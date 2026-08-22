@@ -9,7 +9,9 @@ from starlette.responses import JSONResponse
 
 from stigmergy.admin.routes import compose
 from stigmergy.admin.settings import AdminSettings
+from stigmergy.capture import ops
 from stigmergy.capture import schema as capture_schema
+from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     ADMIN_TOKEN,
@@ -25,9 +27,9 @@ async def _inner(scope, receive, send):
 
 
 @pytest.fixture()
-def app(conn, server_settings, admin_settings, fake_gateway):
+def app(conn, server_settings, admin_settings):
     return compose(_inner, conn=conn, server_settings=server_settings,
-                   admin_settings=admin_settings, gateway=fake_gateway)
+                   admin_settings=admin_settings)
 
 
 def _request(app, method, path, *, token=ADMIN_TOKEN, headers=None, json_body=None):
@@ -176,12 +178,12 @@ def test_a_malformed_body_is_a_400_not_a_traceback(conn, app):
     assert response.json() == {"error": "request body must be valid JSON"}
 
 
-def test_entities_create_commissions_over_http(conn, admin_settings, fake_gateway):
+def test_entities_create_commissions_over_http(conn, admin_settings):
     """ADR 042: the route queues the steward's account as a capture carrying the registration
     and answers with the row — no commit, no ledger row, the librarian does the writing."""
     from stigmergy.capture.evidence import MemoryEvidenceStore
     app = compose(_inner, conn=conn, server_settings=Settings(), admin_settings=admin_settings,
-                  gateway=fake_gateway, evidence=MemoryEvidenceStore())
+                  evidence=MemoryEvidenceStore())
 
     response = _request(app, "POST", "/admin/api/entities/create", json_body={
         "actor": "steward@example.com", "name": "Stark Industries", "entity_type": "organization",
@@ -221,24 +223,21 @@ def test_entities_create_error_mapping_over_http(conn, app):
     assert "evidence store" in refused.json()["error"]
 
 
-# ── crons over HTTP: the wire shape ───────────────────────────────────────────────────────────
-def test_cron_dispatch_and_the_allowlist_over_http(app, fake_gateway):
-    ok = _request(app, "POST", "/admin/api/crons/gardener.yml/dispatch",
-                  json_body={"actor": "steward"})
+# ── the night shift over HTTP: the wire shape ─────────────────────────────────────────────────
+def test_the_jobs_endpoint_is_read_only_over_http(app, conn):
+    """One GET, and nothing else. The three POSTs this page used to expose — dispatch, enable,
+    disable — are gone with the crons themselves (ADR 044), so the assertion is not only that the
+    read works but that the writes are NOT routed: a console that still accepted a dispatch would
+    be accepting it for a workflow file that no longer exists anywhere."""
+    ops.record_job_run(conn, GARDENER_JOB, status="ok", stats={"findings": 1})
+    ok = _request(app, "GET", "/admin/api/jobs")
     assert ok.status_code == 200
-    assert ("dispatch", "gardener.yml", "main", None) in fake_gateway.calls
-    refused = _request(app, "POST", "/admin/api/crons/rm-rf.yml/dispatch",
-                       json_body={"actor": "steward"})
-    assert refused.status_code == 400
-
-
-def test_a_github_failure_is_a_502_with_the_gateways_sentence(app, fake_gateway):
-    from stigmergy.admin.github import ActionsError
-    fake_gateway.fail_with = ActionsError("GitHub answered 403 for PUT x", status=403)
-    response = _request(app, "POST", "/admin/api/crons/gardener.yml/enable",
-                        json_body={"actor": "steward"})
-    assert response.status_code == 502
-    assert "403" in response.json()["error"]
+    files = [job["file"] for job in ok.json()["jobs"]]
+    assert files == ["gardener", "retention-purge", "index-rebuild"]
+    for path in ("/admin/api/jobs/gardener/dispatch", "/admin/api/crons/gardener.yml/dispatch",
+                 "/admin/api/crons/gardener.yml/enable", "/admin/api/crons/gardener.yml/disable"):
+        gone = _request(app, "POST", path, json_body={"actor": "steward"})
+        assert gone.status_code == 404, f"{path} still answers — a cron lever survived the removal"
 
 
 def test_an_unexpected_failure_names_the_class_only(conn, app, monkeypatch):
@@ -362,15 +361,14 @@ def test_pages_delete_on_a_deployment_with_no_evidence_store_is_the_409(conn, ap
 
 
 def test_pages_delete_over_http_queues_the_removal_when_the_queue_is_wired(conn, server_settings,
-                                                                          admin_settings,
-                                                                          fake_gateway):
+                                                                          admin_settings):
     """The benign twin for both refusals above, over the real route: with the queue wired, the
     console's Remove lands a `delete` row attributed to the operator who pressed it. Without this,
     the two 409s would only measure how easily this route says no."""
     from stigmergy.capture.evidence import MemoryEvidenceStore
 
     wired = compose(_inner, conn=conn, server_settings=server_settings,
-                    admin_settings=admin_settings, gateway=fake_gateway,
+                    admin_settings=admin_settings,
                     evidence=MemoryEvidenceStore())
 
     response = _request(wired, "POST", "/admin/api/pages/delete",

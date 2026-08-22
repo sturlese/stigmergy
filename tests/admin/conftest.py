@@ -1,12 +1,15 @@
 """Fixtures for the admin-console suite.
 
-Real Postgres through `tests.testdb` (never a faked queue — the house rule), with exactly the two
-NETWORK edges faked: the GitHub gateway (a recording fake with the real gateway's four methods)
-and, where a digest posts, the digest suite's own fake-gateway posture (here: `gateway=None` plus
-env, since only dry-run runs in this suite). No console mutation writes to the knowledge repo any
-more (ADR 044: registering an entity and removing pages both QUEUE, and the worker writes), so the
-real bare remote `build_bare_knowledge_repo` builds is here for one thing — publishing a registry
-snapshot the way the librarian's own commits do, never a hand-written one.
+Real Postgres through `tests.testdb` (never a faked queue — the house rule), with exactly ONE
+network edge faked: where a digest posts (the digest suite's own posture — `gateway=None` plus
+env, since only dry-run runs in this suite). The console reaches no other service at all: the
+GitHub Actions gateway it once drove the crons through is gone with them (ADR 044 — the night
+shift runs in the librarian worker), so there is no second fake here to keep honest.
+
+No console mutation writes to the knowledge repo any more either (registering an entity and
+removing pages both QUEUE, and the worker writes), so the real bare remote
+`build_bare_knowledge_repo` builds is here for one thing — publishing a registry snapshot the way
+the librarian's own commits do, never a hand-written one.
 
 The composed-branch fixtures drive the REAL `routes.compose` product over `httpx.ASGITransport`
 — real middleware order, real 404/401/421 paths, no uvicorn needed (nothing here exercises the
@@ -78,50 +81,6 @@ def admin_settings():
 @pytest.fixture()
 def server_settings():
     return Settings()
-
-
-class FakeGateway:
-    """The real gateway's four methods, recording instead of calling GitHub."""
-
-    def __init__(self):
-        self.calls = []
-        self.fail_with = None   # set to an exception to make every method raise it
-
-    def _record(self, *call):
-        if self.fail_with is not None:
-            raise self.fail_with
-        self.calls.append(call)
-
-    def workflows(self):
-        self._record("workflows")
-        return [
-            {"id": 1, "name": "index-rebuild", "path": ".github/workflows/index-rebuild.yml",
-             "state": "active"},
-            {"id": 2, "name": "retention-purge", "path": ".github/workflows/retention-purge.yml",
-             "state": "active"},
-            {"id": 3, "name": "gardener", "path": ".github/workflows/gardener.yml",
-             "state": "disabled_manually"},
-            {"id": 4, "name": "repair-propose",
-             "path": ".github/workflows/repair-propose.yml", "state": "active"},
-        ]
-
-    def runs(self, workflow_file, *, limit=10):
-        self._record("runs", workflow_file, limit)
-        return [{"id": 77, "status": "completed", "conclusion": "success", "event": "schedule",
-                 "created_at": "2026-08-03T04:17:11Z", "updated_at": "2026-08-03T04:19:02Z",
-                 "html_url": "https://github.com/example/actions/runs/77",
-                 "display_title": "nightly"}]
-
-    def dispatch(self, workflow_file, *, ref="main", inputs=None):
-        self._record("dispatch", workflow_file, ref, inputs)
-
-    def set_enabled(self, workflow_file, *, enabled):
-        self._record("set_enabled", workflow_file, enabled)
-
-
-@pytest.fixture()
-def fake_gateway():
-    return FakeGateway()
 
 
 def submit_one(conn, *, material=None, submitted_by="steward@example.com", kind="raw", hints=None):

@@ -30,7 +30,6 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from stigmergy.admin import auth
-from stigmergy.admin.github import ActionsError, ActionsGateway
 from stigmergy.admin.schema import ensure_admin_schema
 from stigmergy.admin.service import (
     DEFAULT_METRICS_DAYS,
@@ -61,10 +60,10 @@ _MISDIRECTED = {"error": "misdirected request"}
 
 
 def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | None = None,
-            gateway=None, evidence=None):
-    """Build the branch. `admin_settings`/`gateway` are injectable for tests; production
-    resolves both from the environment (a malformed token hash raises `StartupError` at startup —
-    fail closed and loudly)."""
+            evidence=None):
+    """Build the branch. `admin_settings` is injectable for tests; production resolves it from the
+    environment (a malformed token hash raises `StartupError` at startup — fail closed and
+    loudly)."""
     settings = admin_settings if admin_settings is not None else AdminSettings.from_env()
     if not settings.configured():
         return _Branch(inner, None)
@@ -76,10 +75,8 @@ def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | Non
     ensure_gardener_schema(conn)
     ensure_repair_schema(conn)
 
-    if gateway is None and settings.github_configured():
-        gateway = ActionsGateway(settings.github_token, settings.github_repo)
     service = AdminService(conn, server_settings=server_settings, admin_settings=settings,
-                           gateway=gateway, evidence=evidence)
+                           evidence=evidence)
     public_hosts = _public_hosts_from_env()
     admin_app = _AdminGate(_build_admin_app(service), settings, public_hosts)
     return _Branch(inner, admin_app)
@@ -191,8 +188,6 @@ def _json_endpoint(fn):
             return JSONResponse({"error": str(ex)}, status_code=404)
         except AdminRefused as ex:
             return JSONResponse({"error": str(ex)}, status_code=409)
-        except ActionsError as ex:
-            return JSONResponse({"error": str(ex)}, status_code=502)
         except Exception as ex:  # noqa: BLE001 — the class name is the whole disclosure
             log.exception("admin endpoint failed (path=%s)", request.url.path)
             return JSONResponse(
@@ -348,29 +343,8 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.worker_status()
 
     @_json_endpoint
-    async def crons(_request):
-        return service.crons_state()
-
-    @_json_endpoint
-    async def cron_dispatch(request):
-        data = await _body(request)
-        inputs = data.get("inputs") or {}
-        if not isinstance(inputs, dict):
-            raise AdminBadRequest("'inputs' must be a JSON object")
-        return service.cron_dispatch(request.path_params["workflow_file"],
-                                     actor=_str(data, "actor"), inputs=inputs)
-
-    @_json_endpoint
-    async def cron_enable(request):
-        data = await _body(request)
-        return service.cron_set_enabled(request.path_params["workflow_file"],
-                                        actor=_str(data, "actor"), enabled=True)
-
-    @_json_endpoint
-    async def cron_disable(request):
-        data = await _body(request)
-        return service.cron_set_enabled(request.path_params["workflow_file"],
-                                        actor=_str(data, "actor"), enabled=False)
+    async def jobs(_request):
+        return service.jobs_state()
 
     routes = [
         Route(ADMIN_PREFIX, root, methods=["GET"]),
@@ -397,9 +371,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "pages/delete", pages_delete, methods=["POST"]),
         Route(API_PREFIX + "activity", activity, methods=["GET"]),
         Route(API_PREFIX + "worker", worker, methods=["GET"]),
-        Route(API_PREFIX + "crons", crons, methods=["GET"]),
-        Route(API_PREFIX + "crons/{workflow_file}/dispatch", cron_dispatch, methods=["POST"]),
-        Route(API_PREFIX + "crons/{workflow_file}/enable", cron_enable, methods=["POST"]),
-        Route(API_PREFIX + "crons/{workflow_file}/disable", cron_disable, methods=["POST"]),
+        Route(API_PREFIX + "jobs", jobs, methods=["GET"]),
     ]
     return Starlette(routes=routes)

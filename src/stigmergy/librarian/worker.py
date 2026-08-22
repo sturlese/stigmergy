@@ -21,6 +21,7 @@ the deployed kill window is finite and `ops.job_run` writes its row on the way O
 gets to SIGKILL leaves no row at all.
 """
 import asyncio
+import datetime
 import logging
 import os
 import signal
@@ -28,14 +29,18 @@ import time
 
 from stigmergy.capture import ops, queue, retention, schema
 from stigmergy.capture.errors import QueueStateError
+from stigmergy.gardener import schema as gardener_schema
 from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import base_inputs, config, gates, gitcmd, processing
+from stigmergy.librarian import base_inputs, config, gates, gitcmd, processing, schedule
 from stigmergy.librarian.errors import GitError, LibrarianConfigError, StaleBaseError
 from stigmergy.views import regenerate as views_regenerate
 
 log = logging.getLogger(__name__)
 
 JOB_NAME = "librarian"
+# The gardener's own `job_runs` name, imported rather than repeated: `maybe_garden` asks when it
+# last ran, and a second spelling of it would make the pass run every idle tick forever.
+GARDEN_JOB_NAME = gardener_schema.JOB_NAME
 
 
 def human_duration(seconds) -> str:
@@ -382,6 +387,66 @@ def repair_clause(result) -> str:
     return line
 
 
+def run_garden(conn, deps: processing.Deps) -> dict:
+    """One gardener pass — the night shift's whole-corpus half.
+
+    IMPORTED INSIDE THE FUNCTION, not at module scope: `gardener.run` builds a model stack at
+    import time, and every librarian process would pay for it at startup, including the ones that
+    never garden. `tests/test_architecture.py` pins that edge as a named exception with a fresh
+    interpreter, exactly as the views reach in the other direction is pinned.
+
+    **The index rebuild is deliberately not a second half of this pass, and cannot be**: the
+    deployed worker's environment has no embedding key at all — `bootstrap.READ_PATH_ONLY_ENV`
+    strips it before exec, so the write path cannot reach the read path's credential — so nothing
+    in this process could repair a `pages_index` that has drifted from the corpus. Nor does this
+    pass LINT the index: `index.check` reads `pages_index`, and a scheduled write-path read of the
+    served index would widen an invariant (ADR 033 D1) for a log line, when the admin console's
+    Index page already lints the live index, in-process and on demand, for the operator who is
+    actually looking.
+
+    Returns the pass's stats. The gardener writes its own `job_runs` row inside `run_gardener`, so
+    this function adds none: two rows for one pass would make "when did the garden last run"
+    ambiguous, which is the question `schedule.daily_due` asks.
+    """
+    from stigmergy.gardener.run import run_gardener
+    from stigmergy.gardener.settings import GardenerSettings
+
+    result = asyncio.run(run_gardener(conn, repo=deps.repo, settings=GardenerSettings.from_env()))
+    return {"findings": len(result.findings), "pages_checked": result.pages_checked,
+            "entities_checked": result.entities_checked}
+
+
+def garden_clause(stats: dict | None) -> str:
+    """One line about a garden pass. Unlike the two convergence passes, this one ALWAYS prints when
+    it runs: it is daily, so a line a day is not noise, and "the garden ran and found nothing" is
+    the sentence an operator most wants to be able to see."""
+    if not stats:
+        return ""
+    return (f"garden: {stats['pages_checked']} page(s) and {stats['entities_checked']} "
+            f"entity(ies) checked — {stats['findings']} finding(s)")
+
+
+def run_retention(conn, deps: processing.Deps) -> dict:
+    """The retention purge: the payload and hints of terminal rows past their window, plus any
+    secret/PII refusal whatever its age.
+
+    It writes its own `job_runs` row (`capture.retention.purge`), so this adds none — and it is the
+    one pass that touches no git at all, which is why it is safe to run last: nothing it does can
+    leave a tree half-written.
+    """
+    from stigmergy.capture import retention
+
+    return retention.purge(conn, older_than_days=deps.settings.retention_days)
+
+
+def retention_clause(result: dict | None) -> str:
+    """One line, and only when something was purged: a nightly "purged 0" would bury the nights
+    that removed somebody's material."""
+    if not result or not result.get("purged"):
+        return ""
+    return f"retention: purged the payload of {result['purged']} terminal capture(s)"
+
+
 def _refused_sweep(conn, reason: str, *, error: type[BaseException]) -> views_regenerate.RunResult:
     """A pass that did not run, in the shape a pass that did returns — so `view_sweep_clause`
     prints it and nothing downstream needs a second kind of answer.
@@ -540,7 +605,8 @@ class Worker:
     """The long-running loop. `once` uses `process_next` directly and never constructs this."""
 
     def __init__(self, conn, deps: processing.Deps, *, on_output=print,
-                 view_sweep=run_view_sweep, repair_pass=run_repairs, now=time.monotonic):
+                 view_sweep=run_view_sweep, repair_pass=run_repairs, now=time.monotonic,
+                 garden=run_garden, purge=run_retention, utcnow=None):
         self.conn = conn
         self.deps = deps
         self.on_output = on_output
@@ -550,7 +616,15 @@ class Worker:
         # timing contract, and a test that had to wait one out could only prove it by sleeping.
         self._view_sweep = view_sweep
         self._repair_pass = repair_pass
+        self._garden = garden
+        self._purge = purge
         self._now = now
+        # A SECOND clock, and deliberately not `now`: the two convergence passes are scheduled off
+        # a monotonic counter (an interval must not move when the host's wall clock is corrected),
+        # while the daily passes are scheduled off a WALL time somebody wrote as "05:07". One
+        # injected clock could not serve both, and a test that fed a monotonic float to
+        # `daily_due` would be testing nothing.
+        self._utcnow = utcnow or (lambda: datetime.datetime.now(datetime.UTC))
         # `None` means "due at the first idle tick" — a worker that has just started converges
         # `views/` before it waits an interval, the same posture `sweep()` above already takes.
         self._view_sweep_due_at: float | None = None
@@ -651,6 +725,11 @@ class Worker:
                     worked = False
                     self.maybe_run_repairs()
                     self.maybe_sweep_views(due_now=self._corpus_changed)
+                    # The daily passes go LAST, and the garden last but one on purpose: it writes
+                    # findings the repair pass answers, and putting it after that pass gives them
+                    # a whole repair interval to be seen rather than a whole day.
+                    self.maybe_garden()
+                    self.maybe_purge()
                     self._sleep(self.deps.settings.poll_interval_s)
             stats["processed"] = processed
         return processed
@@ -728,6 +807,73 @@ class Worker:
         if clause:
             self.on_output(clause)
         return True
+
+    def maybe_garden(self) -> bool:
+        """Run the daily gardener pass if today's time has come and it has not run today.
+
+        The two convergence passes above ask "has the interval elapsed"; this one asks
+        `schedule.daily_due`, which answers from the last `job_runs` row rather than from an
+        in-process timer. That difference is the whole point: a worker restarts (a deploy, a crash,
+        a scale event) far more often than once a day, and an in-process timer would garden again
+        every time one did. Reading the ledger makes the pass idempotent across restarts, which is
+        the one property a cron had for free and this had to be given.
+
+        A fault is logged and swallowed, as with every maintenance pass — and the `job_runs` row
+        the gardener wrote before failing is what stops the next idle tick from retrying it all
+        night. `_corpus_changed` is NOT set: the gardener writes findings, never pages.
+        """
+        at = self._daily_at(self.deps.settings.garden_at, schedule.DEFAULT_GARDEN_AT)
+        if at is None or not self._daily_due(GARDEN_JOB_NAME, at):
+            return False
+        try:
+            stats = self._garden(self.conn, self.deps)
+        except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
+            log.error("the nightly garden pass failed; the queue keeps draining", exc_info=True)
+            return True
+        clause = garden_clause(stats)
+        if clause:
+            self.on_output(clause)
+        return True
+
+    def maybe_purge(self) -> bool:
+        """Run the daily retention purge if today's time has come and it has not run today.
+
+        `maybe_garden`'s shape. What differs is that this pass is the one piece of the night shift
+        with a PROMISE behind it — payload is kept for a window and then removed — so a deployment
+        that never runs it is not merely un-converged, it is not keeping its word. That is why the
+        pass is on by default and why its failure is logged at error level even though nothing
+        downstream depends on it.
+        """
+        at = self._daily_at(self.deps.settings.retention_at, schedule.DEFAULT_RETENTION_AT)
+        if at is None or not self._daily_due(retention.JOB_NAME, at):
+            return False
+        try:
+            result = self._purge(self.conn, self.deps)
+        except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
+            log.error("the nightly retention purge failed; the queue keeps draining", exc_info=True)
+            return True
+        clause = retention_clause(result)
+        if clause:
+            self.on_output(clause)
+        return True
+
+    def _daily_at(self, value: str, default: str) -> tuple[int, int] | None:
+        """The configured time for a daily pass, or None when it is switched off or the worker is
+        on its way out. One method for both passes, so "off" cannot come to mean two things."""
+        if self.stopping or self.releasing:
+            return None
+        if str(value or "").strip().lower() == config.DAILY_OFF:
+            return None
+        return schedule.parse_daily(value, default=default)
+
+    def _daily_due(self, job: str, at: tuple[int, int]) -> bool:
+        """Whether `job` is due now — the ledger read, isolated here so a database that is briefly
+        unreadable postpones a maintenance pass instead of taking the worker down with it."""
+        try:
+            return schedule.daily_due(self._utcnow(), schedule.last_run_at(self.conn, job), at)
+        except Exception:  # noqa: BLE001 — see the docstring
+            log.warning("could not read the last run of %s; postponing it", job, exc_info=True)
+            return False
 
     def _sleep(self, seconds: float) -> None:
         """Poll in slices so a signal is observed promptly rather than after a whole interval."""

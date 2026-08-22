@@ -366,8 +366,12 @@ FROM capture_queue WHERE status NOT IN ('filed', 'rejected') ORDER BY created_at
 
 ## Retention
 
-`stigmergy-queue purge` nulls `payload`, `hints` and `outcome` on rows **terminal for more than 30
-days** (`retention.DEFAULT_RETENTION_DAYS`). What survives: `id`, `submitted_by`, `status`, all
+The purge runs **nightly inside the librarian worker**, on its idle branch, at
+`STIGMERGY_LIBRARIAN_RETENTION_AT` (default 04:42 UTC; `off` turns it off) — see
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D6. `stigmergy-queue purge` is the same
+pass run by hand, and the console's Captures page previews it. All three null `payload`, `hints`
+and `outcome` on rows **terminal for more than 30 days** (`retention.DEFAULT_RETENTION_DAYS`,
+`$STIGMERGY_RETENTION_DAYS`). What survives: `id`, `submitted_by`, `status`, all
 three timestamps, `attempts` and `result_ref` — so the trace and the latency measurement stay intact
 and a purged submission is still readable as history (`brain_submissions` marks it
 `payload_purged: true` and returns no excerpt). `outcome` is on the list because a row written

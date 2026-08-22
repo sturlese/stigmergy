@@ -185,7 +185,7 @@ function questionsChart(metrics, days) {
 }
 
 function healthTiles(overview, worker, metrics) {
-  const builtAgo = agoFrom(overview.crons.index_built_at);
+  const builtAgo = agoFrom(overview.night_shift.index_built_at);
   const severity = overview.gardener.severity_counts || {};
   const findings = Object.values(severity).reduce((a, b) => a + b, 0);
   const webhook = metrics.job_history["webhook-index-upsert"] || [];
@@ -198,7 +198,7 @@ function healthTiles(overview, worker, metrics) {
   const filedPerDay = fillDays(metrics.captures_by_day, 14, { filed: 0 }).map((r) => r.filed || 0);
   return [
     tile("Index freshness", builtAgo === null ? "never" : fmtAge(builtAgo),
-      overview.crons.index_built_at ? `rebuilt ${fmtWhen(overview.crons.index_built_at)} · ${webhook.length ? `${webhook.length} incremental upserts on record` : "no incremental upserts yet"}` : "no index yet",
+      overview.night_shift.index_built_at ? `rebuilt ${fmtWhen(overview.night_shift.index_built_at)} · ${webhook.length ? `${webhook.length} incremental upserts on record` : "no incremental upserts yet"}` : "no index yet",
       { tone: builtAgo !== null && builtAgo > 2 * 86400000 ? "warn" : "", onclick: () => { window.location.hash = "#/index"; },
         foot: el("div", { class: "spark" }, sparkline({ values: perDay, color: "accent" })) }),
     tile("Filed per day", String(filedPerDay.at(-1) || 0), "landed in git today · last 14 days",
@@ -226,16 +226,16 @@ function latencyCard(metrics, worker) {
 
 function jobsCard(overview, metrics) {
   const rows = [];
-  for (const [file, run] of Object.entries(overview.crons.latest_runs || {})) {
-    rows.push({ cells: [jobName(run ? run.job : file.replace(".yml", "")), run ? wordPill(run.status) : pill("never ran", "neutral"),
+  for (const [file, run] of Object.entries(overview.night_shift.latest_runs || {})) {
+    rows.push({ cells: [jobName(run ? run.job : file), run ? wordPill(run.status) : pill("never ran", "neutral"),
       run ? relTime(run.finished_at) : "—", run && run.error ? el("span", { class: "muted" }, run.error) : ""] });
   }
-  rows.push({ cells: ["Index rebuild", pill(overview.crons.index_built_at ? "built" : "no index", overview.crons.index_built_at ? "git" : "fail"),
-    overview.crons.index_built_at ? relTime(overview.crons.index_built_at) : "—", el("span", { class: "muted" }, "truth: the index's built_at")] });
+  rows.push({ cells: ["Index rebuild", pill(overview.night_shift.index_built_at ? "built" : "no index", overview.night_shift.index_built_at ? "git" : "fail"),
+    overview.night_shift.index_built_at ? relTime(overview.night_shift.index_built_at) : "—", el("span", { class: "muted" }, "truth: the index's built_at")] });
   const digest = (metrics.job_history.digest || [])[0];
   rows.push({ cells: ["Weekly digest", digest ? wordPill(digest.status) : pill("never posted", "neutral"), digest ? relTime(digest.finished_at) : "—", el("span", { class: "muted" }, overview.digest.last_window_until ? `window ends ${fmtWhen(overview.digest.last_window_until)}` : "command-only")] });
-  return card({ title: "Scheduled work", sub: "the last known truth for each job", actions: [link("jobs", el("span", { class: "btn small ghost" }, "Jobs"))] },
-    table(["job", "last run", "when", ""], rows, { dense: true, empty: "no job has run yet — the four workflows run nightly in GitHub Actions" }));
+  return card({ title: "Unattended work", sub: "the last known truth for each job", actions: [link("jobs", el("span", { class: "btn small ghost" }, "Jobs"))] },
+    table(["job", "last run", "when", ""], rows, { dense: true, empty: "no job has run yet — the night shift runs inside the librarian worker" }));
 }
 
 function consoleActionsCard(overview) {

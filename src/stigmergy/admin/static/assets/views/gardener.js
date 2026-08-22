@@ -3,13 +3,12 @@
 
 import { api } from "../api.js";
 import { chartCard, hbars, runStrip, stackedColumns } from "../charts.js";
-import { check as checkCopy, jobConsequence, severity as severityCopy } from "../copy.js";
+import { check as checkCopy, severity as severityCopy } from "../copy.js";
 import { getMeta, windowDays } from "../state.js";
 import {
   banner, chips, el, fmtDay, fmtWhen, icon, kv, mono, pill, relTime, render, severityPill, table,
 } from "../ui.js";
 import { loading, runShape, runTable } from "./common.js";
-import { dispatchFlow } from "./jobs.js";
 
 const filter = { severity: "", check: "" };
 const SEVERITY_TONE = { warn: "human", info: "code" };
@@ -29,7 +28,6 @@ export async function gardenerView(host) {
     const stats = (data.run && data.run.stats) || {};
     const passErrors = ["sweep", "empty_body", "duplicate_entity"].filter((k) => stats[k] && stats[k].error).map((k) => `${k.replaceAll("_", " ")}: ${stats[k].error}`);
     // the workflow row comes from the server's own table; no button when it is not listed there
-    const gardenerWorkflow = (getMeta().workflows || []).find((w) => w.file === "gardener.yml");
     const history = metrics.job_history.gardener || [];
     const runs = history.map((r) => runShape(r, (run) => `${run.status}${(run.stats || {}).findings_total !== undefined ? ` · ${run.stats.findings_total} findings` : ""}`));
     const severityOrder = (getMeta().gardener_severities && getMeta().gardener_severities.length ? getMeta().gardener_severities : ["info", "warn"]).slice().reverse();
@@ -44,11 +42,10 @@ export async function gardenerView(host) {
           el("div", { class: "card-head" },
             el("div", { class: "card-title" }, el("h2", {}, "Latest completed run"),
               el("div", { class: "sub" }, data.run ? `#${data.run.id} · finished ${relTime(data.run.finished_at)}` : "no completed run yet")),
-            el("div", { class: "spacer" }),
-            gardenerWorkflow ? el("button", { class: "btn small primary", type: "button", disabled: !getMeta().github.configured,
-              onclick: () => dispatchFlow(gardenerWorkflow, jobConsequence(gardenerWorkflow.file, gardenerWorkflow.title)) },
-              icon("play", 14), "Run now") : null),
-          !getMeta().github.configured ? el("div", { class: "sub" }, "Run now needs the GitHub token (Jobs page) — or run ", mono("stigmergy-gardener"), " from a terminal") : null,
+            el("div", { class: "spacer" })),
+          // The garden runs itself nightly on the worker's idle branch (ADR 044), so there is no
+          // button here. The command stays named for the operator who wants one NOW.
+          el("div", { class: "sub" }, "Runs nightly inside the librarian worker, on its idle branch. To run one now: ", mono("stigmergy-gardener"), " from a terminal."),
           data.run ? kv([
             ["findings", el("div", { class: "row" }, ...Object.entries(severities).map(([s, n]) => el("span", { class: "row" }, severityPill(s), String(n))), !Object.keys(severities).length ? "none — a healthy corpus" : null)],
             ["pages walked", stats.pages !== undefined ? String(stats.pages) : (stats.sampled !== undefined ? `${stats.changed || 0} changed + ${stats.sampled} sampled` : null)],

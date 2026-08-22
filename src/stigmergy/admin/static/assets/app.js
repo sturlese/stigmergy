@@ -50,7 +50,7 @@ const DETAIL_ROUTES = [
 ];
 
 // The old tab names keep working — a bookmark must not land on the dashboard by surprise.
-const ALIASES = { overview: "dashboard", queue: "captures", crons: "jobs" };
+const ALIASES = { overview: "dashboard", queue: "captures" };
 
 // Why the operator was signed out, carried across the reload a 401 forces (sessionStorage, one shot).
 const SIGNOUT_KEY = "stigmergy-ops-signout";

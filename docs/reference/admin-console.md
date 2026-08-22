@@ -80,16 +80,21 @@ running yesterday's `app.js` against today's imports; the API carries `no-store`
 
 | Piece | Secret / env | Without it |
 |---|---|---|
-| Jobs: Run now, Enable/Disable, run history | `STIGMERGY_ADMIN_GITHUB_TOKEN` (fine-grained PAT: **Actions read+write on the repository the crons RUN IN — the knowledge repo, see the runbook — and on that one only**) + `STIGMERGY_ADMIN_GITHUB_REPO` (`<owner>/<repo>`; there is no default) | the Jobs page shows the database truth (`job_runs`, `index_meta.built_at`) read-only and says so in a banner; the levers are not rendered at all, and the Run-now buttons on the Gardener and Index pages are disabled with the reason beside them |
 | Digest: Post now | `SLACK_BOT_TOKEN` (already an app-wide Fly secret) + `STIGMERGY_DIGEST_CHANNEL_ID` | the post button refuses naming the missing piece; Preview still works |
 | Digest: audience scoping | `STIGMERGY_ADMIN_CHANNELS_PATH` → the baked `/app/slack-channels.json` (set in `fly.toml`, written by `scripts/deploy_staging.sh`) | every audience falls back to the safe empty default — same behavior as a repo with no channels file |
-| The registry browser, and the registry check on a name | a registry this server can read: the index's `ops/entity-registry.json` snapshot (refreshed by the push webhook and the nightly rebuild), or the `--entity-registry` file where there is no snapshot | the Entities page lists no entity and says no registry is readable here, and every name check answers `unchecked`. Register an entity still works — it queues a capture, and the birth gate runs when the librarian files, inside that capture's own worktree, against the knowledge repo as it stands |
+| The registry browser, and the registry check on a name | a registry this server can read: the index's `ops/entity-registry.json` snapshot (refreshed by the push webhook and by a rebuild), or the `--entity-registry` file where there is no snapshot | the Entities page lists no entity and says no registry is readable here, and every name check answers `unchecked`. Register an entity still works — it queues a capture, and the birth gate runs when the librarian files, inside that capture's own worktree, against the knowledge repo as it stands |
 | Actor prefill on mutation forms | `STIGMERGY_ADMIN_ACTOR` (default `admin-console`) | forms prefill the default; every form field is editable |
 
-PAT rotation is the standard drill: revoke on GitHub, `fly secrets set
-STIGMERGY_ADMIN_GITHUB_TOKEN=...` with the new one. Between the two, the Jobs page degrades
-read-only — nothing breaks. A GitHub call that fails mid-session degrades the same way, with the
-gateway's own sentence (status code, never the token, never an echoed body) shown as a banner.
+**The console's only credential is its own token hash.** It holds no token for any other service,
+because it drives none: the Jobs page reads rows this deployment wrote. There is no PAT to rotate
+and no third party that can degrade a page — the failure modes above are all "a piece of THIS
+system is not configured", and each says so in its own words.
+
+That is a deliberate subtraction rather than a simplification. The console used to carry a
+fine-grained GitHub PAT with Actions read+write, so that a browser could dispatch, enable and
+disable the nightly crons; [ADR 044](../decisions/044-the-capture-is-the-approval.md) moved those
+passes into the librarian worker, and the credential went with them. A token that can start a
+workflow in somebody's repository is not one to keep for a page that now only reads.
 
 ## How the console is read
 
@@ -217,31 +222,36 @@ toggle away, and nothing on a chart is reachable only by hovering.
   `findings_by_severity`), the latest completed run with its findings, pages walked and model
   spend, the run strip, findings by check (click a bar to filter), what each check looks for, and
   the findings table filterable by severity and by check; a `partial` run says the deterministic
-  findings are complete and trustworthy and names the model pass that failed; Run now dispatches
-  the workflow (real model spend, and the button says so).
+  findings are complete and trustworthy and names the model pass that failed. No Run-now button:
+  the garden runs itself nightly inside the worker, and the page names `stigmergy-gardener` for an
+  operator who wants one now.
 - **Index** — built_at, pages indexed, the embedding model, and which copy of each ops control
   file this stack is serving — the entity registry, the identity roster, the Slack channel map,
   each with its snapshot's age and the sha or `rebuild` that wrote it, or "no snapshot" when
   every server here is answering from its own baked file; pages per zone; incremental upserts per
-  day; the substrate check in-process, over that same served registry copy; Rebuild now dispatches
-  the workflow; the recent webhook deliveries.
+  day; the substrate check in-process, over that same served registry copy; the recent webhook
+  deliveries. No Rebuild button, and not because one was dropped: a rebuild needs the embedding
+  key, which no process behind this console holds, so the page names the command instead of
+  offering a button that could only ever fail.
 - **Worker** — `stigmergy-librarian status` live: depth, the lease, the attempts budget, the
   capture→filed percentiles, each item in flight with its lease meter and the three-verdict
   reading, what the librarian finished per day, the latency distribution, and the unresolved
   ingest errors. Read-only; draining and Fly scaling stay in the terminal.
-- **Jobs** — the three workflows, each with its purpose in a sentence, its schedule as "daily at
-  HH:MM UTC · next in …", its enabled state in plain words (scheduled, paused by a person,
-  auto-paused by GitHub), the last known database truth with that run's stats, the run strip
-  (height is duration, colour the outcome), the recent Actions runs (linking out to the logs —
-  and only to `github.com`), and the levers: Run now, Enable, Disable, each confirmed with a
-  sentence that says what the workflow will do. `retention-purge` is the only one that takes a
-  dispatch input (`dry_run`), and it is the only input any dispatch will accept — an undeclared
-  key is refused by name before the GitHub gateway is touched, as is an unlisted workflow file.
-  Its Run-now form starts with Dry run ticked, so the default path lists what would go and
-  touches nothing. The truth column names its source: a `job_runs` row for retention and the
-  gardener, `index_meta.built_at` for the rebuild, which writes none. Other recorded work — the
-  digest, the webhook, reclaims, and the worker's own repair pass, which is not a workflow and has
-  no lever here at all — is listed below the three.
+- **Jobs** — the night shift: each pass with its purpose in a sentence, whether the worker or an
+  operator runs it, when it next falls due ("daily at HH:MM UTC · next in …") and which variable
+  moves it, the last known database truth with that run's stats, and the run strip (height is
+  duration, colour the outcome). The truth column names its source: a `job_runs` row for the
+  gardener and the retention purge, `index_meta.built_at` for the rebuild, which writes none. The
+  rebuild's row names the command instead of a time, because it is the one pass the worker cannot
+  run — no embedding key, by design. Other recorded work — the repair pass, the digest, the
+  webhook, reclaims — is listed below.
+
+  **There are no levers on this page, and that is the design.** These passes used to be GitHub
+  Actions crons the console dispatched, enabled and disabled through a PAT; they now schedule
+  themselves on the worker's idle branch, so there is nothing to dispatch and no schedule to
+  switch off from a browser. What is left is what an operator actually needed: when each pass last
+  ran, and what it did.
+
 - **Digest** — the configured-pieces checklist, Preview (the byte-identical dry-run body), Post
   now (disabled until both Slack pieces are configured, with the checklist saying which is
   missing; it names the duplicate-window risk before it posts), the run strip and history. Still

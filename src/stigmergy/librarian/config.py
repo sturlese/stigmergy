@@ -10,7 +10,8 @@ import os
 import tempfile
 from dataclasses import dataclass
 
-from stigmergy.capture import queue
+from stigmergy.capture import queue, retention
+from stigmergy.librarian import schedule
 from stigmergy.librarian.errors import LibrarianConfigError
 
 # The default filing model. PROVIDER-PREFIXED (pydantic-ai reads a bare name as an OpenAI model)
@@ -77,6 +78,20 @@ DEFAULT_VIEW_SWEEP_CEILING = 10
 # gardener run sooner.
 REPAIR_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S"
 DEFAULT_REPAIR_INTERVAL_S = 3600.0
+
+# The night shift's two daily passes (ADR 044 D6), as "HH:MM" UTC. They replaced scheduled crons
+# calling an HTTP endpoint with a token: a pass that runs INSIDE the worker cannot fire while a
+# capture is being filed, and needs no credential that could be used for anything else.
+# `librarian.schedule` owns the due-ness arithmetic; these are only the times and the switch.
+GARDEN_AT_ENV = "STIGMERGY_LIBRARIAN_GARDEN_AT"
+RETENTION_AT_ENV = "STIGMERGY_LIBRARIAN_RETENTION_AT"
+# The one spelling that turns a daily pass off. Deliberately a word rather than an empty string:
+# an unset variable must mean "the default", so "I did not configure this" and "I do not want this"
+# cannot be the same value.
+DAILY_OFF = "off"
+# How long a terminal row keeps its payload. Shared with `stigmergy-capture purge`'s own default,
+# so the nightly pass and the hand-run command cannot disagree about what "the window" is.
+RETENTION_DAYS_ENV = "STIGMERGY_RETENTION_DAYS"
 # `0` turns the pass off, exactly as `VIEW_SWEEP_OFF` does — and it is the setting a deployment
 # uses to stop the corpus repairing itself while somebody investigates something.
 REPAIR_PASS_OFF = 0.0
@@ -276,6 +291,11 @@ class Settings:
     # `repair.settings`, which the pass reads from the environment when it runs
     repair_interval_s: float = DEFAULT_REPAIR_INTERVAL_S
 
+    # the night shift's daily passes — "HH:MM" UTC, or DAILY_OFF
+    garden_at: str = schedule.DEFAULT_GARDEN_AT
+    retention_at: str = schedule.DEFAULT_RETENTION_AT
+    retention_days: int = retention.DEFAULT_RETENTION_DAYS
+
     # the gates
     gitleaks_bin: str = "gitleaks"      # resolved on PATH; existence checked ONCE at startup
     worktree_root: str = ""             # "" -> a per-run temp dir under the system temp
@@ -330,6 +350,9 @@ class Settings:
                                                   cls.view_sweep_ceiling)),
             repair_interval_s=float(os.environ.get(REPAIR_INTERVAL_ENV,
                                                    cls.repair_interval_s)),
+            garden_at=os.environ.get(GARDEN_AT_ENV, cls.garden_at),
+            retention_at=os.environ.get(RETENTION_AT_ENV, cls.retention_at),
+            retention_days=int(os.environ.get(RETENTION_DAYS_ENV, cls.retention_days)),
             gitleaks_bin=os.environ.get("STIGMERGY_GITLEAKS_BIN", cls.gitleaks_bin),
             worktree_root=os.environ.get("STIGMERGY_LIBRARIAN_WORKTREE_ROOT", cls.worktree_root),
             refused_diff_root=os.environ.get(REFUSED_DIFF_ROOT_ENV, cls.refused_diff_root),

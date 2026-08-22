@@ -257,7 +257,7 @@ They have the same two writers pages have, and no others:
   CLEARED for the registry (a repo before its first mint genuinely has none, and readers fall
   back to their own file), KEPT for the two access files — clearing those would hand every
   deployed reader back to the roster baked at the last deploy, a revocation silently undone by a
-  cron; a deployment that genuinely wants "nobody" pushes an explicit `{}`, a committed statement.
+  rebuild; a deployment that genuinely wants "nobody" pushes an explicit `{}`, a committed statement.
   Nothing is silent: the stats carry `ops_files`, a clear warns, a keep logs an error naming the
   file.
 

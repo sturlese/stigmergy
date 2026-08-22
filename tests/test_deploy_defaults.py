@@ -30,9 +30,9 @@ EMPTY_DEFAULTS = {
     "identities.json": {},
     "entity-registry.json": {"entities": {}},
     "slack-channels.json": {},
-    # the deployed app/slack groups hold no checkout, so the steward map has to ride
-    # the image like the three above. Empty means "nobody is on call" — which is the fail-closed
-    # posture every reader already takes, not a broken deploy.
+    # The deployed app/slack groups hold no checkout, so every ops control file a running process
+    # trusts has to ride the image. Empty means "resolves nobody" — the fail-closed posture every
+    # reader already takes, not a broken deploy.
 }
 
 _RESYNC = (
@@ -53,15 +53,23 @@ def test_the_committed_deploy_file_is_the_empty_default(name):
         f"deploy/{name} is not empty. {_RESYNC}")
 
 
-# The one directory `deploy/` is allowed to contain. It holds the four cron workflows an
-# operator copies into their own knowledge repo — deliberately NOT under `.github/workflows/`,
-# where GitHub would register them on this public repo and show three "Disabled" rows.
+# Which subdirectories `deploy/` is allowed to contain: NONE, today. It held `workflows/` — the
+# cron templates an operator copied into their own knowledge repo — until ADR 044 moved every
+# unattended pass inside the deployment and left nothing to schedule anywhere else.
 #
-# `_staged_run` seeds a tracked file into every directory named here before it runs the real
-# script, so this declaration has a RUNTIME counterpart instead of being a statement about a tree
-# nobody exercises. Extending the set therefore extends what the deploy script is proven to leave
-# alone, in the same edit.
-EXPECTED_SUBDIRS = {"workflows"}
+# The set is kept (rather than deleted with its last member) because it is the guard that makes the
+# NEXT subdirectory a decision instead of an accident: `workflows/` itself arrived here unreviewed,
+# under a check that could only see files.
+EXPECTED_SUBDIRS: set[str] = set()
+
+# What `_staged_run` seeds under the staged `deploy/`, so the script's "leave tracked files alone"
+# property is exercised whether or not the real tree currently has a subdirectory. It is
+# deliberately NOT derived from `EXPECTED_SUBDIRS` any more: it was, and when that set emptied the
+# runtime test would have kept passing while asserting nothing — a permanently-green test reads as
+# coverage. Every declared subdirectory is seeded too, so extending the set still extends what the
+# script is proven to leave alone, in the same edit.
+PROBE_SUBDIR = "probe-tracked-dir"
+SEEDED_SUBDIRS = frozenset({PROBE_SUBDIR}) | frozenset(EXPECTED_SUBDIRS)
 
 SIBLING_MARKER = "tracked.yml"
 
@@ -114,7 +122,7 @@ def _staged_run(tmp_path):
     # not, and that single difference is why the script's `rm -rf` on this directory went
     # unnoticed: there was nothing here to destroy, so the destruction was invisible to the one
     # test positioned to see it.
-    for sub in sorted(EXPECTED_SUBDIRS):
+    for sub in sorted(SEEDED_SUBDIRS):
         (tmp_path / "deploy" / sub).mkdir(parents=True)
         (tmp_path / "deploy" / sub / SIBLING_MARKER).write_text(_sibling_body(sub),
                                                                 encoding="utf-8")
@@ -180,19 +188,21 @@ def test_a_deploy_leaves_tracked_files_it_never_baked_untouched(tmp_path):
     """The fix for the second defect in this script, same shape as the first one above.
 
     OLD BEHAVIOUR: the script opened with `rm -rf "$DEPLOY_DIR"`, and `restore_deploy_defaults`
-    knew only the four JSON files. So one `make deploy-staging` deleted `deploy/workflows/`
+    knew only the JSON files above. So one `make deploy-staging` deleted `deploy/workflows/`
     — a README and four cron templates, all tracked — from the working tree, with nothing in the
     script able to put them back. The next `git add -A` commits that deletion, and `git add -A`
     is exactly what someone runs after deploying.
 
-    It stayed invisible because the two halves of the check never met: `EXPECTED_SUBDIRS` declared
-    `workflows/` but ran no script, and the test that ran the script ran it against a `tmp_path`
-    where the directory had never existed. `_staged_run` now seeds one from that same declaration,
-    which is the join that was missing.
+    It stayed invisible because the two halves of the check never met: the declaration of what
+    `deploy/` may contain ran no script, and the test that ran the script ran it against a
+    `tmp_path` where the directory had never existed. `_staged_run` seeds one now, which is the
+    join that was missing — and it seeds `PROBE_SUBDIR` unconditionally, so this stays a real
+    assertion in a tree that currently has no tracked subdirectory to lose.
     """
     deploy_dir, _ = _staged_run(tmp_path)
 
-    for sub in sorted(EXPECTED_SUBDIRS):
+    assert SEEDED_SUBDIRS, "nothing was seeded — this test would pass without asserting anything"
+    for sub in sorted(SEEDED_SUBDIRS):
         survivor = deploy_dir / sub / SIBLING_MARKER
         assert survivor.is_file(), (
             f"the deploy script destroyed deploy/{sub}/{SIBLING_MARKER}. It is tracked, nothing in "

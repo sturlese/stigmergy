@@ -145,33 +145,25 @@ export function severity(word) {
   return SEVERITY[word] || { label: word, explain: "" };
 }
 
-// ── the four workflows ───────────────────────────────────────────────────────────────────────
-// `consequence` is what the Run-now confirmation says — what happens, in the reader's terms,
-// before the irreversible ones. `retentionDays` is spliced in from `meta().retention`.
+// ── the night shift ──────────────────────────────────────────────────────────────────────────
+// What runs unattended, in a reader's terms. There is no `consequence` any more because there is
+// no button: these passes run on the librarian worker's idle branch (ADR 044), so the page
+// describes them and shows when each last ran rather than offering levers.
 export const JOB = {
-  "index-rebuild.yml": {
-    purpose: "rebuilds the whole search index from the knowledge repo — real embedder, real spend",
-    truth: "the index's own built_at; a rebuild writes no job row",
-    consequence: "runs a FULL index rebuild in GitHub Actions — real embedder, real spend, against this database. Answers keep being served from the old index until it lands.",
-  },
-  "retention-purge.yml": {
-    purpose: "strips payload and hints from captures that have been terminal for a while",
-    truth: "the latest capture-purge job row",
-    consequence: "strips the payload and the placement hints from every capture that has been terminal for {days} days — permanently, in GitHub Actions, against this database. Id, submitter, timestamps, state and result pointer survive; evidence blobs are untouched. Leave Dry run ticked to list what it would take without touching anything (Captures → Retention purge previews the exact rows).",
-  },
-  "gardener.yml": {
+  gardener: {
     purpose: "runs the deterministic corpus-health checks and the model passes; findings persist, "
       + "and the worker's repair pass answers them on its next run",
     truth: "the latest gardener job row",
-    consequence: "runs the deterministic checks AND the model passes in GitHub Actions — real model spend; findings persist to this database, and the librarian worker derives and applies repairs from them on its own schedule (Repairs shows what it did).",
+  },
+  "retention-purge": {
+    purpose: "strips payload and hints from captures that have been terminal for a while",
+    truth: "the latest capture-purge job row",
+  },
+  "index-rebuild": {
+    purpose: "rebuilds the whole search index from the knowledge repo — real embedder, real spend",
+    truth: "the index's own built_at; a rebuild writes no job row",
   },
 };
-
-export function jobConsequence(file, title, retentionDays) {
-  const copy = JOB[file];
-  const text = copy && copy.consequence ? copy.consequence : `runs ${title} in GitHub Actions against this database.`;
-  return text.replaceAll("{days}", String(retentionDays ?? "the configured number of"));
-}
 
 export const JOB_NAME = {
   gardener: "Gardener run",
@@ -266,12 +258,15 @@ export const PAGE = {
     ],
   },
   jobs: {
-    title: "Jobs", purpose: "the four scheduled workflows, and the levers on them",
+    title: "Jobs", purpose: "what runs unattended, and when each last ran",
     read: [
-      "Nothing scheduled runs outside GitHub Actions. Run now dispatches a workflow; Disable stops "
-      + "its schedule until re-enabled (manual runs still work).",
+      "The night shift runs inside the librarian worker, on its idle branch — never while a "
+      + "capture is waiting, so maintenance can never delay a filing. There is nothing to "
+      + "dispatch from here and nothing to switch off.",
       "Each job's truth is a database row it writes — except the index rebuild, whose truth is the "
       + "index's built_at.",
+      "The index rebuild is the one pass the worker cannot run: the deployed worker has no "
+      + "embedding key by design, so it is a command a person runs. The page names it.",
     ],
   },
   digest: {

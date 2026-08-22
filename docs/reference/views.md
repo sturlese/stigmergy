@@ -218,12 +218,12 @@ it. Four details are load-bearing:
   whole interval after a `brain_delete` would leave a view citing pages the removal deleted.
   The repair pass runs after the sweep on the same idle tick and does not set that flag, so what a
   repair changed is picked up by the interval, or by the next queued item.
-- **It runs in the worker, not in a cron.** A view regeneration COMMITS AND PUSHES, and a GitHub
-  Actions cron holding the librarian App's private key is a push credential sitting in a runner's
+- **It runs in the worker.** A view regeneration COMMITS AND PUSHES, and a scheduled GitHub
+  Actions run holding the librarian App's private key is a push credential sitting in a runner's
   environment. The worker already holds that credential and already runs continuously with
   `job_runs` bookkeeping, so this adds no credential surface — the same argument that moved the
-  repair loop here (ADR 044) and the reason the remaining crons are the three that need no
-  credential at all.
+  repair loop here and, in the end, everything else too (ADR 044: there is no scheduled job outside
+  the deployment any more).
 - **It builds its OWN worktree.** The post-meeting hook BORROWS the capture's, and that is where
   `guarded=False`'s justification comes from ("the librarian worker, whose ephemeral worktree is
   always a fresh checkout"). An idle pass has none to borrow, so it makes one — the justification
@@ -342,7 +342,7 @@ standing.
   which closed the "never" (a narrowed, removed or newly-added backlink now moves
   `backlink_hash:` and regenerates the view) and left this one bounded lag rather than paying a
   fresh corpus parse per entity CHECKED to close it. It converges on its own.
-- **No cron regenerates a view — not here, and not in the gardener either.** The convergence pass
+- **Nothing outside the worker regenerates a view — not the gardener either.** The convergence pass
   lives in the librarian worker (which already holds the write credential), and this package owns
   both halves of view regeneration (the skeleton and the synthesis). The gardener owns DETECTION
   only: its daily run reports a `stale-view` finding per divergent entity and says, in place of a

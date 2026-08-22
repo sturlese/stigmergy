@@ -2,7 +2,7 @@
 
 The operations console: one web surface over what already runs — the entity registry and the door
 for registering one, the captures (read-only), the repair ledger, page removal, the four
-scheduled workflows, the gardener's findings, the digest, the index and the ops files it serves,
+the night shift, the gardener's findings, the digest, the index and the ops files it serves,
 activity and the worker's lease. Mounted as an ASGI branch in front of the MCP
 transport, inside the `app` process group, behind its own single credential.
 Narrative: [`docs/reference/admin-console.md`](../../../docs/reference/admin-console.md).
@@ -35,11 +35,10 @@ the same thing, a unified diff per rewritten page.)
 
 | Module | What it is |
 |---|---|
-| `routes.py` | `compose(inner, *, conn, server_settings, admin_settings=None, gateway=None, evidence=None)` — the only door into this package, `evidence` being the process's one evidence store, without which Register an entity has nothing to archive a capture's material into, called by `server.transport_http.build_http_app`. Also `_Branch` (outermost ASGI router), `_AdminGate` (host → token → security headers), `_json_endpoint` (domain-exception → status map) and the route table |
-| `service.py` | `AdminService`, one method per route; `ADMIN_DOOR` (the `source` every governed call names); `CRON_WORKFLOWS`/`DISPATCHABLE` (the drivable-workflow allowlist); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the registry check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`REPAIR_RECENT_LIMIT`, `MAX_RESOLVE_NAMES`, `LATENCY_SAMPLE_LIMIT`, `MAX_METRICS_DAYS`); `_clean`, the one sanitizing seam every untrusted string leaves through; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
-| `settings.py` | `AdminSettings` + `from_env`, the five `*_ENV` constants, `DEFAULT_ACTOR`, `DEFAULT_WORKFLOWS_REPO`, and the sha256-shape refusal that turns a malformed hash into a `StartupError` |
+| `routes.py` | `compose(inner, *, conn, server_settings, admin_settings=None, evidence=None)` — the only door into this package, `evidence` being the process's one evidence store, without which Register an entity has nothing to archive a capture's material into, called by `server.transport_http.build_http_app`. Also `_Branch` (outermost ASGI router), `_AdminGate` (host → token → security headers), `_json_endpoint` (domain-exception → status map) and the route table |
+| `service.py` | `AdminService`, one method per route; `ADMIN_DOOR` (the `source` every governed call names); `NIGHT_SHIFT` (what runs unattended, and where each one's database truth lives) and `INDEX_REBUILD_COMMAND` (the one pass no process here can run); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the registry check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`REPAIR_RECENT_LIMIT`, `MAX_RESOLVE_NAMES`, `LATENCY_SAMPLE_LIMIT`, `MAX_METRICS_DAYS`); `_clean`, the one sanitizing seam every untrusted string leaves through; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
+| `settings.py` | `AdminSettings` + `from_env`, the three `*_ENV` constants, `DEFAULT_ACTOR`, and the sha256-shape refusal that turns a malformed hash into a `StartupError` |
 | `auth.py` | `token_matches` (sha256 + `hmac.compare_digest`), `bearer_token` (two `Authorization` headers → `None`), `host_allowed` |
-| `github.py` | `ActionsGateway` — the Jobs page's only reach out of this process (`workflows`/`runs`/`dispatch`/`set_enabled`), `urllib` with an injectable opener, a 60 s read cache that mutations clear, and `ActionsError` carrying the status and never the token |
 | `schema.py` | `admin_actions`: `ensure_admin_schema` (behind `capture.schema.startup_ddl_lock`), `record_action` (never raises), `recent_actions` |
 | `cli.py` | `stigmergy-admin-token` — mints the one credential: 32 random bytes, plaintext printed once beside its `STIGMERGY_ADMIN_TOKEN_HASH=` line, nothing stored |
 | `static/` | the SPA, no build step: `index.html` + `assets/app.js` (shell, grouped nav, hash router with the old tab names as aliases, login), `theme.js` (the ONE classic script: it stamps the chosen theme on `<html>` before the first paint — a module would be deferred and flash, an inline script is refused by the CSP), `api.js` (the one fetch seam), `state.js` (the server's meta + the chart window), `copy.js` (the VOCABULARY — every system word's human label, meaning and who decides; the per-page explainers), `ui.js` (DOM helpers, pills, the confirm-with-form modal with live field checks, tooltips, the theme picker), `charts.js` (SVG charts built with `createElementNS`, each with a table twin), `views/` (one module per page: `dashboard`, `captures`, `entities`, `repairs`, `gardener`, `index`, `worker`, `jobs`, `digest`, `activity`, plus `common.js` for the loading wrapper, the mutation helper, the report renderer and the trace timeline), `styles.css` |
@@ -79,18 +78,13 @@ cannot need a token to render).
 | POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, QUEUED through `server.review.queue_deletion`, the same seam MCP's `brain_delete` runs, and performed by the librarian worker (ADR 044 D3). It passes no per-path guard: the operator token is the authorization, which makes this the console's most consequential button. What comes back is a queue acknowledgement, and the per-page diffs are read afterwards on the capture | yes |
 | GET | `/admin/api/activity` | `activity()` | yes |
 | GET | `/admin/api/worker` | `worker_status()` | yes |
-| GET | `/admin/api/crons` | `crons_state()` | yes |
-| POST | `/admin/api/crons/{workflow_file}/dispatch` | `cron_dispatch()` — `inputs` must be a JSON object | yes |
-| POST | `/admin/api/crons/{workflow_file}/enable` | `cron_set_enabled(enabled=True)` | yes |
-| POST | `/admin/api/crons/{workflow_file}/disable` | `cron_set_enabled(enabled=False)` | yes |
+| GET | `/admin/api/jobs` | `jobs_state()` — the night shift, read-only | yes |
 
-`{workflow_file}` is a free path segment on the route and an allowlist check in the service
-(`_require_workflow`, before `_require_gateway` and therefore before any network call): the refusal
-must not depend on a converter, so an unlisted file is a 400 naming the allowed set. It is the ONLY
-free segment in the table, and therefore the only place a path could be read as data. No route
-under `entities/` takes a converter any more — the three there are literal segments — so no
-declaration order here is load-bearing, and the two id routes are `{id:int}`, which cannot swallow
-`reclaim` or `purge`. Adding a catch-all under an existing prefix brings the
+**There is no free path segment left in this table.** The four `crons/{workflow_file}/…` routes
+were the only place a path was read as data, and they went with the crons themselves (ADR 044: the
+passes run on the worker's idle branch, so there is nothing to dispatch). The two id routes are
+`{id:int}`, which cannot swallow `reclaim` or `purge`, and no route under `entities/` takes a
+converter — the three there are literal segments — so no declaration order here is load-bearing. Adding a catch-all under an existing prefix brings the
 ordering hazard back with it.
 
 ## Reuse
@@ -154,8 +148,8 @@ ordering hazard back with it.
   `el`'s `style` goes through the CSSOM (`node.style`), never a `style` attribute: the console
   ships under `style-src 'self'`, which refuses the attribute.
 - `ui.confirmForm` (frontend) — every mutation goes through one, and its `consequence` sentence is
-  a required argument, enforced: an empty one throws, so a new workflow without a sentence fails
-  in development rather than shipping a blank line over Dispatch. A field's `live(value, setNote,
+  a required argument, enforced: an empty one throws, so a new mutation without a sentence fails
+  in development rather than shipping a blank line over a button that spends or deletes. A field's `live(value, setNote,
   allValues)` hook renders a node under the field as the user types — the Register form's registry
   check is one; its debounce is cancelled when the dialog closes. The dialog traps Tab and hands
   focus back to the control that opened it, and with no fields at all it is the plainest panel this
@@ -192,8 +186,8 @@ ordering hazard back with it.
   identity/tool, per day, the `ask` outcome rows the console shapes in Python, the rate-limit
   trips), the digest watermark, the zone counts, and `admin_actions`.
 - Raising a message that could carry captured content across the HTTP boundary. The catch-all in
-  `_json_endpoint` returns `the operation failed (<ClassName>)`; only the three domain errors and
-  `ActionsError` cross with their sentence.
+  `_json_endpoint` returns `the operation failed (<ClassName>)`; only the three domain errors
+  cross with their sentence.
 - Deriving a decision in the frontend. `views/repairs.js` sends Remove pages and nothing else —
   it renders a ledger of what the repair pass already did and computes no verdict of its own;
   `views/entities.js` renders the registry check's verdict beside the field it belongs to and acts
@@ -229,8 +223,6 @@ paths would otherwise meet as a bare `UndefinedTable` on a fresh database.
 |---|---|---|
 | `STIGMERGY_ADMIN_TOKEN_HASH` | `""` | the master switch: unset → the console does not exist. Must be 64 sha256 hex (uppercase normalized); any other non-empty value raises `StartupError` at startup |
 | `STIGMERGY_ADMIN_ACTOR` | `admin-console` | the `actor` fallback and the form prefill |
-| `STIGMERGY_ADMIN_GITHUB_TOKEN` | `""` | unset → `gateway is None` → the Jobs page is database-truth-only |
-| `STIGMERGY_ADMIN_GITHUB_REPO` | `""` | which repo's workflows (`<owner>/<name>`). Deliberately not `$STIGMERGY_GITHUB_REPO`, which names the knowledge repo |
 | `STIGMERGY_ADMIN_CHANNELS_PATH` | `""` | the digest's audience-scoping map |
 
 Read but not owned: `STIGMERGY_PUBLIC_HOST` (`routes._public_hosts_from_env`, a two-line copy of
@@ -240,7 +232,8 @@ the transport's parser — importing it would close a cycle through the composit
 **Wire contract**: JSON everywhere except the shell (`text/html`) and the assets. Errors are
 `{"error": "<sentence>"}` at 400 (`AdminBadRequest`), 401 (generic, never a reason), 404
 (`AdminNotFound`, and the inert console's blanket answer), 409 (`AdminRefused`), 421 (foreign
-`Host`), 500 (class name only), 502 (`ActionsError`). Every response carries
+`Host`), 500 (class name only). No 502: this package reaches no other service — the GitHub Actions
+gateway went with the crons (ADR 044), and nothing replaced it. Every response carries
 `content-security-policy` (`default-src 'none'`; fetch directives `'self'`, `img-src` also `data:`;
 `base-uri`/`form-action`/`frame-ancestors` `'none'`), `x-content-type-options: nosniff`,
 `referrer-policy: no-referrer` and `strict-transport-security: max-age=31536000;
@@ -260,12 +253,15 @@ where the page records nobody.
 `repair_kinds` and `gardener_severities`. `copy.js` knows only how to SAY them, and every lookup
 falls back to the raw word — a new status renders ugly and never invisible.
 
-`CRON_WORKFLOWS` — `index-rebuild.yml`, `retention-purge.yml`, `gardener.yml`,
-`repair-propose.yml`, each naming its `schedule_utc` and where the database truth lives
-(`job_runs:<job>`, or `index_meta.built_at` for the rebuild, which writes none).
-`retention-purge.yml` declares the only dispatch input (`dry_run`); an undeclared key is refused by
-name before the gateway is touched. `test_the_console_schedule_table_matches_the_workflow_files`
-parses the real YAML.
+`NIGHT_SHIFT` — the gardener, the retention purge and the index rebuild. Each row names where its
+database truth lives (`job_runs:<job>`, or `index_meta.built_at` for the rebuild, which writes
+none) and `runs_in`: `"worker"` for the two the librarian schedules itself on its idle branch, and
+`"operator"` for the rebuild, which needs an embedding key no process here holds — so its row
+carries `INDEX_REBUILD_COMMAND` instead of a time. A worker row also names the variable that moves
+it, pinned against `librarian.config`'s own defaults by
+`test_the_console_names_the_setting_that_actually_schedules_each_worker_pass`, and the command is
+RUN by `test_the_pass_the_console_cannot_run_names_a_command_that_exists` — a page that names a
+command is making a promise.
 
 **Frontend theme**: every colour token is declared ONCE as `light-dark(light, dark)` on `:root`,
 so a token added to one theme and forgotten in the other cannot exist; the three states are two
@@ -278,7 +274,7 @@ two spellings against each other.
 **Frontend**: each view module exports `render(host, params?) → cleanup?`, dispatched from
 `app.js`'s `GROUPS` (the sidebar, grouped by the job a person came to do) and `DETAIL_ROUTES`
 (`captures/…` and `repairs/…`, each naming its OWN id parser — a shared blanket `Number(...)` once
-turned a non-numeric segment into `NaN` and asked the API for it); the old tab names (`overview`, `queue`, `crons`) are aliases, so a bookmark still lands. The token
+turned a non-numeric segment into `NaN` and asked the API for it); the old tab names (`overview`, `queue`) are aliases, so a bookmark still lands. The token
 lives in `sessionStorage` under `stigmergy-ops-token` — no cookie, therefore no CSRF surface — and
 any 401 clears it, stashes the reason for one reload, and lands on the login screen with that
 reason shown. The chart window (7/30/90 days) lives in `sessionStorage` too, and the per-page
@@ -293,7 +289,7 @@ token so a view that resolves after the next navigation started has its cleanup 
   every other path — flows to the inner app untouched, and `__getattr__` delegates so the branch
   stays transparent to Starlette introspection. Path matching is exact, so `/administration` is
   inner traffic.
-- **Inert means inert.** With the hash unset there is no service, no route table, no gateway and no
+- **Inert means inert.** With the hash unset there is no service, no route table and no
   DDL; from the MCP surface the module is undetectable.
 - **The gate's order is load-bearing**: `Host` first (421), token second (401), headers on the way
   out of both — so the host check also covers the tokenless shell. With no `$STIGMERGY_PUBLIC_HOST`
@@ -353,7 +349,7 @@ token so a view that resolves after the next navigation started has its cleanup 
 |---|---|
 | Add a read endpoint | a method on `AdminService`, a `@_json_endpoint` handler, a `Route`. A new table means checking the import allowlist in `tests/test_architecture.py` first |
 | Add a mutation | the same, but through `_mutate`/`_mutate_async` for the `admin_actions` row and the actor fallback — and the frontend flow through `confirmForm` with an honest consequence sentence |
-| Add a console-drivable workflow | a row in `CRON_WORKFLOWS` (file, title, `schedule_utc`, `truth`, `dispatch_inputs`); `DISPATCHABLE` derives from it and the schedule test fails until the YAML agrees; its purpose, truth and Run-now `consequence` sentences in `copy.js`'s `JOB` (a workflow with no sentence gets a generic one; the pages that mirror a Run-now button look the row up in `meta().workflows` and render nothing when it is absent) |
+| Report a new unattended pass | a row in `NIGHT_SHIFT` (file, title, `runs_in`, `truth`, and either the `at_setting`/`at_default` pair or a `command`), plus its purpose and truth sentences in `copy.js`'s `JOB`. The pass itself is scheduled in `librarian/schedule.py` — this table only reports it, and the settings test fails until the two agree |
 | Reach a new package | add the SUBMODULE to `_ADMIN_ALLOWED_IMPORT_PREFIXES` with a stated reason, in the same diff |
 | Add a config knob | a field on `AdminSettings` + a `*_ENV` constant + a line in `from_env`. Never a CLI flag |
 | Change how untrusted text is cleaned | `service._clean` — never at a call site, and never by flattening newlines |
@@ -366,12 +362,12 @@ token so a view that resolves after the next navigation started has its cleanup 
 
 `tests/admin/` runs against real Postgres through `tests.testdb` and real git wherever a claim
 needs it (`conftest.build_bare_knowledge_repo` — the bare remote the registry fixtures publish an
-entity page into, and the one a removal clones); only the two network edges — GitHub
-Actions and Slack — are faked. `test_settings_and_auth.py` and `test_cli.py` are keyless;
-`test_github_gateway.py` drives an injected opener; `test_service_pg.py` is the largest suite
-(queue reads, reclaim on both edges of the worker's lease, purge dry-run vs real, cron paths, a
-registry the loader refuses, `entity_create` against a throwaway bare remote, and `pages_delete`
-through the shared sequence);
+entity page into, and the one a removal clones); the ONE network edge — Slack — is faked, and
+there is no second one, because the console reaches no other service.
+`test_settings_and_auth.py` and `test_cli.py` are keyless; `test_service_pg.py` is the largest
+suite (queue reads, reclaim on both edges of the worker's lease, purge dry-run vs real, the night
+shift's rows, a registry the loader refuses, `entity_create` against a throwaway bare remote, and
+`pages_delete` through the shared sequence);
 `test_console_reads_pg.py` covers the served registry, the registry check (every verdict beside its
 benign twin, the gate's fold against a looser one) and the metrics window, through the service and
 over the wire; `test_routes_pg.py` exercises the real `compose` product over

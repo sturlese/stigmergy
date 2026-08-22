@@ -396,6 +396,73 @@ def test_librarian_never_imports_server_or_answer(path):
         "above or below it:\n  " + "\n  ".join(offenders))
 
 
+# The ONE librarian module that may name `stigmergy.gardener`, and the only symbols it may name.
+# The edge is new with ADR 044: the night shift moved out of GitHub Actions and into the worker's
+# idle branch, so the worker now RUNS the gardener rather than a cron doing it.
+#
+# Kept this narrow because of what it would otherwise cost. `gardener.run` builds a model stack at
+# import time; a module-scope import of it anywhere in the filing path would load that stack into
+# every librarian process, including the ones that never garden — the same transitive-weight
+# problem `test_gardener_transitive_views_reach_is_a_named_declared_exception` documents in the
+# other direction. `gardener.schema` is a constants module (its own imports stop at
+# `stigmergy.capture`), so the worker takes the JOB NAME at module scope — it must, since
+# `maybe_garden` reads it before deciding anything — and the RUN itself inside the function.
+_LIBRARIAN_GARDENER_DOOR = "worker.py"
+_LIBRARIAN_GARDENER_SYMBOLS = frozenset({
+    "stigmergy.gardener.schema",             # JOB_NAME — which `job_runs` row says it ran today
+    "stigmergy.gardener.store",              # the findings the repair pass answers (ADR 044 D2)
+    "stigmergy.gardener.run.run_gardener",   # the pass itself, imported inside `run_garden`
+    "stigmergy.gardener.settings.GardenerSettings",   # its ceilings, likewise
+})
+
+
+@pytest.mark.parametrize("path", LIBRARIAN_SOURCES, ids=lambda p: p.name)
+def test_only_the_worker_reaches_the_gardener(path):
+    """One seam, named. The gardener is a peer the worker SCHEDULES, not a library the filing path
+    builds on — a gate, a prompt or `processing.py` reaching for it would put corpus-health code
+    inside the write path."""
+    reached = {sym for sym, _ in _imported_symbols(path) if sym.startswith("stigmergy.gardener")}
+    if path.name == _LIBRARIAN_GARDENER_DOOR:
+        undeclared = reached - _LIBRARIAN_GARDENER_SYMBOLS
+        assert not undeclared, (
+            f"{path.name} imports {sorted(undeclared)} from the gardener — the declared door is "
+            f"the night shift only; widen _LIBRARIAN_GARDENER_SYMBOLS with the reason, or find "
+            f"another way")
+        return
+    assert not reached, (
+        f"{path.name} reached into stigmergy.gardener ({sorted(reached)}) — the worker is the one "
+        f"librarian module that may, and only to schedule the night shift")
+
+
+def test_every_declared_gardener_symbol_is_still_imported_by_the_worker():
+    """The pruning half: an exception nobody uses is an exception that has stopped being reviewed.
+    Set equality both ways, so a symbol the worker stopped importing fails here rather than
+    sitting in the allowlist as permission nobody asked for any more."""
+    door = LIBRARIAN / _LIBRARIAN_GARDENER_DOOR
+    imported = {sym for sym, _ in _imported_symbols(door) if sym.startswith("stigmergy.gardener")}
+    assert imported == set(_LIBRARIAN_GARDENER_SYMBOLS), (
+        f"the worker's gardener imports are {sorted(imported)} but the declared door is "
+        f"{sorted(_LIBRARIAN_GARDENER_SYMBOLS)} — update the declaration in the same commit")
+
+
+def test_importing_the_worker_does_not_load_the_gardeners_model_stack():
+    """The transitive half the AST check above cannot see, and the reason the run import sits
+    inside `run_garden`: `gardener.run` builds a model stack at import time. If it were imported
+    at module scope, every librarian process — including `stigmergy-librarian once`, which never
+    gardens — would pay for it at startup.
+
+    Asserted over a FRESH interpreter rather than `sys.modules` here, because this test file's own
+    imports have already loaded half the project."""
+    probe = ("import sys; import stigmergy.librarian.worker; "
+             "print(','.join(sorted(m for m in sys.modules if m.startswith('stigmergy.gardener'))))")
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    loaded = {m for m in out.stdout.strip().split(",") if m}
+    assert "stigmergy.gardener.run" not in loaded, (
+        f"importing the librarian worker loaded {sorted(loaded)} — the gardener's run module (and "
+        f"its model stack) must stay behind the function-level import in `run_garden`")
+
+
 def test_librarian_consumes_capture_and_the_kernel():
     """Positive assertion of the intended dependencies. The librarian is BUILT on the capture
     queue's primitives (whose lease fencing must not be reimplemented) and on the kernel's ACL

@@ -29,9 +29,10 @@ through the durable queue row. `stigmergy.index.corpus` is a declared LIBRARY re
 repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is reached by
 `cli.py` alone; `processing.py` and `worker.py` may import exactly one `stigmergy.views` symbol
 (`views.regenerate`) — the post-meeting hook and the periodic sweep, nothing wider. `worker.py`
-also reaches `stigmergy.repair` for its second maintenance pass, and only from INSIDE
-`run_repairs`: that package loads a model stack, and the filing path must not pay for it at import
-time.
+also reaches `stigmergy.repair` and `stigmergy.gardener` for the night shift, and both RUN imports
+sit INSIDE their functions: those packages load a model stack, and the filing path must not pay for
+it at import time (a fresh-interpreter test pins that the gardener's does not leak in). The
+gardener's `schema` and `store` are module-scope, and are constants and findings rows only.
 
 **`stigmergy.entities` is reachable from `identity.py` and from nowhere else**, and only for
 `entities.birth`, `entities.generator` and `entities.errors`: this is the ONE writer of an entity
@@ -46,7 +47,8 @@ deletes the entry if `identity.py` ever stops using it.
 | Module | What it is |
 |---|---|
 | `processing.py` | `process_item` — one capture end to end (`Result`, `Deps`, the refused-diff digest); `process_meeting_item` — the sibling for `kind="meeting"` rows, filing a page SET; and `process_delete_item` — the sibling for `kind="delete"`, which files nothing and REMOVES (ADR 044 D3): a person's own removal, planned and swept and gated here because this process is the only writer the corpus has. A `document` row runs the ordinary flow with `_source_attachment` ON. The three flows share one spine, and a fourth would join it rather than copy it: `_resolve_filing_base` (this item's base commit, plus the `Deps` re-read at it), `_commit_and_push` (gated commit → lease re-check → push), `_declare_births` (what the gates are TOLD about the identities this run wrote) and `_route_refusal` (which terminal state a surviving veto earns — `rejected` or `failed`, and nothing else). Read it first when tracing a capture's path; everything else is reached from it |
-| `worker.py` | the loop: `startup_checks` (every fail-closed startup refusal), `sweep` (stranded claims), `Worker` (signal handling, and the idle branch's TWO maintenance schedules), `process_next` — the only caller of the whole processing path — plus `run_view_sweep`/`view_sweep_clause` (the periodic view convergence pass) and `run_repairs`/`repair_clause` (the periodic repair pass, ADR 044), each with its own clock and its one operator line |
+| `worker.py` | the loop: `startup_checks` (every fail-closed startup refusal), `sweep` (stranded claims), `Worker` (signal handling, and the idle branch's FOUR maintenance passes), `process_next` — the only caller of the whole processing path — plus the pass functions and their one operator line each: `run_view_sweep`/`view_sweep_clause`, `run_repairs`/`repair_clause`, `run_garden`/`garden_clause` and `run_retention`/`retention_clause` |
+| `schedule.py` | the night shift's due-ness, in one place: `parse_daily` (`"HH:MM"`, falling back rather than refusing to boot), `daily_due` (past today's time · inside the window · not already run today) and `last_run_at` (the `job_runs` read that makes a daily pass survive a restart). Owns the two default times and the window; owns no pass |
 | `gates.py` | the one veto surface: `Finding`, `GateContext`, `run_gates`, `ALL_GATES` (nine gates: zone, binary, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity). A new check is a `(ctx) -> list[Finding]` added to `ALL_GATES`, never a special case in `processing.py` |
 | `identity.py` | the identity WRITER, and the ONE module here that may reach `stigmergy.entities`: `write_births` turns an account's `new_entities`/`new_aliases`/`entity_updates` into a created entity page per identity (rendered from the knowledge repo's own template through `entities.birth`, with `approved_by` naming the capture's own submitter — the capture is the approval, ADR 044), a new `aliases:` entry on a registered entity's page, appended `## Facts`/`## Connections` lines on the pages the account adds to (`_append_to_sections`: in place under the heading, or a new section at the end; never a line the page already carries; `updated:` moved to today), and the regenerated registry — or into `Finding`s having written NOTHING. Its own refusals: the two honesty checks on a declared identity (named in the material, not colliding with a registered spelling), `registration-missing` when the account ignores a registration the capture carries, `update-unknown-entity` and `update-of-new-entity` on an update. `Births` carries what the gates must be told: the registry the commit will PUBLISH, the created / `confirmed` / edited / `updated_pages` paths, the byte proofs, and the lists the report names |
 | `agent.py` | the agent seam's shared half: `build_agent`, `BACKENDS`, `parse_outcome` / `parse_meeting_outcome` (the trust boundary both backends' accounts cross), `confined_write` (the write allow-list), the prompt builders and the fence |
@@ -207,6 +209,24 @@ deletes the entry if `identity.py` ever stops using it.
   this one may already have PUSHED — which is why every repair records its own outcome in the
   ledger before the next is derived, and why the ledger, not this pass's return value, is where an
   operator reads what happened.
+- **The two DAILY passes are the night shift** (ADR 044 D6, `librarian/schedule.py`): the gardener
+  at `garden_at` and the retention purge at `retention_at`, both UTC `"HH:MM"`, both taking `off`.
+  They share the idle branch and the shutdown guards with the two passes above, and differ in one
+  way that matters: **due-ness is a wall time answered from the ledger, not an interval counted in
+  the process.** A worker restarts far more often than once a day — a deploy, a crash, a scale
+  event — and an in-process timer would garden again every time one did; `daily_due` reads the
+  pass's own last `job_runs` row instead, whatever its outcome, so a failed night is one bad night
+  rather than a retry on every idle tick until morning. The window (`DUE_WINDOW_MINUTES`) is the
+  other half: a pass that missed its slot by twelve hours would land after the repair passes that
+  were supposed to answer its findings, so it waits for tomorrow.
+
+  Neither pass writes a `job_runs` row here — each library writes its own, and two rows for one
+  pass would make "when did it last run" ambiguous, which is the question `daily_due` asks.
+
+  **The index rebuild is deliberately not a fifth pass**, and could not be: `bootstrap` strips
+  `OPENAI_API_KEY`/`EMBED_API_KEY` before exec'ing the worker, so the write path cannot reach the
+  read path's credential and nothing in this process can embed anything. It stays an operator
+  command, and the admin console names it rather than offering a button.
 
 ## Tests
 

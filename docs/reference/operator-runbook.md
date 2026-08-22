@@ -4,10 +4,16 @@ Everything below is for the operator running the system. The live world this run
 **three zones** in the knowledge repo (`wiki/` · `sources/` · `views/`), the librarian's
 **9 gates**, **8 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
 `ask`, `brain_submit`/`brain_submissions`/`brain_delete`),
-**one Fly app** with three process groups (`app` · `slack` · `worker`), four GitHub Actions
-crons (`index-rebuild` · `retention-purge` · `gardener`), the optional `/admin`
+**one Fly app** with three process groups (`app` · `slack` · `worker`), the **night shift** the
+worker runs on its own idle branch (the gardener and the retention purge), the optional `/admin`
 console on the `app` group, and the golden evals under `evals/` with the release gates
 (`make gates`) over them.
+
+**Nothing here runs in GitHub Actions.** Every unattended pass runs inside the deployment, on the
+librarian worker's idle branch ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D6) —
+so there is no second place to configure, no schedule that can be silently skipped, and no
+credential for another service to keep. The one exception is the index REBUILD, which needs the
+embedding key the worker deliberately does not have; it stays a command an operator runs.
 
 Organized by OPERATION: Deploy · Wipe & re-seed · Capturing a meeting or a document ·
 Index rebuild · Removing pages · Recovery · Revocation · Release gates & drills · Troubleshooting.
@@ -67,16 +73,11 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    fly secrets set STIGMERGY_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
    fly secrets set STIGMERGY_GITHUB_REPO="<owner>/stigmergy-brain"
    # the admin console (`app` group, ADR 029) — OPTIONAL; unset = the console does not exist.
-   # Hash from `stigmergy-admin-token`; PAT = fine-grained, Actions read+write, one repo only.
-   # STIGMERGY_ADMIN_GITHUB_REPO is WHEREVER THE CRON WORKFLOWS RUN, which is the knowledge repo
-   # (see step 4) — so in practice it holds the same value as STIGMERGY_GITHUB_REPO above, and
-   # the PAT must be scoped to THAT repo. They are still two settings because they answer two
-   # questions (which repo is pushed to vs which repo's Actions the console drives), and there is
-   # no default: without it the crons tab is read-only. The digest channel id is not sensitive;
-   # secrets are simply Fly's env mechanism.
+   # Hash from `stigmergy-admin-token`. That hash is the console's ENTIRE credential surface: it
+   # holds no token for any other service, because it drives none (ADR 044 — the passes it used
+   # to dispatch through a GitHub PAT now run in the worker). The digest channel id is not
+   # sensitive; secrets are simply Fly's env mechanism.
    fly secrets set STIGMERGY_ADMIN_TOKEN_HASH="<from stigmergy-admin-token>"
-   fly secrets set STIGMERGY_ADMIN_GITHUB_TOKEN="<fine-grained PAT>"
-   fly secrets set STIGMERGY_ADMIN_GITHUB_REPO="$STIGMERGY_GITHUB_REPO"   # same repo as above
    fly secrets set STIGMERGY_DIGEST_CHANNEL_ID="C..."
    ```
 
@@ -87,38 +88,27 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 3. **Supabase Postgres** must already have the index built at least once
    (`.venv/bin/stigmergy-index --rebuild --repo $STIGMERGY_REPO` against `STIGMERGY_INDEX_DSN`) — the
    server refuses to serve an empty index.
-4. **GitHub Actions secrets and variables** (for the three crons), on the **knowledge repo**:
+4. **The night shift needs no setup at all.** The gardener and the retention purge run inside the
+   `worker` process group, on its idle branch, and read the same environment the worker already
+   has. Two optional variables move them; both default to a sensible UTC time and both take the
+   word `off`:
 
-   **The crons run from the knowledge repo, not from this one, for privacy.** Actions logs on a
-   PUBLIC repository are world-readable, and these jobs describe the corpus out loud —
-   `stigmergy-gardener` prints its whole report, entity ids and page paths included. Repository
-   *variables* are not masked either (only secrets are). This repo carries the three workflow files
-   as adopter templates, **disabled**; copy them into your private knowledge repo and run them
-   there.
+   | Fly secret / env | Default | What it does |
+   |---|---|---|
+   | `STIGMERGY_LIBRARIAN_GARDEN_AT` | `05:07` | when the daily gardener pass runs, UTC `HH:MM`, or `off` |
+   | `STIGMERGY_LIBRARIAN_RETENTION_AT` | `04:42` | when the daily retention purge runs, UTC `HH:MM`, or `off` |
+   | `STIGMERGY_RETENTION_DAYS` | `30` | how long a terminal capture keeps its payload |
 
-   | Settings → Secrets → Actions | Used by |
-   |---|---|
-   | `INDEX_DSN` | all three workflows |
-   | `OPENAI_API_KEY` | `index-rebuild`, `gardener` |
+   A pass never starts while a capture is waiting in the queue, and yields between units, so
+   maintenance cannot delay a filing. "Did it run" is answered from `job_runs` — the same rows the
+   worker itself reads to decide whether today's pass is still due, which is what makes a restart
+   at 05:08 not garden twice.
 
-   No Slack token here, and no GitHub App credential: none of the three crons posts or pushes. The
-   one scheduled job that DOES push — the worker's repair pass — is not a cron at all: it runs
-   inside the librarian, which already holds that credential (ADR 044).
+   **Nothing is skipped silently.** The failure mode this replaced was a cron guarded by a
+   repository variable: an unset variable made every job green-and-skipped, so "the crons stopped
+   running" looked identical to "the crons are fine". A pass that does not run now leaves its last
+   `job_runs` row where it was, and the console's Jobs page shows how long ago that was.
 
-   | Settings → Variables → Actions | Used by |
-   |---|---|
-   | `STIGMERGY_CRONS_ENABLED` (`true`) | all three — **and it is the on/off switch** |
-   | `STIGMERGY_PLATFORM_REF` (a release tag; default `main`) | all three — which platform version `pip` installs |
-   | `STIGMERGY_GARDENER_MODEL` | `gardener` (a model name is not a credential) |
-   | `STIGMERGY_PLATFORM_REPO` (default `sturlese/stigmergy`) | all three — **set it if you forked.** Leave it unset on a fork and every cron silently `pip install`s the UPSTREAM CLI, so your crons run somebody else's code against your knowledge |
-
-   **No cross-repo PAT is involved.** The knowledge repo is the workflow's own repository, so the
-   job's read-only `GITHUB_TOKEN` covers the checkout; the CLI arrives by
-   `pip install git+https://github.com/<owner>/stigmergy.git@$STIGMERGY_PLATFORM_REF`.
-
-   **Every scheduled job is guarded by `if: vars.STIGMERGY_CRONS_ENABLED == 'true'` and skips
-   cleanly when it is unset.** That is also the failure mode to check first when "the crons stopped
-   running": a skipped job is green, so read `job_runs`, not the Actions tab (below).
 5. **R2 bucket** + scoped API token in the Cloudflare dashboard, and the lifecycle rule
    `evidence-retention-30d` (delete after 30 days — the physical floor behind the queue purge's
    own `DEFAULT_RETENTION_DAYS`). Verify credentials with the smoke check:
@@ -166,12 +156,11 @@ halves: that `fly deploy` saw the real files, and that nothing but the defaults 
 If you ever find real data under `deploy/`, restore the empty defaults before committing.
 
 The script touches **only those three names**, never the `deploy/` directory itself, because
-`deploy/` holds tracked files it does not bake — `workflows/` today, whatever is added next
-tomorrow. It used to clear the directory outright, and since the EXIT trap knew how to rebuild the
-baked JSON files and nothing else, one `make deploy-staging` deleted the four files under
-`deploy/workflows/` from the working tree; a routine `git add -A` afterwards would have committed
-their removal. The delete set and the restore set are now derived from one list in the script, so
-they cannot drift apart again.
+`deploy/` may hold tracked files it does not bake. It used to clear the directory outright, and
+since the EXIT trap knew how to rebuild the baked JSON files and nothing else, one
+`make deploy-staging` deleted every other tracked file under `deploy/` from the working tree; a
+routine `git add -A` afterwards would have committed their removal. The delete set and the restore
+set are now derived from one list in the script, so they cannot drift apart again.
 
 Then it runs `fly deploy` (one image, all three process groups) and pins both singleton groups:
 `fly scale count slack=1 --yes` — Socket Mode has no leader election and `fly deploy` creates two
@@ -184,11 +173,11 @@ redeploy (see Revocation).
 
 **A deploy is not complete without two verifications**:
 
-1. **A release carrying an index schema change rebuilds the index right after the deploy —
-   never wait for the nightly cron.** Until the index catches up, every `ask`/`search_brain`
+1. **A release carrying an index schema change rebuilds the index right after the deploy.**
+   Nothing rebuilds it for you — the rebuild needs an embedding key the worker does not have, so
+   it is always a command somebody runs. Until the index catches up, every `ask`/`search_brain`
    fails `UndefinedColumn`. After any deploy whose diff touches `index/store.py`'s DDL or the
-   columns `index/corpus.py` parses: `gh workflow run index-rebuild.yml` (or
-   `make rebuild-staging`), before calling the deploy done.
+   columns `index/corpus.py` parses: `make rebuild-staging`, before calling the deploy done.
 2. **The deploy check ends with ONE real `ask`, end to end.** `fly status` showing every
    process group healthy proves nothing about the read path a schema-skewed index breaks
    silently.
@@ -202,7 +191,7 @@ do to change this" differently enough that guessing costs a redeploy or a silent
 |---|---|---|
 | Baked into the image at deploy time | `ops/identities.json` — the copy `fly.toml` points the `app` and `slack` groups at (`--identities`); the fallback copy of `ops/entity-registry.json` is baked the same way, but only answers where the index has no snapshot | a commit and a push in the knowledge repo, then `make deploy-staging` to re-bake `deploy/` and redeploy |
 | Cached in the index, refreshed by the push webhook | `ops/entity-registry.json`, `ops/identities.json`, `ops/slack-channels.json` — `ops_file_snapshot` rows every process group reads through its database connection. The console's Index panel shows each file's freshness and source sha | a commit and a push — no deploy; the webhook writes each pushed file within seconds (fetched at the branch ref, so replays are inert), and the nightly index rebuild reconciles per file — it never clears the two access files over an absent checkout copy |
-| A Fly secret, read once at process startup | `STIGMERGY_TOKEN_STORE`, `OPENAI_API_KEY`, `STIGMERGY_INDEX_DSN`, the `STIGMERGY_EVIDENCE_*` group, the librarian App triple, `ANTHROPIC_API_KEY`, `STIGMERGY_ADMIN_TOKEN_HASH`/`STIGMERGY_ADMIN_GITHUB_TOKEN`, the three `SLACK_*` tokens, `STIGMERGY_GITHUB_WEBHOOK_SECRET` | `fly secrets set …` — triggers the redeploy that applies it; effective once the new machines are healthy, not before |
+| A Fly secret, read once at process startup | `STIGMERGY_TOKEN_STORE`, `OPENAI_API_KEY`, `STIGMERGY_INDEX_DSN`, the four `STIGMERGY_EVIDENCE_ENDPOINT`/`_BUCKET`/`_ACCESS_KEY_ID`/`_SECRET_ACCESS_KEY`, the librarian App triple, `ANTHROPIC_API_KEY`, `STIGMERGY_ADMIN_TOKEN_HASH`, the three `SLACK_*` tokens, `STIGMERGY_GITHUB_WEBHOOK_SECRET` | `fly secrets set …` — triggers the redeploy that applies it; effective once the new machines are healthy, not before |
 | A non-secret env var in `fly.toml`'s `[env]`, app-wide | `STIGMERGY_LIBRARIAN_TIMEOUT_S` — the worker's per-item agent budget, and what its lease (`config.resolved_visibility_timeout_s`) is derived from | edit `fly.toml`, then `make deploy-staging`/`fly deploy` — every process group's machines restart on the new value together. The admin console re-derives the DEPENDENT lease fresh on every request rather than caching a class default, so its meter and Reclaim horizon can never disagree with the worker's own once the new machines are up — see "A dead worker mid-item" below |
 | Committed to the knowledge repo, read at a base commit, wherever a checkout exists | `ops/acl.json`, `ops/entity-registry.json` and the contract linter — the WORKER's own reads, at each item's own base commit, distinct from the `app`/`slack` groups' baked copies above | a commit and a push — no deploy; picked up at the very next item the worker claims |
 
@@ -277,43 +266,52 @@ fly deploy --image <that image ref>   # redeploy it directly
 
 (Fly also has `fly apps rollback` on recent CLI versions — either is a single command.)
 
-### Scheduled jobs — the three crons
+### The night shift — what runs unattended
 
-| Workflow | When (UTC) | What |
-|---|---|---|
-| `index-rebuild.yml` | nightly ~04:17 | full staging index rebuild from `@main` |
-| `retention-purge.yml` | nightly ~04:42 | `stigmergy-queue purge` (30-day terminal rows) |
-| `gardener.yml` | daily ~05:07 | `stigmergy-gardener` corpus-health run |
+| Pass | When (UTC) | Where | What |
+|---|---|---|---|
+| gardener | daily, `STIGMERGY_LIBRARIAN_GARDEN_AT` (default 05:07) | the worker's idle branch | `stigmergy-gardener`'s corpus-health run, findings persisted |
+| retention purge | daily, `STIGMERGY_LIBRARIAN_RETENTION_AT` (default 04:42) | the worker's idle branch | payload and hints of terminal rows past the window |
+| view sweep | every `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S`, and after anything this worker filed | the worker's idle branch | regenerates the `views/` rollups that went stale |
+| repair pass | every `STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S` | the worker's idle branch | derives repairs from the gardener's findings and APPLIES them |
+| index rebuild | **never automatically** | an operator's terminal | the full rebuild — see below |
 
-**What answers the gardener's findings is not here.** The librarian worker derives repairs from
-them and applies them on its own idle branch — a job that pushes, which is exactly why it is not a
-scheduled Actions run: a push credential in a public runner's environment is what this whole
-arrangement avoids ([repair.md](./repair.md)). Its interval is
-`STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S` in the worker's environment, and what it did is on the
-console's Repairs page.
+All of it runs inside the `worker` process group. **No pass starts while a capture is waiting**,
+and each yields between units, so maintenance can never put itself between a capture and its
+filing ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D6).
 
-They run from the **knowledge repo's** own `.github/workflows/`; this repository ships them as
-templates in [`deploy/workflows/`](../../deploy/workflows/README.md), outside `.github/` so that
-GitHub does not register them here.
+The two DAILY passes decide "is today's run still owed" by reading their own last `job_runs` row,
+not an in-process timer — which is why a redeploy at 05:08 does not garden a second time, and why
+a worker that was down all night does not run a 05:07 pass at 23:00 (it would land twelve hours
+after the repair passes that were supposed to answer its findings).
 
-All three have `workflow_dispatch` for a manual run (`gh workflow run index-rebuild.yml`, etc.;
-`retention-purge.yml` is the only one taking an input, `dry_run`) — and the admin console's Crons
-tab drives the same dispatch/enable/disable with buttons when its GitHub PAT and repo are
-configured ([admin-console.md](./admin-console.md)).
-`retention-purge` and `gardener` each write a `job_runs` row (so does the worker's repair pass,
-under the job name `repair`); `index-rebuild` writes none and its truth is `index_meta.built_at`
-instead. The Actions tab cannot tell you a
-scheduled job stopped (a job skipped for an unset `vars.STIGMERGY_CRONS_ENABLED` is *green*). The
-database can:
+**The index rebuild is the one pass that cannot move into the worker.** It needs an embedding key,
+and the worker's environment deliberately has none: `librarian.bootstrap` strips `OPENAI_API_KEY`
+and `EMBED_API_KEY` before exec'ing the worker, so the write path cannot reach the read path's
+credential. Rebuild by hand, with the key exported:
+
+```sh
+.venv/bin/stigmergy-index --rebuild --repo $STIGMERGY_REPO      # or: make rebuild-staging
+```
+
+Between rebuilds the index is kept current by the push webhook (below), and the admin console's
+Index page lints the LIVE index on demand — duplicate page ids, orphan continuation parts,
+dangling supersessions, unregistered anchors — which is where drift shows up.
+
+**"Did it run" is a database question, and only a database question.** There is no Actions tab to
+read and no schedule to check:
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
 ORDER BY started_at DESC LIMIT 20;
-SELECT built_at FROM index_meta;                 -- index-rebuild's only trace
+SELECT built_at FROM index_meta;                 -- the rebuild's only trace; it writes no job row
 SELECT * FROM ingest_errors WHERE NOT resolved ORDER BY last_at DESC;
 ```
 
-`stigmergy-digest` is deliberately NOT on a cron ([ADR 026](../decisions/026-the-purge.md) D6): run
+The console's Jobs page is the same rows with the times spelled out, and its Repairs page is what
+the repair pass did with the gardener's findings ([repair.md](./repair.md)).
+
+`stigmergy-digest` is deliberately NOT on the night shift ([ADR 026](../decisions/026-the-purge.md) D6): run
 `.venv/bin/stigmergy-digest --repo $STIGMERGY_REPO` (or `--dry-run`) by hand; its watermark means each
 post covers exactly the window since the previous one.
 
@@ -323,7 +321,7 @@ post covers exactly the window since the previous one.
 middleware, by exact match, because it authenticates differently (HMAC over the raw body). Two Fly
 secrets (above: `STIGMERGY_GITHUB_WEBHOOK_SECRET`, `STIGMERGY_GITHUB_REPO`; optional
 `STIGMERGY_GITHUB_BRANCH`, default `main`, and `STIGMERGY_GITHUB_WEBHOOK_FILE_CAP`, default `50` — a
-push touching more files than the cap is left to the nightly rebuild), plus one webhook in the
+push touching more files than the cap is left to the next rebuild), plus one webhook in the
 **knowledge** repo's GitHub Settings → Webhooks:
 
 - **Payload URL**: `https://$FLY_APP.fly.dev/webhook/github`
@@ -347,8 +345,8 @@ ORDER BY started_at DESC LIMIT 5;
 
 ### The admin console
 
-`/admin` on the `app` process group (ADR 029) — the daily loop (queue drain, crons, gardener,
-repairs, digest, index, activity) in a browser instead of a terminal. Inert 404s until
+`/admin` on the `app` process group (ADR 029) — the daily loop (queue drain, the night shift,
+gardener, repairs, digest, index, activity) in a browser instead of a terminal. Inert 404s until
 `STIGMERGY_ADMIN_TOKEN_HASH` is set; everything it can do, each degraded mode and the rotation
 drills are in [admin-console.md](./admin-console.md). It is management-only: nothing on it reads
 the corpus.
@@ -461,7 +459,6 @@ make index-rebuild                                     # $STIGMERGY_REPO (defaul
 
 ```sh
 make rebuild-staging                  # needs STAGING_DSN in .env (deliberately NOT STIGMERGY_INDEX_DSN)
-gh workflow run index-rebuild.yml     # ...or trigger the nightly workflow manually
 ```
 
 The running Fly machine picks up the new index on its next query — no restart, no redeploy (the
@@ -813,7 +810,7 @@ secret), delete the old key in GitHub. App ID and installation ID are stable.
 
 `fly secrets set STIGMERGY_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"`, then paste the same
 value into the webhook's Secret field in the knowledge repo's GitHub settings. Between the two
-steps the endpoint rejects pushes with the generic `401`; the nightly rebuild covers the gap.
+steps the endpoint rejects pushes with the generic `401`; the next rebuild covers the gap.
 
 ## Release gates & drills
 
@@ -1002,8 +999,7 @@ serving auth open. The mirror-image symptom is a *just-revoked token that still 
 machines have not been replaced yet (see Revocation). Like the 421, these write no audit row.
 
 **`ask`/`search_brain` failing `UndefinedColumn` right after a deploy.** Index schema skew —
-the deploy shipped DDL the staging `pages_index` predates. `gh workflow run index-rebuild.yml`
-(or `make rebuild-staging`) and re-ask. This is exactly why a deploy ends with one real `ask`
+the deploy shipped DDL the staging `pages_index` predates. `make rebuild-staging` and re-ask. This is exactly why a deploy ends with one real `ask`
 (see Deploy).
 
 **The server refuses to start: empty index.** Fail-closed on purpose, both transports. Build

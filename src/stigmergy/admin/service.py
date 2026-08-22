@@ -16,7 +16,6 @@ from collections import Counter
 
 from stigmergy import text as textutil
 from stigmergy.admin import schema as admin_schema
-from stigmergy.admin.github import ActionsError
 from stigmergy.admin.settings import AdminSettings
 from stigmergy.capture import latency, queue, retention
 from stigmergy.capture import schema as capture_schema
@@ -50,7 +49,12 @@ from stigmergy.server.webhook import JOB_NAME as WEBHOOK_JOB
 
 log = logging.getLogger(__name__)
 
-PURGE_JOB, PURGE_DRY_RUN_JOB = "capture-purge", "capture-purge-dry-run"
+PURGE_JOB, PURGE_DRY_RUN_JOB = retention.JOB_NAME, retention.DRY_RUN_JOB_NAME
+
+# The one unattended job this console cannot start, spelled as the command that DOES start it —
+# see `NIGHT_SHIFT` below for why it cannot run in the worker. A console that names a command is
+# making a promise, so a test runs this one rather than trusting the string.
+INDEX_REBUILD_COMMAND = "stigmergy-index --repo $STIGMERGY_REPO"
 
 # The door name this console records on every capture and repair it queues or decides.
 ADMIN_DOOR = "admin"
@@ -83,22 +87,37 @@ _SIMILARITY_MIN_TOKEN = 3
 _SIMILARITY_MIN_CONTAINED = 4
 _SIMILARITY_LIMIT = 5
 
-# The crons tab's table: file, title, schedule, and WHERE the database truth for "did it run"
-# lives — `job_runs` for the two that write one, `index_meta.built_at` for the rebuild, which
-# writes none. `schedule_utc` is pinned against the parsed workflow YAML by test.
+# The Jobs page's table: what the deployment runs UNATTENDED, and where the database truth for
+# "did it run" lives — `job_runs` for the passes that write one, `index_meta.built_at` for the
+# rebuild, which writes none.
 #
-# THREE, not four: the repair pass is not a cron any more (ADR 044). It runs on the worker's idle
-# branch, so there is no workflow file to dispatch and nothing here to control — the Repairs page
-# reads what it did instead.
-CRON_WORKFLOWS = (
-    {"file": "index-rebuild.yml", "title": "Index rebuild", "schedule_utc": "17 4 * * *",
-     "truth": "index_meta.built_at", "dispatch_inputs": ()},
-    {"file": "retention-purge.yml", "title": "Retention purge", "schedule_utc": "42 4 * * *",
-     "truth": f"job_runs:{PURGE_JOB}", "dispatch_inputs": ("dry_run",)},
-    {"file": "gardener.yml", "title": "Gardener", "schedule_utc": "7 5 * * *",
-     "truth": f"job_runs:{GARDENER_JOB}", "dispatch_inputs": ()},
+# There are no levers here any more, and that is the change ADR 044 made rather than a gap. These
+# passes used to be GitHub Actions crons the console could dispatch, enable and disable through a
+# fine-grained PAT; they now run on the librarian worker's idle branch, so there is no workflow to
+# dispatch and no schedule to switch off from a browser. What an operator gets instead is what
+# they actually needed: when each pass last ran, what it did, and — for the one pass that CANNOT
+# run in the worker — the command that runs it.
+#
+# `runs_in` is that distinction, and it is load-bearing rather than decorative:
+#   "worker"   — the night shift, scheduled by `librarian.schedule` on the idle branch.
+#   "operator" — the index rebuild. The deployed worker's environment has no embedding key at all
+#                (`librarian.bootstrap.READ_PATH_ONLY_ENV` strips it before exec, so the write
+#                path cannot reach the read path's credential), so this one is a command a person
+#                runs with the key exported. The console says so and names it rather than
+#                offering a button that could only ever fail.
+NIGHT_SHIFT = (
+    {"file": "gardener", "title": "Gardener", "runs_in": "worker",
+     "truth": f"job_runs:{GARDENER_JOB}",
+     "at_setting": librarian_config.GARDEN_AT_ENV,
+     "at_default": librarian_config.Settings.garden_at},
+    {"file": "retention-purge", "title": "Retention purge", "runs_in": "worker",
+     "truth": f"job_runs:{PURGE_JOB}",
+     "at_setting": librarian_config.RETENTION_AT_ENV,
+     "at_default": librarian_config.Settings.retention_at},
+    {"file": "index-rebuild", "title": "Index rebuild", "runs_in": "operator",
+     "truth": "index_meta.built_at", "at_setting": "", "at_default": "",
+     "command": INDEX_REBUILD_COMMAND},
 )
-DISPATCHABLE = tuple(w["file"] for w in CRON_WORKFLOWS)
 
 # The worker's OWN attempts budget, never the queue CLI's shorter flagless default — comparing a
 # long agent item against the CLI's lease calls it dead while its worker is still on it. The one
@@ -152,12 +171,10 @@ class AdminService:
     invariant: no cursor is ever held across an `await` — the two async digest methods await
     inside `digest.run`, between statements, never mid-cursor."""
 
-    def __init__(self, conn, *, server_settings, admin_settings: AdminSettings, gateway=None,
-                 evidence=None):
+    def __init__(self, conn, *, server_settings, admin_settings: AdminSettings, evidence=None):
         self._conn = conn
         self._server = server_settings
         self._admin = admin_settings
-        self._gateway = gateway
         # The evidence store the queue archives material into — the same instance the MCP server
         # submits through; registering an entity (ADR 042) submits a capture too.
         self._evidence = evidence
@@ -166,9 +183,8 @@ class AdminService:
     def meta(self) -> dict:
         return {
             "actor_default": self._admin.actor,
-            "github": {"configured": self._gateway is not None, "repo": self._admin.github_repo},
             "digest": self._digest_pieces(),
-            "workflows": [dict(w) for w in CRON_WORKFLOWS],
+            "jobs": [dict(job) for job in NIGHT_SHIFT],
             "worker": {"visibility_timeout_s": worker_visibility_timeout_s(),
                        "max_attempts": WORKER_MAX_ATTEMPTS},
             # Every closed vocabulary the console renders ships from HERE, so the frontend never
@@ -414,8 +430,8 @@ class AdminService:
 
     def overview(self) -> dict:
         counts = queue.counts_by_status(self._conn)
-        latest = {w["file"]: self._latest_job_run(self._truth_jobs(w)) for w in CRON_WORKFLOWS
-                  if w["truth"].startswith("job_runs:")}
+        latest = {job["file"]: self._latest_job_run(self._truth_jobs(job)) for job in NIGHT_SHIFT
+                  if job["truth"].startswith("job_runs:")}
         gardener = gardener_store.latest_completed_run(self._conn)
         severity_counts: dict[str, int] = {}
         if gardener is not None:
@@ -425,7 +441,7 @@ class AdminService:
             "queue": {"counts": counts},
             "in_flight": self._in_flight(),
             "ingest_errors": self._ingest_errors(limit=5),
-            "crons": {"latest_runs": latest, "index_built_at": self._built_at()},
+            "night_shift": {"latest_runs": latest, "index_built_at": self._built_at()},
             "gardener": {"run": self._run_row(gardener), "severity_counts": severity_counts},
             "digest": {"last_window_until": self._digest_watermark()},
             "admin_actions": admin_schema.recent_actions(self._conn, limit=5),
@@ -677,51 +693,23 @@ class AdminService:
                 "visibility_timeout_s": worker_visibility_timeout_s(),
                 "max_attempts": WORKER_MAX_ATTEMPTS}
 
-    # ── crons ─────────────────────────────────────────────────────────────────────────────────
-    def crons_state(self) -> dict:
+    # ── the night shift ───────────────────────────────────────────────────────────────────────
+    def jobs_state(self) -> dict:
+        """What the deployment runs unattended, and when each last ran.
+
+        Pure database read: every row's truth is a `job_runs` row the pass wrote itself, or the
+        index's own `built_at`. Nothing here calls out to another service, which is why this page
+        cannot be "degraded" — the state it shows is the state that decides whether tonight's pass
+        is due, the same rows `librarian.schedule.daily_due` reads.
+        """
         rows = []
-        for w in CRON_WORKFLOWS:
-            rows.append({**w,
-                         "latest_run": (self._latest_job_run(self._truth_jobs(w))
-                                        if w["truth"].startswith("job_runs:") else None),
+        for job in NIGHT_SHIFT:
+            rows.append({**job,
+                         "latest_run": (self._latest_job_run(self._truth_jobs(job))
+                                        if job["truth"].startswith("job_runs:") else None),
                          "index_built_at": (self._built_at()
-                                            if w["truth"] == "index_meta.built_at" else None)})
-        state = {"configured": self._gateway is not None, "workflows": rows}
-        if self._gateway is None:
-            return state
-        try:
-            by_path = {w["path"].rsplit("/", 1)[-1]: w for w in self._gateway.workflows()}
-            for row in rows:
-                remote = by_path.get(row["file"])
-                row["state"] = remote["state"] if remote else "unknown"
-                row["runs"] = self._gateway.runs(row["file"], limit=5)
-        except ActionsError as ex:
-            state["github_error"] = str(ex)
-        return state
-
-    def cron_dispatch(self, workflow_file: str, *, actor: str, inputs: dict | None = None) -> dict:
-        self._require_workflow(workflow_file)
-        gateway = self._require_gateway()
-        declared = next(w["dispatch_inputs"] for w in CRON_WORKFLOWS
-                        if w["file"] == workflow_file)
-        cleaned = {}
-        for key, value in (inputs or {}).items():
-            if key not in declared:
-                raise AdminBadRequest(
-                    f"workflow {workflow_file} declares no {key!r} input"
-                    + (f" (accepted: {', '.join(declared)})" if declared else ""))
-            cleaned[key] = "true" if value in (True, "true") else "false"
-        self._mutate(f"cron.dispatch:{workflow_file}", actor, {"inputs": cleaned},
-                     lambda by: gateway.dispatch(workflow_file, inputs=cleaned or None))
-        return {"dispatched": workflow_file, "inputs": cleaned}
-
-    def cron_set_enabled(self, workflow_file: str, *, actor: str, enabled: bool) -> dict:
-        self._require_workflow(workflow_file)
-        gateway = self._require_gateway()
-        verb = "enable" if enabled else "disable"
-        self._mutate(f"cron.{verb}:{workflow_file}", actor, {},
-                     lambda by: gateway.set_enabled(workflow_file, enabled=enabled))
-        return {"workflow": workflow_file, "enabled": enabled}
+                                            if job["truth"] == "index_meta.built_at" else None)})
+        return {"jobs": rows}
 
     # ── internals ─────────────────────────────────────────────────────────────────────────────
     def _mutate(self, action: str, actor: str, args: dict, fn):
@@ -765,19 +753,6 @@ class AdminService:
             raise
         admin_schema.record_action(self._conn, actor=by, action=action, args=args, outcome="ok")
         return result
-
-    def _require_workflow(self, workflow_file: str) -> None:
-        if workflow_file not in DISPATCHABLE:
-            raise AdminBadRequest(
-                f"{workflow_file!r} is not a console-drivable workflow "
-                f"(allowed: {', '.join(DISPATCHABLE)})")
-
-    def _require_gateway(self):
-        if self._gateway is None:
-            raise AdminRefused(
-                "GitHub is not configured — set the admin GitHub token to drive workflows from "
-                "here; the database truth on this page stays readable without it")
-        return self._gateway
 
     def _digest_settings(self) -> DigestSettings:
         try:

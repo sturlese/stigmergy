@@ -35,7 +35,7 @@ index from its own in-memory whole-corpus walk; the incremental webhook
 (`server.webhook._resolve_outbound_links`) builds the same shape from `store.existing_paths`'s
 one-query snapshot of `pages_index`'s CURRENT rows, then calls the identical `resolve_links`. A
 page added in the same push as a sibling it links to cannot resolve that one link yet (the
-snapshot predates the transaction that will land both) — reconciled at the next nightly rebuild,
+snapshot predates the transaction that will land both) — reconciled at the next rebuild,
 exactly like `inlinks` always was. `tests/server/test_webhook.py`'s parity test pins that the two
 snapshots agree on the same corpus, so this stays a fact about the code, not an assumption.
 
@@ -237,7 +237,7 @@ retrieval query reads the registry, and the registry generator never reads the i
 artifacts, one direction each time data moves between them, never a cycle.
 
 The index does CACHE the registry — one `ops_file_snapshot` row, written by the push webhook and
-by the nightly rebuild — but purely as a courier for the server, which holds no checkout in
+by a rebuild — but purely as a courier for the server, which holds no checkout in
 production; the bytes are stored verbatim and interpreted only by `server/entity_aliases.py`. See
 [hybrid-index.md](./hybrid-index.md#the-ops-files-ride-along).
 

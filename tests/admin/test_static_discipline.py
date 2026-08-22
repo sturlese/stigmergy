@@ -273,15 +273,44 @@ def test_the_external_reference_grep_sees_the_object_literal_spelling():
     assert not EXTERNAL_REF.search('href: r.html_url'), "a URL from API data is not a literal"
 
 
-def test_the_one_external_link_is_gated_on_githubs_own_host():
-    """The Jobs page renders the Actions run link from an API response. A scheme allowlist is the
-    difference between "a link to the logs" and "a link to wherever a compromised response
-    says": the anchor is built only behind a `https://github.com/` prefix check."""
-    jobs = (STATIC / "assets" / "views" / "jobs.js").read_text(encoding="utf-8")
-    anchor = jobs.index("href: r.html_url")
-    guard = jobs.rfind('startsWith("https://github.com/")', 0, anchor)
-    assert guard != -1 and anchor - guard < 400, (
-        "jobs.js renders the run link without the github.com prefix guard immediately before it")
+# REPLACES `test_the_one_external_link_is_gated_on_githubs_own_host`. That test pinned the prefix
+# guard in front of the Jobs page's Actions-run link — the console's only anchor built from an API
+# response. The link went with the crons (ADR 044: the night shift runs in the librarian worker, so
+# there is no Actions run to link to), and a guard test over a deleted line would be permanently
+# green — coverage in name only.
+#
+# The RULE it protected got stronger rather than being dropped, and that is what this asserts: the
+# console now builds NO anchor from data at all, so there is no host to allowlist. Written over
+# every `href` in the frontend, so re-introducing a data-driven link fails here and has to bring
+# its own guard and its own test back with it.
+DATA_HREF = re.compile(r"""href\s*[:=]\s*([^,}\s]+)""")
+
+
+def test_the_data_href_grep_tells_a_literal_from_an_expression():
+    """The instrument's own specificity, stated — the ban below is only worth its green if the
+    pattern can actually tell the two apart, in both spellings this frontend writes."""
+    assert DATA_HREF.search('el("a", { href: r.html_url })').group(1) == "r.html_url"
+    assert DATA_HREF.search("a.href = url").group(1) == "url"
+    assert DATA_HREF.search('href: "#captures"').group(1).startswith('"')
+    assert DATA_HREF.search('href="/admin/"').group(1).startswith('"')
+
+
+def test_the_console_builds_no_link_from_data():
+    """Every `href` in the console is a literal in-app route. A link built from a database or API
+    value is how a compromised response becomes a click target, and the console has no reason to
+    render one: everything it shows lives in this deployment."""
+    offenders = []
+    for path in _files(".js", ".html"):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for match in DATA_HREF.finditer(line):
+                value = match.group(1).strip()
+                if value.startswith(("\"", "'", "`")):
+                    continue        # a literal — the external-resource ban above covers those
+                offenders.append(f"{path.name}:{lineno}: href from {value}")
+    assert not offenders, (
+        "the console builds an href from data:\n  " + "\n  ".join(offenders)
+        + "\n\nIf that is intended, it needs a host allowlist in front of it and a test pinning "
+          "the allowlist — see the comment above this test for the one that used to exist.")
 
 
 def test_every_confirm_form_states_its_consequence():
@@ -301,15 +330,26 @@ def test_every_confirm_form_states_its_consequence():
     assert not missing, "confirmForm calls with no consequence of their own:\n  " + "\n  ".join(missing)
 
 
-def test_the_retention_purge_dispatch_defaults_to_a_dry_run():
-    """The one workflow that deletes user material: its Run-now form's dry-run box starts TICKED,
-    so the default path lists what would go and touches nothing."""
+# RETIRED with the dispatch form it guarded: `test_the_retention_purge_dispatch_defaults_to_a_dry_run`
+# pinned the Run-now checkbox for the retention purge as TICKED, so a console dispatch previewed
+# by default instead of deleting user material. There is no dispatch form: the purge runs on the
+# worker's idle branch (ADR 044) and the console only reports what it did.
+#
+# The property has not moved somewhere else to be re-pinned — it stopped existing, because the
+# console no longer has a button that deletes anything nightly. The dry-run PREVIEW an operator
+# can still ask for is Captures → Retention purge, whose own refusals and preview shape are
+# covered in `tests/admin/test_service_pg.py`. Recorded here rather than deleted silently so the
+# next reader can tell a retired guard from a forgotten one.
+
+
+def test_the_jobs_page_offers_no_lever_at_all():
+    """The positive half of that retirement, and the thing worth pinning now: the Jobs page is a
+    read. A `confirmForm`, a `mutate` or a POST reappearing on it would mean somebody rebuilt a
+    lever for a pass that schedules itself — which is exactly what ADR 044 removed."""
     jobs = (STATIC / "assets" / "views" / "jobs.js").read_text(encoding="utf-8")
-    dry_run = re.search(r"""name:\s*["']dry_run["'][^}]*\}""", jobs)
-    assert dry_run, "jobs.js no longer declares the dry_run field"
-    assert re.search(r"value:\s*true", dry_run.group(0)), (
-        "the dry_run checkbox is unticked by default — the default path of the purge dispatch "
-        "is the real purge")
+    for lever in ("confirmForm", "mutate(", "api.post"):
+        assert lever not in jobs, (
+            f"jobs.js calls {lever} — the night shift runs itself; the page reports, never drives")
 
 
 def test_admin_console_docs_do_not_promise_an_unreachable_hover_reason():

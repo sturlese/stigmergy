@@ -32,7 +32,7 @@ stigmergy-gardener                                  stigmergy-digest
         │                                           channel_audiences) — the digest broadcasts
         │                                           --dry-run: byte-identical preview, posts nothing
         │                                                  │
-        └──────────────────────── gardener.yml (daily cron; gardener only) ─────────────────────────┘
+        └────────── the worker's night shift (daily, idle branch; gardener only) ──────────────────┘
 ```
 
 Both commands are **findings-only**: neither fixes, writes, opens a PR or issue, or edits the
@@ -159,7 +159,7 @@ on purpose, on every axis: the NEWEST `STIGMERGY_GARDENER_SWEEP_CHANGED_CEILING`
 pages filed since the last run's watermark, plus a rotating sample of
 `STIGMERGY_GARDENER_SWEEP_SAMPLE` (default 10) unchanged pages, each body clamped to
 `sweep.MAX_SWEEP_PAGE_CHARS` — so the prompt is settings-shaped, never corpus-shaped, even on a
-first run or after a cron outage, and a failed night re-presents a BOUNDED population rather than
+first run or after an outage, and a failed night re-presents a BOUNDED population rather than
 one its own frozen watermark keeps growing. A changed page past the ceiling is deferred, counted
 (`changed_deferred`, plus a skip reason naming the knob) and never lost: it joins the unchanged
 pool, where the rotation reaches it. The pass is deliberately NOT batched instead — its checks
@@ -380,28 +380,33 @@ returned string. A zero-activity window still renders every section, with its ow
 line — "silence is not an outcome" applies here exactly as it does to the gardener's own severity
 sections.
 
-## How the two commands relate to each other, and to the crons
+## How the two commands relate to each other, and to the night shift
 
 `stigmergy-gardener` and `stigmergy-digest` are independent, fully-runnable operator commands.
-**The digest is command-only: no cron at all.** A schedule buys nothing it does not already have —
-`stigmergy-digest` run by hand next month still covers everything since the last post, because its
-own watermark says so; only timeliness is lost by not scheduling it.
+**The digest is command-only: it is on no schedule at all.** A schedule buys nothing it does not
+already have — `stigmergy-digest` run by hand next month still covers everything since the last
+post, because its own watermark says so; only timeliness is lost by not scheduling it.
 
-The gardener's daily cron lives in its own workflow, `gardener.yml` — shipped here as a template
-and **run from the knowledge repo**, whose Actions logs are private (this report names entity ids
-and page paths; see the runbook). It runs
-daily at ~05:07 UTC, after `index-rebuild` (04:17) and `retention-purge` (04:42), so the corpus
-view the gardener reads is the morning's, not last night's. It checks out the knowledge repo
-read-only and runs one command — `stigmergy-gardener --repo stigmergy-knowledge` — which persists
-findings and prints the report, and needs no Slack credential to do it. The whole job is guarded by
-`if: vars.STIGMERGY_CRONS_ENABLED == 'true'`, so a fork that inherits the file but not the deployment
-behind it skips cleanly instead of failing a scheduled run every night. A `concurrency` group
-queues a second run rather than cancelling one in flight: cancelling mid-write would discard real,
-already-computed work.
+**The gardener's daily run happens inside the librarian worker**, on its idle branch, at
+`STIGMERGY_LIBRARIAN_GARDEN_AT` (default 05:07 UTC) — see
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D6 and the
+[operator runbook](./operator-runbook.md). Three properties come from living there rather than in
+a scheduled GitHub Actions run:
 
-**What answers these findings is not a fourth workflow.** The repair pass runs inside the librarian
-worker, on its own interval and only when its queue is idle — because it PUSHES, and a scheduled
-Actions run holding the App's private key is a write credential in a public runner's environment
+- **It cannot delay a filing.** A pass never starts while a capture is waiting in the queue, and
+  yields between units. A cron had no way to know.
+- **It cannot silently stop.** Due-ness is read from the pass's own last `job_runs` row, so a
+  worker that restarts at 05:08 does not garden twice and one that was down all night does not
+  garden at 23:00. The failure mode this replaced was a job guarded by a repository variable: unset
+  meant every run was green-and-skipped, and "the crons stopped running" looked exactly like "the
+  crons are fine".
+- **The report stays private without an arrangement.** This report names entity ids and page paths.
+  Running it inside the deployment means there is no Actions log to keep private in the first
+  place, which is what the "run it from the knowledge repo" rule used to buy.
+
+It needs no Slack credential, and it holds no push credential either: it persists findings and
+returns them. What ANSWERS those findings is the worker's repair pass, on its own interval — a lane
+that does push, which is exactly why it lives inside the deployment that already holds the App key
 ([repair.md](./repair.md), [ADR 044](../decisions/044-the-capture-is-the-approval.md) D2). Its
 coupling to this report is a watermark rather than an offset: it answers the latest COMPLETED
 gardener run, once, and a pass that finds no completed run — or nothing answerable in one — records

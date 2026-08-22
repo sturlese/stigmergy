@@ -48,8 +48,8 @@ kind of material enters at the same door.
   ledger's permanent `content_key` memory (an applied or refused repair is never derived again),
   two ceilings per pass (`STIGMERGY_REPAIR_CEILING`, default 20, and `STIGMERGY_REPAIR_MERGE_CEILING`,
   default 3), and the nine gates
-- **`stigmergy-repair` is gone**, and so is the `repair-propose` cron — three cron templates where
-  there were four. The pass runs on the librarian worker's idle branch
+- **`stigmergy-repair` is gone**, and so is the `repair-propose` cron. The pass runs on the
+  librarian worker's idle branch
   (`STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S`, default 3600, `0` turns it off), only when a completed
   gardener run is newer than the last pass, one commit and one worktree per repair
 - the console's Repairs page is READ-ONLY: `POST /admin/api/repairs/{id}/approve` and `/reject` are
@@ -74,6 +74,24 @@ kind of material enters at the same door.
   it now runs on the first idle tick AFTER the worker did something as well as on its interval — so
   a rollup never describes a page that just went. The gardener's `stale-view` finding names no
   command, because there is none to name
+- **Nothing runs in GitHub Actions any more: the night shift lives in the worker.** The three cron
+  templates under `deploy/workflows/` are deleted, along with `STIGMERGY_CRONS_ENABLED`,
+  `STIGMERGY_PLATFORM_REF`/`_REPO` as cron settings, and the Actions secrets an adopter had to
+  arrange on their knowledge repo. The gardener and the retention purge are daily passes on the
+  librarian worker's idle branch, at `STIGMERGY_LIBRARIAN_GARDEN_AT` (default `05:07` UTC) and
+  `STIGMERGY_LIBRARIAN_RETENTION_AT` (default `04:42`); either takes `off`. Due-ness is read from
+  the pass's own last `job_runs` row, so a restart does not run a pass twice and a worker that was
+  down all night does not run a 05:07 pass at 23:00 — the failure mode the crons had was the
+  opposite one, where an unset repository variable made every scheduled run green-and-skipped
+- **The admin console holds no credential for another service.** `STIGMERGY_ADMIN_GITHUB_TOKEN`
+  and `STIGMERGY_ADMIN_GITHUB_REPO` are gone with `admin/github.py`, the four `POST
+  /admin/api/crons/*` routes and the Jobs page's levers; `GET /admin/api/crons` becomes
+  `GET /admin/api/jobs`, a pure read of `job_runs`. A fine-grained PAT with Actions read+write is
+  not a credential to keep for a page that only reports
+- **The index rebuild is the one pass that stays a command**, and the console says so instead of
+  offering a button: the deployed worker's environment has no embedding key by construction
+  (`bootstrap.READ_PATH_ONLY_ENV` strips it), so nothing in the write path can rebuild the index
+
 ### Changed
 - `brain_submit` takes `kind` in `raw` · `page` · `meeting` · `document`; a `document` also takes
   `source_url`, and its text is filed as a synthesis page beside a verbatim `sources/documents/`
@@ -637,7 +655,8 @@ previous one — there isn't one.
 - **An admin console** at `/admin` on the existing app process group — steward drain, remote
   control of the crons, and an activity view. Inert until its token hash is configured.
 - **Seventeen CLIs**, a `docker-compose` stack for the whole thing, and cron templates in
-  [`deploy/workflows/`](./deploy/workflows) to copy into your own knowledge repo.
+  `deploy/workflows/` to copy into your own knowledge repo (the directory is gone as of ADR 044 —
+  the link with it; what this release shipped stands as written).
 
 ### Notes
 

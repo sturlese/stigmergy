@@ -272,9 +272,9 @@ async def _inner(scope, receive, send):
 
 
 @pytest.fixture()
-def app(conn, server_settings, admin_settings, fake_gateway):
+def app(conn, server_settings, admin_settings):
     return compose(_inner, conn=conn, server_settings=server_settings,
-                   admin_settings=admin_settings, gateway=fake_gateway)
+                   admin_settings=admin_settings)
 
 
 def _request(app, method, path, *, token=ADMIN_TOKEN, json_body=None):

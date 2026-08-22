@@ -1,16 +1,22 @@
 """AdminService over the real queue/tables (stigmergy_test), and over a real bare knowledge repo
 for the decisions: every mutation lands through the SAME library seams the CLIs and the review
 lane use, so what these prove is parity, not a parallel implementation."""
+import argparse
 import asyncio
 import json
 import os
+import shutil
+import subprocess
+import sys
 
 import pytest
 
 from stigmergy.admin import schema as admin_schema
 from stigmergy.admin import service as admin_service
 from stigmergy.admin.service import (
-    CRON_WORKFLOWS,
+    INDEX_REBUILD_COMMAND,
+    NIGHT_SHIFT,
+    PURGE_DRY_RUN_JOB,
     AdminBadRequest,
     AdminNotFound,
     AdminRefused,
@@ -45,9 +51,8 @@ def service(conn, server_settings, admin_settings):
 
 
 @pytest.fixture()
-def gh_service(conn, server_settings, admin_settings, fake_gateway):
-    return AdminService(conn, server_settings=server_settings, admin_settings=admin_settings,
-                        gateway=fake_gateway)
+def gh_service(conn, server_settings, admin_settings):
+    return AdminService(conn, server_settings=server_settings, admin_settings=admin_settings)
 
 
 def _actions(conn):
@@ -555,68 +560,62 @@ def test_activity_reads_the_audit_trail_and_never_a_submission_payload(conn, ser
 
 
 # ── crons ─────────────────────────────────────────────────────────────────────────────────────
-def test_crons_without_a_gateway_is_the_database_truth_only(conn, service):
-    ops.record_job_run(conn, GARDENER_JOB, status="ok", stats={})
-    state = service.crons_state()
-    assert state["configured"] is False
-    by_file = {w["file"]: w for w in state["workflows"]}
-    assert by_file["gardener.yml"]["latest_run"]["status"] == "ok"
-    assert by_file["index-rebuild.yml"]["latest_run"] is None
-    assert by_file["index-rebuild.yml"]["index_built_at"], "built_at is that cron's truth source"
+def test_the_jobs_page_reports_every_night_shift_pass_from_the_database(conn, service):
+    """The page is a pure database read: every row's truth is a `job_runs` row the pass wrote
+    itself, or the index's own `built_at`. Nothing is fetched from another service, which is why
+    this page has no degraded state to render."""
+    state = service.jobs_state()
+    by_file = {job["file"]: job for job in state["jobs"]}
+    assert set(by_file) == {"gardener", "retention-purge", "index-rebuild"}
+    assert by_file["gardener"]["latest_run"] is None      # nothing has run in this fresh database
+    assert by_file["index-rebuild"]["latest_run"] is None  # the rebuild writes no job row, ever
+    ops.record_job_run(conn, GARDENER_JOB, status="ok", stats={"findings": 3})
+    assert service.jobs_state()["jobs"][0]["latest_run"]["stats"] == {"findings": 3}
 
 
-def test_crons_with_a_gateway_carries_state_and_runs(gh_service):
-    state = gh_service.crons_state()
-    by_file = {w["file"]: w for w in state["workflows"]}
-    assert by_file["gardener.yml"]["state"] == "disabled_manually"
-    assert by_file["index-rebuild.yml"]["runs"][0]["conclusion"] == "success"
+def test_the_purge_row_reads_the_dry_run_job_too(conn, service):
+    """A dry run IS a run of the retention pass, and an operator who previewed at 04:42 and sees
+    "no run recorded" would reasonably conclude the night shift is dead. `_truth_jobs` folds the
+    two names, and this is the twin that keeps it folded."""
+    ops.record_job_run(conn, PURGE_DRY_RUN_JOB, status="ok", stats={"purged": 0, "dry_run": True})
+    row = {job["file"]: job for job in service.jobs_state()["jobs"]}["retention-purge"]
+    assert row["latest_run"]["job"] == PURGE_DRY_RUN_JOB
 
 
-def test_dispatch_enforces_the_allowlist_before_any_github_call(gh_service, fake_gateway):
-    with pytest.raises(AdminBadRequest, match="not a console-drivable workflow"):
-        gh_service.cron_dispatch("deploy-anything.yml", actor="steward")
-    assert fake_gateway.calls == []
+def test_the_console_names_the_setting_that_actually_schedules_each_worker_pass():
+    """The drift guard that replaced the cron-YAML one: the Jobs page tells an operator which
+    variable moves a pass, and a renamed variable would leave the page naming a setting that does
+    nothing. Pinned against `librarian.config`'s own constants, and against `Settings` actually
+    having a field the name resolves to — so a variable that stopped being read fails here."""
+    settings = librarian_config.Settings.from_args(argparse.Namespace())
+    for job in NIGHT_SHIFT:
+        if job["runs_in"] != "worker":
+            assert not job["at_setting"], f"{job['file']} is not a worker pass but names a setting"
+            continue
+        assert job["at_setting"].startswith("STIGMERGY_")
+        field = job["at_setting"].removeprefix("STIGMERGY_LIBRARIAN_").lower()
+        assert getattr(settings, field) == job["at_default"], (
+            f"the console says {job['file']} runs at {job['at_default']} via "
+            f"${job['at_setting']}, which the librarian's own settings do not agree with")
 
 
-def test_dispatch_converts_declared_inputs_and_records_the_action(conn, gh_service,
-                                                                  fake_gateway):
-    result = gh_service.cron_dispatch("retention-purge.yml", actor="steward",
-                                      inputs={"dry_run": True})
-    assert result["inputs"] == {"dry_run": "true"}
-    assert ("dispatch", "retention-purge.yml", "main", {"dry_run": "true"}) in fake_gateway.calls
-    assert _actions(conn)[0]["action"] == "cron.dispatch:retention-purge.yml"
-
-
-def test_an_undeclared_input_is_refused_by_name(gh_service, fake_gateway):
-    with pytest.raises(AdminBadRequest, match="declares no 'dry_run' input"):
-        gh_service.cron_dispatch("gardener.yml", actor="steward", inputs={"dry_run": True})
-    assert fake_gateway.calls == []
-
-
-def test_without_a_gateway_a_dispatch_is_refused_with_the_degradation_sentence(service):
-    with pytest.raises(AdminRefused, match="GitHub is not configured"):
-        service.cron_dispatch("gardener.yml", actor="steward")
-
-
-def test_the_console_schedule_table_matches_the_workflow_files():
-    """The pin: `CRON_WORKFLOWS` cannot drift from the YAML files it describes."""
-    import pathlib
-
-    import yaml
-
-    # The cron files are TEMPLATES an operator copies into their knowledge repo, so they
-    # live outside `.github/workflows/` (a file there is registered by GitHub whether enabled or
-    # not, and a column of "Disabled" rows on a public Actions tab reads as a broken project). The
-    # console still dispatches them by the same file NAME, in whichever repo they were copied to.
-    workflows_dir = pathlib.Path(__file__).resolve().parents[2] / "deploy" / "workflows"
-    for row in CRON_WORKFLOWS:
-        with open(workflows_dir / row["file"], encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        triggers = config.get("on") or config.get(True)
-        crons = [entry["cron"] for entry in triggers["schedule"]]
-        assert row["schedule_utc"] in crons, (
-            f"{row['file']} schedules {crons} but the console table says "
-            f"{row['schedule_utc']!r} — update CRON_WORKFLOWS")
+def test_the_pass_the_console_cannot_run_names_a_command_that_exists():
+    """**A message containing a command is an executable promise.** The Jobs page tells an
+    operator to rebuild the index by hand — because the deployed worker has no embedding key by
+    design and cannot — so this runs the binary that sentence names. Its `--help` is enough: the
+    promise being kept is that the command EXISTS and takes the flag, not that a rebuild succeeds
+    without a key (it would not, which is the whole reason the pass is not in the night shift)."""
+    binary, flag = INDEX_REBUILD_COMMAND.split()[0], INDEX_REBUILD_COMMAND.split()[1]
+    # Beside this interpreter first, then PATH: an editable checkout's console scripts live in the
+    # venv's bin, which `python -m pytest` does not put on PATH.
+    beside = os.path.join(os.path.dirname(sys.executable), binary)
+    resolved = beside if os.path.exists(beside) else shutil.which(binary)
+    assert resolved, f"the console tells an operator to run {binary!r}, which is not installed"
+    completed = subprocess.run([resolved, "--help"], capture_output=True, text=True, timeout=60)
+    assert completed.returncode == 0, completed.stderr
+    assert flag in completed.stdout, (
+        f"{binary} --help does not mention {flag} — the console's rebuild sentence names a flag "
+        f"the command does not take")
 
 
 # ── the flagless horizon is clamped, whatever the env says ─────────────────────────────────────
