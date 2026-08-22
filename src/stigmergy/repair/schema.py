@@ -208,13 +208,14 @@ def ensure_repair_schema(conn) -> None:
             cur.execute(statement)
 
 
-# ── the op record: the stored shape of ONE edit, and what identifies a proposal ───────────────
+# ── the op record: the stored shape of ONE edit, and what identifies a repair ─────────────────
 # Pure string and dict work, with no import of its own beyond hashlib, because BOTH ends of the
-# loop need it: the proposer (which loads a model stack) and `remote.apply_via_clone` (which the
-# review lane calls inside the MCP server process, and which must not drag one in). Living here
-# rather than in `proposer.py` is what keeps the server's import graph honest.
+# loop need it: the agent that declares a repair (which loads a model stack) and `apply`, which
+# must not drag one in. Living here rather than beside either is what keeps the import graph
+# honest — the rule outlived the review lane that first made it matter, because the worker still
+# derives with a model and applies without one.
 #
-# The stored key is `op`, not `kind`, so a persisted proposal is never mistaken for a librarian
+# The stored key is `op`, not `kind`, so a persisted repair is never mistaken for a librarian
 # outcome's `edits` entry by anything reading JSON — `declared_edits` is the ONE translation
 # between the two vocabularies, and both validations run on its output, so propose time and apply
 # time cannot come to judge different things.

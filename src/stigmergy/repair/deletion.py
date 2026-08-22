@@ -844,7 +844,9 @@ def apply_declared(worktree: str, ops) -> tuple[list[str], list[gates.Finding]]:
     does NOT rewrite now refers to a going page — the latecomer that would otherwise survive the
     deletion as a dead link. Either refuses the whole plan: the corpus moved, delete again. On the
     act road the plan was made against this very tree moments ago, so both are a formality that
-    costs one walk; on the inbox road they are the whole contract.
+    costs one walk. On the QUEUED road — a removal somebody asked for minutes ago, applied by the
+    worker in a fresh clone — they are the whole contract: the corpus has moved since, and the
+    only honest answer to a page that started referring to a going page in between is a refusal.
     """
     findings = validate(worktree, ops)
     if findings:

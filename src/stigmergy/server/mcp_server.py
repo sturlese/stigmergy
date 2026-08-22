@@ -5,10 +5,12 @@ echoes only messages proven safe by construction and collapses everything unanti
 name.
 """
 import argparse
+import functools
 import json
 import logging
 import sys
 
+import anyio.to_thread
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
@@ -136,7 +138,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return _failure("describe_entity", ex)
 
     @mcp.tool()
-    def brain_submit(kind: str, material: str, hints: dict | None = None,
+    async def brain_submit(kind: str, material: str, hints: dict | None = None,
                      submitted_by: str | None = None, verification: str | None = None,
                      acl: str | list | None = None, content_hash: str | None = None) -> str:
         """Capture something into the brain's write queue. `kind` names the SHAPE of the
@@ -163,9 +165,17 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         their token, not their name, and a document does not get to declare its own access
         labels."""
         try:
-            return json.dumps(service.submit(kind, material, hints=hints,
-                                             submitted_by=submitted_by, verification=verification,
-                                             acl=acl, content_hash=content_hash), **_DUMP)
+            # In a WORKER THREAD, and this tool is `async` for that reason alone: `queue.submit`
+            # UPLOADS the material to the evidence store before it writes the row, and FastMCP
+            # drives a sync tool on the event-loop thread. A megabyte to an object store across
+            # the internet is not "more than a query" — it is every other request on this process
+            # waiting for somebody else's transcript to finish uploading (#136).
+            return json.dumps(
+                await anyio.to_thread.run_sync(
+                    functools.partial(service.submit, kind, material, hints=hints,
+                                      submitted_by=submitted_by, verification=verification,
+                                      acl=acl, content_hash=content_hash)),
+                **_DUMP)
         except (CaptureError, RateLimitError) as ex:
             # Safe to echo verbatim: this family names the caller's own field/hint keys or a
             # static limit; the evidence store's failures are reduced to a class name upstream.
@@ -195,7 +205,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return _failure("brain_submissions", ex)
 
     @mcp.tool()
-    def brain_delete(paths: list[str], why: str) -> str:
+    async def brain_delete(paths: list[str], why: str) -> str:
         """Remove pages from the brain and rewrite every page that referred to them. QUEUED here
         and performed by the librarian, which is the only writer the corpus has.
 
@@ -219,8 +229,15 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         outside the corpus. Both are refused here, before anything is queued.
         """
         try:
-            # The length checks live in `BrainService.delete_pages`, inside the audited seam.
-            return json.dumps(service.delete_pages(paths, why, source="mcp"), **_DUMP)
+            # Off the loop, for `brain_submit`'s reason one line over: a removal queues a capture
+            # too, so it uploads its own material before the row lands.
+            # It is NOT off the loop for the reason #135 moved it there — that call cloned, ran a
+            # model, scanned, linted and pushed inside this process, and none of that is here any
+            # more (ADR 044 D3: the worker writes).
+            return json.dumps(
+                await anyio.to_thread.run_sync(
+                    functools.partial(service.delete_pages, paths, why, source="mcp")),
+                **_DUMP)
         except (CaptureError, RateLimitError, CapabilityUnavailableError) as ex:
             return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — narrow on purpose: only `check_arg_length`'s

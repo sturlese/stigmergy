@@ -17,6 +17,7 @@
   [ADR 034](./034-agentic-pydantic-harness.md) (the rule this applies: deterministic code may seed
   context and must not replace the model's judgment).
   Narrative: [`docs/reference/repair.md`](../reference/repair.md).
+- **Superseded in part by** [ADR 044](./044-the-capture-is-the-approval.md) D2: D1's "a HUMAN decides" clause is withdrawn — a repair is derived, validated, applied and recorded by the worker, and the reading nobody gave it beforehand is the stored diff. The kinds, the validators, the appliers and the nine-gate apply stand unchanged.
 
 ## Context
 

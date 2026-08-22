@@ -270,8 +270,8 @@ def swept_clause(result: dict, settings) -> str:
 #
 # It lives HERE, in the worker, rather than in a cron: this process already holds the GitHub App
 # credential the commit needs, and a scheduled Actions run that pushed would put that credential in
-# a runner's environment. The same argument moved the repair pass here (ADR 044), and it is why the
-# crons that remain are the three that need no credential at all.
+# a runner's environment. The same argument moved the repair pass here, and then the rest of the
+# night shift after it (ADR 044) — there is no scheduled job outside this deployment any more.
 
 
 # The two refusals below both fail CLOSED before a single view is touched, and both exist because

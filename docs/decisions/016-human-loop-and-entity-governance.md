@@ -1,6 +1,7 @@
 # ADR 016 — Reading the fast lane's inputs at the base commit, and governed entity birth
 
 **Status:** accepted · 2026-07-27
+**Superseded in part by** [ADR 044](./044-the-capture-is-the-approval.md): its governance half — a steward confirms what the librarian proposed — is gone. The capture is the approval; the three repo-sourced inputs read at the base commit stand.
 
 ## Context
 

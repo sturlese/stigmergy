@@ -17,6 +17,7 @@ Scope: this test is about `mcp_server.py`'s OWN logic (argument wiring, JSON env
 elsewhere (`test_mcp_harness.py`, `test_service_acl.py`)."""
 import asyncio
 import json
+import types
 from unittest.mock import create_autospec
 
 import pytest
@@ -382,3 +383,58 @@ def test_adversarial_submitted_by_by_contrast_DOES_reach_the_service_because_it_
 
 
 
+
+
+# ── the two tools that upload, and where they run ─────────────────────────────────────────────
+# `queue.submit` PUTs the material into the evidence store before it writes the queue row, so both
+# write tools make a network round trip to an object store — up to a megabyte of transcript. FastMCP
+# drives a SYNC tool on the event-loop thread, where that round trip stalls every other request the
+# process is serving, the read tools included (#136).
+#
+# #135 moved `brain_delete` off the loop for a different and now-extinct reason: it used to clone,
+# run a model, scan, lint and push inside this process, and the sweep writer's `asyncio.run` RAISED
+# on the loop. That work is the librarian worker's now (ADR 044 D3) — so the crash is gone, the
+# blocking is not, and this pair is what keeps the fix from being quietly undone with the crash it
+# was mistaken for.
+def _on_the_event_loop_probe(service, method: str):
+    """Point one `BrainService` method at a probe reporting whether it was called ON the event
+    loop. It answers a fact about its CALLER, so it reads the same for a closure that calls the
+    service inline and for one that hands it to a worker thread."""
+    def probe(*_a, **_k):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return {"on_the_event_loop": False}
+        return {"on_the_event_loop": True}
+
+    setattr(service, method, probe)
+
+
+@pytest.mark.parametrize("tool, method, args", [
+    ("brain_submit", "submit", {"kind": "raw", "material": "something worth keeping"}),
+    ("brain_delete", "delete_pages", {"paths": ["wiki/notes/Old.md"], "why": "stale"}),
+])
+def test_a_tool_that_uploads_never_runs_on_the_event_loop(fake_service, tool, method, args):
+    """Red before the fix for `brain_submit`, which called the service inline.
+
+    The payload is asserted through, not just the flag: moving a call to a worker thread must not
+    change the envelope a client reads, or every caller breaks in exchange for a latency fix."""
+    _on_the_event_loop_probe(fake_service, method)
+
+    out = _call(build_mcp(fake_service), tool, **args)
+
+    assert out == {"on_the_event_loop": False}
+
+
+def test_the_probe_can_actually_see_the_event_loop():
+    """The instrument's own specificity: a probe that always answered `False` would make the two
+    tests above green for a tool that never left the loop at all. Called directly from inside a
+    coroutine, it must say so."""
+    holder = types.SimpleNamespace()
+    _on_the_event_loop_probe(holder, "submit")
+
+    async def go():
+        return holder.submit()
+
+    assert asyncio.run(go()) == {"on_the_event_loop": True}
+    assert holder.submit() == {"on_the_event_loop": False}   # and off it, from an ordinary call

@@ -12,6 +12,7 @@
   (a page is written by a model with the material in front of it, never rendered by a script —
   the same argument, applied to the pages a deletion leaves behind).
   Narrative: [`docs/reference/repair.md`](../reference/repair.md).
+- **Amended by** [ADR 044](./044-the-capture-is-the-approval.md): D1, D3 and D5 stand. D2's "in the act" becomes "in the worker's act" — `brain_delete` queues and the librarian performs the removal — and D4's model runs where every other model of the write path runs.
 
 ## Context
 

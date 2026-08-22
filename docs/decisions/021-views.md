@@ -4,6 +4,7 @@ Status: accepted. Narrative: [`docs/reference/views.md`](../reference/views.md).
 Code map: [`src/stigmergy/views/index.md`](../../src/stigmergy/views/index.md),
 [`src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
 Sibling: [ADR 020](./020-meeting-distiller.md), decided alongside this record.
+**Amended by** [ADR 044](./044-the-capture-is-the-approval.md) D6: C3's "it runs in the librarian worker" is the shape everything else took. "The four crons stay four" is reversed — the four became worker passes on the same idle branch, and there is no GitHub Actions workflow left at all.
 
 ## Context
 

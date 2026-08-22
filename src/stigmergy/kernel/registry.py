@@ -143,8 +143,10 @@ def registry_text(reg: Registry) -> str:
     """The exact bytes `save_registry` writes, as a STRING.
 
     Split out from the write for one caller and one reason: the repair loop's `entity-alias` kind
-    has to know what the regenerated registry WILL say before it writes anything, because a
-    proposal stores the bytes a steward approves and the apply byte-compares against them. Building
+    has to know what the regenerated registry WILL say before it writes anything, because the
+    declared repair stores those bytes and the apply byte-compares against them — the corpus can
+    move between deriving a repair and committing it, and a mismatch must be a refusal rather than
+    a silently different registry. Building
     that string a second way would be a second writer of this file format, which is the one thing
     `ops/entity-registry.json` may not have — so the prediction and the write share this function.
 

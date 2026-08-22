@@ -537,8 +537,8 @@ def is_placeholder_line(line: str) -> bool:
     Deliberately literal, and it has a known false positive: a body line that is a whole one-line
     HTML element (`<details>`, `<!-- a comment -->`) reads as a placeholder here. That is ACCEPTED
     v1 behaviour rather than engineered around — the finding is `info`, the repair it invites is a
-    drafted body a steward reads before approving, and a heuristic that tried to tell markup from
-    a placeholder would be a second, worse parser of somebody's prose. The mirror-image gap is
+    drafted body the worker commits with its diff on the ledger, and a heuristic that tried to tell
+    markup from a placeholder would be a second, worse parser of somebody's prose. The mirror-image gap is
     equally deliberate: a placeholder carried under a list bullet (`- <fact…>`) is not a
     placeholder LINE and does not fire.
     """
@@ -647,8 +647,9 @@ def check_entity_placeholder_bodies(pages: list[dict]) -> list[dict]:
     and to the model's empty-body pass alike — a page list, never a repo path, so this check is a
     pure function of what the walk found. One INFO finding per page whose body still carries at
     least one placeholder line."""
-    action = ("no command — the repair proposer drafts a body from the pages anchored to this "
-              "entity; approve it in the review lane, or edit the page by hand")
+    action = ("no command — the worker's repair pass drafts a body from the pages anchored to "
+              "this entity and commits it; read the diff on the Repairs page, or edit the page "
+              "by hand")
     findings = []
     for page in pages:
         placeholders = placeholder_lines(page["body"])

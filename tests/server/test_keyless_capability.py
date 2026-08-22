@@ -53,10 +53,13 @@ def _tools(service):
 
 
 # ── the half that must keep working ──────────────────────────────────────────────────────────────
+# `brain_submit` is an `async` closure — it uploads to the evidence store, which must not run on
+# the event loop (#136) — so it is driven through `asyncio.run` here, for the reason the `ask` test
+# below states: this suite has no async plugin, and the closure under test is the real one.
 def test_brain_submit_works_with_no_embedder(keyless):
     svc, _ = keyless
-    ack = json.loads(_tools(svc)["brain_submit"](
-        kind="raw", material="a capture made while the embedding key was expired"))
+    ack = json.loads(asyncio.run(_tools(svc)["brain_submit"](
+        kind="raw", material="a capture made while the embedding key was expired")))
     assert ack["status"] == "queued" and isinstance(ack["id"], int)
     assert "error" not in ack
 
@@ -64,7 +67,7 @@ def test_brain_submit_works_with_no_embedder(keyless):
 def test_brain_submissions_works_with_no_embedder(keyless):
     svc, _ = keyless
     tools = _tools(svc)
-    tools["brain_submit"](kind="raw", material="something to read back keyless")
+    asyncio.run(tools["brain_submit"](kind="raw", material="something to read back keyless"))
     out = json.loads(tools["brain_submissions"]())
     assert "error" not in out and out["submissions"]
 
