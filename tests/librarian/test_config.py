@@ -1,5 +1,5 @@
 """`librarian.config.Settings`: precedence (CLI flag -> env var -> class default, module
-docstring), and the computed paths derived from `repo` (`acl_path`, `registry_path`,
+docstring), and the computed paths derived from `repo` (`registry_path`,
 `linter_path`) that every fixture in this suite relies on implicitly.
 """
 import pytest
@@ -297,9 +297,11 @@ def test_settings_never_reads_the_environment_outside_from_args(monkeypatch):
 
 
 # ── computed paths every fixture in this suite depends on ──────────────────────────────────────
-def test_acl_registry_and_linter_paths_are_derived_from_repo():
+def test_registry_and_linter_paths_are_derived_from_repo():
     settings = config.Settings(repo="/some/repo")
-    assert settings.acl_path == "/some/repo/ops/acl.json"
+    assert not hasattr(settings, "acl_path"), (
+        "`acl_path` went with the path resolver (ADR 045 D2) — a capture's audience is the door's "
+        "decision on its own queue row, and no repo file decides a label any more")
     assert settings.registry_path == "/some/repo/ops/entity-registry.json"
     assert settings.linter_path == "/some/repo/.claude/tools/stigmergy_lint.py"
 

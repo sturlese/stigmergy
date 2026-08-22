@@ -106,7 +106,6 @@ nothing left for anyone to decide about one afterwards
 | `page.py` | the page vocabulary — SEVEN known types, of which the fast lane may CREATE three — their folders, the server-owned frontmatter stamp, path identity (case/Unicode-fold), and what a filename may be (`unnameable_reason`, bounded in UTF-8 BYTES) |
 | `gitcmd.py` | worktrees, the diff, the commit, the push |
 | `githubapp.py` | app JWT → installation token → push URL; the commit identity |
-| `acl_rules.py` | audience labels from the ordered path rules, fail-closed |
 | `dedup.py` | the two deterministic dedup levels |
 | `report.py` | what a person is told, one fact set rendered two ways |
 | `errors.py` | the domain errors; `LibrarianConfigError` means the WORKER cannot run — and never crosses to the wire once an item is already claimed: a mid-run one becomes a fixed sentence naming only the stage, the detail goes to the operator's log (`worker.process_next`) |
@@ -406,9 +405,13 @@ semantic-similarity gathering either; reopening that is a design with an ACL que
 **One filter makes "the same data" true, and the SAME two halves bound the read tool.**
 `gather._confined` drops every page that is a symlink or does not resolve inside the worktree, and
 the wikilink-vocabulary walk gets the same treatment. `gather.confined_page` asks those two
-questions of ONE path for `read_page`, plus an allow-list — a `.md` page in a content zone, or a
-per-type template at `ops/templates/<type>.md` — because containment alone would admit `.git/config`
-and `ops/acl.json`. A dropped page is logged at WARNING.
+questions of ONE path for `read_page`, and `gather.may_read` asks the third and newest one:
+whether the page is in this run's own AUDIENCE ([ADR 045](../decisions/045-audience-from-the-door.md)
+D3). Both refusals return the same sentence — "you may not read that" and "there is no such page"
+must not be distinguishable, or the tool is an existence oracle for a model that will report what
+it found. The containment half is an allow-list — a `.md` page in a content zone, or a
+per-type template at `ops/templates/<type>.md` — because containment alone would admit `.git/config` and the identity roster.
+A dropped page is logged at WARNING.
 
 Page excerpts and tool results are captured material coming back into a prompt, so both render
 through the same UNTRUSTED-DATA fence: `pydantic_backend._tool_payload` sends `read_page` bodies and
@@ -683,11 +686,13 @@ checked by `worker._check_skill_at`), and every other input the worker judges wi
 
 | Input | How it is read at `base.sha` | Absent at that commit means |
 |---|---|---|
-| `ops/acl.json` | parsed from the blob — `acl_rules.load_text`, no file anywhere | open corpus (no `acl:` line on the page) |
 | `ops/entity-registry.json` | materialized to a temp file, then `kernel.registry.load_registry` | empty registry — the graph works unregistered |
 | `.claude/tools/stigmergy_lint.py` | materialized per item and executed from there | a fail-closed refusal at startup |
 
-**Three inputs, and no fourth.** The meeting distiller's brief takes the OTHER road, the skill's:
+**Two inputs, and no third.** `ops/acl.json` was one of them and is gone with the path resolver
+([ADR 045](../decisions/045-audience-from-the-door.md) D2): a capture's audience is decided at the
+DOOR and carried on its own queue row, so no repo file decides a label and there is nothing here
+to pin to a commit. The meeting distiller's brief takes the OTHER road, the skill's:
 it is read out of the worktree at `base.sha` by `agent.read_meeting_brief`, deliberately not
 through a second `base_inputs` reader — see [meeting-distiller.md](./meeting-distiller.md).
 
@@ -695,15 +700,13 @@ The linter is materialized **per item** rather than once per run, because the ba
 resolved per item: the script that judges a diff is always the one in the commit the diff was built
 from.
 
-**All of them are re-read on every item, not once at worker startup — including the ACL config.**
-`worker.startup_checks` resolves them once at boot for its own fail-closed refusals, but
-`processing.process_item` re-resolves the registry AND the ACL config for each item, at that item's
-own base commit. That is what makes a push to `ops/acl.json` — or the entity an earlier capture
-just registered — take effect on the very next claim with no worker restart; for the ACL config its
-absence fails in the silently-OPEN direction the moment somebody narrows `ops/acl.json`. It is also
-an integrity property: a working-tree read would judge a capture against a registry that is not in
-any commit, so an uncommitted edit to `ops/entity-registry.json` could anchor captures to an entity
-the repository does not hold.
+**Both are re-read on every item, not once at worker startup.** `worker.startup_checks` resolves
+them once at boot for its own fail-closed refusals, but `processing.process_item` re-resolves the
+registry for each item, at that item's own base commit. That is what makes the entity an earlier
+capture just registered resolve on the very next claim with no worker restart. It is also an
+integrity property: a working-tree read would judge a capture against a registry that is not in any
+commit, so an uncommitted edit to `ops/entity-registry.json` could anchor captures to an entity the
+repository does not hold.
 
 **The cost, accepted:** editing the linter in the checkout and running a walk does not exercise
 the edit — the linter is read at the base commit. Commit and push it, or use the linter's own

@@ -318,10 +318,13 @@ RULE_TABLE = [
     # search further. So this marker is not merely "the meeting flow gathers something": the two
     # characters that make it unique are exactly the ones that mean "rendered with
     # `render_gathered`'s no-tools defaults", which is what the brief phrase promises a tool-less
-    # agent. Verified against the concatenated source before use: it occurs exactly once.
+    # agent. Since ADR 045 D3 the closing characters are the capture's own audience, which is the
+    # other half of what a tool-less agent is promised: the block it is handed is everything, AND
+    # it is scoped to what this capture may cite. Verified against the concatenated source before
+    # use: it occurs exactly once.
     ("tool for looking past it: judge overlap from what is in it, and never assert something "
      "about this",
-     "excerpt_lines=settings.gather_excerpt_lines))"),
+     "acl=_capture_acl(item)))"),
     # The editable folder. `edits.validate` admits all three fast-lane folders, so what actually
     # narrows a MEETING's edits to decision pages is this flow's own lane, declared at its
     # `GateContext` and enforced by `gate_zone`'s `outside-lane` check — the keyword is the

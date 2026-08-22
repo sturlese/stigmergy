@@ -73,7 +73,7 @@ def startup_checks(settings) -> dict:
     """Validate EVERYTHING the worker needs, once, before a single item is claimed.
 
     Every check here is fail-closed and loud: per-item validation would turn a malformed
-    `ops/acl.json` or a missing secret scanner into N identical `failed` rows with the real cause
+    `ops/entity-registry.json` or a missing secret scanner into N identical `failed` rows with the real cause
     buried under attempts-exhausted noise.
 
     Returns the resolved objects the run reuses, all read **at `base.sha`** rather than off the
@@ -128,14 +128,12 @@ def startup_checks(settings) -> dict:
         _check_skill_at(repo, base)
     _check_push_identity(repo)
 
-    # Both read AT `base`, and both re-read per item by `processing.process_item`.
-    acl_config = base_inputs.load_acl(repo, base)
+    # Read AT `base`, and re-read per item by `processing.process_item`.
     registry = base_inputs.load_registry(repo, base)
     reaped = gitcmd.reap(repo, settings.worktree_root)
     if reaped:
         log.warning("reaped %d worktree(s) left by a previous run", reaped)
-    return {"repo": repo, "acl_config": acl_config, "registry": registry, "reaped": reaped,
-            "base": base}
+    return {"repo": repo, "registry": registry, "reaped": reaped, "base": base}
 
 
 def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> str:
@@ -540,7 +538,7 @@ def view_sweep_clause(result: views_regenerate.RunResult) -> str:
 def build_deps(settings, resolved: dict, evidence) -> processing.Deps:
     return processing.Deps(
         settings=settings, evidence=evidence, agent=agent_module.build_agent(settings),
-        registry=resolved["registry"], acl_config=resolved["acl_config"], repo=resolved["repo"])
+        registry=resolved["registry"], repo=resolved["repo"])
 
 
 def process_next(conn, deps: processing.Deps):

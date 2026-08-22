@@ -66,7 +66,8 @@ _UNSAFE_IN_TITLE = re.compile(r"[\x00-\x1f\x7f/\\\[\]\"'`|#:*?<>]+")
 _INJECTION_SIGNALS = (
     ("declare-canonical", ("status: canonical", "mark this canonical", "file this as canonical",
                            "set status to canonical")),
-    ("write-outside-lane", ("ops/acl.json", "write to ops/", "edit .github", "modify the linter")),
+    ("write-outside-lane", ("ops/identities.json", "write to ops/", "edit .github",
+                            "modify the linter")),
     ("reveal-credentials", ("reveal your credentials", "print your token", "show the api key",
                             "echo $anthropic")),
 )
@@ -105,8 +106,10 @@ class DoubleAgent:
         self.settings = settings
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", flow_note: str = "", gathered: str = "") -> AgentRun:
-        # `flow_note`/`gathered` are accepted and unused: the signature answers the PORT.
+            corrective: str = "", flow_note: str = "", gathered: str = "",
+            acl: list[str] | None = None) -> AgentRun:
+        # `flow_note`/`gathered`/`acl` are accepted and unused: the signature answers the PORT,
+        # and this backend holds no read tool for `acl` to scope.
         directives = _directives(material)
         findings = _findings(material)
         run = AgentRun(turns=1, tool_calls=3)
@@ -184,12 +187,16 @@ class DoubleAgent:
                 "note": "the capture states the opposite of what this page records"})
         # An edit to a page that is not there, so `edits.validate` is exercised.
         if "bad-edit" in directives:
-            declared_edits.append({"path": directives["bad-edit"] or "ops/acl.json",
+            declared_edits.append({"path": directives["bad-edit"] or "ops/identities.json",
                                    "kind": "backlink", "link": title, "note": ""})
 
         if "escape" in directives:
             # Deliberately unconfined: writing outside the lane is what the zone gate refuses.
-            self._write_unconfined(worktree, "ops/acl.json", '{"version": 1, "rules": []}\n')
+            # The identity ROSTER — a real ops file, and the sharpest thing an out-of-lane
+            # write could name: an agent that could edit it could grant itself an
+            # audience. `ops/acl.json` used to stand here and no longer exists, so the
+            # sabotage was naming a path nothing could ever have written to.
+            self._write_unconfined(worktree, "ops/identities.json", '{}\n')
         if "delete" in directives:
             self._delete_some_page(worktree, keep=page_path)
         if "rewrite" in directives:
@@ -358,7 +365,7 @@ class DoubleAgent:
                 "note": "the same ground this meeting revisited, from the other side"})
         # An edit code must refuse, so `edits.validate` is exercised on this flow too.
         if "meeting-bad-edit" in directives:
-            declared_edits.append({"path": directives["meeting-bad-edit"] or "ops/acl.json",
+            declared_edits.append({"path": directives["meeting-bad-edit"] or "ops/identities.json",
                                   "kind": "backlink", "link": edit_link, "note": ""})
 
         attendees = [a.strip() for a in (meeting_meta.get("attendees") or "").split(",")

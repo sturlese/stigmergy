@@ -388,8 +388,8 @@ def test_the_signature_check_catches_a_positional_worktree_that_isinstance_waves
         wants_gathered = False
 
         def run(self, worktree: str, *, material: str, hints: dict, submitted_by: str,
-                corrective: str = "", flow_note: str = "",
-                gathered: str = "") -> AgentRun:
+                corrective: str = "", flow_note: str = "", gathered: str = "",
+                acl: list[str] | None = None) -> AgentRun:
             return AgentRun()
 
         def run_meeting(self, worktree: str, *, material: str, meeting_meta: dict, registry,
@@ -423,8 +423,8 @@ def test_the_signature_check_catches_a_renamed_argument_too():
         wants_gathered = False
 
         def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-                corrective: str = "", flow_note: str = "",
-                gathered: str = "") -> AgentRun:
+                corrective: str = "", flow_note: str = "", gathered: str = "",
+                acl: list[str] | None = None) -> AgentRun:
             return AgentRun()
 
         def run_meeting(self, *, worktree: str, material: str, meta: dict, registry,

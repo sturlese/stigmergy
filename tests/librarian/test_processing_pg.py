@@ -838,7 +838,7 @@ def test_a_capture_that_creates_a_second_page_is_refused_rather_than_filing_it_u
 
 # ── the diff is the veto surface ────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("directive,expect_path", [
-    ("escape", "ops/acl.json"),
+    ("escape", "ops/identities.json"),
     ("delete", "wiki/"),
     ("rewrite", "wiki/"),
 ])

@@ -207,6 +207,12 @@ def render_private_channel_refusal() -> list[dict]:
     return [_section(copy.PRIVATE_CHANNEL_REFUSAL)]
 
 
+def render_not_in_this_channels_groups(channel_name: str) -> list[dict]:
+    """Escaped like every other channel-sourced string: a channel name is workspace-authored text
+    and reaches this card verbatim."""
+    return [_section(copy.not_in_this_channels_groups(escape_mrkdwn(channel_name)))]
+
+
 def render_filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
                  anchor_reason: str = "", born: list[str] = ()) -> list[dict]:
     """`anchor_reason` is the AGENT's sentence about a judged anchor, derived from captured

@@ -28,6 +28,7 @@ SELECT id, result_ref, submitted_by, finished_at
 FROM capture_queue
 WHERE payload ->> 'sha256' = %(digest)s
   AND kind = %(kind)s
+  AND acl IS NOT DISTINCT FROM %(acl)s
   AND status = '{schema.FILED}'
   AND result_ref <> ''
   AND id <> %(exclude_id)s
@@ -60,10 +61,12 @@ class Match:
 
 
 def query_filed_with_digest(conn, *, digest: str, kind: str, exclude_id: int,
+                            acl: list[str] | None,
                             submitter: str | None = None,
                             window_s: int | None = None,
                             anchor: str | None = None) -> Match | None:
-    """THE shared base: the earliest FILED submission whose material hashes to `digest`.
+    """THE shared base: the earliest FILED submission whose material hashes to `digest` AND was
+    filed at the same audience.
 
     `submitter=None` means "any identity"; `window_s=None` means "any time", and with a window
     `anchor` is the CURRENT submission's `created_at`, never the wall clock. Callers go through
@@ -72,9 +75,21 @@ def query_filed_with_digest(conn, *, digest: str, kind: str, exclude_id: int,
     `kind` is REQUIRED: the same bytes submitted as `raw` and as `meeting` are two different
     requests, not a retry — collapsing them would report one page for a meeting capture that
     should have produced a page SET.
+
+    `acl` is REQUIRED for two reasons, one per level (ADR 045 D3). At level 1 it stops a
+    RESTRICTION being silently discarded: the same person posting the same text openly and then
+    in a scoped channel would have the second capture collapsed into the first and be told
+    "filed", pointing at the OPEN page. At level 2 it stops this becoming an existence oracle: a
+    duplicate refusal names a page path and a date, and matching across audiences would hand
+    those to a caller who may not read the page — the failure `NOT_YOURS_TO_REMOVE` exists to
+    avoid on the other door.
+
+    `IS NOT DISTINCT FROM` rather than `=`, so NULL (open) matches NULL: in SQL `NULL = NULL` is
+    NULL, and every open capture — which is almost all of them — would stop deduplicating at all.
     """
     with conn.cursor() as cur:
         cur.execute(_MATCHING_FILED, {"digest": digest, "kind": kind, "exclude_id": exclude_id,
+                                      "acl": None if acl is None else list(acl),
                                       "submitter": submitter, "window_s": window_s,
                                       "anchor": anchor})
         row = cur.fetchone()
@@ -97,6 +112,7 @@ def find_retry(conn, item: dict, *, window_s: int) -> Match | None:
     if not digest or not anchor:
         return None
     return query_filed_with_digest(conn, digest=digest, kind=item["kind"], exclude_id=item["id"],
+                                   acl=item.get("acl"),
                                    submitter=item["submitted_by"], window_s=window_s,
                                    anchor=anchor)
 
@@ -107,4 +123,5 @@ def find_already_filed(conn, item: dict) -> Match | None:
     digest = (item.get("payload") or {}).get("sha256") or ""
     if not digest:
         return None
-    return query_filed_with_digest(conn, digest=digest, kind=item["kind"], exclude_id=item["id"])
+    return query_filed_with_digest(conn, digest=digest, kind=item["kind"], exclude_id=item["id"],
+                                   acl=item.get("acl"))

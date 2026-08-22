@@ -122,7 +122,7 @@ async def submit_phase(workdir: pathlib.Path) -> list[dict]:
     from mcp.client.stdio import stdio_client
 
     identities = workdir / "identities.json"
-    identities.write_text(json.dumps({STEWARD: "*"}), encoding="utf-8")
+    identities.write_text(json.dumps({STEWARD: ["brain-admins"]}), encoding="utf-8")
     cmd, *base = console_command("stigmergy-server", "stigmergy.server.mcp_server")
     params = StdioServerParameters(
         command=cmd,

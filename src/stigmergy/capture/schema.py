@@ -241,9 +241,13 @@ SOURCE_HINT_KEYS = ("source_client", "source_permalink", "source_channel_id",
 MEETING_HINT_KEYS = ("meeting_date", "attendees", "source_label")
 
 
-# The subset of `SOURCE_HINT_KEYS` the fast lane TRUSTS: `source_client` turns the source-page
-# attachment on, `source_permalink` lands as `url:` on a reader-facing page.
-SOURCE_PROVENANCE_HINT_KEYS = frozenset({"source_client", "source_permalink"})
+# The subset of `SOURCE_HINT_KEYS` only the SLACK TRANSPORT may assert, because each is a claim
+# about Slack that only Slack's own API responses can make: `source_client` turns the source-page
+# attachment on, `source_permalink` lands as `url:` on a reader-facing page, and
+# `source_channel_id` is the channel whose groups the door files the capture AT (ADR 045 D2) — an
+# access-control key must be the server's observation, never a caller's assertion.
+SOURCE_PROVENANCE_HINT_KEYS = frozenset({"source_client", "source_permalink",
+                                         "source_channel_id"})
 
 # The Slack door's name for itself, as `BrainService.door` spells it. Imported, never re-spelled.
 SLACK_DOOR = "slack"
@@ -279,6 +283,9 @@ ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DOCUMENT
 # **Every member MUST have a declared parameter on the `brain_submit` MCP tool** — FastMCP builds
 # its argument model with `extra="ignore"`, so an undeclared field is stripped silently and
 # declaring the parameter is the only way to REFUSE rather than quietly ignore.
+# `acl` is here and `audience` is deliberately NOT: a caller may REQUEST an audience (the door
+# resolves it, checks it against their own groups and stores the answer on the row), and may never
+# assert the resolved label itself. ADR 045 D2.
 ATTRIBUTION_FIELDS = frozenset({"submitted_by", "verification", "acl", "content_hash"})
 
 # The queue's own columns, with NO tool parameter — listed so a caller addressing the queue by
@@ -651,13 +658,27 @@ CREATE TABLE IF NOT EXISTS capture_queue (
     finished_at TIMESTAMPTZ,
     result_ref TEXT NOT NULL DEFAULT '',            -- the filed page / commit
     error TEXT NOT NULL DEFAULT '',                 -- why the row is where it is (see below)
-    report JSONB                                    -- the librarian's structured report
+    report JSONB,                                   -- the librarian's structured report
+    acl TEXT[]                                      -- the DOOR's audience decision (see below)
 )
 """
+# `acl` — the audience the door decided this capture is filed at (ADR 045 D2), and the value the
+# worker stamps on every page it writes. Server-owned like `submitted_by` beside it: `audience` is
+# what a caller may REQUEST, `acl` is what the door RESOLVED, and no client input reaches this
+# column. The index's own dialect, so a row and a page mean the same thing by the same spelling:
+# NULL = open, `{}` = nobody. A principal holding no group files OPEN — that is a fact about the
+# principal, not an empty audience — so the doors store NULL there, never `{}`.
 # `report` — the librarian's structured account of one item, NULL when never processed. `error`
 # beside it keeps its one-line human meaning.
 _CAPTURE_QUEUE_REPORT_COLUMN = """
 ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS report JSONB
+"""
+
+# Additive, and NULLABLE on purpose: every row queued before ADR 045 was filed under the path
+# resolver, which produced no label for any of them, and NULL is that same "open" in the new
+# dialect. A default of `{}` would have retro-restricted the whole queue to nobody.
+_CAPTURE_QUEUE_ACL_COLUMN = """
+ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS acl TEXT[]
 """
 
 # The retired human loop's columns, still CREATED on a fresh database and never dropped: the
@@ -761,7 +782,7 @@ CREATE INDEX IF NOT EXISTS ingest_errors_source_doc_idx
     ON ingest_errors (source, source_doc_id, last_at DESC)
 """
 
-_ALL_DDL = (_CAPTURE_QUEUE_DDL, _CAPTURE_QUEUE_REPORT_COLUMN,
+_ALL_DDL = (_CAPTURE_QUEUE_DDL, _CAPTURE_QUEUE_REPORT_COLUMN, _CAPTURE_QUEUE_ACL_COLUMN,
             *_CAPTURE_QUEUE_HUMAN_LOOP_COLUMNS, _CAPTURE_QUEUE_OUTCOME_COLUMN,
             _CAPTURE_QUEUE_PARKED_MIGRATION, _CAPTURE_QUEUE_STATUS_CHECK,
             _QUEUE_STATUS_INDEX, _QUEUE_SUBMITTER_INDEX, _QUEUE_CLAIMED_INDEX,

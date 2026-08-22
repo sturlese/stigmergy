@@ -130,11 +130,21 @@ attribution is resolved server-side and never claimed by the client — the `app
 newborn entity page and the `Approved-by:` trailer on a deletion both name the caller the SERVER
 resolved, whatever the client said — and a scoped identity's `brain_delete` is refused by name.
 
-**Say plainly whether a visibility split is observable at all.** If `ops/acl.json` stamps no
-labels, no page carries an `acl:` line and every identity sees the same corpus — by
-construction, not by fault. The mechanism is enforced on every read; it has nothing to bite on
-until a restricting rule exists, and such a rule must **name** its audiences (an empty list in
-that file means *open*, the opposite of what it means everywhere else).
+**Make the visibility split observable — you can now create one.** Since ADR 045 the audience is
+decided at the DOOR, so there is no config file to inspect and nothing to wait for:
+
+1. `brain_submit(kind="raw", material=…, audience=["finance"])` as the scoped identity, and watch
+   the whole page set land carrying `acl: ["finance"]` — the note, and the verbatim `sources/`
+   page beside it.
+2. `search_brain` and `read_page` for that path as an identity that does NOT hold `finance`:
+   absent from search, and the same `unknown page` sentence a page that does not exist gets.
+3. `brain_submit(..., audience=["a-group-you-are-not-in"])`: refused at the door, with nothing
+   queued. You may file only what you could read afterwards.
+4. In Slack, 🧠 in a channel listed in `ops/slack-channels.json`: the capture files at that
+   channel's groups, and a reactor who does not hold them gets an ephemeral refusal and no row.
+
+Then say plainly whether the deployment has any scoped channel or any scoped identity at all — a
+green run over a corpus where nothing is labelled proves the mechanism was never asked anything.
 
 ## Block 6 — the guardrails, fired against the operator's own work
 

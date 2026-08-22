@@ -75,6 +75,13 @@ class Births:
     # path -> canonical id — and the counts the report reads. Appended lines only, byte-proven.
     updated_pages: dict = field(default_factory=dict)
     updates: list = field(default_factory=list)         # [{"entity", "facts", "connections"}]
+    # ADR 045 D6: what a RESTRICTED capture was not allowed to put on the open entity zone —
+    # `[{"entity", "facts", "connections"}]` counted, never quoted. An entity page is the brain's
+    # shared vocabulary and carries no audience, so a capture filed at a group may create an
+    # identity and say what it IS, and may not publish what its own material established. Reported
+    # rather than silently dropped: the person who captured is the one who can decide whether the
+    # fact belongs on an open page, and they can only decide it if they are told.
+    withheld: list = field(default_factory=list)
 
     @property
     def confirmed_ids(self) -> list:
@@ -96,7 +103,8 @@ class Births:
 
 def write_births(worktree: str, *, outcome, base_registry: Registry, material: str,
                  hints: dict | None, today: str, related=(),
-                 registration=None, approver: str = "") -> "Births | list[gates.Finding]":
+                 registration=None, approver: str = "",
+                 acl: list[str] | None) -> "Births | list[gates.Finding]":
     """Create every entity and every alias the account declares, in `worktree`, and return the
     facts about them — or the findings that refuse the account, having written nothing.
 
@@ -105,6 +113,23 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
     hints by the caller: the entity under the registered name is created under exactly that name
     and type, and an account that declares no such entity while the registry lacks it is refused
     with a brief, so the corrective retry does what they asked.
+
+    **`acl` is the capture's audience, and a non-`None` one narrows what may be WRITTEN here
+    rather than labelling anything** ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md)
+    D6). An entity page never carries an audience: the registry is the brain's shared vocabulary,
+    and a corpus where the same customer exists under three spellings because one of them was
+    hidden is the failure this system was built to prevent. So a restricted capture may introduce
+    an identity — its name, its type, its aliases and one sentence of What / Who — and its `facts`
+    and `connections` are dropped, because those are the restricted material's and belong on the
+    restricted page anchored to the entity. `entity_updates` are dropped whole for the same
+    reason: the spine is only ever written from open material. Both are counted into
+    `Births.withheld` and reach the submitter's report.
+
+    The one sentence that DOES cross is deliberate and is the smallest thing that can: ADR 042 D3
+    refuses to write an entity page with no What / Who at all, so the alternative to a model
+    sentence about what the entity is would be no identity — and then the same name introduced
+    again next week as a second entity. Structure is code's, prose is the model's, and the proof
+    is the human's: the report shows the submitter the sentence that was born open.
 
     All-or-nothing like `edits.apply_declared`: the findings are collected over every declaration
     so the single corrective brief names all of them, and the worktree is left untouched when any
@@ -174,13 +199,34 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
                 canonical_id=cid, name=name, entity_type=declared.get("entity_type", ""),
                 aliases=aliases, role=declared.get("role", ""), registry=working,
                 existing_pages=existing_paths + list(planned_pages))
-            body = birth.prepare_body(
-                summary=declared.get("summary", ""), facts=declared.get("facts", ()),
-                # The agent's own connections, or the page this entity was introduced from: a
-                # template stub is a placeholder, and a newborn page is a finished page.
-                connections=(declared.get("connections", ())
-                             or [f"[[{name_of}]] — the page this entity was introduced from"
-                                 for name_of in related]))
+            declared_facts = tuple(declared.get("facts", ()) or ())
+            declared_connections = tuple(declared.get("connections", ()) or ())
+            # ONE local, governing BOTH halves of what this restricted birth may carry — the
+            # body's Connections fallback and the frontmatter's `related:` — because they are the
+            # same fact written twice and a second `if` is how one of them gets missed. It was:
+            # the fallback was dropped and `related` went to the renderer anyway, so the OPEN
+            # entity page published the restricted page's title in its frontmatter. A title is
+            # the whole of what a link leaks; a meeting would have published every decision's.
+            page_related = related if acl is None else ()
+            if acl is None:
+                body = birth.prepare_body(
+                    summary=declared.get("summary", ""), facts=declared_facts,
+                    # The agent's own connections, or the page this entity was introduced from: a
+                    # template stub is a placeholder, and a newborn page is a finished page.
+                    connections=(declared_connections
+                                 or [f"[[{name_of}]] — the page this entity was introduced from"
+                                     for name_of in related]))
+            else:
+                # Identity and What / Who, and nothing else (D6). The body's Connections
+                # fallback and the frontmatter `related:` both go with it (`page_related` above):
+                # either would link the OPEN entity page to the restricted page this capture
+                # filed — an upward link, written by the system itself, on the one page D6 keeps
+                # open on purpose. An entity page is `ORPHAN_EXEMPT_TYPES` in the gardener, so an
+                # empty `related:` costs no orphan finding; there is nothing to trade here.
+                body = birth.prepare_body(summary=declared.get("summary", ""))
+                if declared_facts or declared_connections:
+                    births.withheld.append({"entity": cid, "facts": len(declared_facts),
+                                            "connections": len(declared_connections)})
         except CollisionError as ex:
             hit = working.collision_id(name) or next(
                 (working.collision_id(a) for a in aliases if working.collision_id(a)), "")
@@ -200,7 +246,7 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
         # registration and an ordinary capture alike (ADR 044 D1). The approver is the submitter,
         # resolved by the server, never anything the account said.
         text = birth.render_page(template, proposal, today=today, approved_by=approver,
-                                 body=body, related=related)
+                                 body=body, related=page_related)
         planned_pages[proposal.relpath] = text
         entry = registry_module.entry(proposal.name, proposal.entity_type, proposal.aliases,
                                       approved_by=approver)
@@ -303,6 +349,14 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
         facts = [str(line) for line in (declared.get("facts") or ()) if str(line).strip()]
         connections = [str(line) for line in (declared.get("connections") or ())
                        if str(line).strip()]
+        if acl is not None:
+            # The spine is only ever written from OPEN material (D6). This is not a refusal of the
+            # account — the capture files, its own page carries the facts, and the entity keeps
+            # its anchor — so it is counted and reported rather than turned into a finding the
+            # corrective retry would spend an attempt on.
+            births.withheld.append({"entity": cid or target, "facts": len(facts),
+                                    "connections": len(connections)})
+            continue
         if not cid:
             findings.append(gates.Finding(
                 GATE, "update-unknown-entity",
@@ -356,7 +410,10 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
     if findings:
         return findings
     if not births.touched():
-        return Births(registry=base_registry)
+        # Nothing was WRITTEN — but something may have been WITHHELD (ADR 045 D6), and that is
+        # exactly the case where the submitter has to be told: the page they got carries no sign
+        # of it, so a report that dropped this would be a silent subtraction from their capture.
+        return Births(registry=base_registry, withheld=births.withheld)
 
     for relpath, text in planned_pages.items():
         if not _write_new(worktree, relpath, text):

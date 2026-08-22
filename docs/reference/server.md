@@ -110,7 +110,7 @@ decided in [ADR 022](../decisions/022-entity-navigation.md).
 
 | Tool | What it does |
 |---|---|
-| `brain_submit(kind, material, hints?)` | queue a capture — `kind` is `raw`, `page`, `meeting` (the transcript, with `title` and `meeting_date` in `hints`, optionally `attendees`) or `document` (the document's text, with `title` in `hints` and optionally `source_url`), capped at 256 KB of material for `raw`/`page` and 1 MB for `meeting`/`document` — archived to the evidence plane and attributed by the SERVER. Returns an ack with the submission id; it promises **queued and attributed**, never "saved to the brain" — nothing is in the brain until the librarian files it. Beside the ack it returns `entities`: the registered entities this material already names, `{id, name}` each, so the submitter sees at once which identities the brain recognises. `hints` may also carry a registration — `register_name`, `register_type`, `register_aliases`, `register_source` — which pins the entity this capture introduces instead of leaving the librarian to infer it. Every door may send them: they carry no authority, because there is none left to carry ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1) |
+| `brain_submit(kind, material, hints?, audience?)` | queue a capture — `kind` is `raw`, `page`, `meeting` (the transcript, with `title` and `meeting_date` in `hints`, optionally `attendees`) or `document` (the document's text, with `title` in `hints` and optionally `source_url`), capped at 256 KB of material for `raw`/`page` and 1 MB for `meeting`/`document` — archived to the evidence plane and attributed by the SERVER. Returns an ack with the submission id; it promises **queued and attributed**, never "saved to the brain" — nothing is in the brain until the librarian files it. Beside the ack it returns `entities`: the registered entities this material already names, `{id, name}` each, so the submitter sees at once which identities the brain recognises. `hints` may also carry a registration — `register_name`, `register_type`, `register_aliases`, `register_source` — which pins the entity this capture introduces instead of leaving the librarian to infer it. Every door may send them: they carry no authority, because there is none left to carry ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). `audience` is the ONE access decision a caller makes ([ADR 045](../decisions/045-audience-from-the-door.md) D2): the groups this material is for, as a list of group names, omitted to file OPEN. It is a REQUEST — the door resolves it, checks it with `acl.visible()` against the caller's OWN groups (you may file only what you could read afterwards) and stores the answer on `capture_queue.acl`, which the worker stamps on every page the capture writes, the verbatim `sources/` page included. A caller naming a group they do not hold is refused with one sentence and nothing is queued. |
 | `brain_submissions(limit?, status?)` | the caller's own submissions with state, timestamps, `result_ref` and the librarian's `report`; an UNRESTRICTED identity sees the whole queue with `mine` marking its own rows. Echoed capture text is fenced as `UNTRUSTED-DATA` |
 | `brain_delete(paths, why)` | QUEUE a removal — an UNRESTRICTED identity only. That is the one fact this process can settle, and it is the right one: a removal touches the pages named AND every page that refers to them, a set nothing knows before the corpus is read, so only a caller who can see everything may ask for it. A scoped caller gets one fixed sentence whether the paths exist or not, so this is no existence oracle about a referrer either (ADR 044 D3). What lands here is a `delete` row with the caller's name on it; the WORKER then drops the frontmatter entries that named a removed page, has a model write those pages' bodies so a sentence that cited one still reads, runs the nine gates and pushes ONE App-authored commit with the caller in an `Approved-by:` trailer. The per-page DIFF is stored on the capture and read back through `brain_submissions`, ACL-scoped and fenced. Refused at the door, with nothing queued: an entity page, a path outside the corpus, more than ten pages, an empty reason, an over-long one. Refused by the worker, as a `rejected` capture: a page that is not there, a plan over its byte ceiling, a body the sweep writer could not reconcile, a gate's veto, a dead link the sweep would have left behind — each carrying `reason_code: unremovable` and the lane's own sentence. A reason that matches a likely secret or a personal-data pattern is refused there too, but as `secret`/`pii`, by the same scan every capture's material passes: the reason becomes a commit message, and that is the one place no gate looks |
 
@@ -487,25 +487,46 @@ middleware — inert 404s unless `$STIGMERGY_ADMIN_TOKEN_HASH` is set, and docum
 ## Identities file
 
 A versioned JSON map checked into the knowledge repo at `ops/identities.json`, **keyed by
-email**:
+email**, mapping each principal to a **list of groups** and to nothing else
+([ADR 045](../decisions/045-audience-from-the-door.md) D7):
 
 ```json
 {
-  "ops@example.com": "*",
+  "_comment": "keys beginning with _ are comments and are dropped",
+  "ops@example.com": ["brain-admins"],
   "ana@example.com": ["finance"],
-  "bob@example.com": ["sales", "leadership"]
+  "bob@example.com": ["sales", "leadership"],
+  "newcomer@example.com": []
 }
 ```
 
-`"*"` = unrestricted (sees everything), and since [ADR 044](../decisions/044-the-capture-is-the-approval.md)
-D3 it is also the whole of `brain_delete`'s authorization: a removal touches pages the caller did not
-name, so only an identity with no audience restriction may ask for one — and `brain_submit` refuses
-the `delete` kind by name, so that check cannot be side-stepped by submitting one. A list is the client's audience scope: it sees unlabeled
-pages plus pages sharing at least one label; a bare non-`*` string is accepted as the one-audience
-scope it obviously means. The resolver is **fail-closed** everywhere — no identity, an unknown
-identity, an unreadable/malformed file, or an identity whose value is neither of the shapes above
-each exits non-zero (stdio) or 401s generically (HTTP) with an actionable message; the server never
-starts open.
+Membership of **`brain-admins`** IS the unrestricted scope — the resolver returns `None` for it,
+which is the value `acl.visible()` has always read as "sees everything" — and since
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D3 it is also the whole of
+`brain_delete`'s authorization: a removal touches pages the caller did not name, so only an
+identity with no audience restriction may ask for one — and `brain_submit` refuses the `delete`
+kind by name, so that check cannot be side-stepped by submitting one. It is a group rather than a
+sigil because the identity provider that will replace this file has groups and has no sigils.
+
+Any other list is the client's scope: it reads unlabeled pages plus pages sharing at least one
+group. **An empty list is a principal who holds no group** — authenticated, reading every open
+page and no other. That is a fact about a PERSON and is not the `acl: []` of a PAGE, which means
+nobody; keeping the two apart is what ADR 045 D9 buys.
+
+**Open is the absence of a label, so `all` is a reserved word** and is refused as a group name: a
+page labelled `[all]` would be restricted to whoever holds a group by that name rather than open
+to everyone. Two spellings this file once accepted are refused too, each naming the line to write
+instead — `"*"` (write `["brain-admins"]`) and a bare label (write `["finance"]`) — because a
+roster is parsed on every request and three spellings for one fact is three things to get right.
+
+`ops/slack-channels.json` is the **same grammar** with a different principal, parsed by the same
+function (`identity.group_map_from_text`), so the roster and the channel map cannot come to
+disagree about what a group may be called.
+
+The resolver is **fail-closed** everywhere — no identity, an unknown identity, an
+unreadable/malformed file, a malformed value ANYWHERE in it (not only on the entry being looked
+up) each exits non-zero (stdio) or 401s generically (HTTP) with an actionable message; the server
+never starts open.
 
 stdio's `--identity` flag takes the SAME email keys (e.g. `--identity ops@example.com`) —
 `identity.resolve_audiences` is one resolver for both transports. HTTP resolves
@@ -564,9 +585,9 @@ If you edit a page and forget the rebuild, search "misses" it until the next bui
 - `stigmergy.server.acl.visible(acl, audiences)` — the **one** ACL rule. Every read path (search,
   `read_page` — including its links/backlinks — `list_entities`, `describe_entity`,
   discovery hints) must filter through this function; do not re-implement label matching anywhere
-  else. `acl.all_visible(paths, visible_paths)` is its companion for text composed from MORE than
-  one page's identity: all-or-nothing, never per-path, because a partially scrubbed sentence is the
-  kind of defense that looks complete and is not.
+  else. It had a companion, `all_visible`, for text composed from more than one page's identity;
+  it is gone because nothing called it — the answer layer composes from a `BrainService` that is
+  already scoped, so there is no per-fragment scoping left to make all-or-nothing.
 - `stigmergy.server.identity.resolve_audiences(identities_path, identity)` — the **one** identity
   resolver. Fail-closed; raises `IdentityError` on any failure. Callers must not proceed without
   a resolved scope.

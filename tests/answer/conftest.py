@@ -55,7 +55,7 @@ class AnswerFixture:
 
         os.makedirs(os.path.dirname(self.identities_path), exist_ok=True)
         with open(self.identities_path, "w", encoding="utf-8") as f:
-            f.write('{"steward": "*", "ana": ["finance"], "eng": ["eng"]}')
+            f.write('{"steward": ["brain-admins"], "ana": ["finance"], "eng": ["eng"]}')
 
     # pages live under the `wiki/` zone — the only paths the builder loads
     GLOBEX_DRAFT = "wiki/entities/globex/q1-report.md"

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stigmergy.index import corpus
-from stigmergy.kernel.acl import visible_to_view
+from stigmergy.kernel.acl import flows_into
 
 # Deliberately excludes the `views` zone itself: a view declares `entity: [<id>]` too, and
 # counting it as its own member would change the staleness hash on every write — a
@@ -38,14 +38,28 @@ def _member_rows(repo: str, rows=None) -> list[corpus.PageRow]:
 
 
 def members_of(repo: str, entity_id: str, *, rows=None) -> list[Member]:
-    """Every page whose `entity:` contains `entity_id`, sorted by path — the one member set
-    every other computation (staleness hash, ACL intersection, synthesis prompt, `members:`
-    count) is built from.
+    """Every page whose `entity:` contains `entity_id` and that may be rendered onto an OPEN page,
+    sorted by path — the one member set every other computation (staleness hash, synthesis
+    prompt, `members:` count) is built from.
+
+    **A view carries no audience of its own** ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md)
+    D5), so the filter is `flows_into(member.acl, None)`: open members only. Before that, a view's
+    audience was the INTERSECTION of its members' — which never widened, correctly, but
+    COLLAPSED: one leadership-only note anchored to a popular entity made that entity's view
+    vanish for everyone else, and the timeline still named every member's path and title on the
+    way. The finance reader now finds the finance notes about the entity through search and
+    `describe_entity`, per reader, which is where a per-reader answer belongs; the view is the
+    open rollup and says so by having nothing to say about them.
+
+    Filtered HERE rather than at each consumer, because every one of them — the render, the
+    staleness hashes, the synthesis agent's own readable set — has to agree about what a member
+    is. A member excluded here is excluded from all three at once.
 
     `rows` lets a caller sweeping many entities hand in ONE `corpus.load_pages` parse instead of
     paying for a fresh one per entity; `None` parses the repo here, as every single-entity caller
     wants."""
-    rows = [r for r in _member_rows(repo, rows) if entity_id in r.entity]
+    rows = [r for r in _member_rows(repo, rows)
+            if entity_id in r.entity and flows_into(r.acl, None)]
     return [Member(path=r.path, title=r.title, type=r.type, as_of=r.as_of,
                    superseded_by=r.superseded_by, acl=r.acl, content_hash=r.content_hash)
             for r in sorted(rows, key=lambda r: r.path)]
@@ -134,11 +148,13 @@ def backlinks_of(repo: str, entity_page: Member | None, *,
     """Pages whose wikilinks resolve to the entity's OWN page. Scans every indexed zone (`views/`
     included — another entity's view may legitimately link here).
 
-    A backlink is a governed source OUTSIDE the member set: `visible_to_view` gates whether it
-    renders, and is NEVER folded into the intersection itself — a backlink must never NARROW
-    `view_acl`, only be excluded from this list. The `None` default fail-closes to showing only
-    equally-open backlinks. The match is against RESOLVED link paths, exact even on an ambiguous
-    stem.
+    A backlink is a governed source OUTSIDE the member set, so it passes the same gate a member
+    does and never contributes to the page's own audience: a backlink is excluded from this list,
+    never a reason to narrow anything. **Production always passes `None`** — a view is open
+    (ADR 045 D5) — and the parameter stays because it is `flows_into`'s own argument and its truth
+    table is worth exercising at other audiences rather than only at the one this caller uses. The
+    `None` default is also the fail-closed one: it admits equally-open backlinks and nothing else.
+    The match is against RESOLVED link paths, exact even on an ambiguous stem.
 
     `exclude_path` is the view being generated: it always links its own entity page and always
     passes the filter, so without the exclusion the rollup cites itself and the count runs one
@@ -158,7 +174,7 @@ def backlinks_of(repo: str, entity_page: Member | None, *,
     rows = corpus.load_pages(repo) if rows is None else rows
     excluded = {entity_page.path, exclude_path} - {""}
     return sorted((r for r in rows if entity_page.path in r.links and r.path not in excluded
-                  and visible_to_view(r.acl, view_acl)),
+                  and flows_into(r.acl, view_acl)),
                  key=lambda r: r.path)
 
 
@@ -168,7 +184,7 @@ def backlink_hash(rows: list[corpus.PageRow]) -> str:
 
     Beside `member_hash` and never folded into it — that name says what it hashes, and a backlink
     is not a member. What it covers is the POST-GATE set: `backlinks_of` has already applied
-    `visible_to_view`, so a source whose `acl:` is narrowed to an audience the view does not have
+    `flows_into`, so a source whose `acl:` is narrowed to an audience the view does not have
     drops OUT of these rows and the hash moves, which is what makes the narrowing a regeneration.
     Hashing the pre-gate candidates instead would fire on any ACL edit anywhere, including the
     ones that change nothing on the page.

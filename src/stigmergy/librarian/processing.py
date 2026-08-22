@@ -23,8 +23,8 @@ from stigmergy.capture.errors import CaptureError
 # `MAX_BODY_LINES`/`SPLIT_CHUNK_LINES` are IMPORTED: the linter and the splitter must agree.
 from stigmergy.kernel.normalize import slugify
 from stigmergy.kernel.page import MAX_BODY_LINES, SPLIT_CHUNK_LINES
+from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import (
-    acl_rules,
     base_inputs,
     config,
     dedup,
@@ -36,7 +36,6 @@ from stigmergy.librarian import (
     identity,
     report,
 )
-from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.errors import (
     AgentError,
@@ -95,7 +94,6 @@ class Deps:
     evidence: object
     agent: filing_port.FilingAgent
     registry: object
-    acl_config: object = None
     repo: str = ""
     today: str = ""             # injectable clock: `as_of` must be reproducible in a test
 
@@ -120,6 +118,18 @@ def _injection_categories(outcome) -> list[str]:
     return found
 
 
+def _capture_acl(item: dict) -> list[str] | None:
+    """The audience the DOOR decided this capture is filed at — `capture_queue.acl`, the one input
+    to every stamp this run writes.
+
+    `None` is open, and a row queued before ADR 045 has `NULL` here, which is the same "open" the
+    path resolver produced for every page it ever labelled. An empty list is NOT collapsed to
+    `None`: `[]` means nobody, everywhere, and the collapse is the defect D9 ends.
+    """
+    acl = item.get("acl")
+    return list(acl) if acl is not None else None
+
+
 def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "") -> dict:
     """Rewrite every NEW page's server-owned frontmatter, and return the values written. Must run
     BEFORE the gates: the returned dict is what `gate_frontmatter` re-reads the page against. If
@@ -128,6 +138,11 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     entry, which switches `gate_anchoring` to per-page mode. Stamps `entity: []` for an unresolved
     `entity`-kind outcome, so a partial list cannot survive a gate reordering.
     """
+    # THE label for every page this capture writes: the door's own decision, carried on the row
+    # (ADR 045 D2). Not resolved from the page's path, not read from a config file, not re-derived
+    # per page — one capture, one audience, so a note and the verbatim source beside it cannot
+    # come out labelled differently.
+    acl = _capture_acl(item)
     anchoring = getattr(ctx.outcome, "anchoring", None) or {}
     kind = str(anchoring.get("kind", "")).lower() if isinstance(anchoring, dict) else ""
     # `ctx.registry`, never `deps.registry`: the former is the registry this commit PUBLISHES,
@@ -135,8 +150,12 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     entity, unresolved = gates.resolve_entity_ids(anchoring, ctx.registry)
     if kind == "entity" and (unresolved or not entity):
         entity = []
+    # `acl` belongs in the literal, not in the loop below: it is one value for the whole capture,
+    # and `gate_frontmatter` only enforces a server-owned field that is PRESENT in this dict. Set
+    # inside the loop it would be enforced only if the loop reached it — correctness by accident,
+    # in an access-control stamp.
     stamped = {"status": page_policy.FILED_STATUS, "as_of": deps.as_of(),
-               "submitted_by": item["submitted_by"], "entity": entity}
+               "submitted_by": item["submitted_by"], "entity": entity, "acl": acl}
     for path in ctx.in_lane_new_pages():
         if path in ctx.provenance_pages:
             continue    # stamped by `_stamp_attached_sources`, under the provenance group
@@ -148,7 +167,6 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
                 drafted = f.read()
         except (OSError, UnicodeDecodeError):
             continue
-        acl = acl_rules.resolve(deps.acl_config, path)
         text = page_policy.stamp_server_fields(
             drafted,
             submitted_by=item["submitted_by"],
@@ -160,9 +178,7 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
             text, cited = page_policy.add_source_citation(text, cite_stem)
         with page_policy.open_for_rewrite(full) as f:
             f.write(text)
-        stamped["acl"] = acl
         if cite_stem:
-            # `{**stamped}` snapshots THIS path's `acl`.
             ctx.page_declared[path] = {
                 "page_type": str(getattr(ctx.outcome, "page_type", "") or ""),
                 "anchoring": anchoring if isinstance(anchoring, dict) else {}}
@@ -261,7 +277,7 @@ def _pre_agent(conn, item: dict, deps: Deps, *, material: "str | None" = None) -
 # How each flow finishes the shared stale-base sentence. Kept side by side so a reword of one is
 # read against the other: the ordinary lane names the three repo-sourced inputs it would misjudge.
 _STALE_BASE_TAIL_ORDINARY = (
-    "against the ACL config, entity registry and contract linter of a commit the remote may have "
+    "against the entity registry and contract linter of a commit the remote may have "
     "moved past hours ago. The likely cause is the GitHub App installation (revoked, or a token "
     "that has expired since this container started) or the network. The capture is left in the "
     "queue")
@@ -282,10 +298,12 @@ def _resolve_filing_base(item: dict, deps: Deps, *, log_noun: str, stale_tail: s
             f"{stale_tail}")
     log.info("filing %s %s against %s", log_noun, item["id"], base.describe())
 
-    # Re-read per item at THIS item's base commit: a cached ACL config fails silently OPEN.
+    # Re-read per item at THIS item's base commit: a registry cached from an older commit would
+    # fail an anchor that resolves, or resolve one that no longer does. The ACL config that used
+    # to be re-read beside it is gone — the audience is the door's decision, carried on the row,
+    # so there is no repo-sourced input to this item's label at all (ADR 045 D2).
     return base, dataclasses.replace(deps,
-                                     registry=base_inputs.load_registry(deps.repo, base),
-                                     acl_config=base_inputs.load_acl(deps.repo, base))
+                                     registry=base_inputs.load_registry(deps.repo, base))
 
 
 def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None) -> Result:
@@ -591,12 +609,14 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         gathered = agent_module.render_gathered(
             gather.gather(worktree, deps.registry, material,
                           top_k=settings.gather_top_k,
-                          excerpt_lines=settings.gather_excerpt_lines),
+                          excerpt_lines=settings.gather_excerpt_lines,
+                          acl=_capture_acl(item)),
             **({} if structured else _SEEDED_GATHERED_SENTENCES))
     try:
         run = deps.agent.run(worktree=worktree, material=material,
                              hints=(item.get("hints") or {}).get("client", {}),
                              submitted_by=item["submitted_by"], corrective=corrective,
+                             acl=_capture_acl(item),
                              flow_note=flow_note,
                              gathered=gathered)
     except AgentError as ex:
@@ -632,7 +652,7 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         worktree, outcome=outcome, base_registry=deps.registry, material=material,
         hints=(item.get("hints") or {}).get("client", {}), today=deps.as_of(),
         registration=schema.registration_from_hints(item.get("hints")),
-        approver=str(item.get("submitted_by") or ""),
+        approver=str(item.get("submitted_by") or ""), acl=_capture_acl(item),
         related=[outcome.title] if outcome.title else ())
     if isinstance(births, list):
         return None, births, outcome
@@ -651,6 +671,7 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
         material=material, outcome=outcome, registry=births.registry,
+        acl=_capture_acl(item),
         # The linter materialized from this item's base commit — NOT `settings.linter_path`.
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=write_prefixes, creatable_types=creatable_types,
@@ -711,10 +732,22 @@ def _declare_births(ctx: gates.GateContext, births: identity.Births) -> None:
     ctx.expected_bytes = {**ctx.expected_bytes, **births.expected_bytes}
     ctx.born_entity_pages = frozenset(births.entity_pages)
     ctx.confirmed_entity_pages = dict(births.confirmed)
+    # The identity-zone pages this run MODIFIED — a spelling taught, a spine grown. Told so
+    # `gate_zone`'s audience check skips exactly them and nothing else: an entity page carries no
+    # audience (ADR 045 D6), and what a restricted capture may write on one is bounded in
+    # `identity.write_births` rather than by a path prefix here.
+    ctx.identity_writes = frozenset(births.alias_pages) | frozenset(births.updated_pages)
     for path, entity_id in births.entity_pages.items():
         # What `gate_frontmatter` re-reads the page against: its own anchor and its own state.
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "entity": [entity_id],
-                                     "approved_by": births.confirmed.get(path, "")}
+                                     "approved_by": births.confirmed.get(path, ""),
+                                     # An entity page carries NO audience (ADR 045 D6): the
+                                     # registry is the brain's shared vocabulary. Declared as
+                                     # `None` rather than left out, because `gate_frontmatter`
+                                     # reads a `None` expectation as "this page must OMIT the
+                                     # key" — a field absent from this dict is not compared at
+                                     # all, which is the difference between a rule and a hope.
+                                     "acl": None}
 
 
 
@@ -974,7 +1007,8 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
                      findings=notes,
                      source_pages=list(source_pages),
                      entities_born=born, aliases_added=added_aliases,
-                     entities_updated=births.updates if births is not None else []),
+                     entities_updated=births.updates if births is not None else [],
+                     entities_withheld=births.withheld if births is not None else []),
         findings=notes)
 
 
@@ -1137,18 +1171,24 @@ def _write_attached_sources(worktree: str, attachment: SourceAttachment, outcome
 
 
 def _stamp_one_source(ctx: gates.GateContext, path: str, *, submitted_by: str, as_of: str,
-                      digest: str, extracted_at: str, page_id: str) -> None:
-    """Stamp ONE `sources/` page with the provenance group — THE source stamp for every flow."""
+                      digest: str, extracted_at: str, page_id: str, acl: list[str] | None) -> None:
+    """Stamp ONE `sources/` page with the provenance group — THE source stamp for every flow.
+
+    `acl` is the capture's own, like every other page in the set (ADR 045 D2): a provenance page
+    that carried no audience while its distilled pages did was the meeting-page leak — the set was
+    labelled and the page listing it was not.
+    """
     ctx.page_declared[path] = {"page_type": "source"}
     _rewrite(ctx.worktree, path, lambda text: page_policy.stamp_source_fields(
         text, submitted_by=submitted_by, as_of=as_of, content_hash=digest,
-        extracted_at=extracted_at, page_id=page_id))
+        extracted_at=extracted_at, page_id=page_id, acl=acl))
     # The provenance group MUST appear here — `gate_frontmatter`'s output-equality check covers
     # only what `stamped_by_path` records, and forging this group re-anchors the whole chain.
     # Render each value exactly as `page.stamp_source_fields` writes it.
     ctx.stamped_by_path[path] = {
         "status": page_policy.FILED_STATUS, "as_of": as_of, "submitted_by": submitted_by,
         "content_hash": f"sha256:{digest}", "extracted_at": extracted_at, "tier": "1",
+        "acl": acl,
         **({"id": page_id} if page_id else {})}
 
 
@@ -1163,7 +1203,7 @@ def _stamp_attached_sources(ctx: gates.GateContext, deps: Deps, item: dict,
     for path in sorted(ctx.provenance_pages):
         _stamp_one_source(ctx, path, submitted_by=item["submitted_by"], as_of=deps.as_of(),
                           digest=digest, extracted_at=extracted_at,
-                          page_id=str(ids_by_path.get(path) or ""))
+                          page_id=str(ids_by_path.get(path) or ""), acl=_capture_acl(item))
 
 
 # The meeting flow: a page SET (source + meeting + N decisions), atomically or nothing. A SEPARATE
@@ -1523,7 +1563,8 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
     gathered = agent_module.render_gathered(
         gather.gather(worktree, deps.registry, material,
                       top_k=settings.gather_top_k,
-                      excerpt_lines=settings.gather_excerpt_lines))
+                      excerpt_lines=settings.gather_excerpt_lines,
+                      acl=_capture_acl(item)))
     try:
         run = deps.agent.run_meeting(worktree=worktree, material=material,
                                      meeting_meta=meeting_meta, registry=deps.registry,
@@ -1557,6 +1598,7 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
         hints=meeting_meta, today=deps.as_of(),
         registration=schema.registration_from_hints(item.get("hints")),
         approver=str(item.get("submitted_by") or ""),
+        acl=_capture_acl(item),
         related=decision_stems or [written["meeting_stem"]])
     if isinstance(births, list):
         return None, births, outcome
@@ -1569,6 +1611,7 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
         material=material, outcome=outcome, registry=births.registry,
+        acl=_capture_acl(item),
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=MEETING_WRITE_PREFIXES, creatable_types=MEETING_CREATABLE_TYPES,
         extra_folder_types=dict(MEETING_EXTRA_FOLDER_TYPES))
@@ -1661,6 +1704,10 @@ def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
     """Stamp every page this pass created — PER PAGE, because a decision page's `entity:` differs
     from its siblings'. `as_of` is the meeting's OWN date, never today's."""
     as_of = meeting_meta.get("meeting_date") or deps.as_of()
+    # One capture, one audience — the transcript parts, the meeting page and every decision get
+    # the SAME label the door decided (ADR 045 D2). The meeting page carrying none while its
+    # decisions carried theirs is §4 case 5: the set was labelled and the page listing it was not.
+    acl = _capture_acl(item)
     source_pages, meeting_pages, decision_pages = (_source_pages(ctx), _meeting_pages(ctx),
                                                     _decision_pages(ctx))
     ctx.provenance_pages = frozenset(source_pages)
@@ -1672,14 +1719,15 @@ def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
     for path in source_pages:
         _stamp_one_source(ctx, path, submitted_by=item["submitted_by"], as_of=as_of,
                           digest=digest, extracted_at=extracted_at,
-                          page_id=str(source_ids_by_path.get(path) or ""))
+                          page_id=str(source_ids_by_path.get(path) or ""), acl=acl)
 
     for path in meeting_pages:
         ctx.page_declared[path] = {"page_type": "meeting"}   # no "anchoring" key: provenance only
-        _rewrite(ctx.worktree, path, lambda text: page_policy.stamp_server_fields(
-            text, submitted_by=item["submitted_by"], acl=None, as_of=as_of, entity=()))
+        _rewrite(ctx.worktree, path, lambda text, a=acl: page_policy.stamp_server_fields(
+            text, submitted_by=item["submitted_by"], acl=a, as_of=as_of, entity=()))
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "as_of": as_of,
-                                     "submitted_by": item["submitted_by"], "entity": ()}
+                                     "submitted_by": item["submitted_by"], "entity": (),
+                                     "acl": acl}
 
     for path in decision_pages:
         declared = decisions_by_path.get(path) or {}
@@ -1690,7 +1738,6 @@ def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
         entity_ids, unresolved = gates.resolve_entity_ids(anchoring, ctx.registry)
         if str(anchoring.get("kind", "")).lower() == "entity" and (unresolved or not entity_ids):
             entity_ids = []   # same defence in depth `_stamp` takes for the ordinary flow
-        acl = acl_rules.resolve(deps.acl_config, path)
         _rewrite(ctx.worktree, path, lambda text, e=entity_ids, a=acl: page_policy.stamp_server_fields(
             text, submitted_by=item["submitted_by"], acl=a, as_of=as_of, entity=e))
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "as_of": as_of,
@@ -1761,7 +1808,8 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
                              registry=ctx.registry,
                              entities_born=births.entities if births else [],
                              aliases_added=births.aliases if births else [],
-                             entities_updated=births.updates if births else []),
+                             entities_updated=births.updates if births else [],
+                             entities_withheld=births.withheld if births else []),
         findings=notes)
 
 

@@ -251,6 +251,7 @@ def test_brain_submit_forwards_arguments_and_returns_the_service_payload(fake_se
 
     assert out == fake_service.submit.return_value
     fake_service.submit.assert_called_once_with("raw", "a decision", hints={"title": "t"},
+                                               audience=None,
                                                 submitted_by=None, verification=None, acl=None,
                                                 content_hash=None)
 
@@ -354,7 +355,8 @@ def test_adversarial_an_undeclared_extra_argument_is_silently_dropped_before_rea
                extra_unnamed_field="sneaky, never declared on the tool signature")
 
     assert "error" not in out                          # no refusal, no warning — silent success
-    fake_service.submit.assert_called_once_with("raw", "hello", hints=None, submitted_by=None,
+    fake_service.submit.assert_called_once_with("raw", "hello", hints=None, audience=None,
+                                               submitted_by=None,
                                                 verification=None, acl=None, content_hash=None)
     # the extra value never reached the service at all — not forwarded, not logged, not echoed
     assert "sneaky" not in json.dumps(fake_service.submit.call_args.args) + json.dumps(
@@ -373,7 +375,7 @@ def test_adversarial_submitted_by_by_contrast_DOES_reach_the_service_because_it_
 
     out = _call(mcp, "brain_submit", kind="raw", material="hello", submitted_by="ceo@example.com")
 
-    fake_service.submit.assert_called_once_with("raw", "hello", hints=None,
+    fake_service.submit.assert_called_once_with("raw", "hello", hints=None, audience=None,
                                                 submitted_by="ceo@example.com", verification=None,
                                                 acl=None, content_hash=None)
     assert out == {"error": "submitted_by is set by the server, not by the caller"}

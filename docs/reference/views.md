@@ -4,7 +4,7 @@ A view (`views/<entity-id>.md`) is the page that answers "what do we know about 
 now" without a reader assembling N pages and cross-checking which figure is current. It is
 **derived, never hand-maintained**: one page per entity, regenerated from the entity's own
 anchored pages whenever they change.
-Design record: [ADR 021](../decisions/021-views.md) (the intersection rule's two gates, one commit
+Design record: [ADR 021](../decisions/021-views.md) (the audience rule's two gates, one commit
 per entity, the withheld-synthesis pattern, and the branch-tip contract change a meeting filing
 produces), amended by [ADR 044](../decisions/044-the-capture-is-the-approval.md) D3, which left the
 librarian worker as the only process that writes anything to the knowledge repo. The pages a view's
@@ -167,34 +167,36 @@ that re-attempts it on demand, and this document does not offer one: nothing in 
 regenerate a view except the worker, and the worker converges from state rather than from a request.
 The skeleton is complete and current the whole time.
 
-## The audience rule — the intersection, not the union
+## The audience rule — a view is open, and its feeds are filtered to match
 
-**The load-bearing rule this package is the sole owner of**: a view's `acl` is the
-**intersection** of its members' audiences
-(`stigmergy.kernel.acl.view_acl`), never their union. Concretely: two members labelled
-`["a"]` and `["b"]` respectively (disjoint audiences) intersect to `[]` — nobody below an
-unrestricted client sees the view, which is correct, because a client scoped to only `a` or
-only `b` can read one member but not the other, and a rollup summarizing both must not leak the
-member it can't read. A union of the same two labels would instead produce `["a", "b"]`: a client
-scoped to `a` alone would then pass the visibility check (`set(["a","b"]) & {"a"}` is non-empty)
-and see a view built in part from a member it has no right to read — the union **silently
-widens access to everything the view summarizes**, exactly the bug this rule exists to
-prevent. The intersection is the only rule that guarantees a view never reaches an audience
-that could not already read *every* member it summarizes: an open (label-free) member contributes
-neutrally rather than narrowing, and an empty intersection (`acl: []`) is a legal, meaningful,
-**restrictive-by-construction** value — rendered explicitly, never omitted (an omitted `acl:`
-reads as open).
+**The load-bearing rule this package is the sole owner of**: a view carries **no `acl:` at all**,
+and every feed that renders content onto it is filtered to what may appear on an open page
+([ADR 045](../decisions/045-audience-from-the-door.md) D5). Members: `skeleton.members_of` keeps a
+page only when `stigmergy.kernel.acl.flows_into(member.acl, None)` — open members. Backlinks, a
+governed source that is *not* a member: the same gate, at the same audience
+(`skeleton.backlinks_of`). The synthesis agent reads the filtered member set, so it cannot cite
+what the page may not show.
 
-This computation covers **members only**. One other feed renders content from a governed source
-that is *not* a member — backlinks (any page in the corpus that happens to link to the entity's
-own page) — and a naive skeleton would let it leak a restricted string onto an open or narrower
-view. `stigmergy.kernel.acl.visible_to_view` is the
-**second, separate gate** this feed passes through before rendering (`skeleton.backlinks_of`): a
-governed-but-non-member row must be excluded from a view it cannot read, but — critically — it must
-never *narrow* `view_acl` itself. The two computations stay separate on purpose: `view_acl` answers
-"what is this view's own audience, from its members," and `visible_to_view` answers "may this
-other row be shown here," and folding the second into the first would let a backlink silently
-restrict a view its own members never restricted.
+**What this replaced, and why the replacement is not a weakening.** A view's `acl` used to be the
+**intersection** of its members' audiences. That rule was right about the direction — a union
+would have *widened* access, letting a client scoped to `a` alone read a rollup built in part from
+a `b`-only member — and it was the wrong instrument. Two members labelled `["a"]` and `["b"]`
+intersect to `[]`, which is *nobody*: the entity's view disappeared for every reader, including
+both of the people whose pages caused it, while the timeline went on printing every member's path
+and title on the page nobody could open. One leadership-only note anchored to a popular entity was
+enough. The failure was availability, and it was silent.
+
+Filtering the members instead gives the property the intersection was reaching for — no string
+derived from a governed source renders on a view whose audience is not a subset of that source's —
+and gives it *without* the collapse: the open view simply lacks the restricted material. The
+finance reader still finds the finance notes about that entity, through `search_brain` and
+through `describe_entity`'s timeline, which are scoped per reader. That is where a per-reader
+answer belongs; a view is one page in git, and one page cannot be two answers.
+
+The staleness signals cover both feeds, and that is what keeps the rule true after generation:
+`skeleton.member_hash` moves when a member is narrowed (it drops out of the set), and
+`skeleton.backlink_hash` hashes the POST-gate rows, because a gate that ran only at generation
+time left a narrowed source cited forever on an already-committed page — #85.
 
 ## Two entry points, one guarantee
 
@@ -378,7 +380,7 @@ standing.
 ## Tests
 
 `tests/views/` covers the package end to end — member set and staleness (`test_skeleton.py`),
-the budget-withheld outcome (`test_synthesis.py`), the frontmatter shape and the intersection rule
+the budget-withheld outcome (`test_synthesis.py`), the frontmatter shape and the audience rule
 proven both ways plus its sabotage twin (`test_render.py`), App-bot authorship over a real bare git
 remote (`test_writer.py`), staleness/removal/refusals over that same real git — with the
 `job_runs` write going through the conftest's offline `FakeConn`, so the suite needs no Postgres at

@@ -208,7 +208,7 @@ def test_sabotage_no_filter_would_leak_a_restricted_backlink(tmp_path):
 
 # ── the backlink staleness signal (#85) ─────────────────────────────────────────────────────────
 def test_backlink_hash_is_taken_over_the_rows_the_view_may_actually_show(tmp_path):
-    """The signal is computed AFTER `visible_to_view`, and that is what makes a narrowing
+    """The signal is computed AFTER `flows_into`, and that is what makes a narrowing
     register as a change: the restricted page is one of the rows a `finance` view hashes and none
     of the rows an open view does. A hash over the pre-gate candidates would be identical for
     both audiences here — the same value whether the page renders or not — and could never tell

@@ -9,7 +9,6 @@ generated_at: "2026-07-30T14:57:47.161185+00:00"
 members: 4
 verification: verified
 member_hash: "144dac8b5a678bdb777e3caa17877de29b222cc21a606ed80626e73b1269a437"
-acl: [sales]
 ---
 
 # Aurora Systems — dossier

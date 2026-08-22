@@ -40,9 +40,15 @@ registry already knows joins that entity's `aliases:` instead of becoming a twin
 proposed, nothing waits, and one writer still owns the registry.
 
 **Not everyone may read everything.** A team wiki holds salaries, board material and a customer's
-confidential figures. Visibility is enforced at one point (`acl.visible()`), on every read surface,
-by an architecture test that refuses to let a new reader skip it — and an unknown page and a
-forbidden page return the same string, because *which* one it was is itself a leak.
+confidential figures. Who may read a page is decided by the person who captured it, at the door
+they captured through — the channel they posted in, or the groups they named — never by where the
+page ends up sitting, because the folder is the page's *type* and an audience is metadata, not a
+location. That decision travels on the capture and is stamped on everything it writes, the
+verbatim source page included. Enforcement is one point (`acl.visible()`), on every read surface,
+held by an architecture test that refuses to let a new reader skip it — and an unknown page and a
+forbidden page return the same string, because *which* one it was is itself a leak. A model, in
+turn, never reads what the page it is writing could not cite, so the link that quietly carries a
+restricted title into an open page cannot be written in the first place.
 
 ## Why it is built this way
 
@@ -79,7 +85,7 @@ the colours it uses — the read path has no green, because it touches no git.
 ### The shape
 
 <p align="center">
-  <img src="docs/assets/architecture.svg" alt="the shape: Slack, the admin console and MCP clients all submit into one durable capture queue (raw bytes to an evidence store); the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people — alongside it, on the same process group but behind its own token and its own ASGI branch, the /admin operations console, which never reads pages" width="100%">
+  <img src="docs/assets/architecture.svg" alt="the shape: Slack, the admin console and MCP clients all submit into one durable capture queue (raw bytes to an evidence store), each door deciding the audience the capture is filed at; the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people — alongside it, on the same process group but behind its own token and its own ASGI branch, the /admin operations console, which never reads pages" width="100%">
 </p>
 
 **Read that diagram by asking what survives deleting this software.** The knowledge repo does: it
@@ -95,7 +101,7 @@ The dashed box on the right is the part people are usually surprised by: **there
 ### The write path
 
 <p align="center">
-  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue, the server attributes it, the agent drafts a page in a throwaway worktree; a name the registry does not know is introduced as an entity page born confirmed by the person who captured, in the very same commit, so nothing waits on anybody; the draft is a diff, and 9 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity — either bounce it back with the reason or commit exactly the diff they approved" width="100%">
+  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue carrying who it is for — the channel it was captured in, or the groups the submitter named — and the server attributes it and stamps that audience on the row; the agent drafts a page in a throwaway worktree, reading only pages the page it is writing could cite; a name the registry does not know is introduced as an entity page born confirmed by the person who captured, in the very same commit, so nothing waits on anybody; the draft is a diff, and 9 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity — either bounce it back with the reason or commit exactly the diff they approved, every page of the capture carrying the audience its door decided" width="100%">
 </p>
 
 The purple box is the only place a model decides anything, and everything downstream of it is a
@@ -146,9 +152,10 @@ it (ES/EN, every hit showing its ranking factors). `stigmergy-server --identity 
 over stdio; `--transport http --port <p>` serves streamable HTTP with per-request bearer-token auth.
 
 **`acl.visible()` is the one enforcement point.** Every read surface filters through it, and an
-architecture test holds the line: any module reading `pages_index` either names an ACL predicate or
-sits on a named exception list. Existence leaks count as leaks — an unknown page and a forbidden
-page return the same string, deliberately.
+architecture test holds the line: any module reading `pages_index` — or reading the checkout on
+behalf of a page a model is writing — either names a predicate or sits on a named exception list.
+Existence leaks count as leaks — an unknown page and a forbidden page return the same string,
+deliberately.
 
 `ask(question)` is the answer path: an evidence-gathering agent calls three read tools (`search`,
 `read_page`, `describe_entity`) under the caller's identity and writes a cited answer; then a
@@ -273,7 +280,7 @@ beside it in the source; the bare module at the top is small enough to be its ow
 | `entities/` | a LIBRARY, and nothing else: the rules of entity birth (the name gate, the collision fold, the page render the librarian runs) and the registry generator that derives `ops/entity-registry.json` from `wiki/entities/`. It has no CLI and no decision door — an entity is introduced by a capture, and the librarian is the one caller |
 | `slack/` | the Slack transport: 🧠 capture, `@brain` Q&A, and the push-channel poller that files what a channel publishes |
 | `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis. A LIBRARY with no CLI and no entry point — the librarian worker is its only caller, on the idle branch and right after a meeting files |
-| `gardener/` | corpus health on demand: ten deterministic checks + three bounded model passes (an editorial sweep over changed-plus-sampled pages, every entity page judged for a body that says nothing, and every registered entity judged against the others for a second identity of the same thing), findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
+| `gardener/` | corpus health on demand: eleven deterministic checks + three bounded model passes (an editorial sweep over changed-plus-sampled pages, every entity page judged for a body that says nothing, and every registered entity judged against the others for a second identity of the same thing), findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
 | `repair/` | the repair loop, unattended: for a gardener finding an agent DECLARES a repair — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and the worker applies it on its idle branch, one commit per repair, having validated it twice and put the resulting diff through the same nine gates. Nobody approves it: what bounds it is a permanent memory of what has already been repaired, two ceilings per pass, and the gates; what replaces the reading is the stored diff. A person REMOVES pages at `brain_delete` — the one repair a human decides, queued there and performed by the same worker, with the pages that referred to them rewritten by a model and the diff carried on the capture |
 | `digest/` | the week's activity in one Slack post |
 | `admin/` | the ops console: `/admin` on the same app process group — ten pages: the dashboard, the read-only capture queue, the entities desk where the registry is browsed and an entity can be registered by saying what it is (the name checked against the registry as you type), the repair ledger and page removal, the night shift's own page, gardener/digest/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |

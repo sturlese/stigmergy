@@ -791,9 +791,9 @@ def test_the_checkout_is_parsed_ONCE_however_often_the_model_searches(toolbox, m
     calls = {"n": 0}
     real = gather.load_corpus
 
-    def _counting(worktree):
+    def _counting(worktree, **kwargs):
         calls["n"] += 1
-        return real(worktree)
+        return real(worktree, **kwargs)
 
     monkeypatch.setattr(gather, "load_corpus", _counting)
     fresh = FilingToolbox(toolbox.worktree, top_k=3, excerpt_lines=2)

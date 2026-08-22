@@ -21,8 +21,15 @@ def _write(tmp_path, data) -> str:
     return str(p)
 
 
-def test_unrestricted_star_resolves_to_none(tmp_path):
-    path = _write(tmp_path, {"steward": "*"})
+def test_brain_admins_membership_resolves_to_unrestricted(tmp_path):
+    """The one unrestricted spelling (ADR 045 D7): a GROUP, not a sigil, because the identity
+    provider that replaces this file has groups and has no sigils."""
+    path = _write(tmp_path, {"steward": ["brain-admins"]})
+    assert resolve_audiences(path, "steward") is None
+
+
+def test_brain_admins_beside_other_groups_still_resolves_to_unrestricted(tmp_path):
+    path = _write(tmp_path, {"steward": ["finance", "brain-admins"]})
     assert resolve_audiences(path, "steward") is None
 
 
@@ -32,24 +39,195 @@ def test_scoped_list_resolves_to_tuple(tmp_path):
     assert resolve_audiences(path, "bob") == ("sales", "leadership")
 
 
-def test_bare_label_is_a_one_audience_scope(tmp_path):
+def test_no_groups_at_all_reads_open_pages_and_nothing_else(tmp_path):
+    """A PRINCIPAL with no groups is not the `acl: []` of a PAGE (which means nobody): it is an
+    authenticated reader who holds nothing, so `visible()` shows it every page carrying no label
+    and no other. ADR 045 D9 keeps the two facts apart, and this is the one that is about a
+    person."""
+    path = _write(tmp_path, {"newcomer": []})
+    assert resolve_audiences(path, "newcomer") == ()
+
+
+def test_a_repeated_group_is_normalized_away(tmp_path):
+    path = _write(tmp_path, {"ana": ["finance", " finance ", "sales"]})
+    assert resolve_audiences(path, "ana") == ("finance", "sales")
+
+
+# ── the two retired spellings: refused by name, with the line to write instead ─────────────────
+# "A message containing a command is an executable promise": each refusal below names a
+# replacement, and its twin RUNS that replacement.
+
+def test_the_star_spelling_is_refused_and_names_the_line_to_write(tmp_path):
+    path = _write(tmp_path, {"steward": "*"})
+    with pytest.raises(IdentityError, match=r'write \["brain-admins"\] instead'):
+        resolve_audiences(path, "steward")
+
+
+def test_the_line_the_star_refusal_names_actually_resolves(tmp_path):
+    """The promise, run: what the refusal above tells an operator to write is what works."""
+    path = _write(tmp_path, {"steward": ["brain-admins"]})
+    assert resolve_audiences(path, "steward") is None
+
+
+def test_the_bare_label_spelling_is_refused_and_names_the_line_to_write(tmp_path):
     path = _write(tmp_path, {"ana": "finance"})
+    with pytest.raises(IdentityError, match=r'write \["finance"\] instead'):
+        resolve_audiences(path, "ana")
+
+
+def test_the_line_the_bare_label_refusal_names_actually_resolves(tmp_path):
+    path = _write(tmp_path, {"ana": ["finance"]})
     assert resolve_audiences(path, "ana") == ("finance",)
 
 
-def test_empty_list_is_a_nobody_scope(tmp_path):
-    path = _write(tmp_path, {"nobody": []})
-    assert resolve_audiences(path, "nobody") == ()      # sees only unlabeled (open) content
+# ── `all` is a reserved word, because open is the ABSENCE of a label ───────────────────────────
+def test_the_reserved_group_all_is_refused(tmp_path):
+    """A page labelled `[all]` would be restricted to whoever holds a group called `all` — the
+    opposite of what anybody writing it means. ADR 045 D7."""
+    path = _write(tmp_path, {"ana": ["all"]})
+    with pytest.raises(IdentityError, match="reserved group 'all'"):
+        resolve_audiences(path, "ana")
+
+
+def test_a_group_named_like_all_but_not_all_is_fine(tmp_path):
+    """The benign twin: the reservation is one exact name, not a substring match on it."""
+    path = _write(tmp_path, {"ana": ["all-hands", "allies"]})
+    assert resolve_audiences(path, "ana") == ("all-hands", "allies")
+
+
+# ── the retired sigil, refused as a VALUE and as a NAME ───────────────────────────────────────
+def test_the_sigil_wrapped_in_a_list_is_refused_by_name(tmp_path):
+    """The migration foot-gun: an operator told to "write a list" wraps the old sigil. It would
+    otherwise resolve to a group nobody can hold — the admin silently loses unrestricted access,
+    and at the door files pages nobody can read."""
+    path = _write(tmp_path, {"steward": ["*"]})
+    with pytest.raises(IdentityError, match="retired unrestricted sigil"):
+        resolve_audiences(path, "steward")
+
+
+def test_a_case_variant_of_the_unrestricted_group_is_refused_not_folded(tmp_path):
+    """Refused rather than accepted case-insensitively: folding would WIDEN on a typo, and this is
+    the one label whose typo grants the whole corpus. Refusing is the fail-closed direction and it
+    says which spelling to write."""
+    path = _write(tmp_path, {"steward": ["Brain-Admins"]})
+    with pytest.raises(IdentityError, match="differs only in case"):
+        resolve_audiences(path, "steward")
+
+
+def test_the_reservation_is_casefolded(tmp_path):
+    """`All` is the same intention as `all` with a different shift key."""
+    path = _write(tmp_path, {"ana": ["All"]})
+    with pytest.raises(IdentityError, match="reserved group"):
+        resolve_audiences(path, "ana")
+
+
+# ── the group-name grammar: narrow, because these names reach page frontmatter ────────────────
+def test_a_group_name_carrying_a_newline_is_refused(tmp_path):
+    """A group name is stamped into YAML frontmatter as an access label and, since ADR 045 D2, can
+    arrive from a model through `brain_submit(audience=…)`. A newline there is a page-contract
+    injection, and no legitimate group name needs one."""
+    path = _write(tmp_path, {"ana": ["fin\nance"]})
+    with pytest.raises(IdentityError, match="invalid group"):
+        resolve_audiences(path, "ana")
+
+
+def test_a_group_name_over_the_length_ceiling_is_refused(tmp_path):
+    path = _write(tmp_path, {"ana": ["a" * 65]})
+    with pytest.raises(IdentityError, match="invalid group"):
+        resolve_audiences(path, "ana")
+
+
+def test_too_many_groups_is_refused(tmp_path):
+    path = _write(tmp_path, {"ana": [f"g{n}" for n in range(33)]})
+    with pytest.raises(IdentityError, match="over the ceiling"):
+        resolve_audiences(path, "ana")
+
+
+def test_the_benign_twin_ordinary_group_names_pass_the_grammar(tmp_path):
+    """The specificity half of every rule above: the shapes a real roster uses must all resolve.
+    A rule that has never let anything through has been measured for sensitivity only."""
+    path = _write(tmp_path, {"ana": ["finance", "sales-emea", "eng.platform", "team_42", "g1"]})
+    assert resolve_audiences(path, "ana") == (
+        "finance", "sales-emea", "eng.platform", "team_42", "g1")
+
+
+# ── a refusal that names a replacement RUNS that replacement ──────────────────────────────────
+def test_a_bare_label_that_could_not_be_a_group_is_not_suggested_back(tmp_path):
+    """The naive message answered `"finance,sales"` with `write ["finance,sales"]`, which the
+    comma rule then refuses — a message containing a command is an executable promise, and that
+    one could not be kept. The suggestion is checked before it is offered."""
+    path = _write(tmp_path, {"ana": "finance,sales"})
+    with pytest.raises(IdentityError) as caught:
+        resolve_audiences(path, "ana")
+    assert "write [" not in str(caught.value), str(caught.value)
+
+
+def test_a_bare_label_that_COULD_be_a_group_still_gets_its_suggestion(tmp_path):
+    """The benign twin: the suggestion is withheld only when it would not work."""
+    path = _write(tmp_path, {"ana": "finance"})
+    with pytest.raises(IdentityError, match=r'write \["finance"\] instead'):
+        resolve_audiences(path, "ana")
+
+
+# ── the whole file is validated, not only the entry looked up ──────────────────────────────────
+def test_a_repeated_principal_is_refused_rather_than_last_win(tmp_path):
+    """`json.loads` keeps the last occurrence silently. A diff appending a wide line far from an
+    existing narrow one reads, in review, as one added line beside an unchanged one — and the push
+    webhook makes it live within seconds."""
+    path = _write(tmp_path, '{"ana": ["finance"], "ana": ["brain-admins"]}')
+    with pytest.raises(IdentityError, match="appears more than once"):
+        resolve_audiences(path, "ana")
+
+
+def test_two_principals_differing_only_in_case_are_refused(tmp_path):
+    """Lookups are exact, so these are two principals that look identical in review and grant
+    differently — the file's smuggling surface."""
+    path = _write(tmp_path, '{"Ana@x.com": ["finance"], "ana@x.com": ["brain-admins"]}')
+    with pytest.raises(IdentityError, match="differ only in case"):
+        resolve_audiences(path, "ana@x.com")
+
+
+def test_the_benign_twin_two_genuinely_different_principals_resolve(tmp_path):
+    path = _write(tmp_path, {"ana@x.com": ["finance"], "bob@x.com": ["brain-admins"]})
+    assert resolve_audiences(path, "ana@x.com") == ("finance",)
+    assert resolve_audiences(path, "bob@x.com") is None
+
+
+def test_a_comment_key_whose_value_is_a_group_list_is_refused(tmp_path):
+    """The ambiguous case: somebody whose entry silently does nothing. `_marc@example.com` is a
+    valid email and `stigmergy-issue-token` will issue for it, so "no principal begins with `_`"
+    is a rule this file states rather than a fact about the world."""
+    path = _write(tmp_path, {"_marc@example.com": ["finance"], "ana": ["finance"]})
+    with pytest.raises(IdentityError, match="marks a COMMENT"):
+        resolve_audiences(path, "ana")
+
+
+
+def test_a_malformed_NEIGHBOUR_refuses_the_lookup_too(tmp_path):
+    """An access-scoping file the server cannot make sense of must never answer for the entry that
+    happened to parse. Before ADR 045 each reader validated only the value it wanted."""
+    path = _write(tmp_path, {"ana": ["finance"], "bob": {"nested": True}})
+    with pytest.raises(IdentityError, match="malformed group list"):
+        resolve_audiences(path, "ana")
+
+
+def test_a_comment_key_is_dropped_rather_than_parsed_as_a_principal(tmp_path):
+    """`_`-prefixed keys let an operator say which channel `C0BL6QH7AQN` is, in the file itself.
+    Dropped, not exempted: looking the comment up is an `unknown` refusal like any other."""
+    path = _write(tmp_path, {"_comment": "the roster", "ana": ["finance"]})
+    assert resolve_audiences(path, "ana") == ("finance",)
+    with pytest.raises(IdentityError, match="unknown identity"):
+        resolve_audiences(path, "_comment")
 
 
 def test_no_identity_given_fails_closed(tmp_path):
-    path = _write(tmp_path, {"steward": "*"})
+    path = _write(tmp_path, {"steward": ["brain-admins"]})
     with pytest.raises(IdentityError, match="no identity given"):
         resolve_audiences(path, None)
 
 
 def test_unknown_identity_fails_closed_and_names_known(tmp_path):
-    path = _write(tmp_path, {"steward": "*", "ana": ["finance"]})
+    path = _write(tmp_path, {"steward": ["brain-admins"], "ana": ["finance"]})
     with pytest.raises(IdentityError, match="unknown identity 'ghost'"):
         resolve_audiences(path, "ghost")
 
@@ -77,16 +255,33 @@ def test_non_object_json_fails_closed(tmp_path):
 
 
 def test_malformed_audience_value_fails_closed(tmp_path):
-    # an identity mapped to something that is neither "*" nor a list (here: a bool) must never
-    # silently open — fail closed with an actionable message.
+    # an identity mapped to something that is not a list (here: a bool) must never silently open
+    # — fail closed with an actionable message.
     path = _write(tmp_path, {"steward": True})
-    with pytest.raises(IdentityError, match="malformed audience value"):
+    with pytest.raises(IdentityError, match="malformed group list"):
         resolve_audiences(path, "steward")
 
 
 def test_null_audience_value_fails_closed(tmp_path):
     path = _write(tmp_path, {"steward": None})
-    with pytest.raises(IdentityError, match="malformed audience value"):
+    with pytest.raises(IdentityError, match="malformed group list"):
+        resolve_audiences(path, "steward")
+
+
+def test_a_group_name_that_is_not_a_string_fails_closed(tmp_path):
+    path = _write(tmp_path, {"steward": ["finance", 7]})
+    with pytest.raises(IdentityError, match="not a string"):
+        resolve_audiences(path, "steward")
+
+
+def test_a_group_name_carrying_a_comma_fails_closed(tmp_path):
+    """A label list is CSV-serialized on at least one road, so one comma inside a name would
+    silently become two groups at enforcement time."""
+    path = _write(tmp_path, {"steward": ["finance,leadership"]})
+    # Matched on the COMMA branch's own sentence, not on the generic `invalid group` the charset
+    # rule also emits — otherwise deleting the comma branch would leave this green, and the CSV
+    # reason `check_group_names` documents as existing "for its own reason" would be unpinned.
+    with pytest.raises(IdentityError, match="must not contain ','"):
         resolve_audiences(path, "steward")
 
 
@@ -186,7 +381,7 @@ def test_resolve_email_for_token_success():
 def test_audiences_from_text_resolves_exactly_as_the_file_road_does(tmp_path):
     """One parse under both roads, asserted as behaviour: whatever the file road answers, the
     text road answers for the same bytes — scope, unrestricted and nobody alike."""
-    data = {"steward": "*", "ana": ["finance"], "ghost-scope": []}
+    data = {"steward": ["brain-admins"], "ana": ["finance"], "ghost-scope": []}
     path = _write(tmp_path, data)
     text = json.dumps(data)
 

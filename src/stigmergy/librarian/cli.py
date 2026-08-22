@@ -106,7 +106,7 @@ def _cmd_run(conn, args, settings) -> int:
     """The loop. One worker active by configuration, draining until a signal says stop.
 
     Everything expensive is validated ONCE, before the first claim, by the same
-    `worker.startup_checks` `once` uses — a malformed `ops/acl.json` in a long-running loop
+    `worker.startup_checks` `once` uses — a malformed `ops/entity-registry.json` in a long-running loop
     would otherwise become N identical `failed` rows. The preamble is the same line `once`
     prints, from the same function; the sweep line comes from `Worker.run`, because the loop
     sweeps every pass and printing the first one twice would misreport it. Returns 0 for a clean

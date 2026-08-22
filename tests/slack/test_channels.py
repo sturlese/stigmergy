@@ -52,6 +52,56 @@ def test_a_channel_value_that_is_not_a_list_of_strings_fails_closed(channels_pat
         channel_audiences(str(path), "C_X")
 
 
+def test_the_reserved_group_all_is_refused_here_too(tmp_path):
+    """One grammar for both control files (ADR 045 D7): the roster's rules are this map's rules,
+    so a reserved name cannot be legal in one file and refused in the other."""
+    path = tmp_path / "reserved.json"
+    path.write_text(json.dumps({"C_X": ["all"]}))
+    with pytest.raises(IdentityError, match="reserved group 'all'"):
+        channel_audiences(str(path), "C_X")
+
+
+def test_a_malformed_NEIGHBOUR_channel_refuses_the_lookup_too(tmp_path):
+    """A scoping file the server cannot make sense of never answers for the entry that happened to
+    parse — the posture the roster already had, now this file's too."""
+    path = tmp_path / "neighbour.json"
+    path.write_text(json.dumps({"C_OK": ["finance"], "C_BAD": 7}))
+    with pytest.raises(IdentityError, match="malformed group list"):
+        channel_audiences(str(path), "C_OK")
+
+
+def test_a_comment_key_names_a_channel_without_becoming_one(tmp_path):
+    """What the `_` convention is FOR here: a raw channel id says nothing to a human reading the
+    file, so the file gets to say which one it is."""
+    path = tmp_path / "commented.json"
+    path.write_text(json.dumps({"_C_FINANCE": "#finance, the numbers channel",
+                                "C_FINANCE": ["finance"]}))
+    assert channel_audiences(str(path), "C_FINANCE") == {"finance"}
+    assert channel_audiences(str(path), "_C_FINANCE") == set()
+
+
+def test_a_channel_is_NEVER_unrestricted_even_listed_as_brain_admins(tmp_path):
+    """**The asymmetry between the two callers of one grammar, pinned.** An IDENTITY holding
+    `brain-admins` resolves to `None` — unrestricted, sees everything. A CHANNEL never does: Slack
+    capture and Slack answering are public-channel only, so `brain-admins` here is an ordinary
+    label and nothing more.
+
+    The obvious next refactor is to unify the two readers, and this is the regression that would
+    cause: a channel meaning "sees the whole corpus" makes the digest (`digest.sections`) and
+    every public-channel answer broadcast every restricted page into Slack."""
+    from stigmergy.server.identity import resolve_audiences
+
+    same_bytes = json.dumps({"C_OPS": ["brain-admins"]})
+    path = tmp_path / "admins.json"
+    path.write_text(same_bytes)
+
+    # The SAME bytes down both roads. The identity road collapses `brain-admins` to `None` —
+    # unrestricted, sees everything — and the channel road must not: contrasting them is the
+    # assertion, where `scope is not None` was dead beside the equality above it.
+    assert resolve_audiences(str(path), "C_OPS") is None
+    assert channel_audiences(str(path), "C_OPS") == {"brain-admins"}
+
+
 def test_default_path_joins_ops_slack_channels_json_under_the_repo():
     assert default_path("/repo").endswith("ops/slack-channels.json")
 

@@ -20,12 +20,15 @@ from stigmergy.librarian.errors import AgentError, LibrarianConfigError, StaleBa
 from tests.librarian import support
 
 
-def test_startup_checks_returns_the_resolved_repo_acl_config_and_registry(rig):
+def test_startup_checks_returns_the_resolved_repo_and_registry(rig):
+    """The registry is the ONE repo-sourced input left. The ACL config that used to be resolved
+    beside it went with the path resolver (ADR 045 D2): a capture's audience is the door's
+    decision, carried on its own queue row, so no repo file decides a label."""
     env, deps = rig
     resolved = worker.startup_checks(deps.settings)
     assert resolved["repo"] == env.repo
     assert resolved["registry"].canonical_id("Acme Corp") == "acme-corp"
-    assert resolved["acl_config"] is not None or resolved["acl_config"] is None  # never raises
+    assert "acl_config" not in resolved
     assert resolved["reaped"] == 0                      # nothing to reap on a fresh repo
 
 

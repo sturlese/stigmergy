@@ -126,7 +126,7 @@ one**. The source and meeting pages carry no `"anchoring"` key in their `page_de
 (they are provenance, never a knowledge destination — see below), so they are never asked the
 question; only decision pages are.
 
-`processing._stamp_meeting` stamps each decision page's `entity:`/`acl:` independently, from that
+`processing._stamp_meeting` stamps each decision page's `entity:` independently, from that
 page's own declared anchoring — the same `gates.resolve_entity_ids` call and the same
 defence-in-depth ("stamp `[]` rather than a partial resolution when the anchoring gate is about to
 veto this pass anyway") the ordinary flow's `_stamp` applies, run once per decision page instead of

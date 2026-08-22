@@ -180,36 +180,38 @@ def test_a_converged_multi_entity_corpus_moves_neither_the_remote_tip_nor_a_mode
 
 
 # ── ACL: the intersection rule, with the twin that proves it is an intersection ────────────────
-def test_a_sweep_over_disjoint_audiences_writes_acl_nobody(tmp_path):
-    """`acl: []` is "nobody", never "open" — a rollup must not widen access to what it summarizes.
-    Pinned on the SWEEP path because the periodic pass is a new, unattended caller of
-    `regenerate_entity`, and asserted on the FILE as well as on the outcome: the frontmatter is
-    what `server.acl.visible()` will read, and an outcome field agreeing with itself proves
-    nothing about what was committed."""
+def test_a_sweep_never_writes_an_acl_line_and_never_names_a_labelled_member(tmp_path):
+    """ADR 045 D5, on the SWEEP path — the unattended caller that would republish a retired rule
+    across the whole corpus at once.
+
+    Asserted on the FILE as well as on the outcome: the frontmatter is what `server.acl.visible()`
+    reads, and an outcome field agreeing with itself proves nothing about what was committed. Two
+    things must be true at once, and only the first was under the old rule: the view is readable
+    (no `acl: []`, which is *nobody*), and the labelled members' titles and paths are not on it."""
     remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2,
                                decision_acls=[["finance"], ["legal"]])
 
     result = _sweep(clone, registry_of())
 
-    assert result.outcomes[0].acl == []
+    assert result.outcomes[0].acl is None
     view = open(os.path.join(clone, "views", "acme-corp.md")).read()
-    assert "acl: []" in view
-    # And nothing leaked the members' own labels into the rollup's audience.
-    assert "finance" not in view.split("---")[1]
-    assert "legal" not in view.split("---")[1]
+    front = view.split("---\n\n")[0]
+    assert "acl:" not in front, front
+    assert "Decision 1" not in view and "Decision 2" not in view, view
+    assert "finance" not in view and "legal" not in view, view
 
 
-def test_a_sweep_over_overlapping_audiences_writes_the_intersection_not_nobody(tmp_path):
-    """The benign twin. A rule tested only where it produces `[]` is indistinguishable from "the
-    sweep always writes `acl: []`", which would make every view invisible to everyone and read as
-    a passing security test. Two members sharing one label must yield exactly that label."""
-    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2,
-                               decision_acls=[["finance", "legal"], ["legal"]])
+def test_the_benign_twin_a_sweep_over_OPEN_members_still_renders_them_all(tmp_path):
+    """A rule tested only where it EXCLUDES is indistinguishable from "the sweep renders nothing",
+    which would empty every view in the corpus and read as a passing security test."""
+    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2)
 
     result = _sweep(clone, registry_of())
 
-    assert result.outcomes[0].acl == ["legal"]
-    assert "acl: [legal]" in open(os.path.join(clone, "views", "acme-corp.md")).read()
+    assert result.outcomes[0].acl is None
+    view = open(os.path.join(clone, "views", "acme-corp.md")).read()
+    assert "Decision 1" in view and "Decision 2" in view, view
+    assert result.outcomes[0].member_count >= 3
 
 
 # ── the single parse, and the line it deliberately stops at ────────────────────────────────────
@@ -348,7 +350,7 @@ def test_a_backlink_that_stopped_qualifying_must_not_survive_a_convergence_pass(
       checks could not see it either: they read the corpus, where the link is real until the view
       is regenerated.
     - `restricted` — a steward narrows the source's `acl`. `backlinks_of` gates every backlink
-      through `kernel.acl.visible_to_view`, so the narrowed page drops OUT of the rendered rows,
+      through `kernel.acl.flows_into`, so the narrowed page drops OUT of the rendered rows,
       the hash moves, and the pass regenerates the view without it. Before the fix that gate ran
       at generation time only, so an already-committed view kept the page's STEM and PATH readable
       by everyone the view was readable by — the existence leak, not merely staleness: this

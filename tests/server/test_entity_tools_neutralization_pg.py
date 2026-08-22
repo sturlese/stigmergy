@@ -68,7 +68,7 @@ class _HostileEntityFixture:
 
         os.makedirs(os.path.dirname(self.identities_path), exist_ok=True)
         with open(self.identities_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({self.STEWARD: "*"}))
+            f.write(json.dumps({self.STEWARD: ["brain-admins"]}))
 
 
 @pytest.fixture(scope="module")

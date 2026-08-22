@@ -121,9 +121,9 @@ PROMPT_CACHE_VALUES = ("off", *PROMPT_CACHE_TTLS)
 # What counts as "yes" in an environment variable.
 _TRUTHY = ("1", "true", "yes")
 
-# The three repo-sourced inputs, RELATIVE TO THE REPO ROOT — one spelling each, so the reads at
-# `base.sha` and the checkout paths below can never disagree.
-ACL_RELPATH = "ops/acl.json"
+# The two repo-sourced inputs, RELATIVE TO THE REPO ROOT — one spelling each, so the reads at
+# `base.sha` and the checkout paths below can never disagree. There were three: `ops/acl.json`
+# went with the path resolver (ADR 045 D2 — the audience is the door's, on the row).
 REGISTRY_RELPATH = "ops/entity-registry.json"
 LINTER_RELPATH = ".claude/tools/stigmergy_lint.py"
 
@@ -430,10 +430,6 @@ class Settings:
     # ── the three repo-sourced inputs: where they live IN A CHECKOUT ──────────────────────────
     # Locations, not reads — the fast lane opens none of them, reading all three at `base.sha`.
     # These exist for the operator tooling and its messages, off the same RELPATHs.
-    @property
-    def acl_path(self) -> str:
-        return _in_repo(self.repo, ACL_RELPATH)
-
     @property
     def registry_path(self) -> str:
         return _in_repo(self.repo, REGISTRY_RELPATH)

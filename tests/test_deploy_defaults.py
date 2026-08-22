@@ -19,6 +19,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -104,8 +105,10 @@ def test_no_other_directory_has_appeared_in_deploy():
 _ROSTER = {"someone@example.com": ["everyone", "finance"]}
 _REGISTRY = {"entities": {"acme-corp": {"name": "Acme Corp"}}}
 # Real-looking because the point of these tests is that real data does not survive the script:
-# a steward map is a list of people's email addresses, exactly like the identity roster.
-_CHANNELS = {"everyone": "C0123456789"}
+# a channel map names real channel ids against real group names, and the script's preflight now
+# parses it with the grammar the server reads it with (ADR 045 D7), so a fixture in any other
+# shape would be refused before it could be baked.
+_CHANNELS = {"C0123456789": ["finance"]}
 
 
 def _staged_run(tmp_path):
@@ -222,3 +225,85 @@ def test_the_scripts_restored_defaults_are_the_ones_this_file_asserts(tmp_path):
     restored = {p.name: json.loads(p.read_text(encoding="utf-8"))
                 for p in sorted(deploy_dir.iterdir()) if p.is_file()}
     assert restored == EMPTY_DEFAULTS
+
+
+# ── the preflight: a file the server would refuse to read never becomes an image ───────────────
+# Since ADR 045 D7 there is one value shape for a principal's groups, and a leftover `"*"`
+# invalidates the WHOLE file rather than one entry — so an image shipped ahead of the roster
+# rewrite 401s every request. This is the check that stops that, and it has three outcomes.
+
+def _run_deploy(tmp_path, *, roster, blind: bool = False) -> subprocess.CompletedProcess:
+    """`_staged_run`'s rig with a caller-chosen roster, returning the process rather than
+    asserting success — these tests are about the exit code.
+
+    `blind=True` plants a `python3` that cannot import this package, reaching the script's "I
+    could not check" branch; the default plants one that CAN, by exec'ing this suite's own
+    interpreter. Both are planted rather than inherited, so the branch under test is chosen by the
+    test and not by whatever the machine happens to have on PATH."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copy2(DEPLOY_SCRIPT, scripts / "deploy_staging.sh")
+    ops = tmp_path / "knowledge" / "ops"
+    ops.mkdir(parents=True)
+    (ops / "identities.json").write_text(json.dumps(roster), encoding="utf-8")
+    (ops / "entity-registry.json").write_text(json.dumps(_REGISTRY), encoding="utf-8")
+    (ops / "slack-channels.json").write_text(json.dumps(_CHANNELS), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fly = bin_dir / "fly"
+    fly.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fly.chmod(0o755)
+    # A `python3` on PATH is planted either way, and which one decides the branch — never the
+    # ambient interpreter, whose ability to import this package differs between a CI runner
+    # (`pip install -e .`, it can) and a developer's machine (a venv, it cannot). That difference
+    # is what made the first version of these tests pass in one place and fail in the other.
+    shim = bin_dir / "python3"
+    shim.write_text("#!/usr/bin/env bash\nexit 1\n" if blind
+                    else f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    env = {**os.environ,
+           "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+           "STIGMERGY_REPO": str(tmp_path / "knowledge")}
+    # `cwd=tmp_path`, not the repo root: the script probes `.venv/bin/python` RELATIVE to the
+    # working directory, so a run from the checkout would find this suite's own venv and none of
+    # these tests could tell the three outcomes apart. CI runs from the checkout and has no
+    # `.venv` at all, which is the shape that made the original defect visible there and nowhere
+    # else.
+    return subprocess.run(["bash", str(scripts / "deploy_staging.sh")], cwd=str(tmp_path),
+                          capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_a_retired_roster_spelling_stops_the_deploy_and_names_the_line_to_write(tmp_path):
+    """The refusal, on the case every deployment meets exactly once. The message is the parser's
+    own, so an operator is told what to write rather than that something is wrong."""
+    proc = _run_deploy(tmp_path, roster={"someone@example.com": "*"})
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert '["brain-admins"]' in proc.stderr, proc.stderr
+    assert "refusing to bake" in proc.stderr
+
+
+def test_the_benign_twin_a_roster_in_the_current_shape_deploys(tmp_path):
+    """The specificity half: the preflight must let the shape every real roster now uses through,
+    or it would block every deploy and read as a passing check."""
+    proc = _run_deploy(tmp_path, roster=_ROSTER)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "refusing to bake" not in proc.stderr
+
+
+def test_a_check_that_cannot_RUN_says_so_loudly_and_lets_the_deploy_through(tmp_path):
+    """The third outcome, and the one this check shipped broken on. It invoked `.venv/bin/python`
+    by name, which exists on the author's machine and nowhere else — so CI, where the script is
+    copied to a temp directory, got "no such file" and every deploy test went red.
+
+    "I could not look" must not read as "I looked and it is broken": this script is run standalone
+    by its own tests, so failing closed on its own absence would block a deploy for a reason that
+    has nothing to do with the roster. It warns instead — loudly, because a check that stops
+    running must be impossible to miss."""
+    proc = _run_deploy(tmp_path, roster={"someone@example.com": "*"}, blind=True)
+
+    # A roster the check WOULD have refused, and the deploy still proceeds — which is only
+    # acceptable because the operator is told, in these words.
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "were NOT" in proc.stderr and "unvalidated" in proc.stderr, proc.stderr

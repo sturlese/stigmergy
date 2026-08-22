@@ -93,8 +93,15 @@ reaches `store` and `schema` to READ the ledger. Neither may reach `run.py`, and
 - `librarian.githubapp.authenticated_clone_url` — the SHARED credential resolver, the same one
   `entities.remote` mints through, so the two server-driven doors cannot disagree about when a
   credential is needed.
-- `librarian.gather.load_corpus` / `search_candidates` / `confined_page` — one lexical ranking and
-  one containment rule behind the proposer's tools and the filing agent's.
+- `librarian.gather.load_corpus` / `search_candidates` / `confined_page` / `may_read` — one
+  lexical ranking, one containment rule and one AUDIENCE gate behind the proposer's tools and the
+  filing agent's. Two implementations of a confinement rule is how the second one misses a change
+  the first one got, and this package proved it: the filing toolbox gained the audience gate and
+  its copy here did not, until the gate became a shared function.
+  **The proposer's own audience is OPEN, by decision** ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md)
+  D3): a repair has no capture behind it, so no human act names an audience for it, and running it
+  at open means it may read only open pages and can therefore only ever write open material. The
+  price is stated in the ADR's residuals — a restricted page is never repaired by this loop.
 - `gardener.store.latest_completed_run` / `findings_for_run` — findings are READ, never
   recomputed; `subjects` is the LIST, never the display string re-split. The same list is stored
   on the ledger row as `finding_subjects`, which is what lets the pre-model skip recognise the same

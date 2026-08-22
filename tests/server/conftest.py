@@ -103,7 +103,7 @@ class Fixture:
         os.makedirs(os.path.dirname(self.identities_path), exist_ok=True)
         with open(self.identities_path, "w", encoding="utf-8") as f:
             f.write(json.dumps({
-                self.STEWARD: "*", self.ANA: ["finance"], self.ENG: ["eng"],
+                self.STEWARD: ["brain-admins"], self.ANA: ["finance"], self.ENG: ["eng"],
             }))
 
     ACME_PAGE = "wiki/finance/acme-payroll.md"
@@ -117,7 +117,7 @@ class Fixture:
 
     # `ops/identities.json` is keyed by email; these three constants are the whole suite's
     # identities, one per audience scope (unrestricted / finance / eng).
-    STEWARD = "steward@example.com"     # unrestricted ("*")
+    STEWARD = "steward@example.com"     # unrestricted (holds "brain-admins")
     ANA = "ana@example.com"       # scoped to ["finance"]
     ENG = "eng@example.com"       # scoped to ["eng"]
 
@@ -336,7 +336,7 @@ def run_http_server(app):
 # Real git + real Postgres, same posture as `tests/librarian/`: a deletion clones, gates and pushes
 # for real, and a faked one would prove nothing about the property under test.
 #
-# `STEWARD` is UNRESTRICTED in the fixture identities file (`"*"`) and `ALICE` is scoped — which is
+# `STEWARD` is UNRESTRICTED in the fixture identities file (`["brain-admins"]`) and `ALICE` is scoped — which is
 # exactly the split `brain_delete` authorizes on since ADR 044 D3. The name is kept because that is
 # what a person who may remove pages is called in this repo's prose.
 STEWARD = "steward@example.com"

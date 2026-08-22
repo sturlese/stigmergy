@@ -1,6 +1,6 @@
 """The three repo-sourced inputs the fast lane reads — **at the commit it files against**.
 
-`ops/acl.json`, `ops/entity-registry.json` and `.claude/tools/stigmergy_lint.py` are read at
+`ops/entity-registry.json` and `.claude/tools/stigmergy_lint.py` are read at
 `base`, never off the working tree: an uncommitted local edit must never influence a filing, or a
 page is anchored to an entity nobody approved and stamped with labels its own commit disagrees
 with. Missing keeps its meaning in every case — no ACL config is an open corpus, no registry is an
@@ -11,7 +11,7 @@ import tempfile
 from contextlib import contextmanager
 
 from stigmergy.kernel import registry as registry_module
-from stigmergy.librarian import acl_rules, config, gitcmd
+from stigmergy.librarian import config, gitcmd
 from stigmergy.librarian.errors import GitError, LibrarianConfigError
 
 # Temp directories this module makes. Deliberately NOT under `gitcmd.WORKTREE_PREFIX`: startup
@@ -21,7 +21,7 @@ _TEMP_PREFIX = "stigmergy-base-input-"
 
 
 def where(base: gitcmd.BaseRef, relpath: str) -> str:
-    """`origin/main@abc123def456:ops/acl.json` — how every message in this module names an input,
+    """`origin/main@abc123def456:ops/entity-registry.json` — how every message in this module names an input,
     shared with `worker._check_skill_at` so the two cannot use different layouts."""
     return f"{base.describe()}:{relpath}"
 
@@ -66,14 +66,10 @@ def _materialized(text: str, relpath: str):
         yield path
 
 
-# ── the three wrappers: one per input, each keeping its own semantics ──────────────────────────
-def load_acl(repo: str, base: gitcmd.BaseRef):
-    """`ops/acl.json` at `base`, through the librarian's dialect adapter — no file anywhere. A
-    commit with no ACL config is an open corpus, `acl.py`'s own semantics for a missing one."""
-    relpath = config.ACL_RELPATH
-    return acl_rules.load_text(read_at(repo, base, relpath), label=where(base, relpath))
-
-
+# ── the two wrappers: one per input, each keeping its own semantics ───────────────────────────
+# There were three. `load_acl` read `ops/acl.json` at `base` and is gone with the resolver it fed:
+# a capture's audience is the DOOR's decision, carried on its own queue row (ADR 045 D2), so no
+# repo-sourced input decides a label any more and there is nothing to pin to a commit.
 def load_registry(repo: str, base: gitcmd.BaseRef):
     """`ops/entity-registry.json` at `base`, materialized so the kernel's own path-taking reader
     stays untouched.

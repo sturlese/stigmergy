@@ -43,10 +43,10 @@ def _registry(repo: str):
     return registry_module.load_registry(os.path.join(repo, "ops", "entity-registry.json"))
 
 
-def _write(repo, outcome, *, material, hints=None, approver=SUBMITTER):
+def _write(repo, outcome, *, material, hints=None, approver=SUBMITTER, acl=None):
     return identity.write_births(repo, outcome=outcome, base_registry=_registry(repo),
                                  material=material, hints=hints, today=TODAY,
-                                 related=["A Note"], approver=approver)
+                                 related=["A Note"], approver=approver, acl=acl)
 
 
 def _read(repo: str, relpath: str) -> str:
@@ -264,7 +264,7 @@ def test_the_registered_entity_is_born_confirmed_by_the_person_who_registered_it
         env.repo, outcome=_outcome([_declared()]), base_registry=_registry(env.repo),
         material="Scircle sells personalised perfume online; I met them at a trade fair.",
         hints={"entity": "Scircle", "register_name": "Scircle"},
-        today=TODAY, related=["A Note"], registration=_registration(), approver=SUBMITTER)
+        today=TODAY, related=["A Note"], registration=_registration(), approver=SUBMITTER, acl=None)
 
     assert isinstance(births, identity.Births), births
     page = yaml.safe_load(_read(env.repo, "wiki/entities/Scircle.md").split("---")[1])
@@ -290,7 +290,7 @@ def test_a_second_entity_beside_the_registration_is_born_confirmed_by_the_same_p
     births = identity.write_births(
         env.repo, outcome=outcome, base_registry=_registry(env.repo),
         material="Scircle and Nebula Labs both came up.", hints={"register_name": "Scircle"},
-        today=TODAY, related=["A Note"], registration=_registration(), approver=SUBMITTER)
+        today=TODAY, related=["A Note"], registration=_registration(), approver=SUBMITTER, acl=None)
 
     assert isinstance(births, identity.Births), births
     registry = json.loads(_read(env.repo, "ops/entity-registry.json"))["entities"]
@@ -309,7 +309,7 @@ def test_an_account_that_ignores_the_registration_is_refused_with_a_brief_and_wr
     findings = identity.write_births(
         env.repo, outcome=_outcome(), base_registry=_registry(env.repo),
         material="Scircle sells perfume.", hints={"register_name": "Scircle"},
-        today=TODAY, registration=_registration(), approver=SUBMITTER)
+        today=TODAY, registration=_registration(), approver=SUBMITTER, acl=None)
 
     assert isinstance(findings, list) and [f.code for f in findings] == ["registration-missing"]
     assert findings[0].repairable and "Scircle" in findings[0].brief and "new_entities" in findings[0].brief
@@ -326,7 +326,7 @@ def test_registering_a_name_the_registry_already_resolves_asks_nothing_of_the_ac
     births = identity.write_births(
         env.repo, outcome=_outcome(), base_registry=_registry(env.repo),
         material="Acme Corp again.", hints={"register_name": "Acme Corp"},
-        today=TODAY, registration=_registration(name="Acme Corp", aliases=()), approver=SUBMITTER)
+        today=TODAY, registration=_registration(name="Acme Corp", aliases=()), approver=SUBMITTER, acl=None)
 
     assert isinstance(births, identity.Births), births
     assert not births.touched() and births.confirmed == {}

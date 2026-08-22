@@ -80,7 +80,7 @@ class _EntityDocsFixture:
 
         os.makedirs(os.path.dirname(self.identities_path), exist_ok=True)
         with open(self.identities_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({self.STEWARD: "*", self.ANA: ["finance"], self.ENG: ["eng"]}))
+            f.write(json.dumps({self.STEWARD: ["brain-admins"], self.ANA: ["finance"], self.ENG: ["eng"]}))
 
 
 @pytest.fixture(scope="module")
@@ -379,7 +379,7 @@ class _DuplicateSelfAnchorFixture:
                   "Second self-anchored page.")
         os.makedirs(os.path.dirname(self.identities_path), exist_ok=True)
         with open(self.identities_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({self.STEWARD: "*"}))
+            f.write(json.dumps({self.STEWARD: ["brain-admins"]}))
 
 
 @pytest.fixture(scope="module")

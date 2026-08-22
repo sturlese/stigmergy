@@ -53,8 +53,9 @@
   <!-- ── the durable queue ─────────────────────────────────────────────────── -->
   <rect class="node" x="204" y="120" width="140" height="80" rx="10"/>
   <text x="274" y="148" class="title">capture queue</text>
-  <text x="274" y="166" class="tag">durable · leased</text>
-  <text x="274" y="182" class="tag">server-attributed</text>
+  <text x="274" y="160" class="tag">durable · leased</text>
+  <text x="274" y="176" class="tag">server-attributed</text>
+  <text x="274" y="192" class="tag">audience from the door</text>
 
   <line class="edge" x1="156" y1="108" x2="200" y2="142" marker-end="url(#arr)"/>
   <line class="edge" x1="156" y1="176" x2="200" y2="162" marker-end="url(#arr)"/>

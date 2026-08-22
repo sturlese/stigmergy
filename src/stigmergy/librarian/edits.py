@@ -44,8 +44,10 @@ def page_names(worktree: str, *, confined: bool = False) -> set[str]:
     symlink — the same filter `gather._confined` applies — and it is a PARAMETER because the two
     callers need different answers: `validate` (the default) is answering "would this link be
     dead?", and the answer must be the linter's, whose index has no containment notion (the
-    WRITE road refuses symlinks separately); `gather` passes `True` because its answer becomes a
-    list of names in a model's prompt.
+    WRITE road refuses symlinks separately). The `confined=True` caller used to be `gather`,
+    whose answer became a list of names in a model's prompt; since ADR 045 D3 that vocabulary
+    comes off the SCOPED corpus instead (`gather.Corpus.link_names`), because containment says
+    nothing about audience and a name is the whole of what a link leaks.
     """
     names = set()
     for zone in corpus.ZONES:

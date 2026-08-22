@@ -62,7 +62,7 @@ class _Fixture:
             f.write(json.dumps(BAKED_REGISTRY))
         self.identities_path = os.path.join(ops, "identities.json")
         with open(self.identities_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({STEWARD: "*"}))
+            f.write(json.dumps({STEWARD: ["brain-admins"]}))
 
         write_page(self.repo, ENTITY_PAGE,
                    {"type": "entity", "title": "Ferrovial Nexus",

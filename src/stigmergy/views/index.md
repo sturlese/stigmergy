@@ -18,12 +18,16 @@ same run as the filing). There is no operator command — ADR 044 D3 removed it 
 it is that the sweep also runs on the first idle tick AFTER the worker did something, so the wait
 is a poll interval rather than a sweep interval.
 
-A view's `acl` is the **INTERSECTION** of its members' audiences (`kernel.acl.view_acl`), never
-their union — a rollup must not widen access to what it summarizes. Backlinks are a governed but
-NON-member feed and pass a second gate (`kernel.acl.visible_to_view`), never folded into the
-intersection. That gate is applied at generation time AND inside the staleness signal
-(`skeleton.backlink_hash` hashes the post-gate rows), because a gate that ran only at generation
-time left a narrowed source cited forever on an already-committed page — #85. The synthesis is
+A view carries **no `acl:` at all** ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md)
+D5): it is the OPEN rollup. `skeleton.members_of` admits only members that `flows_into` an open
+page, and the backlink feed — a governed but NON-member source — passes the same gate. It used to
+be the INTERSECTION of its members' audiences, which never widened access, correctly, and
+COLLAPSED: two members with disjoint labels produced `acl: []`, which is *nobody*, so one
+leadership-only note anchored to a popular entity deleted that entity's view for everyone while
+its timeline went on naming every member. Both gates run at generation time AND inside the
+staleness signal (`skeleton.member_hash` moves when a member drops out, `skeleton.backlink_hash`
+hashes the post-gate rows), because a gate that ran only at generation time left a narrowed source
+cited forever on an already-committed page — #85. The synthesis is
 unverified by design: no figure check, no `verification:` field — the one withheld road is the
 agent's budget (`UsageLimitExceeded`).
 
@@ -103,8 +107,8 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
 - Frontmatter (`render.render`): `type: view`, `title`, `entity: [<id>]` (a LIST), `tags`,
   `tier: 3`, `content_hash`, `generated_at`, `members`, `member_hash` and `backlink_hash` (the two
   persisted staleness signals, on the page itself, one per feed it renders — both REQUIRED
-  arguments, since a view written without one reads as stale on every pass thereafter), optional
-  `acl` — `acl: []` is legal and rendered, never omitted.
+  arguments, since a view written without one reads as stale on every pass thereafter). No `acl:`,
+  ever — a view is open and its feeds are filtered to match.
 - `RegenOutcome.action`: `written` / `removed` / `unchanged` / `refused-unknown-entity` /
   `refused-no-members` / `refused-unusable-id` (an id no view file can be named from — counted,
   and named per id in `skip_reasons`, so one typo'd anchor costs its own id and never the pass).

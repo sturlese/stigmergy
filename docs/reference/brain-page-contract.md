@@ -61,7 +61,7 @@ extraction_quality: usable           # usable | manual_review
 source_format: pdf                   # pdf | spreadsheet | document | office | text | other
 contextual_retrieval: title          # embedding-context tier: prepend title to each chunk
 tier: 1                              # 1 primary, 2 second-hand, 3 AI-generated
-acl: [sales, leadership]             # audience labels; absent = open to all
+acl: [sales, leadership]             # audience GROUPS; absent = open, [] = nobody
 # ── the three lines below are HISTORICAL: the trust layer that produced them is deleted,
 #    nothing writes them, and nothing reads them. Pages written before it went still carry
 #    them; a value is a frozen fact about that extraction run, never a live guarantee.
@@ -118,7 +118,10 @@ corpus.
 
 ## How a client should read it
 
-`as_of` and `acl` are stamped by the librarian on every page it files, and `supersedes`/
+`as_of` and `acl` are stamped by the librarian on every page it files — `acl` from the audience
+the DOOR decided for that capture, so a note, the verbatim `sources/` page beside it and every
+page of a meeting set carry the same one. An entity page is the exception and carries none: the
+registry is the brain's shared vocabulary (ADR 045 D6). `supersedes`/
 `superseded_by` are written by a human editing a page (the gardener flags a candidate pair and
 names no command, deliberately). The rest of the table is how to read a page that already carries
 the field — no writer produces one now.
@@ -199,9 +202,11 @@ generator in this codebase — documented in full at [views.md](./views.md). The
 `type: view`, `tags: [view]`, `tier: 3`, `content_hash` (sha256 of the rendered **body** — a
 derived page has no single raw source), `generated_at`, the two staleness signals `member_hash`
 and `backlink_hash` (the member set, and the backlinks the page actually renders — a view missing
-the second is regenerated on the next convergence pass), and `acl` as the **intersection** of the
-member pages' audiences: a rollup never widens access. They carry no
-`verification` field — nothing computes a verdict, so nothing stamps one.
+the second is regenerated on the next convergence pass). They carry **no `acl:` at all**
+([ADR 045](../decisions/045-audience-from-the-door.md) D5): a view is the open rollup, and both of
+its feeds are filtered to what may appear on an open page rather than the page being labelled to
+match them. They carry no `verification` field either — nothing computes a verdict, so nothing
+stamps one.
 
 ## Field notes worth knowing
 

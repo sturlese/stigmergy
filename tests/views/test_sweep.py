@@ -337,17 +337,20 @@ def test_the_ceiling_counts_regenerations_not_entities_examined(tmp_path):
 
 
 # ── ACL: pinned HERE, because this change adds a caller ────────────────────────────────────────
-def test_a_sweep_over_disjoint_audiences_still_writes_acl_nobody(tmp_path):
-    """`acl: []` is a deliberate "nobody", never "open" — the intersection rule a rollup exists to
-    respect. Pinned on the SWEEP path rather than trusted from `regenerate_entity`'s own test,
-    because the periodic pass is a new, unattended caller of it."""
+def test_a_sweep_over_labelled_members_writes_an_OPEN_view_without_them(tmp_path):
+    """A view carries no label and renders open members only (ADR 045 D5). Pinned on the SWEEP
+    path rather than trusted from `regenerate_entity`'s own test, because the periodic pass is an
+    unattended caller of it — and this is the pass that would silently republish the retired
+    behaviour across the whole corpus."""
     remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2,
                                decision_acls=[["a"], ["b"]])
 
     result = sweep(clone, FakeConn(), registry_of())
 
-    assert result.outcomes[0].acl == []
-    assert "acl: []" in open(os.path.join(clone, "views", "acme-corp.md")).read()
+    assert result.outcomes[0].acl is None
+    page = open(os.path.join(clone, "views", "acme-corp.md")).read()
+    assert "acl:" not in page.split("---\n\n")[0]
+    assert "Decision 1" not in page and "Decision 2" not in page
 
 
 # ── the job_runs row the pass leaves behind ────────────────────────────────────────────────────

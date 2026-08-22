@@ -73,29 +73,55 @@ def test_a_stored_value_that_cannot_be_parsed_fails_closed_for_every_client(malf
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The `[]`-stays-`[]` invariant, pinned. Load-bearing, and unguarded for far too long.
 #
-# A view's own `acl` is the INTERSECTION of its members' audiences (`view_acl`,
-# "restrictive by construction, never silently open"), and when that intersection is empty the
-# view is written with a literal `acl: []` rather than the key being omitted. `acl: []` means
-# NOBODY at every serving reader (`server.acl.visible`'s own truth table), so an empty
-# intersection produces a view that is visible to no scoped client — which is the correct,
-# fail-closed answer for a rollup over pages that share no audience.
+# `acl: []` means NOBODY at every serving reader (`server.acl.visible`'s own truth table), and
+# `acl:` ABSENT means open. They are two values, not two spellings of one, and ADR 045 D9 makes
+# that a corpus-wide rule after the librarian's old resolver spent years translating a resolved
+# empty list back into "no line at all" — so the one spelling `ops/acl.json` used to restrict
+# meant its opposite once stamped.
 #
-# Two independent implementations have to agree for that to hold:
+# Two independent implementations have to agree for the rule to hold:
 #
-#   * `views.render` must WRITE `acl: []` and not omit the key;
+#   * `page.stamp_server_fields` must WRITE `acl: []` and not omit the key;
 #   * `index.corpus._acl_labels` must READ `acl: []` back as `[]` and not as `None`.
 #
-# If EITHER ever collapsed empty to open, a view carrying `acl: []` would index as open — and a
-# view's body renders its members' titles and its Backlinks section lists their paths, so the
-# failure discloses every restricted backlink to every reader. Neither side had a test holding it,
-# which is precisely how a two-sided invariant dies in one of its halves.
+# If EITHER collapsed empty to open, a page the writer meant for nobody would index as visible to
+# everyone. The producer used to be `views.render` — a view is the one page that could DERIVE an
+# empty audience, from an intersection over members sharing none — and D5 retired both the
+# derivation and the label. Nothing derives `[]` today; the rule is pinned here anyway, because a
+# value that means the opposite of its neighbour is worth holding before something derives it.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-def test_the_render_side_writes_an_empty_acl_rather_than_omitting_the_key():
-    from stigmergy.kernel.acl import view_acl
-    # Two members sharing NO audience: the intersection is empty.
-    assert view_acl([["finance"], ["sales"]]) == []
-    # ...and an open corpus is a different answer, which is what makes the empty case meaningful.
-    assert view_acl([None, None]) is None
+def test_the_retired_acl_symbols_stay_retired():
+    """The same posture `test_contract_parity` already takes for `kernel.acl.visible` and
+    `Settings.acl_path`: a deleted access-control function is one autocomplete away from being
+    reintroduced, and the reintroduced one would not be wired to anything that tests it.
+
+    `resolve_acl`/`load_acl_config` derived a label from a path (ADR 045 D1/D2); `view_acl`
+    collapsed a view to nobody (D5); `all_visible` never had a caller."""
+    from stigmergy.kernel import acl as kernel_acl
+    from stigmergy.server import acl as server_acl
+
+    for name in ("resolve_acl", "load_acl_config", "load_acl_config_text", "view_acl"):
+        assert not hasattr(kernel_acl, name), (
+            f"kernel.acl.{name} is back — it was deleted by ADR 045, and a second way to answer "
+            f"an access question is a second thing that can answer it differently")
+    assert not hasattr(server_acl, "all_visible"), (
+        "server.acl.all_visible is back — it had no caller, and a predicate nothing calls is a "
+        "predicate nothing tests")
+
+
+def test_the_write_side_writes_an_empty_acl_rather_than_omitting_the_key():
+    """The two spellings must stay two values on the WRITE side, or the read side's truth table
+    below is decorative. `views.render` used to be the only producer of `acl: []` and no longer
+    produces a label at all (ADR 045 D5), so the producer this pins is the stamper every filed
+    page goes through."""
+    from stigmergy.librarian.page import stamp_server_fields
+
+    page = "---\ntype: note\ntitle: t\n---\n\n# t\n"
+    nobody = stamp_server_fields(page, submitted_by="a@b", acl=[], as_of="2026-08-22")
+    assert "acl: []" in nobody, nobody
+    # ...and open is a DIFFERENT answer — an omitted line — which is what makes `[]` meaningful.
+    opened = stamp_server_fields(page, submitted_by="a@b", acl=None, as_of="2026-08-22")
+    assert "acl:" not in opened, opened
 
 
 def test_the_read_side_reads_an_empty_acl_back_as_nobody_never_as_open():
@@ -107,19 +133,22 @@ def test_the_read_side_reads_an_empty_acl_back_as_nobody_never_as_open():
     assert _acl_labels({"acl": None}) is None       # explicit null = open
 
 
-def test_the_two_sides_compose_a_view_over_disjoint_members_is_visible_to_nobody():
-    """The invariant end to end, over the values rather than the prose: render's output shape fed
+def test_the_two_sides_compose_a_page_stamped_at_nobody_is_visible_to_nobody():
+    """The invariant end to end, over the values rather than the prose: the stamper's output fed
     to the reader, then to the one enforcement point. This is the assertion that would have caught
     a collapse in EITHER half, which is why it exists beside the two unit checks and not instead
     of them."""
+    import yaml
+
     from stigmergy.index.corpus import _acl_labels
-    from stigmergy.kernel.acl import view_acl
+    from stigmergy.librarian.page import split_frontmatter, stamp_server_fields
     from stigmergy.server.acl import visible
 
-    acl = view_acl([["finance"], ["sales"]])     # disjoint members -> []
-    assert acl == []
-    rendered = {"acl": acl}                          # what `views.render` puts in frontmatter
-    stored = _acl_labels(rendered)                   # what the index stores
+    page = stamp_server_fields("---\ntype: note\ntitle: t\n---\n\n# t\n",
+                               submitted_by="a@b", acl=[], as_of="2026-08-22")
+    front, _body = split_frontmatter(page)
+    stored = _acl_labels(yaml.safe_load(front))      # what the index stores
+    assert stored == []
     assert visible(stored, {"finance"}) is False
     assert visible(stored, {"sales"}) is False
     assert visible(stored, set()) is False

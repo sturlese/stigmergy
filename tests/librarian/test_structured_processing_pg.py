@@ -178,7 +178,7 @@ class _StructuredAgent:
         self.gathered_seen = []
 
     def run(self, *, worktree, material, hints, submitted_by, corrective="",
-            flow_note="", gathered=""):
+            flow_note="", gathered="", acl=None):
         from stigmergy.librarian import agent as agent_module
         from stigmergy.librarian.errors import AgentError
         from stigmergy.librarian.filing_port import priced
@@ -620,7 +620,7 @@ class _ScriptedAgent:
         self.gathered_seen = []
 
     def run(self, *, worktree, material, hints, submitted_by, corrective="",
-            flow_note="", gathered=""):
+            flow_note="", gathered="", acl=None):
         self.gathered_seen.append(gathered)
         self.calls += 1
         return AgentRun(outcome=self.outcomes[min(self.calls, len(self.outcomes)) - 1],
@@ -676,7 +676,7 @@ class _PathClaimingAgent:
         self.gathered_seen = []
 
     def run(self, *, worktree, material, hints, submitted_by, corrective="",
-            flow_note="", gathered=""):
+            flow_note="", gathered="", acl=None):
         self.gathered_seen.append(gathered)
         return AgentRun(outcome=self.outcome, cost_usd=0.0)
 

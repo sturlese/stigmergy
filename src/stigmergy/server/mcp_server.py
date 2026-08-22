@@ -139,6 +139,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
 
     @mcp.tool()
     async def brain_submit(kind: str, material: str, hints: dict | None = None,
+                     audience: list[str] | None = None,
                      submitted_by: str | None = None, verification: str | None = None,
                      acl: str | list | None = None, content_hash: str | None = None) -> str:
         """Capture something into the brain's write queue. `kind` names the SHAPE of the
@@ -157,8 +158,17 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         writes the entity the material is about and the page anchored to it in the same commit,
         confirmed by you — your capture is the approval, and nobody is asked anything.
 
-        `submitted_by`, `acl` and `content_hash` are the SERVER's to compute — who you are, who
-        may see it, and what it hashes to. `verification` is listed beside them for a different
+        `audience` is the one access decision that is YOURS: the groups this material is for, as
+        a list of group names (`["finance"]`). Omit it and the capture is filed OPEN — readable by
+        everyone in this brain — which is what you want for almost everything. You may only name
+        groups you are in: filing something you could not read afterwards is refused, because a
+        page nobody who wrote it can see is a page nobody can fix. Every page the capture produces
+        carries that audience, the verbatim source page included. There is no way to change it
+        afterwards: if it is wrong, remove the pages and submit again.
+
+        `submitted_by`, `acl` and `content_hash` are the SERVER's to compute — who you are, the
+        RESOLVED audience label (`audience` above is the request; the server decides and stores
+        the answer), and what it hashes to. `verification` is listed beside them for a different
         reason: nothing computes a verdict any more (ADR 026 D2), so no page may carry one, and
         naming the parameter here is what turns passing it into an explicit ERROR instead of
         something silently ignored. Same for the other three: submitting as someone else requires
@@ -173,6 +183,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return json.dumps(
                 await anyio.to_thread.run_sync(
                     functools.partial(service.submit, kind, material, hints=hints,
+                                      audience=audience,
                                       submitted_by=submitted_by, verification=verification,
                                       acl=acl, content_hash=content_hash)),
                 **_DUMP)

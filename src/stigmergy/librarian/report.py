@@ -125,7 +125,7 @@ def _resolution_note(anchoring: dict, registry=None) -> str:
 def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps: list,
           findings: list, pages_edited: list = (), agent_rationale: str = "", registry=None,
           source_pages: list = (), entities_born: list = (), aliases_added: list = (),
-          entities_updated: list = ()) -> dict:
+          entities_updated: list = (), entities_withheld: list = ()) -> dict:
     """The ordinary success: page, commit and anchor, plus the not-searchable-yet clause in the same
     sentence. `pages_edited` is what code actually wrote from the agent's declared edits, while
     `overlaps_flagged` is the agent's JUDGMENT about which pages overlap — a different field.
@@ -158,7 +158,8 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
                     f"{_listed(source_paths)}, and the page cites it in `sources:`.")
     born, added_aliases = _birth_lists(entities_born, aliases_added)
     updated = _updated_list(entities_updated)
-    summary += births_clause(born, added_aliases, updated)
+    withheld = _withheld_list(entities_withheld)
+    summary += births_clause(born, added_aliases, updated, withheld)
     return base_report(
         status=schema.FILED, summary=summary,
         page_path=page_path, commit=commit, anchored_to=anchor,
@@ -169,7 +170,7 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
         findings=list(_as_list(findings)),
         entities_born=born, aliases_added=added_aliases,
-        entities_updated=updated,
+        entities_updated=updated, entities_withheld=withheld,
         **({"source_pages": source_paths} if source_paths else {}))
 
 
@@ -201,9 +202,24 @@ def _birth_lists(entities_born, aliases_added) -> tuple[list, list]:
     return born, aliases
 
 
-def births_clause(born: list, added_aliases: list, updated: list = ()) -> str:
+def _withheld_list(entities_withheld) -> list:
+    return [{"entity": _clean_identity((w or {}).get("entity", ""), 80),
+             "facts": int((w or {}).get("facts") or 0),
+             "connections": int((w or {}).get("connections") or 0)}
+            for w in _as_list(entities_withheld)]
+
+
+def births_clause(born: list, added_aliases: list, updated: list = (),
+                  withheld: list = ()) -> str:
     """The sentence telling a submitter the page landed AND which identities their capture
-    introduced. Empty when nothing was created, so an ordinary filing's sentence is unchanged."""
+    introduced. Empty when nothing was created, so an ordinary filing's sentence is unchanged.
+
+    `withheld` is the half that only a RESTRICTED capture ever has (ADR 045 D6): what its material
+    established could not go on an entity page, because an entity page is the brain's shared
+    vocabulary and carries no audience. COUNTED, never quoted — the sentence must not put back
+    what it is telling you was kept off an open page — and said at all because the person who
+    captured is the only one who can decide whether that fact belongs in the open, and they can
+    only decide it if they are told."""
     parts = []
     if born:
         named = _listed([f"{e['name']} (`{e['id']}`)" for e in born])
@@ -220,6 +236,16 @@ def births_clause(born: list, added_aliases: list, updated: list = ()) -> str:
                              if u.get("connections") else "") if w]
         if added:
             parts.append(f"It adds {' and '.join(added)} to the page of `{u.get('entity', '')}`.")
+    for w in withheld:
+        kept = [x for x in (_plural(int(w.get("facts") or 0), "fact") if w.get("facts") else "",
+                            _plural(int(w.get("connections") or 0), "connection")
+                            if w.get("connections") else "") if x]
+        if kept:
+            parts.append(
+                f"{' and '.join(kept).capitalize()} your material established about "
+                f"`{w.get('entity', '')}` stayed OFF that entity's page, which is open to "
+                f"everyone: they are on the page this capture filed, at its own audience. If any "
+                f"of them belongs in the open, say it in a capture filed open.")
     return (" " + " ".join(parts)) if parts else ""
 
 
@@ -227,7 +253,7 @@ def births_clause(born: list, added_aliases: list, updated: list = ()) -> str:
 def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, commit: str,
                   pages_edited: list = (), agent_rationale: str = "", registry=None,
                   entities_born: list = (), aliases_added: list = (),
-                  entities_updated: list = ()) -> dict:
+                  entities_updated: list = (), entities_withheld: list = ()) -> dict:
     """`filed`'s sibling for a page SET: N >= 1 source pages, a meeting page, and N decision pages,
     each with its OWN anchor outcome. `decisions` is `[{"path": ..., "anchoring": ...}]`, and
     `result_ref` names the MEETING PAGE alone or `dedup.Match.page_path`'s `rsplit("@")` breaks.
@@ -270,9 +296,10 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
     lines.append(f"  agent_rationale   {_clean(agent_rationale, RATIONALE_WIDTH) or NONE_LABEL}")
     born, added_aliases = _birth_lists(entities_born, aliases_added)
     updated = _updated_list(entities_updated)
-    if born or added_aliases or updated:
+    withheld = _withheld_list(entities_withheld)
+    if born or added_aliases or updated or withheld:
         lines.append("")
-        lines.append("  " + births_clause(born, added_aliases, updated).strip())
+        lines.append("  " + births_clause(born, added_aliases, updated, withheld).strip())
     return base_report(
         status=schema.FILED, summary="\n".join(lines), page_path=meeting_page, commit=commit,
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
@@ -280,7 +307,8 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
         # The structured sibling of the rendered lines above, for a caller that branches on facts.
         filed_meeting={"source_pages": [_clean(p, 200) for p in source_pages],
                       "meeting_page": meeting_page, "decisions": decision_rows},
-        entities_born=born, aliases_added=added_aliases, entities_updated=updated)
+        entities_born=born, aliases_added=added_aliases, entities_updated=updated,
+        entities_withheld=withheld)
 
 
 def filed_retry(*, original_id: int, page_path: str, commit: str) -> dict:

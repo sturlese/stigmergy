@@ -22,6 +22,7 @@ that needs a stigmergy import has stopped being the bottom of the stack, and wha
 belongs somewhere else.
 """
 import ast
+import dataclasses
 import pathlib
 import re
 import subprocess
@@ -920,51 +921,6 @@ def test_webhook_actually_uses_its_one_declared_librarian_exception():
         "exception too, or the boundary test is guarding an edge nothing uses")
 
 
-# ── one declared reach across a package boundary, pinned by a test ────────────────────────────────
-# `librarian.acl_rules` is an ADAPTER over `stigmergy.kernel.acl` (its docstring carries the
-# argument: the file on disk in the knowledge repo is written in a dialect the reader raises on, and
-# reimplementing resolution would be strictly worse than translating into it). To translate without a
-# second matching algorithm it reaches PRIVATE NAMES of that module — `_MATCHERS` and
-# `_check_labels`.
-#
-# That is a real coupling and it is deliberate, so it gets a test rather than a comment. Without one,
-# renaming a private name inside the kernel — which its author is entitled to do without consulting
-# anybody, that being what the underscore means — breaks the librarian at WORKER STARTUP with an
-# `AttributeError`, on a machine, at the moment an operator runs a walk. With one, it breaks a test
-# whose failure message says where to look and what the adapter needs.
-_ACL_MODEL_PRIVATE_NAMES = ("_MATCHERS", "_check_labels")
-
-
-def test_the_acl_adapters_reach_into_pipelines_private_names_is_pinned():
-    from stigmergy.kernel import acl as acl_model
-
-    missing = [name for name in _ACL_MODEL_PRIVATE_NAMES if not hasattr(acl_model, name)]
-    assert not missing, (
-        f"stigmergy.kernel.acl no longer exposes {missing} — "
-        f"`stigmergy.librarian.acl_rules` reads them to translate the knowledge repo's on-disk ACL "
-        f"dialect into the reader's, so this rename breaks the librarian at worker STARTUP rather "
-        f"than here. Either restore the names or give the adapter a public entry point (a "
-        f"data-level `load_acl_config`-equivalent that takes a dict) and update `acl_rules.load`.")
-
-
-def test_the_acl_private_names_still_have_the_shape_the_adapter_assumes():
-    """A name surviving is not enough: the adapter iterates `_MATCHERS` as a container of key names
-    and calls `_check_labels(label, audiences)` positionally. Both assumptions are pinned, because a
-    private name changed IN PLACE fails the same way a renamed one does."""
-    from stigmergy.kernel import acl as acl_model
-    from stigmergy.librarian import acl_rules
-
-    assert "path_prefix" in acl_model._MATCHERS, (
-        "`acl_rules._translate_rule` emits `path_prefix` rules and names `_MATCHERS` in its refusal "
-        "message; a matcher set without it means the translation produces rules that never match")
-    # It must accept a valid label list silently and refuse an invalid one — that is the whole of
-    # what the adapter delegates to it, and `acl_rules.load` reports the refusal as a config error.
-    acl_model._check_labels("<pinned by test_architecture>", ["leadership"])
-    with pytest.raises(ValueError):
-        acl_model._check_labels("<pinned by test_architecture>", ["a,comma"])
-    assert acl_rules._UNSUPPORTED_MATCHERS, "the adapter's own refusal list went empty"
-
-
 def _module_level_environ_or_connect_touches(path: pathlib.Path) -> list[int]:
     """Line numbers of TOP-LEVEL (module-scope) statements that touch `os.environ` or call a
     `.connect(...)` method. Mirrors this file's own established idiom for a deferred/conditional
@@ -1645,7 +1601,15 @@ def _rel(path: pathlib.Path) -> str:
 _ACL_STORE_READ = re.compile(
     r"(?is)\b(?:from|join)\s+(?:pages_index|observations)\b"      # SQL over the two tables
     r"|\bquery_facts\s*\("                                        # a facts store's read API...
-    r"|\bfactstore\s*\.\s*\w+\s*\(")                              # ...or any other call into one
+    r"|\bfactstore\s*\.\s*\w+\s*\("                              # ...or any other call into one
+    # The SECOND reader pattern, added with ADR 045 D3. `pages_index` is not the only place a
+    # page's body and title come from: the write path deliberately reads the CHECKOUT instead
+    # (ADR 033 — "no ACL exception is needed for a write-path worker"), and that argument stopped
+    # being true the moment a model reading the checkout could be writing a page at a narrower
+    # audience than what it read. A checkout read is now the same question as an index read, and
+    # the modules that do it must answer it in a reviewed diff like everybody else.
+    r"|\bload_pages\s*\("
+    r"|\bread_entity_pages\s*\(")
 
 # **AST-based, deliberately — not `re.search` over `path.read_text()`.** A raw-text search cannot
 # tell an actual call from a comment or a docstring MENTIONING the predicate, and this repo has
@@ -1653,17 +1617,17 @@ _ACL_STORE_READ = re.compile(
 # link-resolver module (since deleted) read `pages_index.acl` directly while its own docstring
 # said "the SAME column `server.acl.visible()` already reads" — true prose about relying on a
 # DIFFERENT module's enforcement, with no call anywhere in that module itself. The original
-# `re.compile(r"\b(?:visible|visible_to_view)\b").search(path.read_text())` matched that sentence,
+# `re.compile(r"\b(?:visible|flows_into)\b").search(path.read_text())` matched that sentence,
 # so the module passed this file's own check without enforcing anything and without being listed
 # as an exception either: precisely the miss this test was built to make impossible, invisible to
 # the test built to catch it. `ast.parse` never produces a node for a comment at all, and a
 # docstring's TEXT is opaque to it (a `Name`/`Attribute` reference only exists where the
 # identifier is actually used as code), so this is immune by construction, not by an exclusion.
-_PREDICATE_NAMES = frozenset({"visible", "visible_to_view"})
+_PREDICATE_NAMES = frozenset({"visible", "flows_into"})
 
 
 def _uses_acl_predicate(path: pathlib.Path) -> bool:
-    """Does this module IMPORT or CALL `visible`/`visible_to_view` as code? See the comment
+    """Does this module IMPORT or CALL `visible`/`flows_into` as code? See the comment
     above `_PREDICATE_NAMES` for why this is AST-based and what real-file case made it that way."""
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
@@ -1689,7 +1653,13 @@ ACL_REACHABILITY_EXCEPTIONS = {
     # scope its corpus-health queries to. `digest` is the OPPOSITE case and is deliberately absent
     # from this list: it broadcasts to a Slack channel, so it must name a real predicate at that
     # channel's audiences.
-    "gardener/checks.py": "operator tool, terminal output only, no caller identity to scope to",
+    # NOT "terminal output only": findings are PERSISTED to `gardener_findings` and rendered by
+    # the admin console, which sits behind an operator token and has no audience concept. The
+    # honest reason is the consumer, not the medium — every surface that reads these findings is
+    # an operator surface, and an operator is inside the trust boundary by construction. The day
+    # a finding reaches a reader-facing surface, this entry stops being true.
+    "gardener/checks.py": "operator tool; findings reach operator surfaces only, which have no "
+                          "caller identity to scope to",
     # The model sweep's own page-selection query reads `pages_index` for the SAME reason
     # `checks.py` does, immediately above.
     "gardener/sweep.py": "operator tool, terminal output only, no caller identity to scope to",
@@ -1704,6 +1674,27 @@ ACL_REACHABILITY_EXCEPTIONS = {
     # title or path ever crosses; the moment it needs more than counts it names a predicate like
     # everything else.
     "admin/service.py": "operator console; aggregate zone counts only, no content columns",
+    # ── checkout readers (the second pattern) ─────────────────────────────────────────────────
+    # `index/corpus.py` is the PARSER every other checkout reader goes through, and it is the
+    # layer that stores `acl` without ever deciding on it — the same posture as `index/search.py`
+    # directly above, for the same reason.
+    "index/corpus.py": "the parser every checkout reader shares; parses acl, decides nothing",
+    "index/build.py": "the index build reads the whole checkout by design; it serves nobody",
+    # These three read the checkout and hand rows to `views.skeleton`, which is where the audience
+    # filter lives (`members_of`, `backlinks_of`). One filter, at the seam every view computation
+    # shares, rather than three that can disagree about what a member is.
+    "views/staleness.py": "hands its parse to views.skeleton, which applies the filter",
+    "views/regenerate.py": "hands its parse to views.skeleton, which applies the filter",
+    # The entity zone is OPEN by contract (ADR 045 D6): an entity page never carries an audience,
+    # because the registry is the brain's shared vocabulary. Both of these read exactly that zone
+    # — the registry generator to derive `ops/entity-registry.json` from the pages, the birth
+    # writer to grow a spine — and what a RESTRICTED capture may put on one is bounded inside
+    # `identity.write_births` rather than by filtering what it reads.
+    "entities/generator.py": "reads the open-by-contract entity zone to derive the registry",
+    "librarian/identity.py": "writes the open-by-contract entity zone; D6 bounds what it may add",
+    # The alias repair rewrites `aliases:` on entity pages and the registry derived from them —
+    # the same open-by-contract zone, and the proposer that FEEDS it is scoped (`repair/run.py`).
+    "repair/entity_alias.py": "the entity zone again, open by contract; the proposer is scoped",
 }
 
 
@@ -1717,13 +1708,13 @@ def test_the_acl_store_readers_are_found_at_all():
     impossible to miss. The number is a floor, not a census — it drops only when modules that read
     these stores are genuinely deleted, and lowering it is a reviewed edit rather than a
     convenience."""
-    assert len(_acl_store_readers()) >= 7
+    assert len(_acl_store_readers()) >= 14
 
 
 @pytest.mark.parametrize("path", _acl_store_readers(), ids=_rel)
 def test_every_reader_of_an_acl_bearing_store_enforces_or_is_a_named_exception(path):
     """A module that reads `pages_index` or `observations` either imports an ACL predicate
-    (`visible` / `visible_to_view`) or appears in `ACL_REACHABILITY_EXCEPTIONS` with a stated
+    (`visible` / `flows_into`) or appears in `ACL_REACHABILITY_EXCEPTIONS` with a stated
     reason.
 
     This does not prove the predicate is CALLED on every row — no import-graph test can. It
@@ -1736,8 +1727,41 @@ def test_every_reader_of_an_acl_bearing_store_enforces_or_is_a_named_exception(p
     assert _uses_acl_predicate(path), (
         f"{rel} reads an ACL-bearing store but does not import or call an ACL predicate as CODE "
         f"(a mention in a comment or a docstring does not count — see `_uses_acl_predicate`). "
-        f"Either apply `visible()`/`visible_to_view()`, or add it to ACL_REACHABILITY_EXCEPTIONS "
+        f"Either apply `visible()`/`flows_into()`, or add it to ACL_REACHABILITY_EXCEPTIONS "
         f"in this file WITH the reason — and if the reason is 'not yet', name who owns it.")
+
+
+def test_the_checkout_reader_pattern_sees_a_reader_that_touches_no_database(tmp_path):
+    """**The red proof for the SECOND pattern.** The enumeration was SQL-shaped for its whole
+    life, and the write path reads the checkout precisely so it needs no database — which is what
+    made it invisible here, and what made "no ACL exception is needed for a write-path worker"
+    (ADR 033) read as an argument rather than as a gap. A module that opens no connection at all
+    and still puts page bodies in front of a model must be seen by this."""
+    checkout_only = tmp_path / "checkout_reader.py"
+    checkout_only.write_text(
+        "from stigmergy.index import corpus\n\n"
+        "def everything(worktree):\n"
+        "    return [r.body for r in corpus.load_pages(worktree)]\n",
+        encoding="utf-8")
+    assert _ACL_STORE_READ.search(checkout_only.read_text()), (
+        "a module reading the whole checkout is not seen as an ACL-store reader — the second "
+        "pattern has gone blind, and the write path is invisible to this file again")
+    assert _uses_acl_predicate(checkout_only) is False
+
+
+def test_flows_into_counts_as_naming_a_predicate(tmp_path):
+    """Its benign twin: the predicate a checkout reader actually uses must SATISFY the check, or
+    every scoped module would have to be listed as an exception and the list would stop meaning
+    anything."""
+    scoped = tmp_path / "scoped_checkout_reader.py"
+    scoped.write_text(
+        "from stigmergy.index import corpus\n"
+        "from stigmergy.kernel.acl import flows_into\n\n"
+        "def scoped(worktree, acl):\n"
+        "    return [r for r in corpus.load_pages(worktree) if flows_into(r.acl, acl)]\n",
+        encoding="utf-8")
+    assert _ACL_STORE_READ.search(scoped.read_text())
+    assert _uses_acl_predicate(scoped) is True
 
 
 def test_the_acl_predicate_check_cannot_be_satisfied_by_a_comment_or_a_docstring(tmp_path):
@@ -1751,7 +1775,7 @@ def test_the_acl_predicate_check_cannot_be_satisfied_by_a_comment_or_a_docstring
     prose_only = tmp_path / "prose_only_mention.py"
     prose_only.write_text(
         '"""Reuses the SAME column `server.acl.visible()` already reads elsewhere, rather than '
-        'calling visible_to_view() a second time in this module."""\n'
+        'calling flows_into() a second time in this module."""\n'
         "def resolve(conn, path):\n"
         "    cur = conn.cursor()\n"
         "    cur.execute('SELECT acl FROM pages_index WHERE path = %s', (path,))\n"
@@ -1760,7 +1784,7 @@ def test_the_acl_predicate_check_cannot_be_satisfied_by_a_comment_or_a_docstring
     assert _ACL_STORE_READ.search(prose_only.read_text()), (
         "test setup is broken: the fixture itself must look like an ACL-store reader")
     assert _uses_acl_predicate(prose_only) is False, (
-        "a docstring/comment MENTIONING visible()/visible_to_view() must not satisfy this "
+        "a docstring/comment MENTIONING visible()/flows_into() must not satisfy this "
         "check — this is the deleted link-resolver module's false pass, reproduced synthetically")
 
     real_caller = tmp_path / "real_predicate_call.py"
@@ -1899,6 +1923,11 @@ _GARDENER_ALLOWED_PREFIXES = (
     "stigmergy.capture.ops",             # job_runs bookkeeping (capture.ops.record_job_run)
     "stigmergy.capture.schema",          # startup_ddl_lock (this package's own DDL) +
                                        # ensure_capture_schema — several checks read the queue
+    "stigmergy.kernel.acl",              # `flows_into` — `check_link_to_narrower_page` asks the
+                                       # SAME predicate the write path and the view feeds ask, of
+                                       # the same two label lists. A second comparison here would
+                                       # be a finding that disagrees with the gate about what an
+                                       # upward link is (ADR 045 D3)
     "stigmergy.kernel.registry",         # the entity registry loader — the operator-tier reader
                                        # `views/cli.py` already uses, not `server.entity_aliases`
     "stigmergy.kernel.normalize",        # normalize/slugify — the duplicate-identity pass places an
@@ -3130,6 +3159,18 @@ _TOLD_PERMISSIONS = {
     # just wrote; `repair/apply.py` says so for the machine-zone pages a sweep rewrites, which is
     # the first thing in this system that modifies one at all.
     "provenance_pages": ("librarian/processing.py", "repair/apply.py"),
+    # ADR 045 D6. It suspends `gate_zone`'s audience check for the identity zone, so it IS a
+    # permission and not evidence: the pages it names are exempt from a rule everything else
+    # obeys. One granter — the birth writer's own caller, which knows which paths this run wrote
+    # as identity (an alias taught, a spine grown) rather than as knowledge. A path prefix here
+    # would have handed the exemption to callers that never earned it, which is what every other
+    # entry in this table exists to prevent.
+    "identity_writes": ("librarian/processing.py",),
+    # Found by the widened harvester above, having been invisible to it for as long as it existed.
+    # It is a permission and not evidence: `gate_identity` refuses EVERY created page in the
+    # identity zone, and being in this set is the only thing that lifts the refusal — so a caller
+    # that could set it could write an identity the agent invented.
+    "born_entity_pages": ("librarian/processing.py",),
 }
 
 
@@ -3205,22 +3246,73 @@ _GATE_CONTEXT_DATA_KEYWORDS = frozenset({
     "worktree", "entries", "added", "material", "outcome", "registry", "linter_path",
     "gitleaks_bin", "subprocess_timeout_s", "stamped", "findings", "write_prefixes",
     "creatable_types", "extra_folder_types", "page_declared", "stamped_by_path", "edits_allowed",
+    # `identity_writes` and `born_entity_pages` are PERMISSIONS and are in `_TOLD_PERMISSIONS`
+    # below, not here. `confirmed_entity_pages` is evidence beside the second of them: it suspends
+    # nothing, it is the VALUE `gate_identity` proves `approved_by:` equals, and a wrong value
+    # makes a run refuse rather than pass.
+    "confirmed_entity_pages",
+    # `acl` is EVIDENCE, not a permission, and the distinction is the whole point of this test:
+    # a permission tells a gate to suspend a proof, and this tells `gate_zone` the fact it judges
+    # AGAINST — the audience the door filed this capture at (ADR 045 D2). It can only ever make a
+    # run refuse more, never less: `None`, the default and the value every flow that carries no
+    # capture passes, is an OPEN capture, which flows into any page and changes nothing.
+    "acl",
 })
 
 
+# Every field a `GateContext` HAS, so the harvester below can tell an attribute grant on one from
+# an attribute assignment on any other object. Read off the dataclass rather than listed, or this
+# becomes a second copy of the field set that goes stale the way the harvester itself did.
+def _gate_context_fields() -> set[str]:
+    from stigmergy.librarian.gates import GateContext
+    return {f.name for f in dataclasses.fields(GateContext)}
+
+
 def _gate_context_keywords() -> set[str]:
-    """Every keyword argument any module in this system passes to `GateContext(...)`."""
+    """Every `GateContext` field any module in this system SETS — as a keyword argument to the
+    constructor, or by assigning the attribute on a context it built earlier.
+
+    **Both, because both happen, and the second one is how a field slipped past this test.**
+    `identity_writes` is granted only as `ctx.identity_writes = …` in `librarian/processing.py`,
+    exactly as `provenance_pages` and `write_prefixes` already were — so a harvester that read
+    only the constructor called it "not used" and the classification below waved it through
+    unclassified. `_grants_keyword` had understood attribute grants all along; this one did not,
+    and a checker strictly narrower than the rule it feeds is a checker with a hole in it.
+    """
+    fields = _gate_context_fields()
     out: set[str] = set()
     for path in ALL_STIGMERGY_SOURCES:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if not isinstance(node, ast.Call):
+            if isinstance(node, ast.Call):
+                func = node.func
+                name = (func.attr if isinstance(func, ast.Attribute)
+                        else func.id if isinstance(func, ast.Name) else "")
+                if name == "GateContext":
+                    out |= {kw.arg for kw in node.keywords if kw.arg}
                 continue
-            func = node.func
-            name = (func.attr if isinstance(func, ast.Attribute)
-                    else func.id if isinstance(func, ast.Name) else "")
-            if name == "GateContext":
-                out |= {kw.arg for kw in node.keywords if kw.arg}
+            targets = (node.targets if isinstance(node, ast.Assign)
+                       else [node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign))
+                       else [])
+            out |= {t.attr for t in targets
+                    if isinstance(t, ast.Attribute) and t.attr in fields}
     return out
+
+
+def test_the_gate_context_keyword_harvester_sees_an_ATTRIBUTE_grant(tmp_path):
+    """**The red proof for the widening above**, on the shape that slipped through: a module that
+    never calls `GateContext(...)` and sets one of its fields on a context it was handed."""
+    granter = tmp_path / "attribute_granter.py"
+    granter.write_text("def widen(ctx):\n    ctx.identity_writes = frozenset({'a'})\n",
+                       encoding="utf-8")
+    fields = _gate_context_fields()
+    found = set()
+    for node in ast.walk(ast.parse(granter.read_text(encoding="utf-8"))):
+        targets = node.targets if isinstance(node, ast.Assign) else []
+        found |= {t.attr for t in targets
+                  if isinstance(t, ast.Attribute) and t.attr in fields}
+    assert found == {"identity_writes"}, (
+        "the harvester's attribute half went blind — a field granted this way would be "
+        "unclassified and unnoticed, which is how `identity_writes` shipped without a decision")
 
 
 def test_every_gate_context_keyword_is_either_evidence_or_a_pinned_permission():

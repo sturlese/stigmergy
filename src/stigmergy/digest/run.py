@@ -107,7 +107,13 @@ async def run_digest(conn, *, settings: DigestSettings, channels_path: str,
     try:
         since = _resolve_since(conn, since_override=since_override,
                                window_days=settings.window_days, now=now)
-        audiences = channels.channel_audiences(channels_path, settings.digest_channel_id)
+        # The LIVE road, like every other consumer of this fact (`slack.mention`): the
+        # baked file is the copy from the last deploy, so a channel NARROWED in the
+        # knowledge repo would keep its wider groups here and the digest would broadcast
+        # page titles at that wider scope until the next rollout — staleness failing open,
+        # on the one surface whose whole job is to post into a room (issue #79's shape).
+        audiences = channels.channel_audiences_live(
+            conn, channels_path, settings.digest_channel_id)
 
         health = sections.gather_corpus_health(conn, since=since)
         deltas = sections.gather_corpus_deltas(conn, since=since, until=now, audiences=audiences)

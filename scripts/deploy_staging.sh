@@ -50,6 +50,57 @@ if [ ! -f "$STIGMERGY_REPO/ops/identities.json" ]; then
   exit 2
 fi
 
+# The roster must parse under the grammar the SERVER will read it with, before the image that
+# reads it ships. Since ADR 045 D7 there is one value shape, and a leftover `"*"` invalidates the
+# WHOLE file rather than one entry — so deploying ahead of the roster rewrite is a total 401
+# outage, not a partial one. Same posture as the missing-file check above: exit 2, with the
+# parser's own sentence, which names the line to write instead.
+#
+# THREE outcomes, and the third is the one worth spelling out. A file that parses bakes; a file
+# that does not stops the deploy; and a check that could not RUN — no interpreter here has this
+# package importable, which is every invocation outside `make deploy-staging` — says so on stderr
+# and lets the deploy through. It has to be that way round: this script is copied and run
+# standalone by its own tests, and a preflight that failed closed on its own absence would make
+# "I could not look" indistinguishable from "I looked and it is broken". Loud, so a skipped check
+# is impossible to miss (`CLAUDE.md`'s fourth testing line, applied to an operator script).
+PREFLIGHT_PY=""
+for candidate in "$(dirname "$0")/../.venv/bin/python" .venv/bin/python python3; do
+  if command -v "$candidate" >/dev/null 2>&1 &&
+     "$candidate" -c "import stigmergy.server.identity" >/dev/null 2>&1; then
+    PREFLIGHT_PY="$candidate"
+    break
+  fi
+done
+
+if [ -z "$PREFLIGHT_PY" ]; then
+  echo "deploy: WARNING — no interpreter here can import stigmergy, so the ops files were NOT" >&2
+  echo "        checked against the grammar the server reads them with. They are being baked" >&2
+  echo "        unvalidated; run \`make deploy-staging\` (which builds the venv) to get the check." >&2
+else
+  for ops_file in identities slack-channels; do
+    src="$STIGMERGY_REPO/ops/$ops_file.json"
+    [ -f "$src" ] || continue
+    case "$ops_file" in
+      identities)     subject=identity ;;
+      slack-channels) subject=channel ;;
+    esac
+    if ! "$PREFLIGHT_PY" -c "
+import pathlib, sys
+from stigmergy.server.errors import IdentityError
+from stigmergy.server.identity import group_map_from_text
+try:
+    group_map_from_text(pathlib.Path(sys.argv[1]).read_text(), origin=sys.argv[1],
+                        subject=sys.argv[2])
+except IdentityError as ex:
+    print(f'deploy: {ex}', file=sys.stderr)
+    raise SystemExit(1)
+" "$src" "$subject"; then
+      echo "deploy: refusing to bake an ops file the server would refuse to read" >&2
+      exit 2
+    fi
+  done
+fi
+
 # Clear what this script writes, and NOTHING else — never the directory itself. `deploy/` also
 # holds tracked files this script knows nothing about, and the next one added re-opens the wound
 # if the delete is by directory rather than by name.

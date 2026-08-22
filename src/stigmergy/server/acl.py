@@ -46,10 +46,3 @@ def visible(acl, audiences: set[str] | None) -> bool:
         return True
     return bool(labels & set(audiences))           # empty acl → empty intersection → hidden
 
-
-def all_visible(paths, visible_paths) -> bool:
-    """The predicate for text composed from MORE than one page's identity: the scoping key's shape
-    must match the composition's shape, so this is all-or-nothing, never per-path — a partial
-    scrub is the kind of defense that looks complete and is not. An EMPTY `paths` is never "all
-    visible". `visible_paths` is the caller's own exists-and-visible answer (any `in`-container)."""
-    return bool(paths) and all(p in visible_paths for p in paths)

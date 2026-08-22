@@ -287,12 +287,34 @@ class ProposerContext:
         self._registry = registry
         self._lock = threading.Lock()
 
+    # THE audience this proposer reads and writes at, and it is OPEN — deliberately, not by
+    # inheriting a default ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D3).
+    #
+    # A repair has no capture behind it: it is derived from the corpus, so there is no human act
+    # naming an audience for it. Running it at open means it may read only open pages and can
+    # therefore only ever write open material — the fail-closed answer. The price is stated: a
+    # RESTRICTED page is never repaired by this loop. That is a lost convenience, not a lost
+    # invariant, and the alternative — a proposer that reads across audiences to draft an open
+    # entity body — is the leak D3 exists to close, arriving through the one writer that has no
+    # submitter to attribute it to.
+    ACL: list[str] | None = None
+
     def corpus(self) -> gather.Corpus:
         if self._corpus is None:
             with self._lock:
                 if self._corpus is None:
-                    self._corpus = gather.load_corpus(self.repo)
+                    self._corpus = gather.load_corpus(self.repo, acl=self.ACL)
         return self._corpus
+
+    def may_read(self, resolved_rel: str) -> bool:
+        """Is this CONFINED path one the proposer may also read at its own audience?
+
+        Asked beside `gather.confined_page` everywhere a page's bytes are read, because that rule
+        answers containment and says nothing about audience — and this road reaches the filesystem
+        rather than the parsed rows, so a path a finding named must meet the same scope a search
+        does. `ops/templates/` is exempt for the filing toolbox's reason: a template is not a
+        corpus page and carries no audience."""
+        return gather.may_read(self.repo, self.corpus(), resolved_rel)
 
     def registry(self):
         if self._registry is None:
@@ -348,7 +370,9 @@ def read_page_impl(ctx: ProposerContext, path: str) -> str:
     IS readable, never the path asked: a refusal is prompt text, and a path a page chose is
     attacker-reachable."""
     resolved_rel = gather.confined_page(ctx.repo, path or "")
-    if not resolved_rel:
+    if not resolved_rel or not ctx.may_read(resolved_rel):
+        # ONE sentence for both, or this tool is an existence oracle for a model that will report
+        # what it found: "you may not read that" and "there is no such page" must not differ.
         return _payload({"refused": REFUSED_READ}, None)
     # The CANONICAL relpath the rule judged, never the asked string: no symlink re-follow, no NFD
     # spelling that names another page.
@@ -1184,6 +1208,22 @@ async def _repair_run(conn, *, settings, repo: str, branch: str, worktree_root: 
         skill_text = read_skill(reading)
         if fresh:
             ctx = ProposerContext(reading)
+            # The findings feed is an INPUT to a model, and it is not one this loop's corpus scope
+            # covers: a finding's subject comes from `pages_index`, which sees the whole corpus,
+            # and its `detail` quotes that page. The WHOLE finding goes when any subject is out of
+            # scope — a partially-dropped one still carries the excerpt, which is one sentence
+            # about the whole subject set.
+            readable = {row.path for row in ctx.corpus().rows}
+
+            def _all_readable(finding) -> bool:
+                return all(p in readable for p in (finding.get("subjects") or []) if p)
+
+            unreadable = sorted({p for f in fresh if not _all_readable(f)
+                                 for p in (f.get("subjects") or []) if p and p not in readable})
+            fresh = [f for f in fresh if _all_readable(f)]
+            if unreadable:
+                skip_reasons.append(
+                    UNREADABLE_SUBJECT_REASON.format(paths=", ".join(unreadable)))
             # The additive road first, then the body road on what is left of the run's budget. The
             # order is not a priority claim — it is that the ceiling is ONE number for the pass,
             # and something has to be asked first for "what is left" to mean anything.
@@ -1355,6 +1395,20 @@ def _apply_one(conn, repair: dict, *, result: RepairRunResult, repo: str, branch
 
 # The one wording for "this run stopped at its ceiling", shared by both roads: an operator reading
 # `job_runs.stats` must not have to learn two spellings of the same fact.
+# A finding whose subject the proposer may not read. Its `detail` is a MODEL'S SENTENCE about
+# that page, quoting an excerpt of it verbatim (`gardener.sweep`), and the gardener's own sweep
+# reads every page body with no audience at all — so the findings ledger is the one road by which
+# a restricted page's path and text can reach a prompt this loop writes OPEN pages from. Counted
+# rather than silently dropped: ADR 045's third residual promises "a lost convenience", and a
+# lost convenience nobody can observe is a lost invariant.
+UNREADABLE_SUBJECT_REASON = (
+    "unreadable-subject({paths}) — this loop cannot read those pages, so nothing about them "
+    "reaches a prompt. Two causes, deliberately not told apart: the page is gone from the base "
+    "commit, or it is out of this loop's audience (ADR 045 D3 — a repair has no capture behind "
+    "it, so it runs at open and a restricted page is not repaired). The paths are named because "
+    "`job_runs` is an operator surface, and an operator is inside the trust boundary by "
+    "construction — the same argument the gardener's own findings rest on")
+
 RUN_CEILING_REASON = (
     "run-ceiling-reached({ceiling}): this run stopped at its proposal ceiling — {dropped} "
     "proposal(s) from the last batch and {unseen} further finding(s) were not proposed; the next "
@@ -1381,7 +1435,10 @@ async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str,
     if not fresh:
         return [], []
     corpus_paths = {row.path for row in deps.corpus().rows}
-    link_names = edits.page_names(repo, confined=True)
+    # The SCOPED vocabulary, off the same rows every other read answers from — not a
+    # filesystem walk, which would hand the model every restricted page's title as a
+    # name it may link to (ADR 045 D3).
+    link_names = list(deps.corpus().link_names)
     pages = {p: _page_body(deps, p)
              for f in fresh for p in (f.get("subjects") or []) if p in corpus_paths}
     agent = build_proposer(skill_text, model_name=settings.model)
@@ -1457,7 +1514,7 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
             continue
         if agent is None:
             agent = build_entity_body_drafter(skill_text, model_name=settings.model)
-            link_names = edits.page_names(repo)
+            link_names = list(deps.corpus().link_names)   # scoped, as above
         asked += 1
         try:
             op, reasons = await draft_entity_body(
@@ -1686,7 +1743,9 @@ def _page_body(deps: ProposerContext, path: str) -> str:
     `read_page` tool applies — a finding names a path from `pages_index`, which is not this
     checkout, so the path is judged rather than trusted."""
     resolved = gather.confined_page(deps.repo, path)
-    if not resolved:
+    if not resolved or not deps.may_read(resolved):
+        # Same sentence for out-of-scope as for out-of-checkout: a finding's subject comes from
+        # `pages_index`, which sees the whole corpus, so this is where a restricted path arrives.
         return "(this page is not readable in this checkout)"
     try:
         with open(os.path.join(deps.repo, *resolved.split("/")), encoding="utf-8") as f:

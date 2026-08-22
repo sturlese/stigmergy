@@ -290,12 +290,13 @@ RULE_TABLE = [
      "_build_ordinary_page"),
     # The wikilink vocabulary the brief hands over is the SAME set `edits.validate` later answers
     # "does this link resolve" with — one reading, so the gatherer cannot offer a name the edit
-    # validator refuses. The marker carries `confined=True` because that is the whole call: the
-    # gatherer asks the shared reader for the CONTAINED answer, and a marker pinned to the bare
-    # `edits.page_names(worktree)` would keep passing if that argument were ever dropped — which is
-    # the day the gatherer starts offering the model a page it read through a symlink.
+    # validator refuses. Since ADR 045 D3 the names come off the SCOPED corpus rather than a
+    # filesystem walk, which is a strictly smaller set (still contained, and now also within this
+    # capture's audience) — so the promise the brief makes holds a fortiori. The marker is the
+    # derivation itself: pinned to `parsed.link_names`, it goes red the day the vocabulary stops
+    # being derived from the rows the model is actually allowed to see.
     ("- **`link_names`** — every page name in this repo, which is the whole wikilink vocabulary. "
-     "It is", "edits.page_names(worktree, confined=True)"),
+     "It is", "names = list(parsed.link_names)"),
     # Exactly one page per ordinary capture, unchanged by the restructure.
     ("One capture yields **one** page.", "multiple-pages"),
     # Edits are DECLARED and performed by code — the split ADR 015 §3 made and this flow kept.

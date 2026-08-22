@@ -86,13 +86,21 @@ class FilingAgent(Protocol):
     wants_gathered: bool
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", flow_note: str = "", gathered: str = "") -> AgentRun:
+            corrective: str = "", flow_note: str = "", gathered: str = "",
+            acl: list[str] | None = None) -> AgentRun:
         """The ordinary flow: file ONE capture as one new page.
 
         `corrective` is the single retry's repair brief, `flow_note` a fact about the flow this
         item rides; both empty on a first, unattached pass. `gathered` is the gatherer's context
         ALREADY RENDERED to prompt text, so backends share one context builder and one fence
         discipline.
+
+        `acl` is the audience this capture is filed at, and a backend that holds READ TOOLS must
+        scope them to it ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D3): a
+        model may not read what the page it is writing could not cite. A tool-less backend has
+        nothing to scope — the worker already scoped `gathered` — and ignores it. `None` is an
+        open page, and the narrow default: a caller that forgets it starves a run rather than
+        widening one.
         """
         ...
 
