@@ -72,6 +72,17 @@ def test_the_index_lists_exactly_the_documents_that_exist(directory, pattern):
         f"Listed but absent: {sorted(listed - real)}. Present but unlisted: {sorted(real - listed)}")
 
 
+def test_the_index_lists_every_document_beside_it():
+    """The same promise, for the documents that sit at the top of `docs/` rather than in one of
+    its directories. Those are listed by NAME rather than swept up by a folder row, so a new one
+    is exactly the kind of document that gets written, linked from nowhere, and read by nobody."""
+    listed = _linked(r"^\| \[`?([A-Z][A-Za-z0-9-]*\.md)`?\]\(\./\1\)")
+    real = {p.name for p in DOCS.glob("*.md")} - {INDEX.name}
+    assert listed == real, (
+        f"docs/README.md and the documents beside it disagree. "
+        f"Listed but absent: {sorted(listed - real)}. Present but unlisted: {sorted(real - listed)}")
+
+
 # ── every path a document points at is really there ───────────────────────────────────────────
 
 def _broken_links(docs) -> list[str]:
