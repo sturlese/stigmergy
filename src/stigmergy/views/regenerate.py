@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 
 from stigmergy.capture import ops
 from stigmergy.index import corpus
-from stigmergy.kernel.acl import view_acl
 from stigmergy.kernel.fsutil import write_text_atomic
 from stigmergy.kernel.registry import Registry
 from stigmergy.views import render, skeleton, synthesis, writer
@@ -139,9 +138,9 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
        snapshot — see the `backlinks_of` call below.
     2. No FOREIGN commit enters the tree mid-batch. `gitcmd.push` answers a lost race by rebasing
        this worktree onto `FETCH_HEAD`, checking somebody else's pages into the tree the batch is
-       still reading — after which `members`/`member_hash`/`view_audience` come from the pre-rebase
-       parse while the synthesis reads post-rebase bytes off disk, which can publish a rollup of
-       NEW content under an OLD, wider `acl`. This function reports the rebase on
+       still reading — after which `members`/`member_hash` come from the pre-rebase parse while
+       the synthesis reads post-rebase bytes off disk, which can publish a rollup of NEW content
+       under an OLD member set. This function reports the rebase on
        `RegenOutcome.rebased`; `run` below is what acts on it.
 
     `None` parses the repo per entity, as every single-entity caller wants.
@@ -205,9 +204,6 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     title = entity_page.title if entity_page else entity_name
     timeline_ordered = skeleton.timeline_order(members)
     timeline_md = skeleton.render_timeline(members)
-    # The view's audience, computed once from MEMBERS only and threaded into every governed but
-    # non-member feed; `render.render` recomputes the same pure value for the frontmatter.
-    view_audience = view_acl([m.acl for m in members])
     # **`rows` is deliberately NOT threaded here.** `backlinks_of` scans every indexed zone,
     # `views/` INCLUDED — another entity's view may legitimately link to this entity's page — so
     # unlike the member set it is not immune to this batch's own commits: a view written earlier in
@@ -216,7 +212,11 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     # exactly at this line, and this parse pays for itself only on entities being rewritten anyway.
     # The staleness signal above CAN use the snapshot, because being one pass late about a
     # backlink is not the same fault as publishing a page that never had it.
-    backlink_rows = skeleton.backlinks_of(repo, entity_page, view_acl=view_audience,
+    # `view_acl=None` — a view is OPEN and carries no label of its own (ADR 045 D5), so the
+    # non-member feed is gated at the widest audience there is: open backlinks only. It is the
+    # argument's own fail-closed default, passed explicitly because "the view has no audience" is
+    # a decision here rather than an omission.
+    backlink_rows = skeleton.backlinks_of(repo, entity_page, view_acl=None,
                                           exclude_path=view_relpath(entity_id))
     backlinks_md = skeleton.render_backlinks(backlink_rows, entity_title=title)
 
@@ -245,7 +245,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
         entity_id=entity_id, entity_name=entity_name, action="written", commit=landed.sha,
         rebased=landed.rebased,
         path=view_relpath(entity_id), member_count=len(members),
-        synthesis_shipped=result.shipped, acl=view_audience,
+        synthesis_shipped=result.shipped, acl=None,
         timeline_total=len(timeline_ordered),
         timeline_shown=skeleton.timeline_shown(len(timeline_ordered)))
 

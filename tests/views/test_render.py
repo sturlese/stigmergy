@@ -64,52 +64,34 @@ def test_withheld_synthesis_never_ships_prose_and_says_why():
     assert "attempted again\nautomatically the next time" in page
 
 
-def test_acl_is_the_intersection_and_an_open_member_does_not_narrow():
-    members = _members(acls=(["a"], None))            # one labelled, one open
-    page = _render(members)
-    assert "acl: [a]" in page                          # open member contributes neutrally
+def test_a_view_carries_NO_acl_line_whatever_its_members_are_labelled():
+    """ADR 045 D5. A view is the OPEN rollup: `skeleton.members_of` has already dropped every
+    member that may not be rendered onto an open page, so there is nothing left on this page to
+    restrict — and a page with no `acl:` is the contract's spelling of open.
+
+    The renderer is asked with LABELLED members anyway, because that is the shape that used to
+    produce a label and the one a regression would reintroduce it from."""
+    for acls in ((["a"], None), (["a"], ["a", "b"]), (["a"], ["b"]), (None, None)):
+        page = _render(_members(acls=acls))
+        front = page.split("---\n\n")[0]
+        assert "acl:" not in front, f"members={acls} produced a labelled view:\n{front}"
 
 
-def test_acl_narrows_to_the_shared_label_only():
-    members = _members(acls=(["a"], ["a", "b"]))       # [a] ∩ [a,b] = [a]
-    page = _render(members)
-    assert "acl: [a]" in page
-    assert "acl: [a, b]" not in page
+def test_the_collapse_this_replaced_is_what_a_label_here_would_mean():
+    """**The red proof, kept as the argument.** The rule was the INTERSECTION of the members'
+    audiences. It never widened access — that half was right, and its own sabotage twin (a union)
+    genuinely failed. What it did instead was COLLAPSE: two members with disjoint labels produced
+    `acl: []`, which is *nobody*, so one leadership-only note anchored to a popular entity deleted
+    that entity's view for everyone — while the timeline went on naming every member's path and
+    title.
 
-
-def test_disjoint_labels_yield_an_empty_restrictive_acl():
-    members = _members(acls=(["a"], ["b"]))            # empty intersection: restrictive, not open
-    page = _render(members)
-    assert "acl: []" in page
-
-
-def test_all_open_members_yield_no_acl_field_at_all():
-    members = _members(acls=(None, None))
-    page = _render(members)
-    assert "acl:" not in page.split("---\n\n")[0] + "---"
-
-
-def test_sabotage_the_intersection_and_watch_the_test_above_fail():
-    """Before trusting a check, ask whether it can go red, and prove it. This calls the SABOTAGED
-    (union) rule directly and asserts it produces the WRONG, widened answer that `view_acl`'s real
-    intersection must never produce — showing the control can fail for the reason it exists, not
-    merely that the real code happens to pass."""
-    def sabotaged_union(member_acls):
+    This recomputes the retired rule on the fixture that made it collapse, so the reason the line
+    is gone stays legible next to its absence rather than only in an ADR."""
+    def retired_intersection(member_acls):
         sets = [set(a) for a in member_acls if a is not None]
-        if not sets:
-            return None
-        return sorted(set.union(*sets))               # the bug this rule exists to prevent
+        return None if not sets else sorted(set.intersection(*sets))
 
-    member_acls = [["a"], ["b"]]                        # disjoint: correct answer is []
-    correct = _view_acl(member_acls)
-    wrong = sabotaged_union(member_acls)
-    assert correct == []                                # restrictive by construction
-    assert wrong == ["a", "b"]                           # the union WIDENS access — the exact bug
-    assert correct != wrong, (
-        "the intersection and the sabotaged union produced the SAME answer on a disjoint-label "
-        "fixture — this fixture no longer distinguishes the two rules and must be strengthened")
+    assert retired_intersection([["a"], ["b"]]) == []      # nobody: the availability failure
+    assert "acl:" not in _render(_members(acls=(["a"], ["b"]))).split("---\n\n")[0]
 
 
-def _view_acl(member_acls):
-    from stigmergy.kernel.acl import view_acl
-    return view_acl(member_acls)

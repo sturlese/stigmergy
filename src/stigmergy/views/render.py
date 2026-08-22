@@ -7,7 +7,6 @@ depends on.
 import datetime
 import hashlib
 
-from stigmergy.kernel.acl import view_acl
 from stigmergy.kernel.page import _yaml
 from stigmergy.views.skeleton import Member
 
@@ -64,10 +63,10 @@ def render(entity_id: str, entity_title: str, members: list[Member], *, member_h
          # exactly the silence #85 was filed for — so `backlink_hash` is REQUIRED here, and a
          # view written without one reads as stale until it has been regenerated once.
          f'member_hash: "{member_hash}"', f'backlink_hash: "{backlink_hash}"']
-    acl = view_acl([m.acl for m in members])
-    if acl is not None:
-        # The INTERSECTION of the members' audiences — a rollup never widens access. An empty
-        # list is a legal, meaningful value and is rendered as `acl: []`, never omitted.
-        fm.append("acl: [" + ", ".join(_yaml(a) for a in acl) + "]")
+    # NO `acl:` line, ever (ADR 045 D5). A view is the OPEN rollup: `skeleton.members_of` admits
+    # only members that may be rendered onto an open page, and `backlinks_of` gates the
+    # non-member feed the same way, so there is nothing on this page to restrict. The label it
+    # used to carry was the intersection of its members' — which never widened access, correctly,
+    # and collapsed the page to nobody the moment two members disagreed.
     fm.append("---")
     return "\n".join(fm) + "\n\n" + body

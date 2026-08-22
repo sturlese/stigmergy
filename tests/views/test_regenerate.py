@@ -276,49 +276,63 @@ def test_first_ever_write_commits_as_write_not_regenerate(repo):
 # `decision_acls` long before any test passed it, so the whole ACL suite ran on hand-built
 # `Member` objects — never on `acl:` frontmatter genuinely PARSED off disk through
 # `corpus.load_pages`, which is what a real capture leaves behind ─────────────────────────────
-def test_the_intersection_survives_the_real_repo_parse_end_to_end(tmp_path):
-    """Two decision pages carrying REAL `acl:` frontmatter on disk (one `[a]`, one `[a, b]`), plus
-    the entity's own open (label-free) page — `decision_acls[i]` is threaded through `build_repo`
-    into `decision_page`'s own YAML, committed and pushed like any other fixture page, so
-    `skeleton.members_of` must read `Member.acl` off the genuinely parsed frontmatter
-    (`index.corpus.load_pages` → `_acl_labels`), not off a value a test constructed by hand. The
-    real regeneration path, unmodified, must still land the intersection (`[a]`) on the COMMITTED
-    page — closing the coverage gap `test_render.py`'s ACL tests leave open: they prove the
-    intersection MATH against hand-built `Member`s, never that a real page's `acl:` line reaches
-    that math in the first place."""
+def test_a_labelled_member_is_EXCLUDED_from_the_view_end_to_end(tmp_path):
+    """The whole of D5, on real pages: two decision pages carrying REAL `acl:` frontmatter on disk
+    plus the entity's own open page, through the real regeneration path.
+
+    `skeleton.members_of` reads `Member.acl` off genuinely parsed frontmatter
+    (`index.corpus.load_pages` → `_acl_labels`), so this closes the gap `test_render.py` leaves
+    open: it proves a real page's `acl:` line reaches the filter at all, not merely that the
+    filter's arithmetic is right. The labelled pages do not narrow the view and do not collapse
+    it — they are simply not on it, and their titles and paths are not on it either, which the
+    intersection rule never achieved: it hid the view and printed them anyway."""
     remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2,
                                decision_acls=[["a"], ["a", "b"]])
     registry = registry_of()
 
     members = skeleton.members_of(clone, "acme-corp")
-    by_title = {m.title: m.acl for m in members}
-    # the real parse actually produced these, off disk — not asserted from the fixture's own input
-    assert by_title["Decision 1"] == ["a"]
-    assert by_title["Decision 2"] == ["a", "b"]
-    assert by_title["Acme Corp"] is None                    # the entity page itself is open
+    titles = {m.title for m in members}
+    assert "Acme Corp" in titles, "the entity's own open page must still be a member"
+    assert "Decision 1" not in titles and "Decision 2" not in titles, sorted(titles)
+    assert all(m.acl is None for m in members)
 
     outcome = asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry))
     assert outcome.action == "written"
-    assert outcome.acl == ["a"]                              # [a] ∩ [a,b], the open member neutral
+    assert outcome.acl is None
 
     page = open(os.path.join(clone, "views", "acme-corp.md")).read()
-    assert "acl: [a]" in page
-    assert "acl: [a, b]" not in page
+    assert "acl:" not in page.split("---\n\n")[0]
+    assert "Decision 1" not in page and "Decision 2" not in page, page
 
 
-def test_disjoint_real_acls_land_a_restrictive_empty_intersection_on_the_committed_page(tmp_path):
-    """The empty-intersection half of the same chain: two decision pages with DISJOINT real `acl:`
-    frontmatter must land `acl: []` — restrictive by construction — on the committed view, never
-    an omitted `acl:` field, which would read as open to `acl_rules`/the server seam."""
+def test_disjoint_labels_no_longer_collapse_the_view_to_nobody(tmp_path):
+    """The availability failure D5 exists to end, asserted from the other side. Two members with
+    DISJOINT labels used to intersect to `acl: []` — *nobody* — so the entity's view disappeared
+    for every reader including both of the people whose pages caused it. Now the view renders, at
+    open, without them."""
     remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2,
                                decision_acls=[["a"], ["b"]])
     registry = registry_of()
 
     outcome = asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry))
-    assert outcome.acl == []
+    assert outcome.acl is None
 
     page = open(os.path.join(clone, "views", "acme-corp.md")).read()
-    assert "acl: []" in page
+    assert "acl: []" not in page
+    assert "acl:" not in page.split("---\n\n")[0]
+
+
+def test_the_benign_twin_an_all_open_entity_renders_every_member(tmp_path):
+    """The specificity half: the filter must only ever drop a LABELLED member. An entity whose
+    pages are all open — which is every entity in a corpus nobody has restricted — renders
+    exactly as it did before D5."""
+    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2)
+    registry = registry_of()
+
+    outcome = asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry))
+    page = open(os.path.join(clone, "views", "acme-corp.md")).read()
+    assert outcome.member_count == len(skeleton.members_of(clone, "acme-corp"))
+    assert "Decision 1" in page and "Decision 2" in page, page
 
 
 # ── the regression test for a real defect: `skeleton.render_timeline`/`render_backlinks` now

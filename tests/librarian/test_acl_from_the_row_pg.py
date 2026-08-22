@@ -218,3 +218,106 @@ def test_a_scoped_capture_still_collapses_against_its_own_audience(rig, clean_qu
             "submitted_by": "second@x"}
     match = dedup.find_already_filed(clean_queue, item)
     assert match is not None and match.submission_id == first
+
+
+# ── D6: an entity is the shared vocabulary, born open, kept open ──────────────────────────────
+def _entity_page(env, sha, paths):
+    entity_paths = [p for p in paths if p.startswith("wiki/entities/")]
+    assert entity_paths, f"no entity page in the commit: {paths}"
+    return entity_paths[0], support.read_filed_page(env.repo, sha, entity_paths[0])
+
+
+def test_an_entity_born_from_restricted_material_carries_no_audience(rig, clean_queue):
+    """A wiki's vocabulary is shared by definition. A corpus where the same customer exists under
+    three spellings because one of them was hidden is the failure this system was built to
+    prevent, so an entity page never carries an audience — not even one born from material that
+    does."""
+    env, deps = rig
+    support.submit(clean_queue, deps, f"DOUBLE:propose=Zenith Freight\n{_material('birth')}",
+                   submitted_by="scoped@stigmergy.test", acl=SCOPED)
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+    _path, sha = result.result_ref.rsplit("@", 1)
+
+    entity_path, page = _entity_page(env, sha, support.paths_in_commit(env.repo, sha))
+    assert _acl_line(page) == "(none)", f"{entity_path}\n{page}"
+
+
+def test_a_restricted_birth_writes_identity_and_What_Who_and_nothing_else(rig, clean_queue):
+    """The facts and connections belong to the restricted material and stay on the page this
+    capture filed. The one sentence that DOES cross is deliberate and is the smallest thing that
+    can: ADR 042 D3 refuses an entity page with no What / Who at all, so the alternative is no
+    identity — and the same name introduced again next week as a second entity."""
+    env, deps = rig
+    support.submit(clean_queue, deps, f"DOUBLE:propose=Kestrel Haulage\n{_material('spine')}",
+                   submitted_by="scoped@stigmergy.test", acl=SCOPED)
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+    _path, sha = result.result_ref.rsplit("@", 1)
+
+    _entity_path, page = _entity_page(env, sha, support.paths_in_commit(env.repo, sha))
+    assert "Kestrel Haulage is an entity the captured material names" in page, page
+    assert "Named in the capture filed as" not in page, page   # a declared FACT
+    assert "the note that introduced it" not in page, page     # a declared CONNECTION
+
+
+def test_the_benign_twin_an_OPEN_birth_still_writes_its_facts(rig, clean_queue):
+    """The specificity half, and the one that carries ADR 042: an open capture's entity page is
+    RICH — that is what 042 exists for, and D6 must not quietly undo it for everybody."""
+    env, deps = rig
+    support.submit(clean_queue, deps, f"DOUBLE:propose=Marlowe Rail\n{_material('open-birth')}",
+                   submitted_by="open@stigmergy.test")
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+    _path, sha = result.result_ref.rsplit("@", 1)
+
+    _entity_path, page = _entity_page(env, sha, support.paths_in_commit(env.repo, sha))
+    assert "Named in the capture filed as" in page, page
+    assert "the note that introduced it" in page, page
+
+
+def test_what_was_withheld_is_reported_to_the_person_who_captured(rig, clean_queue):
+    """Counted, never quoted — the sentence must not put back what it is telling you was kept off
+    an open page. Said at all because the person who captured is the only one who can decide
+    whether the fact belongs in the open, and they can only decide it if they are told."""
+    env, deps = rig
+    support.submit(clean_queue, deps, f"DOUBLE:propose=Ashford Logistics\n{_material('told')}",
+                   submitted_by="scoped@stigmergy.test", acl=SCOPED)
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+
+    summary = result.report["summary"]
+    assert "stayed OFF that entity's page" in summary, summary
+    assert result.report["entities_withheld"], result.report
+    assert "Named in the capture filed as" not in summary, "the report quoted the withheld fact"
+
+
+def test_the_spine_of_a_registered_entity_is_not_written_from_restricted_material(
+        rig, clean_queue):
+    """§4 case 3. `entity_updates` append to a page that is open to everyone, so a restricted
+    capture's are dropped whole — its own page carries the facts, and the entity keeps its
+    anchor."""
+    env, deps = rig
+    before = support.read_filed_page(env.repo, "main", "wiki/entities/Acme Corp.md")
+    support.submit(clean_queue, deps, f"DOUBLE:update=acme-corp\n{_material('spine-update')}",
+                   submitted_by="scoped@stigmergy.test", acl=SCOPED)
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+    _path, sha = result.result_ref.rsplit("@", 1)
+
+    assert support.read_filed_page(env.repo, sha, "wiki/entities/Acme Corp.md") == before
+    assert result.report["entities_withheld"], result.report
+
+
+def test_the_benign_twin_an_OPEN_capture_still_grows_the_spine(rig, clean_queue):
+    env, deps = rig
+    before = support.read_filed_page(env.repo, "main", "wiki/entities/Acme Corp.md")
+    support.submit(clean_queue, deps, f"DOUBLE:update=acme-corp\n{_material('open-update')}",
+                   submitted_by="open@stigmergy.test")
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+    _path, sha = result.result_ref.rsplit("@", 1)
+
+    after = support.read_filed_page(env.repo, sha, "wiki/entities/Acme Corp.md")
+    assert after != before
+    assert result.report["entities_updated"], result.report

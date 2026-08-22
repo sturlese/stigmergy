@@ -90,12 +90,19 @@ def test_a_stored_value_that_cannot_be_parsed_fails_closed_for_every_client(malf
 # failure discloses every restricted backlink to every reader. Neither side had a test holding it,
 # which is precisely how a two-sided invariant dies in one of its halves.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-def test_the_render_side_writes_an_empty_acl_rather_than_omitting_the_key():
-    from stigmergy.kernel.acl import view_acl
-    # Two members sharing NO audience: the intersection is empty.
-    assert view_acl([["finance"], ["sales"]]) == []
-    # ...and an open corpus is a different answer, which is what makes the empty case meaningful.
-    assert view_acl([None, None]) is None
+def test_the_write_side_writes_an_empty_acl_rather_than_omitting_the_key():
+    """The two spellings must stay two values on the WRITE side, or the read side's truth table
+    below is decorative. `views.render` used to be the only producer of `acl: []` and no longer
+    produces a label at all (ADR 045 D5), so the producer this pins is the stamper every filed
+    page goes through."""
+    from stigmergy.librarian.page import stamp_server_fields
+
+    page = "---\ntype: note\ntitle: t\n---\n\n# t\n"
+    nobody = stamp_server_fields(page, submitted_by="a@b", acl=[], as_of="2026-08-22")
+    assert "acl: []" in nobody, nobody
+    # ...and open is a DIFFERENT answer — an omitted line — which is what makes `[]` meaningful.
+    opened = stamp_server_fields(page, submitted_by="a@b", acl=None, as_of="2026-08-22")
+    assert "acl:" not in opened, opened
 
 
 def test_the_read_side_reads_an_empty_acl_back_as_nobody_never_as_open():
@@ -107,19 +114,22 @@ def test_the_read_side_reads_an_empty_acl_back_as_nobody_never_as_open():
     assert _acl_labels({"acl": None}) is None       # explicit null = open
 
 
-def test_the_two_sides_compose_a_view_over_disjoint_members_is_visible_to_nobody():
-    """The invariant end to end, over the values rather than the prose: render's output shape fed
+def test_the_two_sides_compose_a_page_stamped_at_nobody_is_visible_to_nobody():
+    """The invariant end to end, over the values rather than the prose: the stamper's output fed
     to the reader, then to the one enforcement point. This is the assertion that would have caught
     a collapse in EITHER half, which is why it exists beside the two unit checks and not instead
     of them."""
+    import yaml
+
     from stigmergy.index.corpus import _acl_labels
-    from stigmergy.kernel.acl import view_acl
+    from stigmergy.librarian.page import split_frontmatter, stamp_server_fields
     from stigmergy.server.acl import visible
 
-    acl = view_acl([["finance"], ["sales"]])     # disjoint members -> []
-    assert acl == []
-    rendered = {"acl": acl}                          # what `views.render` puts in frontmatter
-    stored = _acl_labels(rendered)                   # what the index stores
+    page = stamp_server_fields("---\ntype: note\ntitle: t\n---\n\n# t\n",
+                               submitted_by="a@b", acl=[], as_of="2026-08-22")
+    front, _body = split_frontmatter(page)
+    stored = _acl_labels(yaml.safe_load(front))      # what the index stores
+    assert stored == []
     assert visible(stored, {"finance"}) is False
     assert visible(stored, {"sales"}) is False
     assert visible(stored, set()) is False

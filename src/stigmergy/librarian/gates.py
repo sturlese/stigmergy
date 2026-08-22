@@ -160,6 +160,12 @@ class GateContext:
     # the deletion sweep), whose work is derived from the corpus rather than from somebody's
     # material.
     acl: list = None
+    # The paths this run wrote as IDENTITY rather than as knowledge — an alias taught to an
+    # existing entity page, a spine grown from open material (`librarian.identity`). Told by the
+    # caller like every other widening here, empty by default. `gate_zone`'s audience check skips
+    # them: an entity page is the brain's shared vocabulary and carries no audience (ADR 045 D6),
+    # and what a restricted capture may put on one is bounded at the writer, not here.
+    identity_writes: frozenset = field(default_factory=frozenset)
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -190,28 +196,31 @@ class GateContext:
         return [e.path for e in self.entries]
 
 
-# What `_page_acl` returns when the base version of a page cannot be read or parsed. Distinct
-# from `None` (an open page) on purpose: "I could not establish this page's audience" must not
-# read as "this page is open", which is the fail-OPEN answer. `gate_body_rewrite` refuses such a
-# page on its own ground — an unestablishable "before" — so this gate declines to add a second,
-# differently-worded veto for the same file rather than guessing at its audience.
-_ACL_UNREADABLE = object()
-
-
 def _page_acl(worktree: str, path: str):
     """The audience of the page as it exists at the BASE commit, `None` for an open one.
 
     The base version, never the working tree: the working tree is what this run just wrote, and a
-    run that widened a page's own `acl:` would then be judged against its own widening."""
+    run that widened a page's own `acl:` would then be judged against its own widening.
+
+    **Anything this cannot establish reads as OPEN, which is the STRICTEST answer this predicate
+    has.** The direction is the opposite of `server.acl.visible`'s, and deliberately so: there,
+    "open" is the widest READ and a malformed value must hide from everyone; here, "open" is the
+    widest AUDIENCE, so `flows_into` admits only an open capture into it. An earlier version
+    returned a sentinel that SKIPPED the check on the argument that `gate_body_rewrite` refuses an
+    unreadable page anyway — true for an unreadable blob, and false for the case that matters: a
+    page whose frontmatter parses fine and whose `acl:` VALUE is malformed (`acl: [2026]`,
+    `acl: {…}`). The index turns that into a real label and restricts the page; this gate would
+    have waved material into it.
+    """
     text = _base_text(worktree, path)
     if text is None:
-        return _ACL_UNREADABLE
+        return None
     front, _ = page_policy.split_frontmatter(text)
     try:
         parsed = yaml.safe_load(front) if front.strip() else {}
     except yaml.YAMLError:
-        return _ACL_UNREADABLE
-    if not isinstance(parsed, dict) or "acl" not in parsed:
+        return None
+    if not isinstance(parsed, dict):
         return None
     value = parsed.get("acl")
     if value is None:
@@ -220,7 +229,7 @@ def _page_acl(worktree: str, path: str):
         return [s for s in (part.strip() for part in value.split(",")) if s]
     if isinstance(value, list) and all(isinstance(a, str) for a in value):
         return [a.strip() for a in value if a.strip()]
-    return _ACL_UNREADABLE
+    return None
 
 
 # ── zone and path: writes stay in the lane ────────────────────────────────────────────────────
@@ -259,23 +268,42 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
         # leak this closes, and it is asked here rather than at the input scope because the model
         # is not the only way an edit is produced (`edits.apply_declared` performs what the
         # account declared, and the account is the model's, but the sweep and the repair loop
-        # write here too). New pages are stamped WITH the capture's audience, so they are in scope
-        # by construction and are not asked.
-        if status == "M" and path.startswith(ctx.write_prefixes):
-            page_acl = _page_acl(ctx.worktree, path)
-            if page_acl is not _ACL_UNREADABLE and not flows_into(ctx.acl, page_acl):
-                out.append(Finding(
-                    "zone", "edit-outside-audience",
-                    f"this capture is filed at a narrower audience than {path}, so adding to that "
-                    f"page would put restricted material in front of readers it was restricted "
-                    f"from. File the material as its own page instead",
-                    # REPAIRABLE, unlike the other unrepairable zone vetoes: the agent DECLARED
-                    # this edit and can repair it by not declaring it, and the capture then files
-                    # as its own page — which is the outcome the sentence above asks for. A
-                    # `repairable=False` here would spend the retry on nothing and lose the
-                    # capture over a choice the model is free to make differently.
-                    locator=path))
-                continue
+        # write here too). A new page is not asked: every one this run creates is stamped WITH
+        # the capture's own audience, so it is in scope by construction — with one exception that
+        # is handled at the writer rather than here, the born ENTITY page, which is stamped with
+        # no audience at all because the registry is the brain's shared vocabulary (ADR 045 D6).
+        # What a restricted capture may put on one is bounded in `librarian.identity`.
+        #
+        # TWO exclusions, and both are about what an edit CARRIES rather than about who may make
+        # one. A DERIVED file is not a page: `ops/entity-registry.json` is regenerated from the
+        # entity pages in this same commit and proven byte for byte (`ctx.expected_bytes`), so
+        # asking a JSON file for an audience it cannot have would veto every restricted capture
+        # that births anything. An IDENTITY WRITE is the brain's shared vocabulary (ADR 045 D6):
+        # an entity page carries no audience by design, and what a restricted capture may put on
+        # one is constrained at the writer (`librarian.identity`, which drops facts and
+        # connections) rather than here — an ALIAS is a spelling, not material, and a spelling
+        # nobody may teach is how one customer becomes three entities.
+        #
+        # Both are told on the CONTEXT, never inferred from a path prefix. A flow that has never
+        # heard of `identity_writes` gets no exemption from it, which is the property every other
+        # widening in this file has: a gate is told a caller-scoped fact, and a module constant
+        # would hand the exemption to callers that never earned it.
+        if (status == "M" and path.startswith(ctx.write_prefixes)
+                and path not in ctx.derived_files
+                and path not in ctx.identity_writes
+                and not flows_into(ctx.acl, _page_acl(ctx.worktree, path))):
+            out.append(Finding(
+                "zone", "edit-outside-audience",
+                f"this capture is filed at a narrower audience than {path}, so adding to that "
+                f"page would put restricted material in front of readers it was restricted "
+                f"from. File the material as its own page instead",
+                # REPAIRABLE, unlike the other unrepairable zone vetoes: the agent DECLARED
+                # this edit and can repair it by not declaring it, and the capture then files
+                # as its own page — which is the outcome the sentence above asks for. A
+                # `repairable=False` here would spend the retry on nothing and lose the
+                # capture over a choice the model is free to make differently.
+                locator=path))
+            continue
         # Refused BY NAME rather than falling through: a typechange (`T`, a page replaced by a
         # symlink) is outside every status the content gates read.
         if status not in ("A", "M"):

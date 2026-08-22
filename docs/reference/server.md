@@ -585,9 +585,9 @@ If you edit a page and forget the rebuild, search "misses" it until the next bui
 - `stigmergy.server.acl.visible(acl, audiences)` — the **one** ACL rule. Every read path (search,
   `read_page` — including its links/backlinks — `list_entities`, `describe_entity`,
   discovery hints) must filter through this function; do not re-implement label matching anywhere
-  else. `acl.all_visible(paths, visible_paths)` is its companion for text composed from MORE than
-  one page's identity: all-or-nothing, never per-path, because a partially scrubbed sentence is the
-  kind of defense that looks complete and is not.
+  else. It had a companion, `all_visible`, for text composed from more than one page's identity;
+  it is gone because nothing called it — the answer layer composes from a `BrainService` that is
+  already scoped, so there is no per-fragment scoping left to make all-or-nothing.
 - `stigmergy.server.identity.resolve_audiences(identities_path, identity)` — the **one** identity
   resolver. Fail-closed; raises `IdentityError` on any failure. Callers must not proceed without
   a resolved scope.

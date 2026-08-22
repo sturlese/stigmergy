@@ -112,6 +112,25 @@ group name and as an `audience` value.
 reader. A **principal's** empty group list is a different fact — no groups, reads open, files
 open — and the door stores `NULL` for such a capture, never `{}`.
 
+### Residuals, named rather than softened
+
+Three places where the rule above is not fully enforced, each with the reason it is acceptable and
+the signal that would change the answer:
+
+- **The deletion sweep** (`repair/sweep.py`) fences the doomed pages' bodies and every referring
+  page's body into one prompt, across audiences. It is not scoped, because a removal is authorized
+  on an unrestricted identity (ADR 044 D3): the person who asked can already read every page in
+  that prompt, and the model rewrites bodies they named. It becomes a real gap the day a scoped
+  identity may remove anything.
+- **A link the capture's own MATERIAL names.** D3 stops a model LEARNING of a page it may not
+  link to; it does not stop it repeating a name the submitter typed. That reduces to the
+  human-authored upward link this ADR already decided to report rather than police, and the
+  gardener's `link-to-narrower-page` is where it lands — including when a declared edit writes it
+  onto a third page.
+- **The repair proposer runs at OPEN and therefore never repairs a restricted page.** A repair has
+  no capture behind it, so there is no human act naming an audience for it; running it at open is
+  the fail-closed answer, and the price is a lost convenience rather than a lost invariant.
+
 ## What this deliberately does NOT do
 
 - **It does not change enforcement.** `visible()` and its truth table, including malformed →

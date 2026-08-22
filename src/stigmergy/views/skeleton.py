@@ -38,14 +38,28 @@ def _member_rows(repo: str, rows=None) -> list[corpus.PageRow]:
 
 
 def members_of(repo: str, entity_id: str, *, rows=None) -> list[Member]:
-    """Every page whose `entity:` contains `entity_id`, sorted by path — the one member set
-    every other computation (staleness hash, ACL intersection, synthesis prompt, `members:`
-    count) is built from.
+    """Every page whose `entity:` contains `entity_id` and that may be rendered onto an OPEN page,
+    sorted by path — the one member set every other computation (staleness hash, synthesis
+    prompt, `members:` count) is built from.
+
+    **A view carries no audience of its own** ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md)
+    D5), so the filter is `flows_into(member.acl, None)`: open members only. Before that, a view's
+    audience was the INTERSECTION of its members' — which never widened, correctly, but
+    COLLAPSED: one leadership-only note anchored to a popular entity made that entity's view
+    vanish for everyone else, and the timeline still named every member's path and title on the
+    way. The finance reader now finds the finance notes about the entity through search and
+    `describe_entity`, per reader, which is where a per-reader answer belongs; the view is the
+    open rollup and says so by having nothing to say about them.
+
+    Filtered HERE rather than at each consumer, because every one of them — the render, the
+    staleness hashes, the synthesis agent's own readable set — has to agree about what a member
+    is. A member excluded here is excluded from all three at once.
 
     `rows` lets a caller sweeping many entities hand in ONE `corpus.load_pages` parse instead of
     paying for a fresh one per entity; `None` parses the repo here, as every single-entity caller
     wants."""
-    rows = [r for r in _member_rows(repo, rows) if entity_id in r.entity]
+    rows = [r for r in _member_rows(repo, rows)
+            if entity_id in r.entity and flows_into(r.acl, None)]
     return [Member(path=r.path, title=r.title, type=r.type, as_of=r.as_of,
                    superseded_by=r.superseded_by, acl=r.acl, content_hash=r.content_hash)
             for r in sorted(rows, key=lambda r: r.path)]

@@ -81,10 +81,23 @@ def test_an_unrestricted_caller_may_file_at_any_group(indexed):
 def test_a_caller_may_file_at_several_groups_when_they_hold_one_of_them(indexed):
     """`visible()` is "shares at least one label", and the door asks exactly that of the writer:
     ana can read a `[finance, eng]` page, so she may file one. Widening it to `eng` readers is a
-    human choice, attributed to her on every page it writes."""
+    human choice, attributed to her on every page it writes.
+
+    Stored SORTED: `capture_queue.acl` is a `text[]` and dedup compares it element-wise, so one
+    audience must have one spelling however a caller ordered it."""
     ack = _service(indexed, ANA).submit("raw", "Shared finance and engineering note.",
                                               audience=["finance", "eng"])
-    assert ack["acl"] == ["finance", "eng"]
+    assert ack["acl"] == ["eng", "finance"]
+
+
+def test_the_stored_label_is_canonical_whatever_order_the_caller_used(indexed):
+    """Two callers naming the same groups in different orders must produce the SAME row value, or
+    dedup's `IS NOT DISTINCT FROM` sees two audiences and files the material twice."""
+    first = _service(indexed, STEWARD).submit("raw", "One ordering.",
+                                              audience=["leadership", "finance"])
+    second = _service(indexed, STEWARD).submit("raw", "The other ordering.",
+                                               audience=["finance", "leadership"])
+    assert first["acl"] == second["acl"] == ["finance", "leadership"]
 
 
 # ── the benign twin: the ordinary capture nobody labels ───────────────────────────────────────

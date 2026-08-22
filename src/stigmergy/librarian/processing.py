@@ -277,7 +277,7 @@ def _pre_agent(conn, item: dict, deps: Deps, *, material: "str | None" = None) -
 # How each flow finishes the shared stale-base sentence. Kept side by side so a reword of one is
 # read against the other: the ordinary lane names the three repo-sourced inputs it would misjudge.
 _STALE_BASE_TAIL_ORDINARY = (
-    "against the ACL config, entity registry and contract linter of a commit the remote may have "
+    "against the entity registry and contract linter of a commit the remote may have "
     "moved past hours ago. The likely cause is the GitHub App installation (revoked, or a token "
     "that has expired since this container started) or the network. The capture is left in the "
     "queue")
@@ -652,7 +652,7 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         worktree, outcome=outcome, base_registry=deps.registry, material=material,
         hints=(item.get("hints") or {}).get("client", {}), today=deps.as_of(),
         registration=schema.registration_from_hints(item.get("hints")),
-        approver=str(item.get("submitted_by") or ""),
+        approver=str(item.get("submitted_by") or ""), acl=_capture_acl(item),
         related=[outcome.title] if outcome.title else ())
     if isinstance(births, list):
         return None, births, outcome
@@ -732,6 +732,11 @@ def _declare_births(ctx: gates.GateContext, births: identity.Births) -> None:
     ctx.expected_bytes = {**ctx.expected_bytes, **births.expected_bytes}
     ctx.born_entity_pages = frozenset(births.entity_pages)
     ctx.confirmed_entity_pages = dict(births.confirmed)
+    # The identity-zone pages this run MODIFIED — a spelling taught, a spine grown. Told so
+    # `gate_zone`'s audience check skips exactly them and nothing else: an entity page carries no
+    # audience (ADR 045 D6), and what a restricted capture may write on one is bounded in
+    # `identity.write_births` rather than by a path prefix here.
+    ctx.identity_writes = frozenset(births.alias_pages) | frozenset(births.updated_pages)
     for path, entity_id in births.entity_pages.items():
         # What `gate_frontmatter` re-reads the page against: its own anchor and its own state.
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "entity": [entity_id],
@@ -1002,7 +1007,8 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
                      findings=notes,
                      source_pages=list(source_pages),
                      entities_born=born, aliases_added=added_aliases,
-                     entities_updated=births.updates if births is not None else []),
+                     entities_updated=births.updates if births is not None else [],
+                     entities_withheld=births.withheld if births is not None else []),
         findings=notes)
 
 
@@ -1592,6 +1598,7 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
         hints=meeting_meta, today=deps.as_of(),
         registration=schema.registration_from_hints(item.get("hints")),
         approver=str(item.get("submitted_by") or ""),
+        acl=_capture_acl(item),
         related=decision_stems or [written["meeting_stem"]])
     if isinstance(births, list):
         return None, births, outcome
@@ -1801,7 +1808,8 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
                              registry=ctx.registry,
                              entities_born=births.entities if births else [],
                              aliases_added=births.aliases if births else [],
-                             entities_updated=births.updates if births else []),
+                             entities_updated=births.updates if births else [],
+                             entities_withheld=births.withheld if births else []),
         findings=notes)
 
 

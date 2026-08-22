@@ -94,8 +94,9 @@ the irreversible, the gardener flags conventions.**
 
 **`link-to-narrower-page` is the one link a model can no longer write and a person still can.**
 Since [ADR 045](../decisions/045-audience-from-the-door.md) D3 every page a model reads while
-writing is scoped to what that page may cite, so the librarian cannot produce an upward link at
-all. What remains is a human writing a restricted page's title into open material — the same act
+writing is scoped to what that page may cite, so the librarian cannot LEARN of a page it may not
+link to. What remains is a name the capture's own material supplies — a human writing a restricted
+page's title into open material — the same act
 as posting it in a public channel — and the brain reports it rather than policing it. Nothing is
 repaired: narrowing the linking page would punish one person's capture for what somebody else
 restricted, demoting the link to plain text leaves the title (which is the whole of what a link

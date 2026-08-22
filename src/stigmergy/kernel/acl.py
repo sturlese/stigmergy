@@ -1,12 +1,15 @@
 """The audience vocabulary: what a label list MEANS when two of them meet.
 
-Two questions live here, and neither of them is "who is asking" — that one is
+One question lives here, and it is not "who is asking" — that one is
 `stigmergy.server.acl.visible()`, the one enforcement point, and it stays there.
 
   * `flows_into(content_acl, page_acl)` — may this CONTENT be written into, or rendered onto, a
     page carrying that label? Asked wherever text crosses from one governed page to another.
-  * `view_acl(member_acls)` — a view's own label, the INTERSECTION of its members'. On its way
-    out with ADR 045 D5: a view carries no label at all once its members are filtered to open.
+
+`view_acl` lived here too — a view's own label, the INTERSECTION of its members'. It never
+widened access, correctly, and it COLLAPSED: one leadership-only note anchored to a popular entity
+made that entity's view vanish for everyone else. ADR 045 D5 replaced it with an open view whose
+members are filtered with `flows_into`, so there is no second label to compute.
 
 Where a label comes from is not this module's business either, and used to be: `resolve_acl` and
 its four matchers mapped a path to a label list from an ordered config file, of which two matchers
@@ -56,19 +59,3 @@ def flows_into(content_acl: list[str] | None, page_acl: list[str] | None) -> boo
         return False
     return set(page_acl) <= set(content_acl)
 
-
-def view_acl(member_acls: list) -> list[str] | None:
-    """A view's audience: the INTERSECTION of its members' — a rollup must never widen access to
-    what it summarizes. Members without a label don't restrict; all-`None` -> `None` (open). An
-    empty intersection is restrictive by construction, never silently open.
-
-    **Retired by [ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D5**, in the
-    phase after this one: the intersection never widens, correctly, but it COLLAPSES — one
-    leadership-only note anchored to a popular entity makes that entity's view vanish for
-    everyone else. It is replaced by an open view whose members are filtered with `flows_into`.
-    """
-    sets = [set(a) for a in member_acls if a is not None]
-    if not sets:
-        return None
-    out = set.intersection(*sets)
-    return sorted(out)

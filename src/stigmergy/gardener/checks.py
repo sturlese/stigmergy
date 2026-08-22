@@ -687,7 +687,7 @@ _LINK_NARROWER_SQL = """
 SELECT p.path, p.acl, q.path, q.acl
 FROM pages_index p
 JOIN pages_index q ON q.path = ANY(p.links)
-WHERE p.path <> q.path
+WHERE p.path <> q.path AND p.zone <> 'views'
 ORDER BY p.path, q.path
 """
 
@@ -711,17 +711,28 @@ def check_link_to_narrower_page(conn) -> list[dict]:
         cur.execute(_LINK_NARROWER_SQL)
         rows = cur.fetchall()
     by_source: dict[str, list[str]] = {}
+    unreadable: dict[str, bool] = {}
     for source_path, source_acl, target_path, target_acl in rows:
         if not flows_into(target_acl, source_acl):
             by_source.setdefault(source_path, []).append(target_path)
+            # `acl = {}` is what `index.corpus` stores for a page whose frontmatter it could not
+            # read — the fail-closed reading, "visible to nobody". It is NOT somebody's audience
+            # decision, and a finding that called it one would assert something false about that
+            # page. Tracked so the sentence can say which of the two this is.
+            unreadable[source_path] = unreadable.get(source_path, False) or target_acl == []
     for source_path, targets in sorted(by_source.items()):
+        more = f" (and {len(targets) - 1} more)" if len(targets) > 1 else ""
+        detail = (f"it links `{targets[0]}`{more}, which is restricted to an audience this "
+                  f"page's own readers are not all in — they see the title and cannot open it")
+        if unreadable[source_path]:
+            detail = (f"it links `{targets[0]}`{more}, which the index cannot read the "
+                      f"frontmatter of and therefore treats as visible to nobody — so this "
+                      f"page's readers see a title nobody can open. Fix that page's frontmatter "
+                      f"first; the link may be perfectly fine")
         findings.append(build_finding(
             check=CHECK_LINK_TO_NARROWER_PAGE, severity=SEVERITY_WARN, subject=source_path,
             subjects=[source_path, *targets],
-            detail=(f"it links `{targets[0]}`"
-                    + (f" (and {len(targets) - 1} more)" if len(targets) > 1 else "")
-                    + ", which is restricted to an audience this page's own readers are not all "
-                      "in — they see the title and cannot open it"),
+            detail=detail,
             suggested_action=(
                 "decide which of the two is wrong, by hand: if the LINK is what belongs in the "
                 "open, reword the sentence without the bracketed name; if the MATERIAL is, remove "

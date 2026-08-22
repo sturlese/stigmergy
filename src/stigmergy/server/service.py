@@ -642,6 +642,11 @@ class BrainService:
             raise CaptureError(str(ex)) from ex
         if not labels:
             return None
+        # SORTED, so one audience has one spelling wherever it is compared: `capture_queue.acl` is
+        # a `text[]` and dedup's `IS NOT DISTINCT FROM` is element-wise ordered, so two callers
+        # naming the same groups in different orders would otherwise defeat both dedup levels and
+        # file the same material twice.
+        labels = sorted(labels)
         if not visible(labels, self.audiences):
             raise CaptureError(NOT_YOURS_TO_FILE_AT.format(
                 holds=", ".join(sorted(self.audiences)) if self.audiences else "none"))

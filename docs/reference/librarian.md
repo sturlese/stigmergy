@@ -405,7 +405,11 @@ semantic-similarity gathering either; reopening that is a design with an ACL que
 **One filter makes "the same data" true, and the SAME two halves bound the read tool.**
 `gather._confined` drops every page that is a symlink or does not resolve inside the worktree, and
 the wikilink-vocabulary walk gets the same treatment. `gather.confined_page` asks those two
-questions of ONE path for `read_page`, plus an allow-list — a `.md` page in a content zone, or a
+questions of ONE path for `read_page`, and `gather.may_read` asks the third and newest one:
+whether the page is in this run's own AUDIENCE ([ADR 045](../decisions/045-audience-from-the-door.md)
+D3). Both refusals return the same sentence — "you may not read that" and "there is no such page"
+must not be distinguishable, or the tool is an existence oracle for a model that will report what
+it found. The containment half is an allow-list — a `.md` page in a content zone, or a
 per-type template at `ops/templates/<type>.md` — because containment alone would admit `.git/config`
 A dropped page is logged at WARNING.
 

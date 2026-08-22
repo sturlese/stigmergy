@@ -287,12 +287,34 @@ class ProposerContext:
         self._registry = registry
         self._lock = threading.Lock()
 
+    # THE audience this proposer reads and writes at, and it is OPEN — deliberately, not by
+    # inheriting a default ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D3).
+    #
+    # A repair has no capture behind it: it is derived from the corpus, so there is no human act
+    # naming an audience for it. Running it at open means it may read only open pages and can
+    # therefore only ever write open material — the fail-closed answer. The price is stated: a
+    # RESTRICTED page is never repaired by this loop. That is a lost convenience, not a lost
+    # invariant, and the alternative — a proposer that reads across audiences to draft an open
+    # entity body — is the leak D3 exists to close, arriving through the one writer that has no
+    # submitter to attribute it to.
+    ACL: list[str] | None = None
+
     def corpus(self) -> gather.Corpus:
         if self._corpus is None:
             with self._lock:
                 if self._corpus is None:
-                    self._corpus = gather.load_corpus(self.repo)
+                    self._corpus = gather.load_corpus(self.repo, acl=self.ACL)
         return self._corpus
+
+    def may_read(self, resolved_rel: str) -> bool:
+        """Is this CONFINED path one the proposer may also read at its own audience?
+
+        Asked beside `gather.confined_page` everywhere a page's bytes are read, because that rule
+        answers containment and says nothing about audience — and this road reaches the filesystem
+        rather than the parsed rows, so a path a finding named must meet the same scope a search
+        does. `ops/templates/` is exempt for the filing toolbox's reason: a template is not a
+        corpus page and carries no audience."""
+        return gather.may_read(self.repo, self.corpus(), resolved_rel)
 
     def registry(self):
         if self._registry is None:
@@ -348,7 +370,9 @@ def read_page_impl(ctx: ProposerContext, path: str) -> str:
     IS readable, never the path asked: a refusal is prompt text, and a path a page chose is
     attacker-reachable."""
     resolved_rel = gather.confined_page(ctx.repo, path or "")
-    if not resolved_rel:
+    if not resolved_rel or not ctx.may_read(resolved_rel):
+        # ONE sentence for both, or this tool is an existence oracle for a model that will report
+        # what it found: "you may not read that" and "there is no such page" must not differ.
         return _payload({"refused": REFUSED_READ}, None)
     # The CANONICAL relpath the rule judged, never the asked string: no symlink re-follow, no NFD
     # spelling that names another page.
@@ -1381,7 +1405,10 @@ async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str,
     if not fresh:
         return [], []
     corpus_paths = {row.path for row in deps.corpus().rows}
-    link_names = edits.page_names(repo, confined=True)
+    # The SCOPED vocabulary, off the same rows every other read answers from — not a
+    # filesystem walk, which would hand the model every restricted page's title as a
+    # name it may link to (ADR 045 D3).
+    link_names = list(deps.corpus().link_names)
     pages = {p: _page_body(deps, p)
              for f in fresh for p in (f.get("subjects") or []) if p in corpus_paths}
     agent = build_proposer(skill_text, model_name=settings.model)
@@ -1457,7 +1484,7 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
             continue
         if agent is None:
             agent = build_entity_body_drafter(skill_text, model_name=settings.model)
-            link_names = edits.page_names(repo)
+            link_names = list(deps.corpus().link_names)   # scoped, as above
         asked += 1
         try:
             op, reasons = await draft_entity_body(
@@ -1686,7 +1713,9 @@ def _page_body(deps: ProposerContext, path: str) -> str:
     `read_page` tool applies — a finding names a path from `pages_index`, which is not this
     checkout, so the path is judged rather than trusted."""
     resolved = gather.confined_page(deps.repo, path)
-    if not resolved:
+    if not resolved or not deps.may_read(resolved):
+        # Same sentence for out-of-scope as for out-of-checkout: a finding's subject comes from
+        # `pages_index`, which sees the whole corpus, so this is where a restricted path arrives.
         return "(this page is not readable in this checkout)"
     try:
         with open(os.path.join(deps.repo, *resolved.split("/")), encoding="utf-8") as f:

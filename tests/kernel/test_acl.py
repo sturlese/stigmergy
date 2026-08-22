@@ -1,14 +1,14 @@
 """`kernel.acl` — the audience vocabulary: what two label lists mean when they meet.
 
-`flows_into` is the load-bearing one and is asked in six places (ADR 045 D3/D5), so its truth
-table is pinned here rather than inferred from any one caller. `view_acl` is on its way out with
-D5 and keeps its own test until it goes.
+`flows_into` is the whole of this module now, and it is asked in six places (ADR 045 D3/D5), so
+its truth table is pinned here rather than inferred from any one caller.
 
-What this file used to hold — `load_acl_config`, `resolve_acl` and the four matchers — went with
-the path resolver (ADR 045 D2): a capture's audience is the door's decision, carried on its queue
-row, so there is nothing left to resolve from a config file.
+What this file used to hold went with two decisions. `load_acl_config`, `resolve_acl` and the four
+matchers went with the path resolver (D2): a capture's audience is the door's decision, carried on
+its queue row, so there is nothing to resolve from a config file. `view_acl` went with D5: a view
+carries no label, so there is no second label to compute.
 """
-from stigmergy.kernel.acl import flows_into, view_acl
+from stigmergy.kernel.acl import flows_into
 
 
 # ── flows_into: may this CONTENT be written into a page with THAT label ────────────────────────
@@ -50,12 +50,3 @@ def test_nobody_content_flows_only_into_a_nobody_page():
 
 def test_order_and_duplicates_do_not_change_the_answer():
     assert flows_into(["leadership", "finance", "finance"], ["finance", "leadership"]) is True
-
-
-# ── view_acl: the members' intersection (retired by D5, in the next phase) ─────────────────────
-def test_view_acl_is_intersection():
-    assert view_acl([None, None]) is None                       # all open -> open
-    assert view_acl([["a", "b"], ["b", "c"]]) == ["b"]           # intersection, never union
-    assert view_acl([["a"], ["b"]]) == []                        # disjoint -> nobody, not open
-    assert view_acl([None, ["a"]]) == ["a"]                      # an open member does not widen
-    assert view_acl([]) is None

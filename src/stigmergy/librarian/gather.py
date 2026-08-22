@@ -124,13 +124,60 @@ class Corpus:
     by_path: dict
     terms_by_path: dict
     link_names: tuple
-    # `page.path_key` (NFC + casefold) of every visible row — what `read_page` asks membership of.
-    # The same spelling the WRITE path compares on, and for the same reason: on a case- and
-    # normalization-insensitive filesystem the NFD respelling of a page names that page, so a raw
-    # `in by_path` would refuse a page the model may legitimately read. Casefolding cannot make a
-    # RESTRICTED page readable through an open one's casing, because the knowledge repo's linter
-    # refuses duplicate basenames case-insensitively — the same assumption the write path rests on.
+    # `page.path_key` (NFC + casefold) of every visible row — a CANDIDATE INDEX for `read_page`,
+    # never the decision. On a case- and normalization-insensitive filesystem the NFD respelling
+    # of a page names that page, so a raw `in by_path` would refuse a page the model may
+    # legitimately read; but the fold is coarser than any collision rule this system enforces (the
+    # knowledge repo's linter compares `stem.lower()`, without NFC, and skips `views/`), so on a
+    # case-SENSITIVE filesystem a restricted `straße.md` beside an open `strasse.md` folds to the
+    # same key. `may_read` therefore confirms with `os.path.samefile` and refuses a key that more
+    # than one visible row claims: the same helper that is fail-CLOSED on the write path (a
+    # collision refuses a write) would be fail-OPEN here (a collision admits a read), and those
+    # are opposite directions rather than "the same reason".
     visible_keys: frozenset
+    # `path_key -> [visible relpath, …]`, so the confirmation above has candidates to check.
+    visible_by_key: dict
+
+
+def _by_key(rows) -> dict:
+    out: dict = {}
+    for row in rows:
+        out.setdefault(page_policy.path_key(row.path), []).append(row.path)
+    return out
+
+
+def may_read(worktree: str, parsed: "Corpus", resolved_rel: str) -> bool:
+    """Is a CONFINED path also one this run's audience may read? The second half of every read
+    tool's gate, beside `confined_page`, which answers containment and says nothing about
+    audience (ADR 045 D3).
+
+    Shared by both model-facing read tools — the filing toolbox and the repair proposer — because
+    two implementations of one confinement rule is exactly how the second one misses a change the
+    first one got.
+
+    `ops/templates/` is exempt: a template is not a corpus page and carries no audience, and this
+    run writes a page's own container. `confined_page` already requires exactly three segments
+    there, so no zone path can be spelled to look like one.
+
+    An exact path match answers immediately. Otherwise the folded key gives CANDIDATES, and the
+    answer is `os.path.samefile` against one of them — the filesystem's own notion of identity,
+    not a string rule that is coarser than any collision check this system enforces. A key more
+    than one visible row claims is refused: two distinct visible pages folding together means the
+    fold cannot tell which one was asked for, and guessing is the wrong direction here.
+    """
+    if resolved_rel.startswith(f"{TEMPLATE_DIR}/"):
+        return True
+    if resolved_rel in parsed.by_path:
+        return True
+    candidates = parsed.visible_by_key.get(page_policy.path_key(resolved_rel), ())
+    if len(candidates) != 1:
+        return False
+    full = os.path.join(worktree, *resolved_rel.split("/"))
+    other = os.path.join(worktree, *candidates[0].split("/"))
+    try:
+        return os.path.samefile(full, other)
+    except OSError:
+        return False
 
 
 def load_corpus(worktree: str, *, acl: list[str] | None = None) -> Corpus:
@@ -162,7 +209,8 @@ def load_corpus(worktree: str, *, acl: list[str] | None = None) -> Corpus:
                   terms_by_path={row.path: _terms(f"{row.title}\n{row.body}") for row in rows},
                   link_names=tuple(sorted({row.path.rsplit("/", 1)[-1][: -len(".md")]
                                            for row in rows if row.path.endswith(".md")})),
-                  visible_keys=page_policy.path_keys(row.path for row in rows))
+                  visible_keys=page_policy.path_keys(row.path for row in rows),
+                  visible_by_key=_by_key(rows))
 
 
 def search_candidates(parsed: Corpus, query: str, *, top_k: int, excerpt_lines: int,

@@ -518,7 +518,9 @@ class FilingToolbox:
         # scoped to it (ADR 045 D3), so the model cannot read — and therefore cannot cite or link
         # to — a page its own output would not be readable beside. `None` is an open page, which
         # admits open rows only: the fail-closed direction for a caller that forgets to pass it.
-        self.acl = list(acl) if acl else None
+        # `is None`, never truthiness: `[]` is a value meaning nobody, and collapsing it here
+        # would make the tools and the seeded gather disagree about the corpus.
+        self.acl = None if acl is None else list(acl)
         # ONCE, before the model runs: recomputing per call would let a page the agent just wrote
         # count as "existing", denying it a second write of its own draft.
         self.existing = gitcmd.tracked_paths(self.worktree)
@@ -582,8 +584,7 @@ class FilingToolbox:
         resolved_rel = gather.confined_page(self.worktree, path or "")
         if not resolved_rel:
             return {"refused": REFUSED_READ}
-        if (not resolved_rel.startswith(f"{gather.TEMPLATE_DIR}/")
-                and page_policy.path_key(resolved_rel) not in self.corpus().visible_keys):
+        if not gather.may_read(self.worktree, self.corpus(), resolved_rel):
             return {"refused": REFUSED_READ}
         # The CANONICAL relpath the rule judged, never the asked string: no symlink re-follow,
         # no NFD spelling that names another page.
