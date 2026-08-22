@@ -85,7 +85,7 @@ the colours it uses — the read path has no green, because it touches no git.
 ### The shape
 
 <p align="center">
-  <img src="docs/assets/architecture.svg" alt="the shape: Slack, the admin console and MCP clients all submit into one durable capture queue (raw bytes to an evidence store); the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people — alongside it, on the same process group but behind its own token and its own ASGI branch, the /admin operations console, which never reads pages" width="100%">
+  <img src="docs/assets/architecture.svg" alt="the shape: Slack, the admin console and MCP clients all submit into one durable capture queue (raw bytes to an evidence store), each door deciding the audience the capture is filed at; the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people — alongside it, on the same process group but behind its own token and its own ASGI branch, the /admin operations console, which never reads pages" width="100%">
 </p>
 
 **Read that diagram by asking what survives deleting this software.** The knowledge repo does: it
@@ -101,7 +101,7 @@ The dashed box on the right is the part people are usually surprised by: **there
 ### The write path
 
 <p align="center">
-  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue, the server attributes it, the agent drafts a page in a throwaway worktree; a name the registry does not know is introduced as an entity page born confirmed by the person who captured, in the very same commit, so nothing waits on anybody; the draft is a diff, and 9 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity — either bounce it back with the reason or commit exactly the diff they approved" width="100%">
+  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue carrying who it is for — the channel it was captured in, or the groups the submitter named — and the server attributes it and stamps that audience on the row; the agent drafts a page in a throwaway worktree, reading only pages the page it is writing could cite; a name the registry does not know is introduced as an entity page born confirmed by the person who captured, in the very same commit, so nothing waits on anybody; the draft is a diff, and 9 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity — either bounce it back with the reason or commit exactly the diff they approved, every page of the capture carrying the audience its door decided" width="100%">
 </p>
 
 The purple box is the only place a model decides anything, and everything downstream of it is a

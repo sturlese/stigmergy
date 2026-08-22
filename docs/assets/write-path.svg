@@ -44,12 +44,14 @@
 
   <!-- ── the spine ─────────────────────────────────────────────────────────── -->
   <rect class="human" x="24" y="74" width="156" height="62" rx="10"/>
-  <text x="102" y="100" class="title">material</text>
-  <text x="102" y="120" class="tagH">thread · transcript</text>
+  <text x="102" y="92" class="title">material</text>
+  <text x="102" y="111" class="tagH">thread · transcript</text>
+  <text x="102" y="127" class="tagH">and who it is for</text>
 
   <rect class="node" x="212" y="74" width="156" height="62" rx="10"/>
-  <text x="290" y="100" class="title">capture queue</text>
-  <text x="290" y="120" class="tag">the server attributes it</text>
+  <text x="290" y="92" class="title">capture queue</text>
+  <text x="290" y="111" class="tag">the server attributes it</text>
+  <text x="290" y="127" class="tag">and stamps the audience</text>
   <line class="edge" x1="180" y1="105" x2="208" y2="105" marker-end="url(#arr)"/>
 
   <rect class="agent" x="400" y="62" width="208" height="86" rx="10" filter="url(#glow)"/>
@@ -86,8 +88,9 @@
   <text x="530" y="292" class="title" font-size="14">9 deterministic gates over that diff — a model can be argued with, a gate cannot</text>
 
   <rect class="chip" x="36" y="308" width="102" height="52" rx="9"/>
-  <text x="87" y="332" class="chipT">zone</text>
-  <text x="87" y="348" class="chipN">where it writes</text>
+  <text x="87" y="330" class="chipT">zone</text>
+  <text x="87" y="345" class="chipN">where it writes,</text>
+  <text x="87" y="357" class="chipN">and for whom</text>
 
   <rect class="chip" x="147" y="308" width="102" height="52" rx="9"/>
   <text x="198" y="332" class="chipT">binary-page</text>
@@ -135,6 +138,7 @@
   <text x="770" y="474" class="tagT">to the knowledge repo</text>
 
   <text x="530" y="518" class="elabT" text-anchor="middle">the diff the gates approved is provably the diff that lands — gitcmd.commit(gated_entries=…)</text>
+  <text x="530" y="536" class="elab" text-anchor="middle">every page of the capture carries the audience its door decided — the note, and the verbatim source beside it</text>
 
   <!-- ── legend ───────────────────────────────────────────────────────────── -->
   <g transform="translate(26,546)">
