@@ -9,7 +9,7 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
-## [Unreleased]
+## [0.9.0] - 2026-08-22
 
 **The capture is the approval** ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md), #134).
 Every write used to end in a queue somebody had to come back to: an entity waited to be approved, a
