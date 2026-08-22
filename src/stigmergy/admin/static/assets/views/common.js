@@ -132,6 +132,12 @@ export function reportPanel(row) {
     facts.push(["entity pages grown", el("ul", { class: "names" }, report.entities_updated.map((u) => el("li", {}, mono(String(u.entity)),
       ` · ${u.facts || 0} fact(s), ${u.connections || 0} connection(s)`)))]);
   }
+  if (Array.isArray(report.deleted) && report.deleted.length) {
+    facts.push(["pages removed", el("ul", { class: "names" }, report.deleted.map((path) => el("li", {}, mono(String(path)))))]);
+  }
+  if (Array.isArray(report.withheld) && report.withheld.length) {
+    facts.push(["diffs withheld", el("ul", { class: "names" }, report.withheld.map((path) => el("li", {}, mono(String(path)))))]);
+  }
   if (report.reason_code) facts.push(["refusal code", mono(report.reason_code)]);
   if (report.judged_type) facts.push(["judged type", mono(report.judged_type)]);
   if (Array.isArray(report.findings) && report.findings.length) {
@@ -142,6 +148,18 @@ export function reportPanel(row) {
     parts.push(el("div", {},
       el("div", { class: "quote-label" }, keyDot("model"), "the agent's reading"),
       el("div", { class: "material" }, report.agent_rationale)));
+  }
+  // A removal's diffs, and the reason they are HERE rather than in the dialog that asked for it:
+  // nobody reads that prose before it lands (ADR 043 D5), and since ADR 044 D3 the removal is
+  // performed by the worker minutes later, so the capture is where the reading happens. Rendered
+  // as the bytes they are — `.pre` keeps the newlines and scrolls in its own box.
+  const rewritten = Object.entries(report.rewritten || {});
+  if (rewritten.length) {
+    parts.push(el("div", { class: "stack" },
+      el("div", { class: "quote-label" }, keyDot("model"), "what was written into the pages that referred to them"),
+      ...rewritten.map(([path, diff]) => el("div", {},
+        el("div", { class: "quote-label" }, mono(path)),
+        el("pre", { class: "pre", style: { maxHeight: "480px", overflow: "auto" } }, diff)))));
   }
   if (!parts.length) return el("div", { class: "empty" }, el("div", { class: "empty-title" }, "the librarian has not reported on this capture yet"));
   return el("div", { class: "stack" }, ...parts);

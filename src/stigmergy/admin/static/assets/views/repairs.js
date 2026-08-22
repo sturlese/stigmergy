@@ -248,14 +248,15 @@ export async function repairDetailView(host, id) {
 }
 
 // The ONE act on this page, and the only thing here a person decides: removing pages (ADR 043).
-// It waits on nobody — the judgment is the operator's and it lands in this call — so the confirm
-// has to carry the whole consequence, and the result has to carry the diffs, because nobody read
-// the rewritten prose before it landed.
+// It waits on nobody — the judgment is the operator's — but it does not land in this call either
+// (ADR 044 D3): the librarian worker is the one writer the corpus has, so what this button does is
+// QUEUE the removal in the operator's name. The confirm still has to carry the whole consequence,
+// because nothing else will ask.
 async function deleteFlow() {
   const answer = await confirmForm({
     title: "Remove pages from the brain",
-    consequence: "removes these pages and rewrites every page that refers to them — their related/sources entries by code, their bodies by a model — as ONE commit, right now. There is no proposal and no second click: this console's token is the authorization. If it lands, only a revert in the knowledge repo undoes it.",
-    note: banner("warn", "nobody reads the rewritten prose before it lands. The diffs come back here — read them, and revert in the knowledge repo if a page came out wrong."),
+    consequence: "queues the removal of these pages and the rewriting of every page that refers to them — their related/sources entries by code, their bodies by a model — as ONE commit the librarian pushes within a minute or so. There is no second click: this console's token is the authorization. Once it lands, only a revert in the knowledge repo undoes it.",
+    note: banner("warn", "nobody reads the rewritten prose before it lands. The diffs land on the capture — open it from Captures to read them, and revert in the knowledge repo if a page came out wrong."),
     fields: [
       actorField(),
       { name: "paths", label: "Pages", kind: "textarea", required: true,
@@ -269,25 +270,7 @@ async function deleteFlow() {
   const paths = String(answer.values.paths || "").split("\n").map((p) => p.trim()).filter(Boolean);
   const body = { actor: answer.values.actor, why: answer.values.why, paths };
   const result = await mutate("pages/delete", body,
-    (r) => `removed ${(r.deleted || []).length} page(s) — commit ${String(r.commit || "").slice(0, 12) || "?"}`);
+    (r) => `queued as capture #${r.id ?? "?"} — the librarian performs it`);
   if (!result) return;
-  await showDiffs(result);
-  go("repairs");
-}
-
-// The reading, moved after the push (ADR 043 D5). A `confirmForm` with no fields is the plainest
-// dialog this console has, and the diffs go in it UNRENDERED — what landed in the repo is these
-// bytes, so these bytes are what the person who pressed Remove should be looking at.
-function showDiffs(result) {
-  const rewritten = Object.entries(result.rewritten || {});
-  return confirmForm({
-    title: `Removed ${(result.deleted || []).length} page(s) — commit ${String(result.commit || "").slice(0, 12)}`,
-    consequence: "this has already landed in the knowledge repo. Read what the model wrote into the pages that referred to the removed ones; a revert there is the undo.",
-    note: rewritten.length
-      ? el("div", { class: "stack" }, ...rewritten.map(([path, diff]) => el("div", {},
-          el("div", { class: "quote-label" }, mono(path)),
-          el("pre", { class: "pre" }, diff))))
-      : banner("plain", "nothing referred to the removed page(s), so no page was rewritten."),
-    fields: [], confirmLabel: "Done", cancelLabel: "Close", wide: true,
-  });
+  go(`captures/${result.id}`);
 }

@@ -373,34 +373,32 @@ def conn():
 
 
 @pytest.fixture()
-def require_gitleaks():
-    from tests.librarian import support
-    if support.gitleaks_available():
-        return
-    pytest.skip("gitleaks not on PATH (brew install gitleaks) — the write path's gates need it")
+def env(tmp_path):
+    """A real bare remote + clone of the fixture knowledge repo, for the doors that need a
+    `STIGMERGY_REPO` shape to resolve their entity registry from.
 
-@pytest.fixture()
-def env(tmp_path, require_gitleaks):
+    It used to require gitleaks, because the deletion door ran the write path's gates inside the
+    MCP call. Since ADR 044 D3 no door in this package writes to the corpus at all — a removal is
+    QUEUED here and performed by the worker — so no test here has a gate to run, and gating the
+    package on a binary it no longer uses would skip real coverage on any laptop without it. The
+    gates keep their coverage where they run: `tests/librarian/` and `tests/repair/`.
+    """
     from tests.librarian import support
     return support.build_repo(str(tmp_path))
 
 
 def make_review_service(env, conn, identity_name=ALICE, *, audiences=None, evidence=None,
-                        knowledge_repo=None, librarian_repo_url=None,
-                        entity_registry_path=None):
-    """`librarian_repo_url` defaults to `env.bare` — the same local `git init --bare` remote
-    `env.repo` is a clone of — so a test that removes pages lands the commit for real, against a
-    real bare remote with no GitHub and no App credential (`env.bare` is not `https://`, so the
-    door needs none). Pass `""` explicitly for a test that wants the capability refusal (no repo
-    URL configured) instead."""
+                        knowledge_repo=None, entity_registry_path=None):
+    """A service with the queue wired up. Since ADR 044 D3 this process writes nothing to the
+    corpus — a removal is QUEUED here and performed by the worker — so there is no repo URL and no
+    credential to configure: what a deletion test needs from this fixture is an evidence store and
+    an identity."""
     from stigmergy.capture.evidence import MemoryEvidenceStore
     from stigmergy.server import entity_aliases
     from stigmergy.server.settings import Settings
     settings = Settings(identity=identity_name,
                         knowledge_repo=env.repo if knowledge_repo is None else knowledge_repo,
-                        librarian_repo_url=env.bare if librarian_repo_url is None
-                        else librarian_repo_url,
-                        # The registry the inbox is derived from: the checkout's own file, as a
+                        # The registry this service answers from: the checkout's own file, as a
                         # local `--repo` server reads it (the deployed one reads the index's
                         # snapshot; `test_registry_freshness_pg.py` covers that road).
                         entity_registry_path=(entity_aliases.default_path(env.repo)

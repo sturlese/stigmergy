@@ -2,8 +2,8 @@
 
 Not a test: a narrated walk the way an operator meets it — drop a meeting transcript, watch the
 librarian file it and regenerate the touched entity's view in the same run (the post-filing
-hook); read the committed view back from git; run `stigmergy-views regenerate --entity <id>` by
-hand and watch the honest no-op; then let the worker's periodic convergence sweep create a view for
+hook); read the committed view back from git; ask `regenerate_entity` for the same entity again
+and watch the honest no-op; then let the worker's periodic convergence sweep create a view for
 an entity NOTHING has a hook for. Real Postgres, real git, real gates, the offline double.
 
 It proves the MECHANISM only — skeleton, synthesis, commit, hook, no-op, convergence. Whether a
@@ -88,9 +88,8 @@ def main() -> int:
         assert page, f"{relpath} was never committed to {env.bare}"
         print(page)
 
-        step("the operator CLI (stigmergy-views regenerate --entity), by hand, "
-            "from a steward's clone freshly synced with what the worker just pushed: an honest "
-            "no-op, since the worker already regenerated it")
+        step("the same entity asked for again, from a clone freshly synced with what the worker "
+            "just pushed: an honest no-op, since the worker already regenerated it")
         gitcmd.run("fetch", "origin", settings.branch, cwd=env.repo)
         gitcmd.run("reset", "--hard", f"origin/{settings.branch}", cwd=env.repo)
         outcome = asyncio.run(regenerate.regenerate_entity(

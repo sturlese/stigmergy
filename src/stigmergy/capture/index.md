@@ -24,7 +24,7 @@ drained them. What a human decides now is an IDENTITY, after the filing, through
 
 | Module | Owns |
 |---|---|
-| `schema.py` | The contract: idempotent DDL and `startup_ddl_lock`; the status enum, its named CHECK and the two-halved guard that swaps it; `RETIRED_STATUSES` and the startup migration that returns a still-parked row to `queued` with one `trace` event saying why; the status sets (`TERMINAL_STATUSES` / `FINISHED_STATUSES` / `GATE_NOT_YET_RUN_STATUSES`); the pure submission contract (`prepare_submission`); the kind vocabulary every door speaks (`KINDS`) and the per-kind material caps under it (`MATERIAL_CAP_BYTES`, read through `max_material_bytes`; `MAX_MATERIAL_BYTES` is the largest, which is what a transport's body limit derives from); the hint allowlists — placement, the three provenance ones, and `REGISTER_HINT_KEYS`, the four `register_*` keys a capture carries a registration as (`Registration`, `registration_hints`, `registration_from_hints`, `REGISTRATION_SOURCES` = the doors that name themselves) — and `normalize_hints`; the two `reject_*` refusals; the rejection reason codes and `withheld_reason`; `clean_note`; `base_report` / `SEARCHABILITY_NOTE`; `validate_meeting_date` |
+| `schema.py` | The contract: idempotent DDL and `startup_ddl_lock`; the status enum, its named CHECK and the two-halved guard that swaps it; `RETIRED_STATUSES` and the startup migration that returns a still-parked row to `queued` with one `trace` event saying why; the status sets (`TERMINAL_STATUSES` / `FINISHED_STATUSES` / `GATE_NOT_YET_RUN_STATUSES`); the pure submission contract (`prepare_submission`); the kind vocabularies (`SUBMITTABLE_KINDS`, what any door may ask for; `KINDS`, what the queue accepts — the two differ by `DELETE` alone, guarded by `reject_unsubmittable_kind`) and the per-kind material caps under them (`MATERIAL_CAP_BYTES`, read through `max_material_bytes`; `MAX_MATERIAL_BYTES` is the largest, which is what a transport's body limit derives from); the hint allowlists — placement, the three provenance ones, and `REGISTER_HINT_KEYS`, the four `register_*` keys a capture carries a registration as (`Registration`, `registration_hints`, `registration_from_hints`, `REGISTRATION_SOURCES` = the doors that name themselves) — `DELETE_HINT_KEYS` and the removal's own seam (`delete_paths`, `MAX_DELETED_PAGES`, `DELETE_REASON_CHARS`, the zone rules) — and `normalize_hints`; the `reject_*` refusals; the rejection reason codes and `withheld_reason`; `clean_note`; `base_report` / `SEARCHABILITY_NOTE`; `validate_meeting_date` |
 | `queue.py` | Insert · claim (`FOR UPDATE SKIP LOCKED`) · `release_expired` · `finish` (the `attempts` fence, and the ONLY transition out of a claim) · `holds_lease` · the one listing query and its two entry points · `get_submission_trace` · `query_in_flight` · `work_waiting` (is anything QUEUED right now — one bit, for the worker's view sweep deciding whether to yield the loop back) · `counts_by_status` · `outcomes_by_day` · the two latency sample readers |
 | `evidence.py` | The content-addressed store: `content_key` (pure), `S3EvidenceStore` (MinIO/R2, lazy boto3 client), `MemoryEvidenceStore` (the offline double) and `store_from_env` |
 | `ops.py` | `record_job_run`, `record_ingest_error`, the `job_run` context manager, the written-down `job_runs.status` spec (`ok` / `error` / `partial`), and `try_advisory_lock` — the NON-blocking mutual exclusion a maintenance pass takes so a loser can skip and say so (`views.regenerate.sweep`); `schema.startup_ddl_lock` is the blocking sibling, and each caller owns its own key |
@@ -86,10 +86,16 @@ drained them. What a human decides now is an IDENTITY, after the filing, through
   `stigmergy.index` (for `store.connect` / `store.dsn`), open a connection, or read the
   environment — library code takes `conn` as an argument, and nothing touches global state at
   module scope.
-- **Never give a door a kind of its own.** `KINDS` is the one vocabulary every door speaks
-  (`raw`, `page`, `meeting`, `document`), and what a kind requires is enforced at
+- **Never give a door a kind of its own.** `SUBMITTABLE_KINDS` is the one vocabulary every door
+  speaks (`raw`, `page`, `meeting`, `document`), and what a kind requires is enforced at
   `prepare_submission`, never at one door
   ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md) D4).
+- **`delete` is the one kind nothing may SUBMIT**, and the distinction is load-bearing rather than
+  tidy. `KINDS` is what the QUEUE accepts; `SUBMITTABLE_KINDS` is what a caller may ask for, and
+  `reject_unsubmittable_kind` is what keeps the difference real — without it,
+  `brain_submit(kind="delete", …)` would queue a removal without ever meeting the
+  unrestricted-identity check the removal door exists to run, and the worker performs whatever
+  `delete` row it claims (ADR 044 D3).
 - **Never compose a submitter-facing sentence outside `librarian.report`.**
   The shared shape lives in `schema.py`; the wording belongs to the package that authored the
   outcome.

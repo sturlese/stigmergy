@@ -58,6 +58,22 @@ kind of material enters at the same door.
   repair a person performs — a deletion they asked for
 - the gardener's `sla` severity band and its Slack notice are gone: nothing produced one, and the
   findings it would have paged somebody about are answered by the worker
+- **One writer.** `brain_delete` no longer clones, sweeps, gates and pushes inside the call: it
+  authorizes (an unrestricted identity, one fixed refusal whether or not the paths exist) and
+  QUEUES a `capture_queue` row of the new kind `delete`. The librarian worker performs it — plan, a
+  model writing the bodies of the pages that referred to the removed ones, the nine gates, a
+  whole-tree dead-link check, one commit carrying `Approved-by: <the person who asked>`. The
+  per-page diffs land in the row's report and are read back through `brain_submissions`,
+  ACL-scoped and fenced
+- **The API process holds no git credential at all.** `Settings.librarian_repo_url` and
+  `STIGMERGY_LIBRARIAN_REPO_URL` are gone from `server/settings.py`; `fly.toml`'s `[env]` block is
+  the worker's alone in practice as well as in its comment
+- `brain_submit` refuses `kind="delete"` by name: the queue's vocabulary is wider than what any
+  door may submit, and the door that queues a removal is the door that authorized it
+- **`stigmergy-views` is gone.** The worker's own sweep is the only road to a regenerated view, and
+  it now runs on the first idle tick AFTER the worker did something as well as on its interval — so
+  a rollup never describes a page that just went. The gardener's `stale-view` finding names no
+  command, because there is none to name
 ### Changed
 - `brain_submit` takes `kind` in `raw` · `page` · `meeting` · `document`; a `document` also takes
   `source_url`, and its text is filed as a synthesis page beside a verbatim `sources/documents/`

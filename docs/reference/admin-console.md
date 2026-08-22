@@ -3,7 +3,8 @@
 The web control room over what already runs — the capture queue read-only beside the two levers
 over the whole of it, the entity registry this stack serves and the one door for registering a name
 nobody has captured about yet, the ledger of repairs the worker made of the gardener's findings —
-each with the diff it pushed — and the Remove pages button beside it, corpus health, the index and
+each with the diff it pushed — and the Remove pages button beside it, which queues one, corpus
+health, the index and
 the ops files it serves, the worker, the three scheduled jobs, the digest, and who is using the
 brain — served by the SAME `app` process group that serves MCP, behind its own token.
 Design record: [ADR 029](../decisions/029-admin-console.md),
@@ -26,9 +27,10 @@ reads through `list_entities`), and it fetches no page: everything it renders co
 this database, never from the knowledge repo. Two things on it read as page PROSE, and each is
 there because nobody read those bytes before they landed. An applied repair carries the unified
 DIFF it pushed, out of the `repairs` row that recorded it — page bytes, but bytes this console's
-own subject produced, and the whole reason the page exists (ADR 044). A removal hands back the same
-thing per rewritten page, in a dialog, at the moment it performs it — the reading ADR 043 D5 moved
-to after the push rather than before it.
+own subject produced, and the whole reason the page exists (ADR 044). A removal carries the same
+thing per rewritten page, on the capture it was queued as — the reading ADR 043 D5 moved to after
+the push rather than before it, and ADR 044 D3 moved to the row rather than the response, because
+this process is no longer the one that pushes.
 
 **The one thing that boundary does not cover, said plainly:** the Activity page renders the `ask`
 QUESTIONS in `audit_log`. No answer, no page, no snippet — but a question is user content, and it
@@ -126,7 +128,7 @@ toggle away, and nothing on a chart is reachable only by hovering.
 - **Dashboard** — the window's **captures filed** as the number that means work: a capture that
   landed is a page, and the identities it introduced were born in the same commit, so the number
   beside it is not a backlog but what did NOT land (refused by a gate, could not finish, still
-  moving), with in-flight, queued and the repairs waiting on a decision on the statline. Beside it,
+  moving), with in-flight, queued and the repairs the worker APPLIED in the window on the statline. Beside it,
   **the write path, live**: the window's captures flowing through the model's draft and code's
   gates into landed-in-git, refused and could-not-finish, with the legacy handled-by-hand outcome
   kept for as long as old rows carry it. Then captures per day by what became of them, questions
@@ -197,16 +199,19 @@ toggle away, and nothing on a chart is reachable only by hovering.
   that stopped existing and the pages rewritten so they no longer link to them; for an
   `entity-alias` merge, which identity survived and which was retired.
 
-  **Remove pages** is the one button here that writes anything. A person names the
-  pages and says why, and it lands in that call —
-  the pages go, every page that referred to them is rewritten (its frontmatter by code, its body
-  by a model), the nine gates judge it, and one App-authored commit is pushed. There is no
+  **Remove pages** is the one button here that writes anything, and what it writes is a QUEUE ROW.
+  A person names the pages and says why; the console queues a `delete` capture under its actor and
+  hands back the acknowledgement. The librarian performs it — the pages go, every page that referred
+  to them is rewritten (its frontmatter by code, its body by a model), the nine gates judge it, and
+  one App-authored commit is pushed with an `Approved-by:` trailer naming that actor. There is no
   second click, because the judgment was the operator's when they typed it
   ([ADR 043](../decisions/043-a-sweep-is-written.md)); what the console's token buys here is the
   whole authorization — the MCP door asks for an UNRESTRICTED identity instead, and this token
   stands for the whole deployment — so this is its most consequential control and its confirm says
-  so. The per-page diffs come back in a dialog: nobody read that prose before it landed, and a
-  revert in the knowledge repo is the undo.
+  so. **The diffs are not on this page.** They land on the capture's own report, where Captures
+  reads them: nobody read that prose before it landed, and a revert in the knowledge repo is the
+  undo. This process holds no git credential and pushes nothing
+  ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3).
 
 - **Gardener** — findings per run over the last runs by severity (from each run's own
   `findings_by_severity`), the latest completed run with its findings, pages walked and model
@@ -264,10 +269,11 @@ corpus, and why" is answered by that row and by `git log`, whose trailer says wh
 was: `Approved-by:` when a person asked for it, `Repair: <check> #<finding>` when the worker
 derived it.
 
-One asymmetry is deliberate: a removal a gate refuses leaves a `failed` row carrying the sentence
-that refused it, and the `admin_actions` row for the attempt is there already with the refusing
-class name on it. Nothing is retried and nothing is put back — the operator reads both and decides
-whether to ask again.
+One asymmetry is deliberate: a removal the worker cannot perform leaves a `rejected` CAPTURE
+carrying the sentence that refused it, not a `repairs` row — a removal is queued, not derived, so
+its record is the row it was queued as. The `admin_actions` row for the request is there already,
+saying who asked and when. Nothing is retried and nothing is put back — the operator reads both and
+decides whether to ask again.
 
 **`entities/create` decides nothing and touches no git.** It writes its `admin_actions` row and a
 `capture_queue` row, and that is all this process does; the entity page, its `approved_by:` naming

@@ -64,9 +64,13 @@ REASON_STEWARD = "steward"
 # A drafted page whose frontmatter cannot be re-serialized after server-owned fields are stripped
 # and restamped: content-caused, which is what routes it to `rejected` rather than `failed`.
 REASON_MALFORMED_FRONTMATTER = "malformed-frontmatter"
+# A removal the worker could not perform as asked: a page that is not there, one the deletion lane
+# may not touch, a plan too large, or a body the sweep writer could not reconcile. Content-caused —
+# the person named those pages — which is what routes it to `rejected` rather than `failed`.
+REASON_UNREMOVABLE = "unremovable"
 
-REJECTION_REASONS = (REASON_SECRET, REASON_PII, REASON_DUPLICATE,
-                     REASON_STEERING, REASON_STEWARD, REASON_MALFORMED_FRONTMATTER)
+REJECTION_REASONS = (REASON_SECRET, REASON_PII, REASON_DUPLICATE, REASON_STEERING,
+                     REASON_STEWARD, REASON_MALFORMED_FRONTMATTER, REASON_UNREMOVABLE)
 # The key the code travels under inside the `report` JSONB column.
 REASON_CODE_KEY = "reason_code"
 
@@ -191,12 +195,26 @@ MEETING = "meeting"
 # with a file open. Nothing is fetched or converted server-side; the worker files a synthesis page
 # beside the verbatim `sources/documents/` part(s).
 DOCUMENT = "document"
-KINDS = (RAW, PAGE, MEETING, DOCUMENT)
+SUBMITTABLE_KINDS = (RAW, PAGE, MEETING, DOCUMENT)
+
+# The one kind that is not material at all: a person's REMOVAL. Its "material" is the reason they
+# gave and its `hints` carry the paths, and the worker performs it rather than filing it (ADR 044
+# D3) — one writer for the corpus, and it is the worker.
+#
+# It is a KIND rather than a table of its own because everything a capture gets, a removal needs
+# too: a durable row that survives a restart, a lease, an attempt count, an audited submitter, and
+# `brain_submissions` to read the outcome back from. What it is NOT is submittable: `brain_submit`
+# takes `SUBMITTABLE_KINDS`, so the only door that can queue one is the one that authorizes it.
+DELETE = "delete"
+KINDS = (*SUBMITTABLE_KINDS, DELETE)
 
 # The cap on captured text, in UTF-8 BYTES — what the row and the object store pay for. Per kind,
-# because a transcript or a document's text is legitimately several times a pasted note.
+# because a transcript or a document's text is legitimately several times a pasted note. A
+# deletion's "material" is one sentence of reason, and `DELETE_REASON_CHARS` is the real bound —
+# this one only keeps the object store's arithmetic total.
 MATERIAL_CAP_BYTES = {RAW: 256 * 1024, PAGE: 256 * 1024,
-                      MEETING: 1024 * 1024, DOCUMENT: 1024 * 1024}
+                      MEETING: 1024 * 1024, DOCUMENT: 1024 * 1024,
+                      DELETE: 4 * 1024}
 # The largest of them: what a transport's request-body limit has to fit.
 MAX_MATERIAL_BYTES = max(MATERIAL_CAP_BYTES.values())
 
@@ -243,8 +261,17 @@ DOCUMENT_HINT_KEYS = ("source_url",)
 # — pinning a name is not an act of authority, because there is no authority left to hold: an
 # identity is born confirmed by whoever captured it either way.
 REGISTER_HINT_KEYS = ("register_name", "register_type", "register_aliases", "register_source")
+
+# What a `delete` row carries instead of material: the pages that go, one per line, and the door
+# that queued it. A STRING like every other hint — this vocabulary is string-valued by
+# construction, and a list-valued exception for one kind would be a second shape every reader of
+# `hints` has to know about. The paths are parsed once, at the seam below, so no consumer parses
+# them a second way. `delete_source` is spelled apart from the `source_*` group and mirrors
+# `register_source`: it names the DOOR the removal came through, which is the server's own fact
+# about the row and never the submitter's claim about a document.
+DELETE_HINT_KEYS = ("delete_paths", "delete_source")
 ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DOCUMENT_HINT_KEYS
-                     + REGISTER_HINT_KEYS)
+                     + REGISTER_HINT_KEYS + DELETE_HINT_KEYS)
 
 # Fields a client may never assert: as an argument or a hint each is an explicit error; declared in
 # a page's frontmatter each is recorded as a flagged hint and otherwise inert.
@@ -470,6 +497,65 @@ def _require_document_hints(client: dict) -> None:
             "source page, where a reader follows it")
 
 
+# What a deletion may be, at every door. `MAX_DELETED_PAGES` is not a technical bound — the plan's
+# byte ceiling is — it is what ONE person's removal may mean: a page they judged stale, or a
+# handful, never a corpus sweep typed in one line. `DELETE_REASON_CHARS` bounds the sentence that
+# becomes the commit message.
+MAX_DELETED_PAGES = 10
+DELETE_REASON_CHARS = 400
+
+# Where a removal may point. Deliberately NOT `repair.deletion.DELETABLE_PREFIXES` imported: this
+# package may not import the librarian's write path, and this seam answers a narrower question —
+# "is this a corpus page at all" — before anything is queued. The applier asks the full question
+# again in the tree it commits from, which is the one that decides.
+DELETABLE_ZONE_PREFIXES = ("wiki/", "sources/", "views/")
+# The one zone a removal may never name, at every door: an identity is retired by removing what
+# made it one, never by deleting the page out from under the pages anchored to it.
+UNDELETABLE_ZONE_PREFIX = "wiki/entities/"
+
+
+def delete_paths(hints: dict | None) -> list[str]:
+    """The pages a `delete` row names, parsed from its hints — the ONE parser, so a worker and a
+    door cannot disagree about what was asked for. Order preserved, blanks dropped, duplicates
+    collapsed."""
+    raw = str(((hints or {}).get("client") or {}).get("delete_paths") or "")
+    out: list[str] = []
+    for line in raw.splitlines():
+        path = line.strip()
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
+def _require_delete_hints(client: dict) -> None:
+    """`kind == DELETE` names its pages at THIS seam, which every caller of `queue.submit` crosses.
+
+    Everything here is answerable without a checkout, and that is the point: a removal a person
+    typed wrong should be refused at the door, in their session, rather than becoming a queued row
+    that fails minutes later where they are not looking. Whether the page EXISTS is not asked here
+    — the tree the worker commits from is the only place that answer is not already stale.
+    """
+    paths = delete_paths({"client": client})
+    if not paths:
+        raise SubmissionRejected(
+            "a deletion names at least one page — nothing was queued")
+    if len(paths) > MAX_DELETED_PAGES:
+        raise SubmissionRejected(
+            f"a deletion names at most {MAX_DELETED_PAGES} page(s), and this one names "
+            f"{len(paths)}. One removal is one judgment a person made about pages they read; a "
+            f"larger sweep is a series of them — nothing was queued")
+    for path in paths:
+        if path.startswith(UNDELETABLE_ZONE_PREFIX):
+            raise SubmissionRejected(
+                f"{path} is an entity page, and an identity is retired by removing what made it "
+                f"one rather than by deleting the page the anchored pages point at — nothing was "
+                f"queued")
+        if not path.startswith(DELETABLE_ZONE_PREFIXES) or ".." in path.split("/"):
+            raise SubmissionRejected(
+                f"{path} is not a corpus page: a removal names a page under "
+                f"{', '.join(DELETABLE_ZONE_PREFIXES)} — nothing was queued")
+
+
 def _require_meeting_hints(client: dict) -> None:
     """`kind == MEETING` requires both at THIS seam, which every caller of `queue.submit` crosses:
     a missing `meeting_date` silently degrades every filed page's `as_of` to today."""
@@ -478,6 +564,22 @@ def _require_meeting_hints(client: dict) -> None:
             "a meeting submission requires hints['title'] — the meeting's title, used as this "
             "capture's source and meeting page identity")
     validate_meeting_date(client.get("meeting_date") or "")
+
+
+def reject_unsubmittable_kind(kind: str) -> None:
+    """Refuse a kind no door may SUBMIT. One kind qualifies — `delete` — and the reason it has to be
+    refused HERE rather than by the kind vocabulary is that the vocabulary is what the QUEUE
+    accepts, not what a submitter may ask for.
+
+    Without this, `brain_submit(kind="delete", …)` would queue a removal without ever meeting the
+    unrestricted-identity check `brain_delete` exists to run: the worker performs whatever `delete`
+    row it claims, and the row is the whole of what it knows.
+    """
+    if kind in KINDS and kind not in SUBMITTABLE_KINDS:
+        raise SubmissionRejected(
+            f"{kind!r} is not something to submit: it is what a door queues on your behalf after "
+            f"deciding you may. To remove pages, use the removal door — it asks a question this "
+            f"one cannot")
 
 
 def prepare_submission(kind: str, material: str, hints: dict | None = None) -> Submission:
@@ -504,6 +606,8 @@ def prepare_submission(kind: str, material: str, hints: dict | None = None) -> S
         _require_meeting_hints(normalized_hints["client"])
     if kind == DOCUMENT:
         _require_document_hints(normalized_hints["client"])
+    if kind == DELETE:
+        _require_delete_hints(normalized_hints["client"])
     return Submission(
         kind=kind,
         material=material,

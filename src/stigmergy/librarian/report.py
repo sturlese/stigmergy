@@ -293,6 +293,28 @@ def filed_retry(*, original_id: int, page_path: str, commit: str) -> dict:
                        retry_of=original_id)
 
 
+def filed_delete(*, deleted: list, rewritten: dict, commit: str, model_calls: int = 0) -> dict:
+    """A removal that landed. The one report that carries page BYTES: nobody read the prose the
+    sweep wrote before it was pushed (ADR 043 D5), so the per-page diff travels in the row and the
+    read surfaces show it — ACL-scoped and fenced by whoever renders it, exactly as
+    `brain_delete`'s own response used to be.
+
+    `deleted` is the pages that stopped existing and `rewritten` is `{path: unified diff}` for the
+    pages that no longer point at them. Both are needed: a reader who saw only the diffs would not
+    know what went, and one who saw only the paths would not know what a model wrote in their name.
+    """
+    n_gone, n_rewritten = len(deleted or ()), len(rewritten or {})
+    summary = (
+        f"{schema.FILED} — removed {n_gone} {_plural(n_gone, 'page')} and rewrote {n_rewritten} "
+        f"that referred to them, as commit {commit[:12]}. Nobody read the rewritten prose before "
+        f"it landed: the diffs on this row are that reading, and `git revert` in the knowledge "
+        f"repo is the undo.")
+    return base_report(status=schema.FILED, summary=summary, commit=commit,
+                       deleted=[_clean(p) for p in (deleted or ())],
+                       rewritten={_clean(path): text for path, text in (rewritten or {}).items()},
+                       model_calls=int(model_calls))
+
+
 # ── rejected ──────────────────────────────────────────────────────────────────────────────────
 def _rejected(reason_code: str, summary: str, **facts) -> dict:
     """A refusal. `capture.queue`'s list surface consults `reason_code` to decide whether this row's
@@ -308,6 +330,15 @@ def rejected_duplicate(*, page_path: str, as_of: str) -> dict:
                f"{_clean(page_path)} (filed {as_of}); nothing new was created. If this capture "
                f"adds new information, resubmit just what's different.")
     return _rejected(schema.REASON_DUPLICATE, summary, page_path=page_path)
+
+
+def rejected_unremovable(*, reason: str) -> dict:
+    """A removal the worker could not perform. `reason` is the deletion lane's own sentence — it
+    names repo-relative paths and what it could not do, and it is written to be published, which is
+    what lets it travel verbatim into a report the person who asked reads back."""
+    summary = (f"{schema.REJECTED} — this removal was not performed: {_clean(reason, 600)} "
+               f"Nothing was deleted and nothing was committed.")
+    return _rejected(schema.REASON_UNREMOVABLE, summary)
 
 
 def rejected_secret(*, line: str, rule_id: str, where: str = "your material") -> dict:

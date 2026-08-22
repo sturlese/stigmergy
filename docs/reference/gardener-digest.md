@@ -37,18 +37,19 @@ stigmergy-gardener                                  stigmergy-digest
 
 Both commands are **findings-only**: neither fixes, writes, opens a PR or issue, or edits the
 registry. `stigmergy-gardener` reports; `stigmergy-digest` broadcasts what was already reported
-plus the corpus's own deltas. Every other lane — the repair loop, `stigmergy-views regenerate`, a
+plus the corpus's own deltas. Every other lane — the worker's repair pass, its view sweep, a
 person's own `brain_delete`, an ordinary correction filed through the 🧠 gesture — is how anything
 a finding names actually gets fixed.
 
-**A finding's road to zero starts in a different package.**
-`stigmergy-repair propose` reads the latest completed gardener run and, for the three findings a
-link or a callout can answer (`model-unlinked-mention`, `model-contradiction`, `orphan-page`), has
-a model draft a concrete strictly-additive edit that a person approves ONE at a time, on the
-console's Repairs page, before any code applies it. None of that reaches back here: this
-package still detects and fixes nothing, and it neither imports nor calls the one that proposes.
+**A finding's road to zero starts in a different package.** The librarian worker reads the latest
+completed gardener run on its idle branch and, for the six findings this vocabulary can answer,
+derives a concrete change, validates it against a real checkout, proves it through the nine gates
+and pushes it — nobody is asked, and the reading happens afterwards, from the diff the ledger
+stored. None of that reaches back here: this package still detects and fixes nothing, and it
+neither imports nor calls the one that repairs.
 The narrative is [repair.md](./repair.md), decided in
-[ADR 039](../decisions/039-governed-repair-loop.md).
+[ADR 039](../decisions/039-governed-repair-loop.md) and amended by
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D2.
 
 ## The ten deterministic checks
 
@@ -100,11 +101,12 @@ born under the older contract, carrying `ops/templates/entity.md`'s angle-marked
 verbatim, or one whose body is blank below its title. Nothing counted those pages before this
 check — the orphan check exempts entity pages by type, and no other check reads a body — so an
 identity with no content was invisible to every health pass. The finding is `info` and its repair
-is `entity-body` ([repair.md](./repair.md)): the proposer drafts that page's body from the pages
-anchored to the entity, and a person approves the draft. The rule
+is `entity-body` ([repair.md](./repair.md)): the worker's repair pass drafts that page's body from
+the pages anchored to the entity, proves the diff through the nine gates and pushes it, and the
+draft is read afterwards on the ledger. The rule
 is deliberately literal — a body line that is wholly wrapped in angle brackets — so a one-line HTML
 element (`<details>`) reads as a placeholder. That false positive is accepted: the finding is
-`info`, and the repair it invites is a draft a human reads before it lands.
+`info`, and the repair it invites is bounded by the same gates every other diff passes.
 
 Its literal-ness is also its gap, and the gap is wide: a body somebody WROTE that says nothing —
 `Cofers is a company we work with.` — carries no angle markers and passes this check, and every
@@ -265,14 +267,14 @@ over 38 registered entity(ies)
 
 19 finding(s): 5 warn, 14 info
 
-most of what follows is a judgment call, not a one-paste fix: only `stale-view` names a runnable
-command below. Everything else names what to go look at.
+nothing below is a one-paste fix: every `action:` names what to go look at, or says who is already
+taking care of it. This report runs no command and suggests none.
 
 ## WARN (5)
 [WARN] anchor-concentration        acme-corp — 14 of the last 18 filings (78%) anchored here, above the 60% threshold  [deterministic]
   action: no command — read a few of the recent filings anchored to Acme Corp and judge whether that's genuinely how lopsided the work has been, or whether unrelated material is defaulting here because picking the right anchor felt like more effort
 [WARN] stale-view                  acme-corp — the view no longer matches the corpus — its member set or the backlinks it cites have changed since it was last generated  [deterministic]
-  action: `stigmergy-views regenerate --entity acme-corp`
+  action: no command — the librarian worker regenerates it on its next idle pass; a view still listed here after several is worth checking the worker's job runs for
 ...
 ## INFO (14)
 ...
@@ -283,13 +285,14 @@ findings this run still prints its header (with its count) and an explicit "none
 a silently absent section. Within a group, findings sort by check slug then subject, so two runs
 over an unchanged corpus produce byte-identical output. Each finding is two lines: the finding
 itself (severity tag, slug, subject, the specific numbers that make it self-explanatory, and
-`[deterministic]` or `[model: {model_id}]`), then its `action:` — a backtick-quoted command when
-one genuinely exists (`stale-view` only, with the backticks baked into the stored value so the
-report and `--json` carry the identical string), a plain sentence otherwise. Nothing here is a
-repair tool; the preamble says so once, up front, rather than leaving a reader to discover it
-finding by finding. `stigmergy-repair propose` reading these same findings afterwards does not
-soften that: an `action:` line still names what to go look at, and what the proposer produces is a
-question for a person, never a fix this report performed. `--json` emits one object per finding
+`[deterministic]` or `[model: {model_id}]`), then its `action:` — a plain sentence, always. **No
+finding names a command any more.** The last one that did was `stale-view`, and what replaced its
+command is the truth about it: the librarian worker's view sweep converges that zone and there is
+no second road, so telling an operator to run something would be an executable promise nothing
+keeps. Nothing here is a repair tool; the preamble says so once, up front, rather than leaving a
+reader to discover it finding by finding. The worker's repair pass reading these same findings
+afterwards does not soften that: an `action:` line still names what to go look at, never a fix this
+report performed. `--json` emits one object per finding
 with the same fields plus
 `id`/`run_id`/`created_at`/`model_id`, `suggested_action` always populated (never `null` for a
 sentence-only check — an absent field would read as "nothing to do," which is false).
@@ -396,12 +399,13 @@ behind it skips cleanly instead of failing a scheduled run every night. A `concu
 queues a second run rather than cancelling one in flight: cancelling mid-write would discard real,
 already-computed work.
 
-A fourth workflow sits an hour behind this one, `repair-propose.yml` at ~06:07 UTC, and the offset
-is the whole of the coupling: `stigmergy-repair propose` reads the latest COMPLETED gardener run,
-so it wants this morning's findings rather than yesterday's. It belongs to `stigmergy.repair`, runs
-under the same `STIGMERGY_CRONS_ENABLED` gate and the same queue-don't-cancel `concurrency` rule,
-and needs neither a Slack token nor a write credential — a pass that finds no completed run, or
-nothing proposable in one, proposes nothing and exits 0.
+**What answers these findings is not a fourth workflow.** The repair pass runs inside the librarian
+worker, on its own interval and only when its queue is idle — because it PUSHES, and a scheduled
+Actions run holding the App's private key is a write credential in a public runner's environment
+([repair.md](./repair.md), [ADR 044](../decisions/044-the-capture-is-the-approval.md) D2). Its
+coupling to this report is a watermark rather than an offset: it answers the latest COMPLETED
+gardener run, once, and a pass that finds no completed run — or nothing answerable in one — records
+that it did nothing and carries on.
 
 ## Findings-only, provably
 

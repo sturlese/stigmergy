@@ -639,9 +639,10 @@ class AdminService:
         return self._repair(row)
 
     def pages_delete(self, *, actor: str, paths, why: str) -> dict:
-        """Remove pages and rewrite every page that referred to them, through
-        `server.review.delete_and_record` — the SAME sequence the MCP door runs (ADR 043 D2), so
-        which door a person deleted from changes the ledger's `source` and nothing else.
+        """QUEUE a removal, through `server.review.queue_deletion` — the SAME seam the MCP door
+        runs, so which door a person removed from changes the row's `source` and nothing else. The
+        worker performs it (ADR 044 D3); this process writes nothing to the corpus and holds no git
+        credential.
 
         The MCP door requires an unrestricted identity; this one carries no such check, because
         `actor` is free text behind the operator token and **the console's authorization IS that
@@ -652,9 +653,8 @@ class AdminService:
         `admin_actions` before `ReviewError` becomes `AdminRefused` for the caller.
         """
         def _do(by: str) -> dict:
-            return server_review.delete_and_record(
-                self._conn, repo_url=self._server.librarian_repo_url, paths=paths, why=why,
-                actor=by, source=ADMIN_DOOR)
+            return server_review.queue_deletion(
+                self._conn, self._evidence, paths=paths, why=why, actor=by, source=ADMIN_DOOR)
 
         return self._mutate("pages.delete", actor,
                             {"paths": [str(p) for p in (paths or ())], "why_chars": len(why or "")},

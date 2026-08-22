@@ -439,6 +439,8 @@ def process_next(conn, deps: processing.Deps):
     try:
         if item.get("kind") == schema.MEETING:
             result = processing.process_meeting_item(conn, item, deps)
+        elif item.get("kind") == schema.DELETE:
+            result = processing.process_delete_item(conn, item, deps)
         else:
             result = processing.process_item(conn, item, deps)
     except StaleBaseError:
@@ -553,6 +555,10 @@ class Worker:
         # `views/` before it waits an interval, the same posture `sweep()` above already takes.
         self._view_sweep_due_at: float | None = None
         self._repair_due_at: float | None = None
+        # "Something this worker did changed the corpus since the last view sweep." Set by the
+        # loop after a filing and by the repair pass after an applied repair; read and CLEARED by
+        # the sweep it causes, so one piece of work makes the sweep due once rather than forever.
+        self._corpus_changed = False
 
     def _sweep_pause_reason(self) -> str:
         """Why the view sweep should yield between entities, or `""` — read at the moment it is
@@ -610,11 +616,13 @@ class Worker:
             # `stopping` guards the CLAIM, not just the exit: the contract is that the flags stop
             # the NEXT claim, and a break placed after the claim cannot deliver that — the loop
             # would file, commit and push one more item first.
+            worked = False
             while not self.releasing and not self.stopping:
                 outcome = (process_next(self.conn, self.deps)
                            if not (self.releasing or self.stopping) else None)
                 if outcome is not None:
                     processed += 1
+                    worked = True
                     item, result = outcome
                     self.on_output(f"#{item['id']} -> {result.status}")
                     # After EVERY item, not once after the loop: `StaleBaseError` escapes this
@@ -627,14 +635,29 @@ class Worker:
                     # The queue is empty — where maintenance belongs. On its OWN interval, not
                     # every idle tick: an empty queue polls every few seconds and a corpus parse
                     # per tick is not free.
-                    self.maybe_sweep_views()
+                    #
+                    # EXCEPT on the tick that follows work. A capture, a repair or a removal has
+                    # just changed the corpus, and `views/` is derived from it — waiting out a
+                    # whole interval would leave a view describing a page that is no longer there
+                    # (ADR 044 D3). "Something just changed the corpus" is the moment the rollups
+                    # are most likely to be wrong and the cheapest time to fix them.
+                    #
+                    # The repair pass runs FIRST for exactly that reason: it is one of the things
+                    # that changes the corpus, and a sweep asked before it would converge the tree
+                    # as it was a moment ago. `_corpus_changed` is what carries the fact across —
+                    # set by a filing here and by an applied repair inside the pass, read and
+                    # cleared by the sweep.
+                    self._corpus_changed = self._corpus_changed or worked
+                    worked = False
                     self.maybe_run_repairs()
+                    self.maybe_sweep_views(due_now=self._corpus_changed)
                     self._sleep(self.deps.settings.poll_interval_s)
             stats["processed"] = processed
         return processed
 
-    def maybe_sweep_views(self) -> bool:
-        """Run the convergence pass if its interval has elapsed. Returns whether it ran.
+    def maybe_sweep_views(self, *, due_now: bool = False) -> bool:
+        """Run the convergence pass if its interval has elapsed — or if `due_now`, which is the
+        first idle tick after this worker actually did something. Returns whether it ran.
 
         SKIPPED, never blocked: the idle branch returns immediately when the pass is not due, so
         `_sleep` keeps polling in slices and a signal is still observed promptly.
@@ -652,8 +675,9 @@ class Worker:
         if interval <= config.VIEW_SWEEP_OFF or self.stopping or self.releasing:
             return False
         now = self._now()
-        if self._view_sweep_due_at is not None and now < self._view_sweep_due_at:
+        if not due_now and self._view_sweep_due_at is not None and now < self._view_sweep_due_at:
             return False
+        self._corpus_changed = False
         # Scheduled BEFORE the pass runs, off the moment it STARTED: a fault would otherwise
         # re-attempt on every idle tick, and a pass slower than its own interval would owe another
         # the instant it finished.
@@ -691,8 +715,15 @@ class Worker:
             result = self._repair_pass(self.conn, self.deps,
                                        should_stop=self._sweep_pause_reason)
         except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
+            # A pass that died may still have PUSHED before it died — each repair commits on its
+            # own — so the corpus is marked changed either way. A sweep that had nothing to do
+            # costs a corpus parse; a view left describing a page a repair removed costs a wrong
+            # answer.
+            self._corpus_changed = True
             log.error("the periodic repair pass failed; the queue keeps draining", exc_info=True)
             return True
+        if result is not None and result.stats.get("applied"):
+            self._corpus_changed = True
         clause = repair_clause(result)
         if clause:
             self.on_output(clause)

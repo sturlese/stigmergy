@@ -3,9 +3,10 @@
 Real Postgres through `tests.testdb` (never a faked queue — the house rule), with exactly the two
 NETWORK edges faked: the GitHub gateway (a recording fake with the real gateway's four methods)
 and, where a digest posts, the digest suite's own fake-gateway posture (here: `gateway=None` plus
-env, since only dry-run runs in this suite). Since ADR 030, `entity_approve` reaches real git too
-(`entities.remote.decide_via_clone`) — `build_bare_knowledge_repo`/`require_gitleaks` below are this
-package's OWN, minimal fixture for that, never a faked commit (this repo's own testing doctrine).
+env, since only dry-run runs in this suite). No console mutation writes to the knowledge repo any
+more (ADR 044: registering an entity and removing pages both QUEUE, and the worker writes), so the
+real bare remote `build_bare_knowledge_repo` builds is here for one thing — publishing a registry
+snapshot the way the librarian's own commits do, never a hand-written one.
 
 The composed-branch fixtures drive the REAL `routes.compose` product over `httpx.ASGITransport`
 — real middleware order, real 404/401/421 paths, no uvicorn needed (nothing here exercises the
@@ -272,30 +273,16 @@ def entity_mint_repo(tmp_path) -> str:
     return build_bare_knowledge_repo(str(tmp_path / "git"))
 
 
-@pytest.fixture()
-def require_gitleaks():
-    """Skip on a laptop with no gitleaks on PATH; FAIL in CI (`$STIGMERGY_TEST_DSN` set) rather than
-    let a secrets gate silently never run — the same posture `tests/entities/conftest.py` and
-    `tests/server/conftest.py` each hold for their own `entity_approve`-adjacent git suites.
-    `mint.mint` always scans (`refuse_secrets`), so every test that mints for real needs this."""
-    from tests.librarian import support
-    if support.gitleaks_available():
-        return
-    if testdb.required():
-        pytest.fail("$STIGMERGY_TEST_DSN is set (CI mode) but gitleaks is not on PATH — refusing to "
-                   "skip the admin console's entity-mint suite silently. Install gitleaks BEFORE "
-                   "the test step (see .github/workflows/ci.yml).")
-    pytest.skip("gitleaks not on PATH (brew install gitleaks) — entity_approve's secrets gate "
-               "cannot be exercised without it")
-
-
 @pytest.fixture(autouse=True)
 def no_real_github_app(monkeypatch):
-    """`entity_approve` walks the same `entities.remote.decide_via_clone` door a `librarian_repo_url`
-    pointed at a real `https://` remote would authenticate through — same guard
-    `tests/server/conftest.py` applies to its own package: no test here may mint a real GitHub
-    installation token out of an operator's `.env`. Harmless for every OTHER admin suite in this
-    package, which never sets `librarian_repo_url` at all."""
+    """No test in this package may mint a real GitHub installation token out of an operator's
+    `.env` — the same structural guard `tests/librarian/conftest.py` and `tests/server/conftest.py`
+    each apply to their own package, and for the reason `tests.testdb` refuses a non-test DSN: the
+    property has to hold whatever an operator keeps in their environment.
+
+    Nothing here reaches the App today: every console mutation queues, and the fixtures' bare
+    remote is a local path. The guard stays because the accident it prevents — a `make test` that
+    pushes to a company's live knowledge repo — is not one to re-learn if a road back opens."""
     from stigmergy.librarian import githubapp
     for name in (githubapp.APP_ID_ENV, githubapp.INSTALLATION_ID_ENV,
                 githubapp.PRIVATE_KEY_ENV, githubapp.PRIVATE_KEY_FILE_ENV):

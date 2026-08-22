@@ -196,27 +196,27 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
 
     @mcp.tool()
     def brain_delete(paths: list[str], why: str) -> str:
-        """Remove pages from the brain and rewrite every page that referred to them — it happens
-        in this call rather than waiting on anybody.
+        """Remove pages from the brain and rewrite every page that referred to them. QUEUED here
+        and performed by the librarian, which is the only writer the corpus has.
 
         You are the person deciding it: name the pages (repo-relative, as `search_brain` and
         `read_page` give them) and say what makes them stale, in a sentence `git log` carries
-        afterwards. It requires an identity with no audience restriction: a removal touches the
-        pages you name AND every page that refers to them, which are computed here and may be
-        outside a narrower scope.
+        afterwards. Nobody is asked afterwards — what this call needs is an identity with no
+        audience restriction, because a removal touches the pages you name AND every page that
+        refers to them, a set nothing can know before the corpus is read.
 
-        What happens, in one pass: the pages are removed; every page that referred to one of them
-        has its `related:`/`sources:` entries dropped by code and its BODY rewritten by a model, so
-        a sentence that cited a removed page still reads and a callout that only existed because of
-        one is gone; the librarian's nine gates judge the result; and one App-authored commit lands
-        with your name in an `Approved-by` trailer. Nobody reads the rewritten prose before it lands,
-        so the response carries the per-page diff — that IS the reading — and `git revert` in the
-        knowledge repo is the undo. Nothing is written if any page cannot be reconciled: the
-        refusal names it.
+        What the librarian then does, in one pass: the pages are removed; every page that referred
+        to one of them has its `related:`/`sources:` entries dropped by code and its BODY rewritten
+        by a model, so a sentence that cited a removed page still reads and a callout that only
+        existed because of one is gone; the nine gates judge the result; and one App-authored commit
+        lands with your name in an `Approved-by` trailer. Nobody reads the rewritten prose before it
+        lands, so the per-page diff is stored on the capture — `brain_submissions` is where you read
+        it — and `git revert` in the knowledge repo is the undo. Nothing is written if any page
+        cannot be reconciled: the capture is refused and the reason names it.
 
-        An entity page is never deletable here — an identity is retired by removing what made it
-        one, not by deleting the page out from under the pages that anchor to it — nor is anything
-        outside the corpus.
+        An entity page is never deletable — an identity is retired by removing what made it one,
+        not by deleting the page out from under the pages that anchor to it — nor is anything
+        outside the corpus. Both are refused here, before anything is queued.
         """
         try:
             # The length checks live in `BrainService.delete_pages`, inside the audited seam.

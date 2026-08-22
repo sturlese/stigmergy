@@ -9,11 +9,6 @@ from dataclasses import dataclass
 from stigmergy.index import store
 from stigmergy.server import entity_aliases, identity
 
-# `librarian.config.REPO_URL_ENV`'s spelling for the same env var — the repo a server-driven
-# entity mint clones from. Spelled here rather than imported: `server` may never import
-# `stigmergy.librarian`, so the duplication is declared instead of discovered.
-LIBRARIAN_REPO_URL_ENV = "STIGMERGY_LIBRARIAN_REPO_URL"
-
 
 @dataclass(frozen=True)
 class Settings:
@@ -30,11 +25,6 @@ class Settings:
     # path needs it since ADR 044 retired the review lane; it stays because a local stdio server
     # started with `--repo` derives the ops-file paths below from it.
     knowledge_repo: str = ""
-    # `$STIGMERGY_LIBRARIAN_REPO_URL` — where `brain_delete` clones from to apply. A settings field
-    # rather than a raw env read inside `review.py`, so a test can point one at a local bare remote
-    # with no env monkeypatching. Empty = no server-driven write here, refused by name, never a
-    # silent no-op.
-    librarian_repo_url: str = ""
     dsn: str | None = None             # Postgres DSN (None -> store.dsn())
     embedder: str | None = None        # 'openai' | 'fake' | None (None = match the index's model)
     # the answer model policy: the same server process that serves the read tools also serves
@@ -54,14 +44,12 @@ class Settings:
         entity_registry_path = (getattr(args, "entity_registry", None)
                                or entity_aliases.default_path(repo))
         knowledge_repo = os.environ.get("STIGMERGY_KNOWLEDGE_REPO") or repo or ""
-        librarian_repo_url = os.environ.get(LIBRARIAN_REPO_URL_ENV, "")
 
         return cls(
             identity=args.identity or os.environ.get("STIGMERGY_IDENTITY"),
             identities_path=identities_path,
             entity_registry_path=entity_registry_path,
             knowledge_repo=knowledge_repo,
-            librarian_repo_url=librarian_repo_url,
             dsn=args.dsn or store.dsn(),
             embedder=args.embedder,
             llm=(getattr(args, "answer_llm", None) or os.environ.get("ANSWER_LLM", cls.llm)).lower(),

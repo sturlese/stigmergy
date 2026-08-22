@@ -238,9 +238,8 @@ def test_brain_delete_checks_every_path_it_was_handed_not_only_the_reason():
 
 def test_brain_delete_at_the_limit_reason_reaches_the_service():
     """The benign twin: an AT-limit reason is never rejected for its LENGTH — the call proceeds
-    into the service, whose first move is to touch the (poisoned) connection. The
-    `AssertionError` that comes back is `Poison`'s own, a genuinely different failure from the
-    length check's, so "passed the guard" can never be read as "was rejected by it"."""
+    into the door, which then refuses it for a completely different reason, so "passed the guard"
+    can never be read as "was rejected by it"."""
     from stigmergy.server.mcp_server import build_mcp
 
     svc = poisoned_service(audit=FakeAudit())
@@ -248,8 +247,9 @@ def test_brain_delete_at_the_limit_reason_reaches_the_service():
 
     out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md"], why="x" * MAX_ARG_CHARS)
     # Past the guard and into the door's own first refusal — a genuinely different sentence from
-    # the length check's, on a service with no knowledge-repo URL configured.
-    assert "$STIGMERGY_LIBRARIAN_REPO_URL" in out["error"]
+    # the length check's, on a service with no evidence store wired (a removal is QUEUED since ADR
+    # 044 D3, so the capture queue is what this door needs and what this service has not got).
+    assert "evidence store" in out["error"]
     assert "too long" not in out["error"]
 
 
@@ -263,7 +263,7 @@ def test_a_pydantic_shaped_value_error_is_still_reduced_to_a_class_name(monkeypa
         raise ValueError("SECRET-MARKER field path leaked from somewhere internal")
     # The door's own sequence, reached as a module attribute — patched here rather than raised
     # from a double, so the ValueError arrives from exactly where a real one would.
-    monkeypatch.setattr("stigmergy.server.review.delete_and_record", _unmarked)
+    monkeypatch.setattr("stigmergy.server.review.queue_deletion", _unmarked)
 
     # `poisoned_service` resolves no audiences, so it is unrestricted — the one identity kind
     # `brain_delete` authorizes (ADR 044 D3), which is what lets the call reach the door at all.

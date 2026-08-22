@@ -86,7 +86,10 @@ kill_timeout = "300s"
   # nothing here turns it on.
   STIGMERGY_ADMIN_CHANNELS_PATH = "/app/slack-channels.json"
 
-  # ── the worker group's configuration (inert for the server, which reads none of it) ──────────
+  # ── the worker group's configuration ─────────────────────────────────────────────────────────
+  # `[env]` is app-wide, so every process group sees these — and since ADR 044 D3 the server group
+  # READS none of them. It holds no git credential and writes nothing to the corpus: a removal is
+  # queued at `brain_delete` and performed by the worker, which is the one writer there is.
   # The knowledge repo it clones and files into — yours to set. https, not ssh: the App
   # authenticates over https through `stigmergy-librarian-credential`, and an ssh key would be a
   # second credential to manage.

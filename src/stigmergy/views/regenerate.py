@@ -31,7 +31,7 @@ from stigmergy.views.staleness import (
 
 JOB_NAME = "views"
 # The periodic convergence pass's own job name, so an operator reading `job_runs` can tell a
-# maintenance pass from an operator's `stigmergy-views regenerate` and from the post-meeting hook.
+# maintenance pass from the post-meeting hook.
 SWEEP_JOB_NAME = f"{JOB_NAME}-sweep"
 
 # The convergence pass's mutual-exclusion key. Two sweepers are a supported SHAPE (two workers on
@@ -412,9 +412,9 @@ async def sweep(repo: str, conn, *, registry: Registry, branch: str = "main", fo
     """The CONVERGENCE pass: `run` over the union population, off one corpus parse, ONE AT A TIME
     across the whole deployment.
 
-    The semantic wrapper both unattended and operator callers reach for — the librarian worker's
-    idle pass and `stigmergy-views regenerate --sweep` — so "which population converges `views/`"
-    is answered once, here, and never at a call site. Everything else (the commits, the `job_runs`
+    The ONE population that converges `views/`, answered here and never at a call site — the
+    worker's idle pass is its only caller now, and a second one would have to come through this
+    function rather than build a population of its own. Everything else (the commits, the `job_runs`
     row, the ceiling) is `run`'s, unchanged.
 
     It is state-based rather than triggered: it asks the corpus what is divergent NOW, so it covers

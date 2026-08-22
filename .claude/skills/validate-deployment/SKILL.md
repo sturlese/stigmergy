@@ -155,9 +155,13 @@ that file means *open*, the opposite of what it means everywhere else).
 
 ## Block 7 — the flows that stay on the CLI by design
 
-View regeneration (`stigmergy-views`) and the index builder (`stigmergy-index --check`). Run them
-yourself, with the environment mapped as above (note `stigmergy-views` also needs
-`OPENAI_API_KEY`, and the knowledge-repo commands run from that checkout with `--repo .`).
+The index builder (`stigmergy-index --check`) and the queue's own reads (`stigmergy-queue`). Run
+them yourself, with the environment mapped as above (the knowledge-repo commands run from that
+checkout with `--repo .`).
+
+View regeneration is NOT on this list any more: there is no command, and the worker's own sweep
+is the only road — it converges `views/` on its interval and on the first idle tick after it
+changes the corpus. To watch one happen, read `job_runs` for `views-sweep`.
 
 Entity registration is NOT on this list any more: it is a capture like every other write, from the
 console's **Register an entity** or from `brain_submit`, and the worker writes the page.

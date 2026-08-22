@@ -54,6 +54,10 @@ capture_queue row (claimed, fenced by `attempts`)
 Everything below the two columns is shared, byte for byte: one stamp, the same nine gates, the
 same "exactly one new page per capture" cross-check, one commit path.
 
+**That diagram is the ORDINARY flow, and two kinds leave it.** A `meeting` transcript becomes a
+page SET in one indivisible commit ([`meeting-distiller.md`](./meeting-distiller.md)), and a
+`delete` row is a person's own removal, performed rather than filed — the third flow, below.
+
 **There is one decision, and it is `file`** (`agent.DECISIONS`). Nothing parks, nothing is asked of
 anybody: a capture reaches `filed`, `rejected` or `failed` and nothing else.
 
@@ -84,11 +88,11 @@ nothing left for anyone to decide about one afterwards
 | Module | Does |
 |---|---|
 | `cli.py` | `stigmergy-librarian` — `once`, `run`, `status` |
-| `worker.py` | the loop, the fail-closed `startup_checks`, the claim sweep, signal handling, the per-`kind` routing, and the idle branch's periodic view sweep |
+| `worker.py` | the loop, the fail-closed `startup_checks`, the claim sweep, signal handling, the per-`kind` routing, and the idle branch's maintenance — the view sweep (on its interval, and on the first idle tick after an item reached a terminal state) and the repair pass |
 | `bootstrap.py` | `stigmergy-librarian-boot` — the DEPLOYED worker's entry point (clone, verify, exec) |
 | `gitcredential.py` | `stigmergy-librarian-credential` — the git credential helper the container fetches with |
 | `config.py` | every tunable, resolved once (`Settings.from_args`); the derived lease |
-| `processing.py` | one item, end to end: dedup → worktree → agent → edits → stamp → gates → commit. `process_item` is the ordinary flow; `process_meeting_item` is a genuine second flow (a page SET), and the only kind routed away from `process_item` |
+| `processing.py` | one item, end to end: dedup → worktree → agent → edits → stamp → gates → commit. `process_item` is the ordinary flow; `process_meeting_item` (a page SET) and `process_delete_item` (a removal, and the only flow with no agent in it) are the two kinds routed away from it |
 | `base_inputs.py` | the three repo-sourced inputs, read at the item's own base commit |
 | `filing_port.py` | the PORT — the two calls `processing.py` makes, the `AgentRun` envelope, the fault contract, the per-flow side-effect rules |
 | `agent.py` | the shared agent seam: the outcome contract, the fence, the prompts, the write-confinement rule, the system-prompt frame the brief is injected under, and the `backend` dispatch. Drives no model itself |
@@ -263,7 +267,7 @@ time, and model ids are configuration, never constants.
 | `STIGMERGY_LIBRARIAN_GATHER_EXCERPT_LINES` | 20 | how many lines of each candidate either of them shows |
 | `STIGMERGY_LIBRARIAN_TIMEOUT_S` | 300 | per-item wall clock (enforced by us), around the WHOLE run rather than one request — a different bound from the iteration budget above, and not a substitute for it |
 | `STIGMERGY_LIBRARIAN_DEDUP_WINDOW_S` | 600 | the retry-collapse window |
-| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | 900 | how often the idle loop converges `views/` to the corpus (see [`views.md`](./views.md)). It runs on the IDLE branch only — a busy queue is drained first — and the first pass is at the first idle tick, so a restart converges without waiting an interval out. `0` turns the pass off, leaving the post-meeting hook and `stigmergy-views regenerate` as the only roads; a NEGATIVE value is refused by name, because it would rebuild a worktree and re-parse the corpus on every poll |
+| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | 900 | how often the idle loop converges `views/` to the corpus (see [`views.md`](./views.md)). It runs on the IDLE branch only — a busy queue is drained first — and the first pass is at the first idle tick, so a restart converges without waiting an interval out. It is ALSO due on the first idle tick after this worker took a queued item to a terminal state, whatever the interval says — a filing, a meeting, a document or a removal has just moved the corpus a rollup is derived from. `0` turns the pass off entirely, leaving the post-meeting hook as the only road; a NEGATIVE value is refused by name, because it would rebuild a worktree and re-parse the corpus on every poll |
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | 10 | how many entities ONE pass may regenerate or remove — each is a model call, and nothing else bounds them. Entities that cost nothing (`unchanged`) do not consume it. What a pass defers is recorded in `job_runs.stats.skip_reasons` and picked up by the next one, since the population is recomputed from state every time. Below `1` is refused by name: every pass would defer everything |
 | (`--poll-interval`) | 3.0 | `run` only; must be > 0 |
 | (`--visibility-timeout`) | 900 | derived: `2 × timeout_s + 120s` gates `+ 180s` headroom — nothing converts before the first agent pass, since every kind arrives as text ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4) |
@@ -273,7 +277,7 @@ time, and model ids are configuration, never constants.
 | `STIGMERGY_LIBRARIAN_REFUSED_DIFF_DIR` | `<tmp>/stigmergy-refused-diffs` | where a refused diff's digest is written |
 | `STIGMERGY_LIBRARIAN_APP_ID` / `_INSTALLATION_ID` / `_PRIVATE_KEY` (or `_PRIVATE_KEY_FILE`) | — | the GitHub App; all or none |
 | `STIGMERGY_LIBRARIAN_APP_LOGIN` | `stigmergy-librarian` | your App's **slug**, which GitHub derives from its name and which in turn derives the identity every commit is authored by (`<id>+<slug>[bot]@users.noreply.github.com`). Deployment-specific: set it unless your App is called exactly the default. **Wrong is silent where it happens and loud one repository over** — the commits push fine and simply stop rendering as the App, while the knowledge repo's `check_trust_authorship.py` rejects all of them, since a check against forged authorship has to pin one identity. For the same reason, renaming an App that already has commits in the repo splits the history across two logins: leave a working App's name alone |
-| `STIGMERGY_LIBRARIAN_REPO_URL` (`--url`) | — | inside THIS package, `stigmergy-librarian-boot` only: where a DEPLOYED worker clones `$STIGMERGY_REPO` from, since a container starts with no checkout. The identical env var is also read independently by `stigmergy.server.settings`, for the two sequences that commit from the serving process — a repair apply and a page removal — see the runbook's [Removing pages](./operator-runbook.md#removing-pages) and [`repair.md`](./repair.md) |
+| `STIGMERGY_LIBRARIAN_REPO_URL` (`--url`) | — | `stigmergy-librarian-boot` only: where a DEPLOYED worker clones `$STIGMERGY_REPO` from, since a container starts with no checkout. It is read HERE and nowhere else. `stigmergy.server.settings` read the same name until [ADR 044](../decisions/044-the-capture-is-the-approval.md) D3, for the sequences that committed from the serving process; there are none left, and the field is deleted rather than left inert |
 | `STIGMERGY_LIBRARIAN_REQUIRE_REMOTE_BASE` | — | set to `1` by `stigmergy-librarian-boot`, never by hand: refuse an item whose base did not come from the remote. See below |
 
 **`STIGMERGY_LIBRARIAN_REQUIRE_REMOTE_BASE` — why the deployed worker refuses what a laptop
@@ -467,7 +471,7 @@ source attachment each widen it for the duration of one item, never for the proc
 **One row per WRITER.** Each non-creatable row has exactly one stamper: `entity` the identity
 writer (`librarian.identity` — an existing entity page is later EDITED by a repair, never created
 by one), `meeting` the distiller, `source` the provenance writer
-(`processing._build_source_parts`), `view` the regenerator (`stigmergy-views`). A person, team,
+(`processing._build_source_parts`), `view` the regenerator (`stigmergy.views`, reached from this worker's idle branch and from the post-meeting hook). A person, team,
 product, customer or project is an ENTITY, and an entity's own kind lives in the registry's `type`
 field (`person`, `organization`, `product`, `tool`, `repository`, `place`, `project` —
 `entities.generator.ENTITY_TYPES`, written on the page as `entity_type`). `project` is an entity
@@ -717,11 +721,73 @@ mutual overlap callout. These two are deterministic and run before the agent, ch
   filed, at that page.
 - **already filed**: the hash matches a page already in the repo → `rejected`, pointing at it.
 
+## The removal flow — the third kind, and the only one with no agent in it
+
+A `delete` row is not material. Its "material" is the REASON a person gave for removing pages, its
+`hints.delete_paths` are the pages themselves (one per line, parsed once by
+`capture.schema.delete_paths` so a door and this worker cannot disagree about what was asked for),
+and `process_delete_item` PERFORMS it rather than filing it. It is a queue kind rather than a table
+of its own because everything a capture gets, a removal needs too: a durable row that survives a
+restart, a lease, an attempt count, an audited submitter, and `brain_submissions` to read the
+outcome back from. What it is NOT is submittable — `brain_submit` refuses the kind by name
+(`schema.reject_unsubmittable_kind`), so the only doors that can queue one are the two that
+authorize it.
+
+**The judgment was made at the door and nothing here re-decides it.** Only an identity with no
+audience restriction may ask for a removal, because it touches every page that refers to the ones it
+names ([server.md](./server.md#the-capture-tools-the-write-path), ADR 044 D3). What runs here is the
+part that needs a checkout and a credential, and this process is the only one that has either
+([ADR 043](../decisions/043-a-sweep-is-written.md) for what the sweep does; ADR 044 D3 for why it
+happens here).
+
+The sequence, and why each step is where it is:
+
+1. **`_pre_agent`, unchanged.** The reason is text a person wrote, so it is scanned for secrets and
+   personal data exactly as any capture's material is — a token pasted into "why" would otherwise
+   land in a commit message, where no gate looks. That is why a `delete` row can end `rejected` with
+   `reason_code: secret` or `pii` and not only with this flow's own code.
+2. **Plan against THIS item's base**, in a fresh worktree: which pages go, and which pages refer to
+   them (`repair.deletion.plan`, then its byte ceiling). A refusal here is the person's to act on —
+   a page that is not there, a path the lane may not touch, a plan too large — so it is `rejected`,
+   never `failed`.
+3. **A model writes the pages that stay** (`repair.sweep.write_sync`), because dropping a reference
+   is a prose problem: a sentence that cited a removed page still has to read, and a callout that
+   only existed because of one has to go.
+4. **The nine gates judge the diff**, told the four facts only this caller knows: the lane the plan
+   spans, the paths it may REMOVE (`deletions_allowed`), the exact bytes it computed for every page
+   it rewrites (`expected_bytes`), and the machine-zone pages whose provenance stamps it only ever
+   drops a link from.
+5. **The knowledge repo's own linter runs over the WHOLE tree**, asked one question: does anything
+   still link to a page this sweep removed? `gate_contract` filters the linter's findings to the
+   pages a diff touched, which is right for every other flow and blind for this one — a deletion's
+   blast radius is the whole graph, and a page the sweep never planned is exactly where a missed
+   reference would sit. Scoped to the removed stems rather than vetoing on ANY error: a corpus that
+   already carries an unrelated contract error is not this removal's fault.
+6. **Commit and push**, through the same lease-fenced seam every filing uses.
+
+**What its report carries.** `report.filed_delete` puts `deleted` (the paths that stopped existing)
+and `rewritten` (`{path: unified diff}`) on the row, beside the commit and the model-call count.
+Both are needed: a reader who saw only the diffs would not know what went, and one who saw only the
+paths would not know what a model wrote in their name. Those diffs are page BYTES, so the surfaces
+that render them scope each path through `acl.visible()` and fence what survives, naming any path
+they withhold. A refusal is `report.rejected_unremovable` — `reason_code: unremovable`, carrying the
+deletion lane's own sentence verbatim, because every sentence that lane raises is written to be
+published.
+
+**The one thing that makes it different from every other commit here: it names a person.** Every
+filing and every repair this worker pushes is App-authored with no human in the message. A removal's
+commit carries `Approved-by: <the submitter>` — the trailer is half of how `git log` answers who
+authorized a change to the corpus, the App author line being the other half — because a removal is
+the one write in this system a human decided. It writes no `repairs` row: the capture row and its
+report ARE the record, which is why `brain_submissions` and the console's Captures page are where a
+removal is read back.
+
 ## The source attachment: a parameter, never a third flow
 
 Material with independent documentary existence — a Slack thread, the text of a document —
 files a verbatim `sources/` page beside the synthesis; conversational material leaves none. The
-SHAPE of that is a **parameter on the fast lane**, not a third flow.
+SHAPE of that is a **parameter on the fast lane**, not a flow of its own: the flows are the three
+above — ordinary, meeting, removal — and this is a switch on the first of them.
 
 `processing._source_attachment` is the on/off switch, decided per item; it returns `None` — the OFF
 position, where every `GateContext` the fast lane builds is byte-identical to the unattached one —
@@ -912,9 +978,9 @@ work through ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D5).
 
 ## A refusal carries a code, not only a sentence
 
-Every `rejected` report carries `reason_code` — the six values of
+Every `rejected` report carries `reason_code` — the seven values of
 `capture.schema.REJECTION_REASONS`: `secret`, `pii`, `duplicate`, `steering`, `steward`,
-`malformed-frontmatter` — beside the sentence a person reads. The sentence is for the human; the
+`malformed-frontmatter`, `unremovable` — beside the sentence a person reads. The sentence is for the human; the
 code is the only thing a **read path** may branch on. `steward` is LEGACY and nothing writes it: it
 was a person declining a parked row by hand, back when a capture could park, and it is kept because
 the rows carrying it must keep reading as a judgment call rather than a pattern match.
@@ -993,6 +1059,7 @@ refusal that somehow does is withheld rather than echoed.
 | Suite | Covers |
 |---|---|
 | `tests/librarian/test_processing_pg.py` | the whole filing path over real Postgres + real git |
+| `tests/librarian/test_delete_processing_pg.py` | the removal flow end to end over real Postgres + real git: the plan, the written sweep, the gates, the whole-tree dead-link check, the `Approved-by:` trailer, and each refusal beside its benign twin |
 | `tests/librarian/test_identity_unit.py` | `write_births` on a real worktree: what each declaration writes, and every honesty refusal beside its benign twin |
 | `tests/librarian/test_refusal_routing.py` | `_route_refusal`'s two destinations — which causes are the submitter's and which are the librarian's |
 | `tests/librarian/test_adversarial.py` | the permanent cat. 1 / cat. 5 / cat. 7 cases (`-k adversarial_cat5`) |

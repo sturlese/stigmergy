@@ -9,9 +9,13 @@ and the one deletion code can settle by lookup. Nobody is asked, before or after
 happens afterwards, on the console, from the diff the ledger stored.
 
 **A person's own deletion is the one repair a human decides.** It enters at an authenticated door —
-`brain_delete` over MCP, or the console's own Remove pages button — and lands in that same call:
-the judgment was already theirs, so what a second click would supply is an authentication, and it
-runs in the act ([ADR 043](../decisions/043-a-sweep-is-written.md)).
+`brain_delete` over MCP, or the console's own Remove pages button — where the judgment was already
+theirs, so what a second click would supply is an authentication and there is nobody left to ask
+([ADR 043](../decisions/043-a-sweep-is-written.md)). What the door does is QUEUE it, as a `delete`
+row in the capture queue; the librarian worker performs it, because since
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D3 the worker is the only process that
+writes to the knowledge repo at all. The reading still happens afterwards — on the capture, not on
+the ledger.
 
 Design record: [ADR 039](../decisions/039-governed-repair-loop.md), amended by
 [ADR 043](../decisions/043-a-sweep-is-written.md) and
@@ -44,9 +48,10 @@ Deletion is the one kind the covenant reads differently for, and deliberately:
 - **a model may never declare one, in any spelling** — the decision is a person's at an
   authenticated door, or, for exact-duplicate `sources/` pages where it is a lookup rather than a
   judgment, code's own;
-- **a person's own deletion is decided by the call that asked for it** (ADR 043 D2): they already
-  judged it, and asking them to approve their own request supplied an authentication, not a second
-  opinion.
+- **a person's own deletion is decided by the request that asked for it** (ADR 043 D2): they
+  already judged it, and asking them to approve their own request supplied an authentication, not a
+  second opinion. It is PERFORMED one flow over, in the worker, which is where the checkout and the
+  credential are (ADR 044 D3).
 
 And its pages are WRITTEN. Code drops the frontmatter entries that named a removed page — a lookup
 — and a model writes the bodies of the pages that referred to it, so a sentence that cited one
@@ -82,15 +87,20 @@ still reads and a callout that only existed because of one is gone (ADR 043 D1).
               └─ a `repairs` row EITHER WAY: applied, with the commit and the
                    DIFF that landed — or failed, with the sentence that refused it
 
-  a person, at an authenticated door — and there is nobody left to ask, so it lands in this call
-   brain_delete(paths, why)  ──>  an UNRESTRICTED identity, or the lane's refusal
-   (MCP / the console)       ──>  clone
+  a person, at an authenticated door — nobody is asked afterwards, and the WORKER performs it
+   brain_delete(paths, why)  ──>  an UNRESTRICTED identity, or the door's one refusal
+   (MCP / the console)       ──>  a `delete` row in capture_queue: the reason as its
+        │                            material, the pages in its hints, their name on it
+        v   the librarian worker claims it, in its own ephemeral worktree
+   processing.process_delete_item
+                             ──>  the secrets/PII scan over the reason, as for any capture
                              ──>  deletion.plan: the referring set, the frontmatter
-                             ──>  sweep.write: a model writes their bodies, one retry
-                             ──>  the bounds, run_gates(ALL_GATES), commit + push
+                             ──>  sweep.write_sync: a model writes their bodies, one retry
+                             ──>  the bounds, run_gates(ALL_GATES), the whole-tree
+                                    dead-link check, commit + push
                              ──>  trailer `Approved-by: <the person>`
-                             ──>  an `applied` row like any other, and the DIFF per
-                                    page back to the caller
+                             ──>  NO `repairs` row: the capture's own report carries the
+                                    paths that went and the DIFF per rewritten page
 ```
 
 ## The six checks a repair can answer
@@ -194,8 +204,9 @@ a file, so it carries two op shapes:
 ```
 
 - **Who may decide one.** A person, at `brain_delete(paths, why)` over MCP or the console's own
-  button — and nothing else, except the one deterministic road below. It is decided, written, gated
-  and pushed in that call, and what comes back is the commit and the per-page diff. **A model may
+  button — and nothing else, except the one deterministic road below. It is decided there and
+  QUEUED; the worker plans it, has a model write the pages that stay, gates it and pushes it, and
+  the commit and the per-page diff land on that capture's report. **A model may
   never declare a deletion in any spelling**: `validate_batch` drops such an op by name with a
   sentence saying the road does not exist. Judging that a page is stale is the judgment that is
   neither code's nor a model's.
@@ -231,18 +242,20 @@ a file, so it carries two op shapes:
   wrote may still refer to a going page. One retry carrying the reasons, then a refusal naming the
   page — **there is no deterministic fallback**, because two writers of one page are two
   implementations that can disagree about it.
-- **What the row records.** `target_paths` carries the FULL touched set, deleted and scrubbed
-  alike, so the ledger row, the console's history and the returned diff all name the whole blast
-  radius — the pages someone asked to remove are never the whole of what changed.
-  `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one stored plan may carry, shared with the
-  entity-alias kind because both hold whole pages.
+- **What gets recorded, and where.** On the automatic road the `repairs` row's `target_paths`
+  carries the FULL touched set, deleted and scrubbed alike, so the ledger row, the console's history
+  and the stored diff all name the whole blast radius — the pages a rule removed are never the whole
+  of what changed. A person's removal writes no `repairs` row at all: its record is the
+  `capture_queue` row it was queued as, whose report carries the paths that stopped existing and the
+  unified diff of every page rewritten. `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one plan
+  may carry on both roads, shared with the entity-alias kind because both hold whole pages.
 - **How the apply proves it.** A written sweep cannot be recomputed, so the recomputation ADR 039
   B4 ran is replaced by three questions asked of the tree the commit is made in (ADR 043 D3): the
   two bounds above, re-run there; the per-page base hash every scrub op carries, so a page that
   CHANGED since the plan was written refuses it; and a walk of the corpus for a page the plan never
-  rewrote that now refers to a going one — the latecomer B4's recomputation used to catch. On the
-  act road all three are a formality that costs one walk, because the plan was made in that very
-  clone. Then the gates are told `deletions_allowed={the pages that go}` and
+  rewrote that now refers to a going one — the latecomer B4's recomputation used to catch. On a
+  person's road all three are a formality that costs one walk, because the plan was made in the very
+  worktree the commit is made in. Then the gates are told `deletions_allowed={the pages that go}` and
   `expected_bytes={path: the planned file}`; for a planned path the additive proof is replaced by
   byte-equality, which is a STRONGER statement than it (additive says "nothing disappeared";
   byte-equality says "this is precisely the file that was planned"). Finally the knowledge repo's
@@ -366,38 +379,47 @@ What a stop prevents is picking up the next one.
 brain_delete(paths=["wiki/notes/Old Memo.md"], why="what makes it stale")
 ```
 
-One call, and everything happens inside it. **The authorization is one question, asked before
-anything is cloned: is the caller an UNRESTRICTED identity** — no audience restriction in
+One request, and nobody is asked afterwards. **The authorization is one question, asked before
+anything is queued: is the caller an UNRESTRICTED identity** — no audience restriction in
 `ops/identities.json` (ADR 044 D3). It is the one fact the server can settle at the door, and the
 right one: a removal touches the pages named AND every page that refers to them, a set nothing
-knows until the clone exists, so only a caller who can already see the whole corpus may ask for it.
-A scoped caller gets the lane's own anonymous refusal — *there is nothing for you to decide at that
-id* — which is therefore no oracle about a referrer either. The console's Remove pages button runs
-the same sequence under the console's own token.
+knows until the corpus is read, so only a caller who can already see the whole corpus may ask for
+it. A scoped caller gets the door's one anonymous refusal — *there is nothing for you to remove at
+those paths*, the same sentence whether or not the paths exist — which is therefore no oracle about
+a referrer either. The console's Remove pages button reaches the same seam under the console's own
+token.
 
-Then: `deletion.plan` for the frontmatter and the referring set, `sweep.write` for the bodies, the
-nine gates, one App-authored commit with the caller in an `Approved-by:` trailer, and a push that
-never rebases.
+What the door then writes is a `delete` row in `capture_queue`: the reason as its material, the
+pages in its hints, the caller as its `submitted_by`. **The worker performs it** (ADR 044 D3), in
+its own ephemeral worktree and with the only git credential the deployment has:
+`deletion.plan` for the frontmatter and the referring set, `sweep.write_sync` for the bodies, the
+nine gates, the knowledge repo's own linter over the whole tree, one App-authored commit with the
+caller in an `Approved-by:` trailer, and a push. The whole of it is
+`librarian.processing.process_delete_item` ([librarian.md](./librarian.md)).
 
-- **What comes back** is the commit, the pages removed, and a unified DIFF per rewritten page,
-  fenced as untrusted data because it carries both page bytes and fresh model output. Every diff
-  still passes `acl.visible()` for the caller — one place decides read access, whatever the caller
-  was allowed to remove — and a page this server's index does not carry is NAMED as withheld rather
-  than dropped, so nobody reads "nothing happened to it" into a silence. Nobody read that prose
-  before it landed — that is the trade ADR 043 D5 states rather than softens — so the diff is the
-  reading, and `git revert` in the knowledge repo is the undo.
-- **The row is `applied` like any other**, so the console's Repairs ledger and the metrics read one
-  table whichever door removed the pages. What says a HUMAN decided it is not a column but the
-  commit: `Approved-by:` names them, where a repair the worker derived carries
+- **What comes back at the door** is a queue acknowledgement naming the row — never a commit, because
+  there is not one yet.
+- **What comes back afterwards** is that row's report: the pages removed, and a unified DIFF per
+  rewritten page. It is read through `brain_submissions`, which fences each diff as untrusted data
+  (it carries both page bytes and fresh model output) and passes every path through
+  `acl.visible()` for whoever is reading — one place decides read access, whatever the caller was
+  allowed to remove — with a path it withholds NAMED rather than dropped, so nobody reads "nothing
+  happened to it" into a silence. Nobody read that prose before it landed — that is the trade ADR
+  043 D5 states rather than softens — so the diff is the reading, and `git revert` in the knowledge
+  repo is the undo.
+- **It writes no `repairs` row.** The capture row is the record, which is the one place a person's
+  removal and a worker-derived repair now part company: the ledger is what the worker derived, and a
+  removal is what a person asked for. What says a HUMAN decided it is not a column either way but
+  the commit: `Approved-by:` names them, where a repair the worker derived carries
   `Repair: <check> #<finding>` instead — the commit log never claims a decision nobody made.
-  `model_id` names the model that wrote the pages that stay, and is empty when nothing referred to
-  the removed ones; it never means a model chose the deletion, because for this kind none ever
-  does.
-- **What it refuses, before anything is cloned**: an audience-restricted caller, no page, no
-  reason, more than `MAX_DELETED_PAGES` (10) pages in one call, a reason matching a likely
-  secret. And after the clone: an entity page, a path outside the
-  corpus, a plan over `STIGMERGY_REPAIR_MAX_PLAN_BYTES`, a frontmatter reference the sweep cannot
-  rewrite, and a body the writer could not reconcile in one retry. Every one of those lands
+- **What it refuses at the door, with nothing queued**: an audience-restricted caller, no page, no
+  reason, more than `MAX_DELETED_PAGES` (10) pages in one request, an entity page, a path outside
+  the corpus.
+- **What the worker then refuses**, as a `rejected` capture carrying the reason: a page that is not
+  there, a plan over `STIGMERGY_REPAIR_MAX_PLAN_BYTES`, a frontmatter reference the sweep cannot
+  rewrite, a body the writer could not reconcile in one retry, a gate's veto, and a dead link the
+  sweep would have left behind. A reason matching a likely secret or a personal-data pattern is
+  refused there too, by the same scan every capture's material passes. Every one of those lands
   nothing at all.
 
 | Setting | Default | Effect |
@@ -566,8 +588,8 @@ The reading nobody gave a repair before it landed happens on the console's **Rep
 is the `repairs` ledger and nothing else: every outcome the deployment ever produced as a
 part-to-whole, the worker's own pass history as a run strip, and a bounded page of the most recent
 rows, newest first, filterable by outcome. **Nothing on that page decides anything** — its one
-write is Remove pages, which is the deletion a person performs and is a repair like any other in
-everything but its trailer.
+write is Remove pages, and that button no longer lands in the ledger it sits on: it queues a
+`delete` capture, and the reading of what the worker then did is on that capture.
 
 The three outcomes are three different readings rather than three colours of one:
 

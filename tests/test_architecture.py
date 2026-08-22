@@ -661,28 +661,19 @@ _WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS = (
 )
 
 
-# A SECOND declared exception, mirroring the webhook.py one above. `stigmergy.server.review` holds
-# the SYNCHRONOUS, human-triggered half of the write path — the repair verdict and the deletion
-# act. It needs ONE librarian primitive the async worker already owns, and reusing it is the whole
-# point: `gates.scan_secrets`, over the caller's own free-text reason, so a credential typed into
-# a deletion's `why` never reaches a commit message.
-# Importing `stigmergy.librarian.worker`/
-# `processing`/`agent` (the ASYNC queue-drain loop) would still be the layering violation this
-# test exists to catch — a slow agent run inside an MCP call — and
-# `test_server_review_never_imports_the_async_librarian_loop` below asserts that prose rule
-# directly rather than leaving it implicit in what the tuple happens not to list.
+# `server/review.py` used to hold a SECOND declared exception beside webhook.py's, for one
+# primitive: `gates.scan_secrets`, run over a deletion's free-text reason before that reason
+# reached a commit message. **It is gone, and the grant went with it.** Under ADR 044 D3 the
+# review lane writes nothing to the corpus — a removal is a queued `delete` row, and the worker
+# that claims it scans the row's material exactly as it scans every other kind's. So review.py
+# falls under the GENERIC rule below, which admits no librarian import at all: strictly stronger
+# than the allowlist it replaced, and one fewer door held open.
 #
-# The tuple is deliberately short, and it shrinks when the code does: a declared door nothing
-# walks through is exactly what the positive test below refuses to let stand.
-_REVIEW_ALLOWED_LIBRARIAN_SYMBOLS = (
-    "stigmergy.librarian.gates",        # scan_secrets over the caller's own free-text reason
-)
-
-# The prose rule the exception's own comment states but nothing used to assert: importing the
-# ASYNC queue-drain loop (`worker`/`processing`/`agent`) would be the layering violation this
-# whole boundary exists to catch, regardless of what `_REVIEW_ALLOWED_LIBRARIAN_SYMBOLS` says —
-# checked independently of the allowlist mechanism, so widening that tuple later can never
-# silently re-open this specific door.
+# The prose rule the exception's own comment used to state: importing the ASYNC queue-drain loop
+# (`worker`/`processing`/`agent`) would be the layering violation this whole boundary exists to
+# catch — a slow agent run inside a synchronous MCP call. It is asserted for EVERY server module,
+# independently of the allowlist mechanism, so widening `_WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS` later
+# can never silently re-open this specific door.
 _LIBRARIAN_ASYNC_LOOP_MODULES = ("worker", "processing", "agent")
 
 
@@ -692,9 +683,9 @@ def test_server_never_imports_the_librarian(path):
     QUEUE — a durable row — never through an import. If it ever calls into the worker directly,
     a slow agent run is happening inside an HTTP request.
 
-    `webhook.py` and `review.py` get their own declared exceptions above; every other server
-    module (including these two, for anything OUTSIDE their own declared symbols) is checked
-    exactly as before.
+    `webhook.py` gets the one declared exception above; every other server module — `review.py`
+    included, since ADR 044 D3 left it with no librarian primitive to reuse — is checked exactly
+    as before.
     """
     if path.name == "webhook.py":
         offenders = [f"{path.name}:{line} -> {sym}"
@@ -705,15 +696,6 @@ def test_server_never_imports_the_librarian(path):
             "webhook.py reached into stigmergy.librarian beyond the one declared exception "
             f"({_WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS}):\n  " + "\n  ".join(offenders))
         return
-    if path.name == "review.py":
-        offenders = [f"{path.name}:{line} -> {sym}"
-                     for sym, line in _imported_symbols(path)
-                     if sym.startswith("stigmergy.librarian")
-                     and sym not in _REVIEW_ALLOWED_LIBRARIAN_SYMBOLS]
-        assert not offenders, (
-            "server/review.py reached into stigmergy.librarian beyond its declared exceptions "
-            f"({_REVIEW_ALLOWED_LIBRARIAN_SYMBOLS}):\n  " + "\n  ".join(offenders))
-        return
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _all_module_imports(path)
                  if mod.startswith("stigmergy.librarian")]
@@ -722,39 +704,19 @@ def test_server_never_imports_the_librarian(path):
         "directly:\n  " + "\n  ".join(offenders))
 
 
-def test_review_actually_uses_its_declared_librarian_exception():
-    """Positive assertion, mirroring `test_webhook_actually_uses_its_one_declared_librarian_
-    exception` above — and a SUPERSET assertion rather than an ANY-intersection.
+@pytest.mark.parametrize("path", SERVER_SOURCES, ids=lambda p: p.name)
+def test_no_server_module_imports_the_async_librarian_loop(path):
+    """The rule the declared exceptions' own comments state in prose, asserted directly and for
+    EVERY server module: importing `stigmergy.librarian.worker`/`processing`/`agent` (the ASYNC
+    queue-drain loop) would put a slow agent run inside a synchronous MCP call, the exact layering
+    violation this whole boundary exists to catch. For a while nothing asserted it anywhere.
+    Adding one of these to a declared-exception tuple must fail THIS test, independent of whatever
+    `_WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS` happens to say at the time.
 
-    **This used to be `used & set(_REVIEW_ALLOWED_LIBRARIAN_SYMBOLS)`, truthy on ANY overlap, and
-    it passed with declared symbols that `review.py` imported nowhere.** A stale exception is
-    exactly the failure mode this test exists to catch, and an ANY-intersection cannot catch it:
-    it stays green as long as review.py uses AT LEAST ONE declared symbol, however many others sit
-    open and unused beside it. The correct shape is `declared ⊆ used`: every symbol the exception
-    grants must be exercised, or it is a door nothing needs held open "just in case"."""
-    canon_path = SERVER / "review.py"
-    if not canon_path.is_file():
-        pytest.skip("server/review.py not present yet")
-    used = {sym for sym, _ in _imported_symbols(canon_path)}
-    declared = set(_REVIEW_ALLOWED_LIBRARIAN_SYMBOLS)
-    unused = declared - used
-    assert not unused, (
-        f"server/review.py declares {sorted(unused)} in _REVIEW_ALLOWED_LIBRARIAN_SYMBOLS but never "
-        "imports them — remove the unused door(s) rather than leaving an exception nothing "
-        "exercises")
-
-
-@pytest.mark.parametrize("path", (SERVER / "webhook.py", SERVER / "review.py"), ids=lambda p: p.name)
-def test_server_review_never_imports_the_async_librarian_loop(path):
-    """The rule `_REVIEW_ALLOWED_LIBRARIAN_SYMBOLS`'s own comment states in prose, asserted
-    directly: importing `stigmergy.librarian.worker`/`processing`/`agent` (the ASYNC queue-drain
-    loop) would put a slow agent run inside a synchronous MCP call, the exact layering violation
-    this whole boundary exists to catch. For a while nothing asserted it anywhere. Adding one of
-    these to either declared-exception tuple above must fail THIS test, independent of whatever
-    `_REVIEW_ALLOWED_LIBRARIAN_SYMBOLS`/`_WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS` happen to say at the
-    time."""
-    if not path.is_file():
-        pytest.skip(f"{path.name} not present yet")
+    It was parametrized over webhook.py and review.py alone, back when those were the two modules
+    with a librarian grant. Review's grant is gone (ADR 044 D3), and narrowing this to the one
+    survivor would have made the rule look like a property of whichever file currently holds an
+    exception rather than of the layer."""
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _all_module_imports(path)
                  for loop_mod in _LIBRARIAN_ASYNC_LOOP_MODULES
@@ -800,53 +762,33 @@ def test_server_never_imports_entities_beyond_the_one_declared_review_lane_excep
 
 
 # The `stigmergy.repair` symbols the review lane reaches, mirroring the entities exception above
-# name for name, because it is the same shape of grant: a governed WRITE door plus the vocabulary
-# needed to read the queue and translate a refusal.
+# name for name. **It is down to one, and the one is inert:** `schema`, for the repair ledger's
+# DDL, which `service.build_service` runs at startup and this module re-exports because the table
+# is written on the other side of it.
 #
-# `remote` is the WHOLE module, imported and called as `repair_remote.apply_approved(...)` rather
-# than a bound `from ... import apply_approved`, for exactly the reason `entities.remote` is: a
-# test has to be able to monkeypatch the ATTRIBUTE. `store` is the pending-proposals read and the
-# two state transitions a verdict makes; `schema` is the status/kind vocabulary and the op record's
-# field names, so no spelling of `"pending"` or `"op"` is retyped here; `errors.RepairError` is the
-# one class this module translates into its own vocabulary, under the rule the whole module holds
-# — an exception type from below never leaves as itself, because `stigmergy.slack` is barred from
-# importing it and could only catch it generically.
+# ADR 044 D3 is what emptied the rest. This lane used to enter the write path itself for the one
+# repair a person decides: `apply` (the governed door that commits and pushes), `deletion` (code's
+# half of a sweep), `sweep` (the writer, the ONE model road the server entered at all), `brief`
+# and `settings.RepairSettings`. A removal is now a queued row the worker performs, so the serving
+# process holds no checkout, no credential and no model road — and every one of those grants was
+# pruned rather than kept "in case". The list shrinks when the code does; that is the whole
+# discipline, and `test_review_actually_uses_its_declared_repair_exception` is what enforces it.
 #
-# What is NOT here is the point of the list: `stigmergy.repair.proposer` and
-# `stigmergy.repair.cli`. The proposer loads a model stack, and the review lane runs inside the MCP
-# server process — a synchronous MCP call must never carry a model run, which is the same layering
+# What must stay absent: `stigmergy.repair.proposer`, `stigmergy.repair.sweep` and
+# `stigmergy.repair.run`. Each loads a model stack, and this module is imported by every process
+# that serves an MCP call — a synchronous MCP call must never carry a model run, the same layering
 # rule `_LIBRARIAN_ASYNC_LOOP_MODULES` states one exception over. The package's own suite pins the
 # other half (`test_only_the_proposer_loads_a_model_stack`), so the two halves fail independently.
-# ADR 043's act road adds four, and every one is reached from `delete_pages` alone: `deletion`
-# (the plan and its readers — code's half of a sweep), `sweep` (the writer, the ONE model road the
-# server enters at all), `brief` (the skill the writer is briefed with, read from the clone), and
-# `settings.RepairSettings` (the model and the plan ceiling, read
-# through the one function in that package that consults the environment). The last two are
-# imported INSIDE the function, exactly as `mcp_server.ask` imports the answer layer inside its
-# tool: `sweep` loads a model stack, and this module is imported by every process that serves an
-# MCP call. `_imported_symbols` walks function bodies too, so the grant is still declared here and
-# still pruned — what moves is the import-time weight, not the edge.
-#
-# `brief` is imported BY NAME rather than reached as `sweep.brief`, and the difference is this
-# list: an attribute hop through an allowed module lands on an undeclared one invisibly, since
-# `_imported_symbols` reads imports and not attribute access. A grant that can be side-stepped by
-# spelling is not a grant.
 _REVIEW_ALLOWED_REPAIR_SYMBOLS = (
-    "stigmergy.repair.apply",
     "stigmergy.repair.schema",
-    "stigmergy.repair.errors.RepairError",
-    "stigmergy.repair.deletion",
-    "stigmergy.repair.sweep",
-    "stigmergy.repair.brief",
-    "stigmergy.repair.settings.RepairSettings",
 )
 
 
 @pytest.mark.parametrize("path", SERVER_SOURCES, ids=lambda p: p.name)
 def test_server_never_imports_repair_beyond_the_one_declared_review_lane_exception(path):
-    """The apply half of the repair loop is reached from `server/review.py` and nowhere else in the
-    server, and only for the ONE repair a person performs (a deletion). Deriving repairs belongs to
-    the worker's idle pass, not to a process answering MCP calls."""
+    """The repair loop is the WORKER's, and the server's whole reach into it is a table's DDL.
+    Deriving repairs, writing a sweep and applying one all belong to the process that holds the
+    checkout and the credential (ADR 044 D3), never to one answering MCP calls."""
     if path.name == "review.py":
         offenders = [f"{path.name}:{line} -> {sym}"
                      for sym, line in _imported_symbols(path)
@@ -860,8 +802,8 @@ def test_server_never_imports_repair_beyond_the_one_declared_review_lane_excepti
                  for mod, line in _all_module_imports(path)
                  if mod.startswith("stigmergy.repair")]
     assert not offenders, (
-        "the server imported stigmergy.repair outside the review lane — the apply door is entered "
-        "from the one module that decides who may approve:\n  " + "\n  ".join(offenders))
+        "the server imported stigmergy.repair outside the review lane — the repair loop belongs "
+        "to the worker, and the server's one grant is a table's DDL:\n  " + "\n  ".join(offenders))
 
 
 def test_review_actually_uses_its_declared_repair_exception():
@@ -1554,13 +1496,6 @@ _VIEWS_LIBRARY_ALLOWED_PREFIXES = (
     #   `views.synthesis` runs inside the librarian worker, whose boot STRIPS `$OPENAI_API_KEY`
     #   on purpose, so a view agent inheriting `CLEAN_MODEL` could only ever raise there (#90).
 )
-# cli.py's additional, documented reach: the one DB-connection seam (mirroring capture.cli /
-# entities.cli) and the repo-path default `librarian.config` already exports.
-_VIEWS_CLI_EXTRA_ALLOWED_PREFIXES = _VIEWS_LIBRARY_ALLOWED_PREFIXES + (
-    "stigmergy.index.store",
-    "stigmergy.librarian.config",
-)
-
 
 def test_views_sources_found():
     assert VIEWS_SOURCES, "no stigmergy.views modules found — the layout moved and this went blind"
@@ -1582,9 +1517,11 @@ def test_views_never_imports_server_answer_capture_or_entities(path):
         "stigmergy.views reached outside its documented edge:\n  " + "\n  ".join(offenders))
 
 
-@pytest.mark.parametrize("path", [p for p in VIEWS_SOURCES if p.name != "cli.py"],
-                        ids=lambda p: p.name)
+@pytest.mark.parametrize("path", VIEWS_SOURCES, ids=lambda p: p.name)
 def test_views_library_modules_stay_within_the_documented_edge(path):
+    """Every module in the package, with no exception left. `cli.py` used to be excluded and
+    checked against a wider grant of its own (a DB connection and the repo-path default): there is
+    no `stigmergy-views` entry point any more, so there is no CLI and no second edge to state."""
     offenders = [f"{path.name}:{line} -> {sym}"
                  for sym, line in _imported_symbols(path)
                  if sym.startswith("stigmergy.")
@@ -1592,16 +1529,6 @@ def test_views_library_modules_stay_within_the_documented_edge(path):
     assert not offenders, (
         "a stigmergy.views library module imported outside its documented edge:\n  "
         + "\n  ".join(offenders))
-
-
-def test_views_cli_stays_within_the_documented_edge_plus_its_own_db_connection():
-    path = VIEWS / "cli.py"
-    offenders = [f"{path.name}:{line} -> {sym}"
-                 for sym, line in _imported_symbols(path)
-                 if sym.startswith("stigmergy.")
-                 and not sym.startswith(_VIEWS_CLI_EXTRA_ALLOWED_PREFIXES)]
-    assert not offenders, (
-        "stigmergy.views.cli imported outside its documented edge:\n  " + "\n  ".join(offenders))
 
 
 @pytest.mark.parametrize("path", LIBRARIAN_SOURCES, ids=lambda p: p.name)
@@ -2891,6 +2818,59 @@ def test_the_mint_sequence_caller_pin_can_go_red_in_both_directions(tmp_path):
     assert observed() == ["handlers.py"] != declared
 
 
+# ── ADR 044 D3: the serving process holds no write path at all ─────────────────────────────────
+# The two symbols that WRITE to the knowledge repo, named directly rather than left implicit in
+# what the per-package allowlists above happen not to list. `librarian.gitcmd` is the worktree,
+# commit and push primitive; `repair.apply` is the governed door that performs ops, gates them and
+# pushes. Both used to be reachable from `server/review.py`, which cloned and committed inside an
+# MCP call; ADR 044 D3 made the worker the ONE writer, and this is the pin that says so.
+#
+# Checked INDEPENDENTLY of `_WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS` and `_REVIEW_ALLOWED_REPAIR_SYMBOLS`,
+# for the reason `test_no_server_module_imports_the_async_librarian_loop` is: a widened allowlist
+# must never be able to re-open this specific door quietly.
+#
+# `librarian.githubapp` is deliberately NOT in this tuple, and the omission is the interesting one:
+# `webhook.py` mints an installation token to READ file contents for the incremental index upsert,
+# under its own declared, pruned grant above. What that credential must never be used for here is
+# a push, and a push needs `gitcmd` — which is why the write primitive is what this pins, rather
+# than the credential the read path legitimately holds.
+_SERVER_FORBIDDEN_WRITE_SYMBOLS = ("stigmergy.librarian.gitcmd", "stigmergy.repair.apply")
+
+
+@pytest.mark.parametrize("path", SERVER_SOURCES, ids=lambda p: p.name)
+def test_no_server_module_reaches_the_knowledge_repo_write_path(path):
+    """There is ONE writer for the corpus and it is the worker. A server module that imported
+    either symbol would be a second one, holding a git credential inside a process that answers
+    MCP calls — and the removal it would perform is exactly the act this phase moved onto the
+    queue, where it gets a durable row, a lease and an attempt count for free."""
+    offenders = [f"{path.name}:{line} -> {sym}"
+                 for sym, line in _imported_symbols(path)
+                 if sym in _SERVER_FORBIDDEN_WRITE_SYMBOLS]
+    assert not offenders, (
+        "a server module reached the knowledge repo's write path — the worker is the one writer "
+        "(ADR 044 D3), and the server hands it work as a queue row:\n  " + "\n  ".join(offenders))
+
+
+def test_the_write_path_pin_can_go_red(tmp_path):
+    """**The intruder, over the real predicate.** A pin over a set of symbols nothing imports is
+    green whatever it is spelled, including when it is spelled wrong — so the mechanism is run
+    against a module that really does import one, and against a module that only names it in prose.
+    """
+    intruder = tmp_path / "review.py"
+    prose_only = tmp_path / "service.py"
+    intruder.write_text("from stigmergy.librarian import gitcmd\n\n"
+                        "def delete(paths):\n    return gitcmd.push(paths)\n", encoding="utf-8")
+    prose_only.write_text(
+        '"""The worker commits through `librarian.gitcmd`; this module queues a row and stops."""\n'
+        "\ndef delete(paths):\n    return {'status': 'queued'}\n", encoding="utf-8")
+
+    def offenders(path):
+        return [sym for sym, _ in _imported_symbols(path) if sym in _SERVER_FORBIDDEN_WRITE_SYMBOLS]
+
+    assert offenders(intruder) == ["stigmergy.librarian.gitcmd"]
+    assert offenders(prose_only) == [], "prose about the write path is not an import"
+
+
 # ── the repair apply, and who may enter it ─────────────────────────────────────────────────────
 # The same guarantee the registration sequence gets above, for the act that writes to the corpus
 # with the librarian App's credential: `apply_and_record` performs the ops, gates them, commits,
@@ -2898,10 +2878,11 @@ def test_the_mint_sequence_caller_pin_can_go_red_in_both_directions(tmp_path):
 # argument, and under ADR 044 there is no approval anywhere behind it — so the CALLER SET is the
 # whole of what says who may write to the knowledge repo this way.
 #
-# Two callers, and they are different in kind. The worker's pass derives a repair and applies it
-# with nobody's name on it. The deletion door applies a repair a PERSON asked for, in that person's
-# name, having already required an unrestricted identity. Anything else appearing here is a third
-# way to write to the corpus.
+# ONE caller: the worker's own pass, deriving a repair and applying it with nobody's name on it.
+# It used to be two — the deletion door applied a repair a PERSON asked for, in that person's name,
+# from inside the MCP process. ADR 044 D3 moved that act to the worker as a `delete` capture, which
+# rides `librarian/processing.py` and this door not at all. Anything reappearing here is a second
+# way to write to the corpus, and it would arrive with whatever authorization its own surface has.
 #
 # `_names_the_mint_sequence`'s predicate is reused verbatim for both scans below: it is the same
 # question (does this module CALL or IMPORT this name, as code rather than as prose), and a second
@@ -2914,7 +2895,7 @@ _REPAIR_APPLY_PRIMITIVE = "apply_in_tree"
 
 # `repair/apply.py` DEFINES the door and never calls it (an `ast.FunctionDef` carries its name as a
 # plain string, so a definition is not a reference).
-_REPAIR_APPLY_DOOR_CALLERS = ("repair/run.py", "server/review.py")
+_REPAIR_APPLY_DOOR_CALLERS = ("repair/run.py",)
 # `repair/apply.py` defines the primitive AND calls it, from `apply_and_record` and from
 # `apply_via_clone` — the ONE module allowed to, because the door is what records the outcome
 # around it.
@@ -2932,6 +2913,47 @@ def _names_symbol(path: pathlib.Path, symbol: str) -> bool:
         for node in ast.walk(tree))
 
 
+# ── ADR 044 D3: who may QUEUE a removal ────────────────────────────────────────────────────────
+# The same guarantee the mint sequence gets above, for the other sequence in `server/review.py` that
+# takes NO authorization argument. `queue_deletion` lands a durable `delete` row with a person's
+# name on it, and the worker performs whatever `delete` row it claims — the row is the whole of
+# what it knows. So the CALLER SET is the whole of what says who may remove pages from the
+# knowledge repo.
+#
+# Two callers, and each has ALREADY decided authorization for itself before calling in: the MCP
+# door by requiring an UNRESTRICTED identity (a removal touches every page that refers to the ones
+# named, so "may this caller see the whole corpus" is the only question answerable before a tree is
+# read), the console by sitting behind its operator token. A third entry is a surface removing
+# pages under whatever authorization it happens to have — including none.
+#
+# `server/review.py` DEFINES the sequence and is deliberately absent: an `ast.FunctionDef` carries
+# its name as a plain string, so the definition is not a reference, and a review lane that started
+# calling its own sequence would show up here as the new door it is. `capture/cli.py` and the Slack
+# transport are absent and must stay absent — neither has an identity it may attribute a removal to.
+_QUEUE_DELETION_SEQUENCE = "queue_deletion"
+_QUEUE_DELETION_CALLERS = ("admin/service.py", "server/service.py")
+
+
+def test_the_removal_queueing_sequence_is_entered_from_exactly_the_authorizing_surfaces():
+    """Set EQUALITY, both directions, this file's house rule for every caller pin. Through
+    `_names_symbol`, so prose about the sequence is not counted as a call — and that predicate's
+    own ability to go red on an intruder AND on a stale grant is proven over synthetic modules by
+    `test_the_repair_apply_caller_pin_can_go_red_in_both_directions` below, rather than by a third
+    copy of the same dance here.
+
+    A NEW entry queues a removal through a function that decides nothing about who may. A MISSING
+    entry means a declared door stopped calling the shared sequence: check it did not grow its own
+    copy of the queueing, which is the drift having one copy removes. Equality also means renaming
+    the function empties the scan and goes red rather than leaving a permanently-green test."""
+    callers = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES
+                     if _names_symbol(p, _QUEUE_DELETION_SEQUENCE))
+    assert callers == sorted(_QUEUE_DELETION_CALLERS), (
+        f"the removal queueing sequence is reached from {callers}, not from "
+        f"{sorted(_QUEUE_DELETION_CALLERS)}. It carries no authorization of its own (ADR 044 D3) — "
+        "a new surface either decides who may before calling in, as the MCP door does by requiring "
+        "an unrestricted identity, or states here why it decides authorization for itself")
+
+
 @pytest.mark.parametrize("symbol,declared", [
     (_REPAIR_APPLY_DOOR, _REPAIR_APPLY_DOOR_CALLERS),
     (_REPAIR_APPLY_PRIMITIVE, _REPAIR_APPLY_PRIMITIVE_CALLERS),
@@ -2939,7 +2961,7 @@ def _names_symbol(path: pathlib.Path, symbol: str) -> bool:
 def test_the_governed_repair_apply_is_entered_from_exactly_the_declared_surfaces(symbol, declared):
     """Set EQUALITY, both directions, this file's house rule for every caller pin.
 
-    A NEW entry is a third way to write to the knowledge repo with the App's credential, and it
+    A NEW entry is a second way to write to the knowledge repo with the App's credential, and it
     would arrive with whatever authorization its own surface happens to have. A MISSING entry means
     a declared door stopped calling the shared door: check it did not grow its own copy, which is
     the defect having one copy removes. Equality also means renaming either function empties the
@@ -2947,8 +2969,8 @@ def test_the_governed_repair_apply_is_entered_from_exactly_the_declared_surfaces
     callers = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES if _names_symbol(p, symbol))
     assert callers == sorted(declared), (
         f"{symbol} is reached from {callers}, not from {sorted(declared)}. The repair apply takes "
-        "no authorization argument — a new surface either resolves an identity before calling in, "
-        "as the deletion door does, or states here why it needs none")
+        "no authorization argument — a new surface either resolves an identity before calling in "
+        "or states here why it decides authorization for itself")
 
 
 def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
@@ -3013,16 +3035,26 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
 # `Name` the shared walker sees. READING a field (`ctx.deletions_allowed`, inside the gate itself)
 # is not granting it, and the predicate deliberately does not count it.
 #
-# `repair/apply.py` builds the GateContext for an approved repair and names exactly what that one
-# proposal covers. The librarian's own flows tell TWO of these — for one thing, and it is the
-# claim: a capture that proposes an identity writes the regenerated registry beside its page, so
+# `repair/apply.py` builds the GateContext for a derived repair and names exactly what that one
+# proposal covers. `librarian/processing.py` tells FOUR of the five, across its two flows, and each
+# is a different claim.
+#
+# A CAPTURE that proposes an identity writes the regenerated registry beside its page, so
 # `derived_files` names that one JSON file and `expected_bytes` carries the bytes the generator
-# produced (`processing._declare_births`, over `identity.write_births`' outcome). A capture
-# still permits no body rewrite and no deletion: "the librarian never deletes a file" stays
-# literally true, and the additive proof still faces every page.
+# produced (`processing._declare_births`, over `identity.write_births`' outcome), and
+# `provenance_pages` names the source pages that capture just filed. A capture still permits no
+# body rewrite and no deletion.
+#
+# `deletions_allowed` is the removal flow's, and it is new (ADR 044 D3): a `delete` row is a
+# person's own removal, performed by the ONE writer, and `gate_zone`'s oldest veto has to stand
+# aside for exactly the paths that row named — derived from the ops just performed
+# (`processing._commit_delete`), never from the row's hints. **"The librarian never deletes a file"
+# stopped being literally true when the act moved here**, and this entry is where that reads. What
+# is still true, and what the entry preserves, is that no capture can: the grant is scoped to the
+# ops of a plan, so a filing whose agent asked for a deletion still meets the veto.
 _TOLD_PERMISSIONS = {
     "body_rewrite_allowed": ("repair/apply.py",),
-    "deletions_allowed": ("repair/apply.py",),
+    "deletions_allowed": ("librarian/processing.py", "repair/apply.py"),
     "expected_bytes": ("librarian/processing.py", "repair/apply.py"),
     "derived_files": ("librarian/processing.py", "repair/apply.py"),
     # The one with two granters, and both are the same claim: these fields were stamped by the
@@ -3182,7 +3214,6 @@ _ALLOW_LISTS = {
     "_GARDENER_ALLOWED_PREFIXES": _GARDENER_ALLOWED_PREFIXES,
     "_GARDENER_CLI_EXTRA_ALLOWED_PREFIXES": _GARDENER_CLI_EXTRA_ALLOWED_PREFIXES,
     "_REPAIR_ALLOWED_PREFIXES": _REPAIR_ALLOWED_PREFIXES,
-    "_VIEWS_CLI_EXTRA_ALLOWED_PREFIXES": _VIEWS_CLI_EXTRA_ALLOWED_PREFIXES,
     "_VIEWS_LIBRARY_ALLOWED_PREFIXES": _VIEWS_LIBRARY_ALLOWED_PREFIXES,
 }
 

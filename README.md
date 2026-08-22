@@ -125,8 +125,10 @@ Two flows sit on top: the **meeting distiller** (a submitted transcript becomes 
 meeting page and one decision page per decision, each anchored) and **views** (per-entity rollups
 whose ACL is the intersection of their members'). A view is derived, so it can go stale whatever
 wrote the page — the worker fixes that by CONVERGENCE rather than by a hook per door: whenever its
-queue is idle and its interval has elapsed, it asks the corpus which views diverge and regenerates
-those, bounded by a per-pass ceiling that says what it deferred.
+queue is idle, it asks the corpus which views diverge and regenerates those, bounded by a per-pass
+ceiling that says what it deferred. It is due on its own interval AND on the first idle tick after
+the worker took a queued item to a terminal state, so a rollup never outlives the pages a removal
+just deleted.
 
 ### The read path
 
@@ -264,15 +266,15 @@ beside it in the source; the bare module at the top is small enough to be its ow
 | `text.py` | the bottom of the stack: the hardened UNTRUSTED-DATA fence, sanitize, clamp, and the one parser for a capture's `<path>@<sha>` result ref |
 | `kernel/` | a LIBRARY that imports nothing from this project: the model dispatch, the page contract's cap + scalar emitter, frontmatter parsing, the ACL resolver, and the entity registry |
 | `index/` | the hybrid derived index: postgres+pgvector, reciprocal rank fusion, contract ranking |
-| `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook, entity navigation, and the one door that writes to the corpus from this process: a person's own page removal |
+| `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook and entity navigation. It writes nothing to the knowledge repo: even a person's own page removal is queued here and performed by the librarian |
 | `answer/` | the answering agent + deterministic verifier: powers the `ask` tool |
 | `capture/` | the durable capture queue: submit, claim, the evidence plane, retention — ONE vocabulary of four kinds (`raw`, `page`, `meeting`, `document`) for every door; and `stigmergy-queue`, the operator's view of the write path without a SQL client |
 | `librarian/` | the filing engine: the worker, the agent, the nine gates, the commit; the identities it writes into the same commit as the page, the deployed worker, the meeting flow |
 | `entities/` | a LIBRARY, and nothing else: the rules of entity birth (the name gate, the collision fold, the page render the librarian runs) and the registry generator that derives `ops/entity-registry.json` from `wiki/entities/`. It has no CLI and no decision door — an entity is introduced by a capture, and the librarian is the one caller |
 | `slack/` | the Slack transport: 🧠 capture, `@brain` Q&A, and the push-channel poller that files what a channel publishes |
-| `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis |
+| `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis. A LIBRARY with no CLI and no entry point — the librarian worker is its only caller, on the idle branch and right after a meeting files |
 | `gardener/` | corpus health on demand: ten deterministic checks + three bounded model passes (an editorial sweep over changed-plus-sampled pages, every entity page judged for a body that says nothing, and every registered entity judged against the others for a second identity of the same thing), findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
-| `repair/` | the repair loop, unattended: for a gardener finding an agent DECLARES a repair — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and the worker applies it on its idle branch, one commit per repair, having validated it twice and put the resulting diff through the same nine gates. Nobody approves it: what bounds it is a permanent memory of what has already been repaired, two ceilings per pass, and the gates; what replaces the reading is the stored diff. A person REMOVES pages at `brain_delete` — the one repair a human decides, applied in the same call, with the pages that referred to them rewritten by a model and the diff handed back |
+| `repair/` | the repair loop, unattended: for a gardener finding an agent DECLARES a repair — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and the worker applies it on its idle branch, one commit per repair, having validated it twice and put the resulting diff through the same nine gates. Nobody approves it: what bounds it is a permanent memory of what has already been repaired, two ceilings per pass, and the gates; what replaces the reading is the stored diff. A person REMOVES pages at `brain_delete` — the one repair a human decides, queued there and performed by the same worker, with the pages that referred to them rewritten by a model and the diff carried on the capture |
 | `digest/` | the week's activity in one Slack post |
 | `admin/` | the ops console: `/admin` on the same app process group — ten pages: the dashboard, the read-only capture queue, the entities desk where the registry is browsed and an entity can be registered by saying what it is (the name checked against the registry as you type), the repair ledger and page removal, cron remote-control, gardener/digest/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |
 

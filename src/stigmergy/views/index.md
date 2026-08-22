@@ -11,10 +11,12 @@ or the backlinks it is allowed to cite. This package is the ONLY writer of
 **Staleness is fixed by CONVERGENCE, not by a trigger per door.** The librarian worker runs
 `regenerate.sweep` periodically on its idle branch: it asks the corpus which entities diverge from
 `views/` right now and fixes those, so a view is never stale whatever wrote the page — an ordinary
-capture, a 🧠 gesture, a submitted meeting or document, an applied repair, an entity born, a hand
-edit. Three entry points, one guarantee and two latency optimisations on top of it: the periodic sweep (the
-guarantee), the post-meeting hook in `librarian.processing` (best-effort, same run as the filing),
-and `stigmergy-views regenerate` (the operator's).
+capture, a 🧠 gesture, a submitted meeting or document, an applied repair, a page REMOVED, an entity
+born, a hand edit. Two entry points, one guarantee and one latency optimisation on top of it: the
+worker's sweep (the guarantee) and the post-meeting hook in `librarian.processing` (best-effort,
+same run as the filing). There is no operator command — ADR 044 D3 removed it — and what replaces
+it is that the sweep also runs on the first idle tick AFTER the worker did something, so the wait
+is a poll interval rather than a sweep interval.
 
 A view's `acl` is the **INTERSECTION** of its members' audiences (`kernel.acl.view_acl`), never
 their union — a rollup must not widen access to what it summarizes. Backlinks are a governed but
@@ -29,7 +31,6 @@ agent's budget (`UsageLimitExceeded`).
 
 | Module | What it is |
 |---|---|
-| `cli.py` | `stigmergy-views regenerate` with a required target (`--entity` / `--stale` / `--all` / `--sweep`) plus `--force` |
 | `regenerate.py` | Orchestration: `regenerate_entity` (one entity, one commit), `run` (the shared batch base — one `job_runs` row per batch, the per-run ceiling, the cooperative `should_stop`) and `sweep` (the semantic wrapper: `run` over the union population off one corpus parse, under the deployment-wide advisory lock `VIEW_SWEEP_LOCK_KEY`). Owns `RegenOutcome`, `RunResult` and the whole `skip_reasons` vocabulary, because nothing here is deferred or skipped silently: `RUN_CEILING_REASON`, `STOPPED_EARLY_REASON` and `BRANCH_MOVED_REASON` (the three ways a batch stops early), `UNUSABLE_ID_REASON` (an id no view file can be named from) and `SWEEP_IN_FLIGHT_REASON` (another sweeper holds the lock) |
 | `staleness.py` | The READ-ONLY half: `view_relpath`/`view_path`, `ViewSignals` with `existing_signals`/`current_signals`/`view_is_current` (the staleness definition itself), `existing_member_hash` (the existence probe), `existing_view_ids`, `list_stale_entities`, `list_all_anchored_entities`, `list_sweep_entities` (the union). Imports neither `writer` nor `synthesis` |
 | `skeleton.py` | The deterministic half: `members_of`, `member_hash`, `backlinks_of`/`backlink_hash`, timeline and backlinks rendering, `entity_own_page` |

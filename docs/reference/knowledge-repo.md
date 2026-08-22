@@ -70,7 +70,7 @@ The zones differ by **who writes them**:
 |---|---|---|
 | `wiki/` | people; the librarian, through the nine gates (`wiki/entities/` too, in the same commit as the capture that introduced the identity); the meeting flow (`wiki/meetings/`); an applied repair (a drafted entity body, a merge) | what someone concluded |
 | `sources/` | the librarian worker only, from the captured material, byte for byte | what someone said or sent — written once, never edited |
-| `views/` | `stigmergy.views` only — ONE writer, three entry points: the librarian worker's periodic convergence sweep (the guarantee), the librarian right after a meeting files (best-effort), and `stigmergy-views regenerate` by hand | derived rollups, regenerated from their members |
+| `views/` | `stigmergy.views` only — ONE writer and two entry points, both inside the librarian worker: its convergence sweep (the guarantee) and the hook right after a meeting files (best-effort). There is no command | derived rollups, regenerated from their members |
 
 A capture **door** (the 🧠 gesture, `brain_submit` from any MCP client, the console's *Register an
 entity*) never writes a page. It puts a row on the queue and archives the material in the evidence

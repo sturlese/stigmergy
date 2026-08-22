@@ -153,11 +153,11 @@ def test_the_error_mapping_carries_the_librarys_sentences(conn, app):
     assert _request(app, "GET", "/admin/api/repairs/424242").status_code == 404
     bad = _request(app, "GET", "/admin/api/queue?status=bogus")
     assert bad.status_code == 400 and "unknown status" in bad.json()["error"]
-    # `app` carries no knowledge-repo URL: a removal is refused by name as a 409, nothing written
+    # `app` carries no evidence store: a removal is refused by name as a 409, nothing queued
     refused = _request(app, "POST", "/admin/api/pages/delete",
                        json_body={"actor": "steward", "paths": ["wiki/notes/Old.md"],
                                   "why": "superseded"})
-    assert refused.status_code == 409 and "STIGMERGY_LIBRARIAN_REPO_URL" in refused.json()["error"]
+    assert refused.status_code == 409 and "evidence store" in refused.json()["error"]
     no_paths = _request(app, "POST", "/admin/api/pages/delete",
                         json_body={"actor": "steward", "paths": [], "why": "superseded"})
     assert no_paths.status_code == 400
@@ -326,14 +326,14 @@ def test_the_deletion_that_clones_never_runs_on_the_event_loop(conn, app, monkey
 
 def test_pages_delete_needs_the_token_and_a_non_empty_paths_list(conn, app, monkeypatch):
     """The console's most consequential control (ADR 043 D2): its token IS the authorization, so
-    the tokenless call must never reach the sequence at all — and an empty `paths` is a 400 rather
-    than a clone that finds nothing to do."""
+    the tokenless call must never reach the queueing seam at all — and an empty `paths` is a 400
+    rather than a row the worker would claim and find nothing to do with."""
     from stigmergy.server import review as server_review
 
     def never(*_a, **_k):
-        raise AssertionError("a deletion ran for a request that should have been refused")
+        raise AssertionError("a removal was queued for a request that should have been refused")
 
-    monkeypatch.setattr(server_review, "delete_and_record", never)
+    monkeypatch.setattr(server_review, "queue_deletion", never)
 
     tokenless = _request(app, "POST", "/admin/api/pages/delete", token=None,
                          json_body={"actor": "ops@example.com", "paths": ["wiki/notes/X.md"],
@@ -346,12 +346,40 @@ def test_pages_delete_needs_the_token_and_a_non_empty_paths_list(conn, app, monk
     assert "paths" in empty.json()["error"]
 
 
-def test_pages_delete_on_an_unconfigured_deployment_is_the_409(conn, app):
-    """The same deployment shape the approve route meets before a knowledge-repo URL is
-    configured: a refusal naming the variable, never a 500 naming a class."""
+def test_pages_delete_on_a_deployment_with_no_evidence_store_is_the_409(conn, app):
+    """The deployment shape a console served by a process whose object store is unconfigured is in:
+    a removal is a queued capture, and a capture needs somewhere to archive its material. The
+    refusal names what is missing, and it is a 409 — never a 500 naming a class."""
     response = _request(app, "POST", "/admin/api/pages/delete",
                         json_body={"actor": "ops@example.com", "paths": ["wiki/notes/X.md"],
                                    "why": "stale"})
 
     assert response.status_code == 409
-    assert "STIGMERGY_LIBRARIAN_REPO_URL" in response.json()["error"]
+    assert "evidence store" in response.json()["error"]
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0
+
+
+def test_pages_delete_over_http_queues_the_removal_when_the_queue_is_wired(conn, server_settings,
+                                                                          admin_settings,
+                                                                          fake_gateway):
+    """The benign twin for both refusals above, over the real route: with the queue wired, the
+    console's Remove lands a `delete` row attributed to the operator who pressed it. Without this,
+    the two 409s would only measure how easily this route says no."""
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+
+    wired = compose(_inner, conn=conn, server_settings=server_settings,
+                    admin_settings=admin_settings, gateway=fake_gateway,
+                    evidence=MemoryEvidenceStore())
+
+    response = _request(wired, "POST", "/admin/api/pages/delete",
+                        json_body={"actor": "ops@example.com", "paths": ["wiki/notes/Old.md"],
+                                   "why": "superseded"})
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["status"] == capture_schema.QUEUED
+    with conn.cursor() as cur:
+        cur.execute("SELECT kind, submitted_by FROM capture_queue WHERE id = %s",
+                    (response.json()["id"],))
+        assert cur.fetchone() == (capture_schema.DELETE, "ops@example.com")

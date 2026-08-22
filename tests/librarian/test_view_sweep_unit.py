@@ -81,6 +81,47 @@ def test_the_loop_sweeps_on_the_idle_branch(rig, monkeypatch):
     assert slept == [deps.settings.poll_interval_s]
 
 
+# ── the tick after work: derived pages must not describe a corpus that moved ──────────────────
+def test_the_idle_tick_after_work_sweeps_even_though_the_interval_has_not_elapsed(rig, monkeypatch):
+    """**The property ADR 044 D3 added**: a capture, a repair or a removal has just changed the
+    corpus, and `views/` is DERIVED from it. Waiting out a whole interval would leave a rollup
+    describing a page that is no longer there — the window where a view is most likely to be wrong
+    is exactly the moment after something landed.
+
+    Proven through the loop rather than through the method, because what makes the trigger true is
+    the loop's own bookkeeping: it sweeps on the idle tick that FOLLOWS work, not inside the item.
+    """
+    _env, deps = rig
+    items = [({"id": 1, "attempts": 1}, type("R", (), {"status": "filed"})()), None, None]
+    monkeypatch.setattr(worker, "process_next", lambda *a, **kw: items.pop(0) if items else None)
+    monkeypatch.setattr(worker.queue, "release_expired", lambda *a, **kw: {})
+    sweeper, clock = _CountingSweep(), _Clock()
+    w = _worker(deps, sweeper=sweeper, clock=clock, interval=900.0, conn=FakeConn())
+    ticks = []
+    monkeypatch.setattr(w, "_sleep",
+                        lambda s: (ticks.append(s), setattr(w, "stopping", len(ticks) >= 2)))
+
+    w.run()
+
+    # Two idle ticks, no clock advance at all: the first followed the filing and swept, the second
+    # did not — the interval is back in charge the moment the work stops.
+    assert ticks == [deps.settings.poll_interval_s] * 2
+    assert sweeper.calls == 1
+
+
+def test_work_does_not_make_the_sweep_due_forever(rig, monkeypatch):
+    """The benign twin of the trigger above, and the one that stops it becoming "sweep on every
+    tick": the flag is consumed by the sweep it caused. Without that, one filing would make every
+    later idle tick due and the interval would mean nothing."""
+    _env, deps = rig
+    sweeper, clock = _CountingSweep(), _Clock()
+    w = _worker(deps, sweeper=sweeper, clock=clock, interval=900.0, conn=FakeConn())
+
+    assert w.maybe_sweep_views(due_now=True) is True
+    assert w.maybe_sweep_views() is False
+    assert sweeper.calls == 1
+
+
 # ── D7: its own interval, not every idle tick ──────────────────────────────────────────────────
 def test_the_first_idle_tick_sweeps(rig):
     """A worker that has just started converges `views/` before it waits an interval out — the same

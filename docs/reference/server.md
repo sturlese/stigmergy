@@ -23,14 +23,23 @@ person for a verdict**: the capture is the approval, so an identity a capture in
 confirmed by whoever captured it and there is no lane to review
 ([ADR 044](../decisions/044-the-capture-is-the-approval.md)).
 
-Two doors still write to the knowledge repo from this process, and both are acts a person performs
-rather than reviews. `brain_delete` decides and applies in the SAME call: the person naming the
-pages already made the judgment, so what the server checks is that they are an UNRESTRICTED
-identity — no audience restriction in `ops/identities.json`, the only kind that can see every page
-a removal touches — and the per-page diff comes back with the commit
-([ADR 043](../decisions/043-a-sweep-is-written.md), ADR 044 D3). Approving a repair the gardener's
-findings earned is the other ([ADR 039](../decisions/039-governed-repair-loop.md)), and it is
-reachable from the admin console alone — there is no MCP tool for it.
+**Nothing in this process writes to the knowledge repo at all.** It never clones it, never commits
+to it and never pushes: the librarian worker is the one writer there is (ADR 044 D3). What was the
+last exception — `brain_delete`, which used to clone, sweep, gate and push inside the call — is now
+a QUEUEING door: it authorizes, writes a `delete` row, and the worker performs it. The one place
+this process touches the App credential at all is `webhook.py`, and it READS with it: an incremental
+upsert fetches the pushed files over the GitHub Contents API, no clone and no checkout. The setting
+that named a repo to write to (`$STIGMERGY_LIBRARIAN_REPO_URL`, read by `settings.py`) is gone from
+this package with the sequence that used it.
+
+That leaves the server with exactly one thing to decide about a removal, and it is the one it can:
+whether the caller is an UNRESTRICTED identity — no audience restriction in `ops/identities.json`,
+the only kind that can see every page a removal touches, including the ones the sweep rewrites. A
+scoped caller gets one fixed sentence whether or not the paths exist, so the door is no existence
+oracle either. Everything after that is the worker's, and what comes back to the person is the
+capture: `brain_submissions` carries the outcome and the per-page diff, ACL-scoped and fenced —
+nobody reads that prose before it lands, so that is the reading
+([ADR 043](../decisions/043-a-sweep-is-written.md) D5, in ADR 044's shape).
 
 ## Module map
 
@@ -39,9 +48,9 @@ reachable from the admin console alone — there is no MCP tool for it.
 | `settings.py` | explicit runtime config (`from_args`); no env reads at import |
 | `identity.py` | the one identity → audiences resolver over `ops/identities.json` (stdio, startup) **and** the per-request half: bearer token → sha256 → the token store → email, fail-closed on every step |
 | `acl.py` | the one visibility rule (`visible`) every read path filters through |
-| `review.py` | the two sequences that touch the knowledge repo from the SERVING process, and nothing else — there is no inbox and no ledger of verdicts. **The DELETION act** (`delete_pages` → `delete_and_record`): one clone held open for the whole pass, `repair.deletion` plans it, `repair.sweep` WRITES the pages that referred to a removed one, the nine gates judge the result, one App-authored commit lands with an `Approved-by:` trailer, and the per-page diff goes back ACL-scoped and fenced ([ADR 043](../decisions/043-a-sweep-is-written.md)). **The REPAIR verdict** ([ADR 039](../decisions/039-governed-repair-loop.md)): `apply_repair_and_record` marks the row decided with a conditional UPDATE — which is what makes a second Approve LOSE rather than clone, so no lease is needed anywhere below it — applies through `repair.remote.apply_approved` (the librarian's own `edits.validate`, its nine gates, and a cross-check that the diff is the one the stored `target_paths` describe), and records the verdict on the proposal's OWN row; `reject_repair_and_record` is its dismissal half. A gate refusing the apply leaves the proposal `failed` carrying the refusing sentence, never restored to pending: a silent revert would hide that a gate spoke. `commission_registration` is the third entry point and touches no git at all ([ADR 042](../decisions/042-an-entity-is-born-written.md)): registering an entity queues a `raw` capture whose material is what the person knows about it and whose hints carry the registration (`capture.schema.registration_hints`), and the LIBRARIAN writes the page and births the identity confirmed by them. Every writer here takes a required, undefaulted `source` naming its door, so a new door that forgets to name itself fails loudly instead of being attributed to an existing one. **No sequence here carries authorization** (ADR 030 D2's rule, which outlived the doors it was written for): each surface decides who may before it calls in — the MCP tool by requiring an unrestricted identity, the console by sitting behind its operator token — which is why the caller set of each is closed and pinned rather than open. `NOT_YOURS_TO_DECIDE` is the lane's one anonymous refusal, so a caller who may not act learns nothing about whether an id exists |
+| `review.py` | the two sequences this process runs on somebody's behalf, and nothing else — neither of them writes to the knowledge repo, because nothing here does. **A REMOVAL** (`queue_deletion`): the reason is normalized and bounded, the pages are validated at `capture.schema`'s own seam, and a `delete` row is queued under the caller's name; the worker performs it ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3, and [ADR 043](../decisions/043-a-sweep-is-written.md) for what performing it means). **A REGISTRATION** ([ADR 042](../decisions/042-an-entity-is-born-written.md)): registering an entity queues a `raw` capture whose material is what the person knows about it and whose hints carry the registration (`capture.schema.registration_hints`), and the LIBRARIAN writes the page and births the identity confirmed by them. Both take a required, undefaulted `source` naming their door, so a new door that forgets to name itself fails loudly instead of being attributed to an existing one. **Neither carries authorization** (ADR 030 D2's rule, which outlived the doors it was written for): each surface decides who may before it calls in — the MCP tool by requiring an unrestricted identity, the console by sitting behind its operator token — which is why the caller set of each is closed and pinned rather than open. It also re-exports `ensure_repair_schema` — the repairs ledger's DDL — which is the whole of what this module still reaches into `stigmergy.repair` for |
 | `service.py` | `BrainService` — the transport-agnostic core; `build_service`/`open_scoped_resources` wire it fail-closed. Also the rate-limit + audit wrapper (`_call`/`call_async`) both transports share; `list_entities`/`describe_entity` (the entity-navigation door) and entity-first resolution INSIDE `_search` itself, so every client gets it. `require_embedder` is the keyless seam: a server started without an embedding key still starts and still serves `read_page`/the capture tools, and the tools that cannot work say which capability is missing (`CapabilityUnavailableError`) instead of failing opaquely. `_search` also hands the resolved entity id DOWN as `entity_hint` — the rank-time boost is TOLD, never re-inferred from query tokens |
-| `ratelimit.py` | `RateLimiter`, a per-identity token bucket, injectable clock. **TWO live buckets**: `overall` (30/min, spent by every wrapped call) and an additional `ask` (10/min). A third constructor knob, `propose_per_min`, is accepted and stored but nothing spends it — `_extra` registers `"ask"` alone. It survives as the shape for the next expensive write tool, not as a live limit |
+| `ratelimit.py` | `RateLimiter`, a per-identity token bucket, injectable clock. **THREE live buckets**: `overall` (30/min, spent by every wrapped call) and two stricter ones on top of it, `ask` (10/min) and `brain_delete` (3/min). The delete bucket is the tightest not because the call is expensive here — it queues a row and returns — but because of what each row COSTS downstream: a worker pass, a model call over every page that referred to the removed ones, and a commit. A fourth constructor knob, `propose_per_min`, is accepted and stored but nothing spends it — `_extra` registers the two names above. It survives as the shape for the next expensive tool, not as a live limit |
 | `audit.py` | `audit_log` DDL + `AuditWriter` — one row per tool call, both transports; a write failure is logged loudly and never fails the serving call. `result` (nullable JSONB) is a per-tool outcome SUMMARY (`{"hits": n}` for `search_brain`, `{refused, suppressed, verdict, first_verdict, citations, retried, usage}` for `ask` via
 `answer.service.audit_summary` — `first_verdict` is the FIRST draft's verdict, the only field that
 says what a corrective retry was for) — never a question or an answer, by construction |
@@ -54,26 +63,29 @@ says what a corrective retry was for) — never a question or an answer, by cons
 | `pilot_report.py` | `stigmergy-pilot-report` — questions/identity/week, answered-with-citation vs honest refusal, capture→filed and capture→searchable latency, from real `audit_log`/`capture_queue` rows. Reads only |
 
 The server may import `stigmergy.index` and `stigmergy.capture` freely. It may **not** import
-`stigmergy.librarian` — they talk through the queue, a durable row, never an import — with exactly
-**two** module-scoped exceptions, each a named symbol list rather than a general license and each
-mechanically pinned by `tests/test_architecture.py`:
+`stigmergy.librarian` — they talk through the queue, a durable row, never an import — with **one**
+module-scoped exception, a named symbol list rather than a general license and mechanically pinned
+by `tests/test_architecture.py`:
 
-- `webhook.py` → `librarian.githubapp` (the App-credential primitives) and
-  `librarian.errors.LibrarianConfigError`;
-- `review.py` → `librarian.gates` alone (scan the caller's own free-text reason for secrets, so a
-  credential typed into a deletion's `why` never reaches a commit message).
+- `webhook.py` → `librarian.githubapp` (the App-credential primitives, used to authenticate the
+  Contents API reads an incremental upsert makes — no clone, no checkout) and
+  `librarian.errors.LibrarianConfigError`.
+
+The list was two entries until ADR 044 D3. `review.py` held the second, for `librarian.gates`: it
+scanned a deletion's free-text reason for secrets before that sentence became a commit message. It
+is not needed here any more, because the sentence no longer becomes a commit message HERE — the
+worker scans it with every other capture's material, on the way to the commit it writes.
 
 The tests assert both directions: an import outside the list fails, and so does a DECLARED symbol
 nothing actually imports, so a stale exception cannot sit there widening the door. Importing the
-librarian's async queue-drain loop (`worker`/`processing`/`agent`) is refused independently of
-either list — a slow agent run must never happen inside an HTTP request. `review.py` additionally
+librarian's async queue-drain loop (`worker`/`processing`/`agent`) is refused independently of that
+list — a slow agent run must never happen inside an HTTP request. `review.py` additionally
 reaches exactly two `stigmergy.entities` symbols — `generator.ENTITY_TYPES` (the closed type list a
 registration is validated against) and `generator.canonical_id_for` (the id its ack names), neither
-of which writes anything — and a declared slice of `stigmergy.repair`: `remote`, `store`, `schema` and
-`RepairError`, the apply half of the repair loop and nothing else. What that list leaves out is its
-point: `repair.proposer` and `repair.cli` are absent because the proposer loads a model stack, and
-this lane runs inside the MCP server process, where the same rule that bars the librarian's agent
-bars it. `stigmergy.kernel` is a library every package may depend on. The capture edge
+of which writes anything — and one `stigmergy.repair` module, `schema`, for the repairs ledger's
+DDL. That slice used to include the apply half of the repair loop, and shrinking it is the whole
+point of D3: the sequences that plan, sweep, gate and push live where the credential lives.
+`stigmergy.kernel` is a library every package may depend on. The capture edge
 is one-way: `stigmergy.capture` never imports `stigmergy.server`, so the queue has no opinion about
 identity, rate limits or transports — those are resolved here and passed down.
 
@@ -100,7 +112,7 @@ decided in [ADR 022](../decisions/022-entity-navigation.md).
 |---|---|
 | `brain_submit(kind, material, hints?)` | queue a capture — `kind` is `raw`, `page`, `meeting` (the transcript, with `title` and `meeting_date` in `hints`, optionally `attendees`) or `document` (the document's text, with `title` in `hints` and optionally `source_url`), capped at 256 KB of material for `raw`/`page` and 1 MB for `meeting`/`document` — archived to the evidence plane and attributed by the SERVER. Returns an ack with the submission id; it promises **queued and attributed**, never "saved to the brain" — nothing is in the brain until the librarian files it. Beside the ack it returns `entities`: the registered entities this material already names, `{id, name}` each, so the submitter sees at once which identities the brain recognises. `hints` may also carry a registration — `register_name`, `register_type`, `register_aliases`, `register_source` — which pins the entity this capture introduces instead of leaving the librarian to infer it. Every door may send them: they carry no authority, because there is none left to carry ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1) |
 | `brain_submissions(limit?, status?)` | the caller's own submissions with state, timestamps, `result_ref` and the librarian's `report`; an UNRESTRICTED identity sees the whole queue with `mine` marking its own rows. Echoed capture text is fenced as `UNTRUSTED-DATA` |
-| `brain_delete(paths, why)` | remove pages and rewrite every page that referred to them, decided and applied in THIS call — an UNRESTRICTED identity only. That is the one fact the server can settle before it clones, and it is the right one: a removal touches the pages named AND every page that refers to them, which are computed later and may sit outside a narrower scope, so only a caller who can see everything may ask for it. A scoped caller gets the lane's anonymous refusal, which is therefore no existence oracle about a referrer either (ADR 044 D3). Code drops the frontmatter entries that named a removed page; a model writes those pages' bodies, so a sentence that cited one still reads and a callout that only existed because of one is gone. One App-authored commit with the caller in an `Approved-by:` trailer, and the response carries the per-page DIFF — nobody read that prose before it landed, so this is the reading ([ADR 043](../decisions/043-a-sweep-is-written.md)). Refuses whole: an entity page, a path outside the corpus, more than ten pages, a reason matching a secret, a body the writer could not reconcile in one retry |
+| `brain_delete(paths, why)` | QUEUE a removal — an UNRESTRICTED identity only. That is the one fact this process can settle, and it is the right one: a removal touches the pages named AND every page that refers to them, a set nothing knows before the corpus is read, so only a caller who can see everything may ask for it. A scoped caller gets one fixed sentence whether the paths exist or not, so this is no existence oracle about a referrer either (ADR 044 D3). What lands here is a `delete` row with the caller's name on it; the WORKER then drops the frontmatter entries that named a removed page, has a model write those pages' bodies so a sentence that cited one still reads, runs the nine gates and pushes ONE App-authored commit with the caller in an `Approved-by:` trailer. The per-page DIFF is stored on the capture and read back through `brain_submissions`, ACL-scoped and fenced. Refused at the door, with nothing queued: an entity page, a path outside the corpus, more than ten pages, an empty reason, an over-long one. Refused by the worker, as a `rejected` capture: a page that is not there, a plan over its byte ceiling, a body the sweep writer could not reconcile, a gate's veto, a dead link the sweep would have left behind — each carrying `reason_code: unremovable` and the lane's own sentence. A reason that matches a likely secret or a personal-data pattern is refused there too, but as `secret`/`pii`, by the same scan every capture's material passes: the reason becomes a commit message, and that is the one place no gate looks |
 
 **Nothing in this lane waits on the caller, and nothing waits on anybody else.** There is no reply
 tool and no state that asks for one: a capture reaches `filed`, `rejected` or `failed`. When the
@@ -457,8 +469,7 @@ Every response body an HTTP client can receive from this server, and what it can
 | `brain_submit` — `EvidenceError` (the object store is unreachable, misconfigured, or refuses the write) | `{"error": "evidence store unavailable (<ExceptionClassName>)"}` | No — the redaction happens INSIDE `capture.evidence`, before the exception leaves it: boto3's own exception text embeds the endpoint URL, the bucket name and the access key id, so `str(ex)` is never propagated. The full detail, bucket and endpoint included, goes to `log.error` server-side |
 | `brain_submit` / `brain_submissions` — any OTHER exception | `{"error": "<tool> failed (<ExceptionClassName>)"}` | No — class name only, same posture as the four read/answer tools above |
 | `_BearerAuthMiddleware` — a `content-length` over `MAX_REQUEST_BODY_BYTES` | fixed `{"error": "request too large"}`, HTTP 413 | **No** — one constant, like the 401 above. It is returned only AFTER auth succeeded, so it also cannot be used to probe whether a token is valid: an unauthenticated oversized request gets the 401, not this |
-| `brain_delete` — `CaptureError` (a scoped caller, an unknown or entity-zone path, more than ten pages, a secret in the reason, a body the sweep writer could not reconcile, a gate's refusal, a lost push race) | `{"error": "..."}` | No — the authorization refusal is the lane's one fixed, no-existence-leak sentence (`review.NOT_YOURS_TO_DECIDE`), so it can name no page and no referrer; every other message is built from the caller's own paths plus static text, or is a gate's own sentence about the diff |
-| `brain_delete` — `CapabilityUnavailableError` (no librarian GitHub App credential or no `$STIGMERGY_LIBRARIAN_REPO_URL` configured) | `{"error": str(ex)}`, echoed VERBATIM | No — names the missing capability by env var, same posture as `search_brain`/`ask`'s own keyless-embedder refusal above |
+| `brain_delete` — `CaptureError` (a scoped caller, an entity-zone path, a path outside the corpus, more than ten pages, an empty reason, no evidence store) | `{"error": "..."}` | No — the authorization refusal is the door's one fixed, no-existence-leak sentence (`service.NOT_YOURS_TO_REMOVE`), so it can name no page and no referrer; every other message is built from the caller's own paths plus static text. Everything the WORKER refuses is not an error here at all: the call succeeded, and the capture's own report carries the reason |
 | `brain_delete` — any OTHER exception | `{"error": "brain_delete failed (<ExceptionClassName>)"}` | No — class name only, same posture as every other tool above; only `check_arg_length`'s own marked rejection echoes verbatim |
 
 An unknown token and an unknown identity both resolve to the SAME first row above — the fixed
@@ -488,7 +499,8 @@ email**:
 
 `"*"` = unrestricted (sees everything), and since [ADR 044](../decisions/044-the-capture-is-the-approval.md)
 D3 it is also the whole of `brain_delete`'s authorization: a removal touches pages the caller did not
-name, so only an identity with no audience restriction may ask for one. A list is the client's audience scope: it sees unlabeled
+name, so only an identity with no audience restriction may ask for one — and `brain_submit` refuses
+the `delete` kind by name, so that check cannot be side-stepped by submitting one. A list is the client's audience scope: it sees unlabeled
 pages plus pages sharing at least one label; a bare non-`*` string is accepted as the one-audience
 scope it obviously means. The resolver is **fail-closed** everywhere — no identity, an unknown
 identity, an unreadable/malformed file, or an identity whose value is neither of the shapes above
@@ -562,10 +574,11 @@ If you edit a page and forget the rebuild, search "misses" it until the next bui
   transport-agnostic core. `build_service` wires identity → connection → embedder → service
   fail-closed, in that order (identity resolves before any DB work). New tools/transports should
   call into a `BrainService` instance, never re-open the index themselves.
-- `stigmergy.server.review.delete_and_record` — the deletion act's own sequence (plan → written
-  sweep → gates → commit → row), authorization-free by design so each surface decides who may
-  before calling in. Reach it rather than growing a second removal path; its caller set is closed
-  and pinned by `tests/test_architecture.py`.
+- `stigmergy.server.review.queue_deletion` — the removal's own queueing sequence (bound the reason →
+  validate the paths → write the `delete` row), authorization-free by design so each surface decides
+  who may before calling in. Reach it rather than growing a second removal path; its caller set is
+  closed and pinned by `tests/test_architecture.py`. What happens to the row afterwards is
+  `librarian.processing.process_delete_item`'s, and no code in this package may call it.
 - `tests/server/conftest.py::mcp_session` — an async context manager that spawns the real
   `stigmergy-server` console entry point over stdio and drives it with a real MCP client
   (`ClientSession`). Use it for any test that must prove the transport, not just the service
@@ -601,7 +614,7 @@ else ([operator-runbook.md](./operator-runbook.md#the-two-databases)):
 | `test_acl_visibility.py` | the full `acl.visible` truth table, including the fail-closed malformed case |
 | `test_service_acl.py` | `BrainService` end to end (fake embedder, real Postgres): ACL enforcement on `search`, `read_page`, `scoped_entities` and the view pages, plus the `max_results` clamp and the structured output shape |
 | `test_acl_empty_and_malformed_e2e.py` | a deliberate `acl: []` and a build-time-malformed acl land in the exact same nobody-but-unrestricted state |
-| `test_delete_pages_pg.py` | `brain_delete` end to end: the unrestricted-identity rule and its anonymous refusal, the plan, the written sweep, the gates and the per-page diff, real git + real Postgres |
+| `test_delete_pages_pg.py` | `brain_delete` as a queueing door: the unrestricted-identity rule and its one anonymous refusal, the seam's own validation, and the `delete` row it writes. What the worker then does with that row is `tests/librarian/test_delete_processing_pg.py`, with real git and the real gates |
 | `test_service_capture.py` | the write path at the service layer: attribution, the server-owned-field refusals, the submissions listing and its scoping |
 | `test_fence.py` | the `UNTRUSTED-DATA` fence is inescapable in-band, including truncation-boundary edge cases |
 | `test_startup.py` | startup through the real `main()`: no/unknown identity, malformed identities file, unreachable Postgres (credential-free error) and an `index_meta` row without `built_at` all exit non-zero — while a missing `OPENAI_API_KEY` DEGRADES instead (the process starts and still serves the write path) and an unknown embedder NAME is still a clean startup error |

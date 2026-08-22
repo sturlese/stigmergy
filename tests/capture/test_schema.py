@@ -51,14 +51,24 @@ def test_durable_tables_names_exactly_the_four_the_index_rebuild_must_not_take()
     assert schema.DURABLE_TABLES == ("capture_queue", "audit_log", "job_runs", "ingest_errors")
 
 
-def test_kinds_are_the_one_vocabulary_every_door_shares():
-    """`KINDS` names the SHAPE of the material — never a topic — and it is the ONE list: there is
-    no narrower `brain_submit` list and no operator door with a kind of its own (ADR 044 D4). A
-    contract change here is tracked rather than silent."""
-    assert schema.KINDS == ("raw", "page", "meeting", "document")
+def test_submittable_kinds_are_the_one_vocabulary_every_door_shares():
+    """`SUBMITTABLE_KINDS` names the SHAPE of captured material — never a topic — and it is the ONE
+    list: there is no narrower `brain_submit` list and no operator door with a kind of its own
+    (ADR 044 D4). A contract change here is tracked rather than silent."""
+    assert schema.SUBMITTABLE_KINDS == ("raw", "page", "meeting", "document")
     assert schema.MEETING == "meeting"
     assert schema.DOCUMENT == "document"
     assert not hasattr(schema, "MCP_SUBMIT_KINDS")
+
+
+def test_delete_is_a_queue_kind_and_not_a_submittable_one():
+    """The one kind that is not captured material: a person's removal (ADR 044 D3). It rides the
+    queue for everything a capture gets — a durable row, a lease, an attempt count, an audited
+    submitter — and it is deliberately absent from what any door may SUBMIT, because the door that
+    queues one is the door that authorized it."""
+    assert schema.DELETE == "delete"
+    assert tuple(schema.KINDS) == (*schema.SUBMITTABLE_KINDS, schema.DELETE)
+    assert schema.DELETE not in schema.SUBMITTABLE_KINDS
 
 
 # ── kind=="meeting" is validated at the ENQUEUE SEAM — every caller of `queue.submit` passes

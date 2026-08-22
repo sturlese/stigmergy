@@ -27,6 +27,11 @@ from stigmergy.server.settings import Settings
 # Re-exported for `stigmergy.slack.context`; `capture.schema` stays the owner.
 SLACK_DOOR = capture_schema.SLACK_DOOR
 
+# What a caller who may not remove pages is told, whatever they named. ONE sentence for "you are
+# not allowed" and "there is no such page", so this door is no existence oracle: a scoped identity
+# probing for a page it cannot read learns nothing from the difference.
+NOT_YOURS_TO_REMOVE = "there is nothing for you to remove at those paths"
+
 log = logging.getLogger(__name__)
 
 # Ranked hits pulled from the index BEFORE ACL filtering and truncation: an out-of-scope page must
@@ -564,8 +569,10 @@ class BrainService:
         capture_schema.reject_server_owned_arguments(server_owned)
         # The two source hints the fast lane trusts — refused for every door but Slack's own.
         capture_schema.reject_source_provenance_hints(hints, door=self.door)
-        # `kind` is MODEL-CHOSEN and `prepare_submission` refuses one outside `KINDS` by name —
-        # there is no narrower list for this door (ADR 044 D4).
+        # `kind` is MODEL-CHOSEN and `prepare_submission` refuses one outside `KINDS` by name.
+        # This door takes the SUBMITTABLE ones (ADR 044 D4) — the queue's vocabulary is wider by
+        # exactly one, and `delete` is queued by the door that authorized it, never asked for here.
+        capture_schema.reject_unsubmittable_kind(kind)
         if self.evidence is None:
             raise CaptureError("the capture queue is not available on this server")
         if not self.identity:
@@ -646,35 +653,76 @@ class BrainService:
             "hints": {k: neutralize_fence(v) for k, v in (row["hints"] or {}).items()},
             "flagged_hints": row["flagged_hints"],
             "excerpt": fence(excerpt) if excerpt else "",
-            "report": _without_operator_telemetry(_neutralize_report(row["report"])),
+            "report": self._shape_report(row["report"]),
         }
+
+    def _shape_report(self, raw) -> dict:
+        """The librarian's own report, ready to go over the wire.
+
+        One kind of row needs more than the shared neutralizing: a performed REMOVAL carries the
+        unified diff of every page it rewrote, and those are page BYTES. So they obey the two rules
+        every other surface that echoes a page obeys — `acl.visible()` decides who may read one,
+        asked per path, and what survives is FENCED, because it carries both a page's own bytes and
+        fresh model output and neither is an instruction to whoever reads this. A page whose diff is
+        withheld is NAMED rather than dropped: it changed, the commit says so, and a reader who
+        cannot see why must not be left thinking nothing happened to it.
+        """
+        shaped = _without_operator_telemetry(_neutralize_report(raw))
+        rewritten = shaped.get("rewritten")
+        if not isinstance(rewritten, dict):
+            return shaped
+        readable = {path: fence(text) for path, text in rewritten.items()
+                    if self.may_read_page(path)}
+        return {**shaped, "rewritten": readable,
+                "withheld": sorted(set(rewritten) - set(readable))}
     # ── the write lane's governed door ─────────────────────────────────────────
-    # The mechanics live in `server.review`: it needs librarian primitives this module may not
-    # import, and a deletion clones the knowledge repo and runs a model.
+    # The queueing lives in `server.review`, which is the ONE seam both removal doors cross (this
+    # one and the console's) — so which door a person removed from changes the row's
+    # `delete_source` and nothing else. Nothing here reaches the knowledge repo: since ADR 044 D3
+    # the worker is the only writer, and this process holds neither the checkout nor the credential.
 
     def delete_pages(self, paths, why: str = "", *, source: str) -> dict:
-        """Remove pages and rewrite every page that referred to them, as ONE commit attributed to
-        THIS service's resolved identity; `review.delete_pages` carries the contract. Like
-        `review_decide`, `source` is REQUIRED and never defaulted — the ledger row names the DOOR,
-        and a default would attribute one door's act to another the day a third arrives.
+        """QUEUE a removal: the pages that go and the reason, as a `delete` row this service's
+        resolved identity is on. The worker performs it (ADR 044 D3) — this process holds no git
+        credential and writes nothing to the corpus.
 
-        The audit row keeps the shape and never the reason: `why` is free text a person wrote.
+        **Authorization is the one question this door can answer, and it answers it here.** A
+        removal touches the pages it names AND every page that refers to them, a set nothing knows
+        before the tree is read — so the only honest question at the door is "may this caller see
+        the whole corpus": an identity with no audience restriction can, a scoped one cannot,
+        whatever those paths turn out to be. The refusal is the lane's anonymous sentence, so it is
+        no existence oracle either.
 
-        Both free-text arguments are length-checked INSIDE the `_call` seam, so an over-long one
-        is refused before anything is cloned AND recorded as the caller behaviour it is — a check
-        run in the tool closure instead would be invisible to `audit_log`.
+        `source` is REQUIRED and never defaulted: the row names the DOOR, and a default would
+        attribute one door's act to another the day a third arrives.
+
+        The audit row keeps the shape and never the reason: `why` is free text a person wrote. Both
+        free-text arguments are length-checked INSIDE the `_call` seam, so an over-long one is
+        refused before anything is queued AND recorded as the caller behaviour it is — a check run
+        in the tool closure instead would be invisible to `audit_log`.
         """
         def _checked():
             check_arg_length("why", why or "")
             for path in paths or ():
                 check_arg_length("path", str(path))
-            return review.delete_pages(self, paths=paths, why=why, source=source)
+            return self._queue_delete(paths, why, source=source)
 
         return self._call(
             "brain_delete",
             {"paths": [str(p) for p in (paths or ())], "why_chars": len(why or ""),
              "source": source},
             _checked)
+
+    def _queue_delete(self, paths, why: str, *, source: str) -> dict:
+        """The authorization, then the shared queueing seam. The refusal is the ONE sentence for
+        both "you may not" and "there is no such page", so a scoped identity probing for a page it
+        cannot read learns nothing from the difference."""
+        if not self.identity:
+            raise CaptureError("no resolved identity — a removal cannot be queued unattributed")
+        if not self.unrestricted:
+            raise CaptureError(NOT_YOURS_TO_REMOVE)
+        return review.queue_deletion(self.conn, self.evidence, paths=paths, why=why,
+                                     actor=self.identity, source=source)
 
     # ── scoped read helpers (reused by the answer layer) ──────────────────────
     def scoped_entities(self) -> list[str]:
@@ -732,8 +780,8 @@ def _neutralize_report(report, depth: int = 0):
     captured material. Neutralized rather than fenced — that is what stops a value closing the
     excerpt's fence in-band. Depth-bounded; beyond it the subtree is dropped.
 
-    The ONE string-leaf walker: `review._neutralize_leaves` delegates here rather than keeping a
-    second copy, which had already drifted apart from this one at the depth bound."""
+    The ONE string-leaf walker in this package: a second copy had already drifted apart from this
+    one at the depth bound before it was collapsed to this."""
     if depth > MAX_AUDIT_DEPTH:
         return None
     if isinstance(report, str):
@@ -831,8 +879,6 @@ def build_service(settings: Settings, conn=None) -> BrainService:
 
     ensure_audit_table(conn)
     ensure_capture_schema(conn)
-    # unconditional: the repair ledger is read on any server, knowledge repo configured or not.
-    review.ensure_repair_schema(conn)
     # Created single-threaded here so the webhook's own `IF NOT EXISTS` has nothing left to race:
     # losing that race inside its phase-2 transaction would roll the pushed pages back with it.
     store.ensure_ops_file_table(conn)

@@ -26,8 +26,6 @@ from stigmergy.gardener.store import insert_findings
 from stigmergy.index import store as index_store
 from stigmergy.librarian import config as librarian_config
 from stigmergy.repair import schema as repair_schema
-from stigmergy.repair import store as repair_store
-from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     LANDED_COMMIT,
@@ -474,15 +472,6 @@ def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_
 
 # ── entities: read ────────────────────────────────────────────────────────────────────────────
 # ── registering an entity: the console commissions a capture, the librarian writes the page ──
-@pytest.fixture()
-def entity_service(conn, admin_settings, entity_mint_repo):
-    """`AdminService` pointed at a real, throwaway bare knowledge repo — for the tests that land a
-    decision for real. The validation-only tests use the plain `service` fixture instead (no repo
-    configured): they never reach git at all, and proving that is part of what they pin."""
-    return AdminService(conn, server_settings=Settings(librarian_repo_url=entity_mint_repo),
-                        admin_settings=admin_settings)
-
-
 def test_entity_create_commissions_a_capture_the_librarian_writes_the_page_from(conn, admin_settings):
     """ADR 042. OLD BEHAVIOUR: the console's Register minted the template with the name filled in,
     pushed it and wrote the ledger row — an entity page with nothing said about the entity. Now it
@@ -668,19 +657,20 @@ def test_a_malformed_agent_budget_leaves_the_console_serving_its_own_boot_call(
 # sanitizing, the per-kind op shapes, and the counts a chart may draw a part-to-whole from.
 #
 # The console's ONE surviving mutation is `pages.delete`, and it is the console's most consequential
-# button: the ordering it drives belongs to `server.review.delete_and_record` and is proven there
-# against real state (`tests/server/test_delete_pages_pg.py`), so what is asserted here is the
-# wiring, the `admin_actions` bookkeeping and the error mapping.
-FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+# button. Since ADR 044 D3 it QUEUES: this process writes nothing to the corpus and holds no git
+# credential, and the worker performs the removal (`tests/librarian/test_delete_processing_pg.py`
+# proves that half against a real remote). So what is asserted here is the row this door lands, the
+# `admin_actions` bookkeeping and the error mapping.
 
 
 @pytest.fixture()
 def deletion_service(conn, admin_settings):
-    """`AdminService` with a knowledge-repo URL configured. The URL is never dialled in these
-    tests — `delete_and_record` is replaced below — but it has to be non-empty, because the
-    sequence refuses an unconfigured deployment before anything is cloned."""
-    return AdminService(conn, server_settings=Settings(librarian_repo_url="/tmp/not-dialled.git"),
-                        admin_settings=admin_settings)
+    """`AdminService` with the capture queue wired. An evidence store is the whole of what this
+    door needs now — a removal is a `delete` row, and the row's material is the reason. It used to
+    take a knowledge-repo URL, back when the console cloned and pushed for itself."""
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    return AdminService(conn, server_settings=Settings(), admin_settings=admin_settings,
+                        evidence=MemoryEvidenceStore())
 
 
 def test_repairs_list_carries_every_outcome_and_the_whole_tables_counts(conn, service):
@@ -810,29 +800,27 @@ def test_a_deletion_reaches_the_console_with_the_prose_that_landed(conn, service
 
 
 # ── the console's one surviving mutation: a person's own deletion ─────────────────────────────
-def test_pages_delete_runs_the_shared_sequence_and_records_the_console_as_the_door(
-        conn, deletion_service, monkeypatch):
-    """The console's deletion door (ADR 043 D2). It reaches `server.review.delete_and_record` — the
-    SAME sequence MCP's `brain_delete` runs — and hands in NO authorization: its token is the
-    authorization. So what this asserts is the wiring and the two bookkeeping rows, not a second
-    copy of the sequence's own behaviour (`tests/server/test_delete_pages_pg.py` proves that
-    against a real remote)."""
-    seen = {}
-
-    def fake(conn_arg, *, repo_url, paths, why, actor, source, authorize=None):
-        seen.update({"repo_url": repo_url, "paths": list(paths), "why": why, "actor": actor,
-                     "source": source, "authorize": authorize})
-        return {"deleted": list(paths), "rewritten": {}, "commit": FAKE_COMMIT,
-                "repair_id": 7, "model_calls": 0, "message": "done"}
-
-    monkeypatch.setattr(server_review, "delete_and_record", fake)
-
+def test_pages_delete_queues_through_the_shared_seam_and_records_the_console_as_the_door(
+        conn, deletion_service):
+    """The console's deletion door (ADR 043 D2, ADR 044 D3). It calls
+    `server.review.queue_deletion` — the SAME seam MCP's `brain_delete` calls — and hands in NO
+    authorization: its token is the authorization, and this is the one door where that is the whole
+    of it. Asserted against the REAL queue rather than a replaced sequence: the row is what the
+    worker will act on, so a double here would prove nothing about what gets removed."""
     result = deletion_service.pages_delete(actor="ops@example.com",
                                            paths=["wiki/notes/Old Memo.md"], why="superseded")
 
-    assert result["commit"] == FAKE_COMMIT
-    assert seen["paths"] == ["wiki/notes/Old Memo.md"]
-    assert (seen["actor"], seen["source"]) == ("ops@example.com", "admin")
+    assert result["status"] == capture_schema.QUEUED
+    with conn.cursor() as cur:
+        cur.execute("SELECT kind, submitted_by, hints, payload FROM capture_queue WHERE id = %s",
+                    (result["id"],))
+        kind, by, hints, payload = cur.fetchone()
+    assert kind == capture_schema.DELETE
+    assert by == "ops@example.com"
+    assert capture_schema.delete_paths(hints) == ["wiki/notes/Old Memo.md"]
+    assert hints["client"]["delete_source"] == "admin", (
+        "which door a person removed from changes this field and nothing else")
+    assert payload["text"] == "superseded"
     recorded = _actions(conn)[0]
     assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
         "ops@example.com", "pages.delete", "ok")
@@ -841,38 +829,32 @@ def test_pages_delete_runs_the_shared_sequence_and_records_the_console_as_the_do
 
 
 def test_a_refused_deletion_records_the_real_class_before_it_becomes_AdminRefused(
-        conn, deletion_service, monkeypatch):
+        conn, deletion_service):
     """`_mutate`'s ordering, on this door too: the console's own log keeps the library's exception
-    class, and the caller gets the sentence as a refusal rather than a 500."""
-    def refuse(*_a, **_k):
-        raise server_review.ReviewError("wiki/entities/Acme Corp.md is an entity page")
-
-    monkeypatch.setattr(server_review, "delete_and_record", refuse)
-
-    with pytest.raises(AdminRefused, match="entity page"):
+    class, and the caller gets the sentence as a refusal rather than a 500. Driven by a REAL
+    refusal — an entity page, which the queueing seam refuses by name — so the class recorded is
+    the one a real operator's mistake would record."""
+    with pytest.raises(AdminRefused, match="identity is retired"):
         deletion_service.pages_delete(actor="ops@example.com",
                                       paths=["wiki/entities/Acme Corp.md"], why="stale")
 
     recorded = _actions(conn)[0]
     assert (recorded["action"], recorded["outcome"], recorded["error_class"]) == (
-        "pages.delete", "error", "ReviewError")
+        "pages.delete", "error", "SubmissionRejected")
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0, "refused at the seam means no row and no blob"
 
 
-def test_pages_delete_without_a_configured_repo_refuses_before_anything_is_cloned(conn, service):
-    """The plain `service` fixture has no `librarian_repo_url`. The refusal is a `ReviewError`, so
-    `_mutate`'s own `CaptureError` branch maps it — and it is raised before the clone, because a
-    network leg and a model call spent to arrive at the same answer are a network leg and a model
-    call wasted."""
-    def never(*_a, **_k):
-        raise AssertionError("the repo was cloned on a deployment with no knowledge-repo URL")
+def test_pages_delete_without_an_evidence_store_is_a_refusal_naming_it(conn, service):
+    """The plain `service` fixture has no evidence store, which is the deployment shape a console
+    served by a process whose object store is unreachable is in. The refusal is a `ReviewError`, so
+    `_mutate`'s own `CaptureError` branch maps it to the routes' 409 with the library's own
+    sentence — never a 500 naming a class."""
+    with pytest.raises(AdminRefused, match="evidence store"):
+        service.pages_delete(actor="ops@example.com", paths=["wiki/notes/Old Memo.md"],
+                             why="superseded")
 
-    monkeypatch_target = server_review.repair_apply
-    assert hasattr(monkeypatch_target, "cloned"), "the clone seam moved; this guard is now blind"
-
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(monkeypatch_target, "cloned", never)
-        with pytest.raises(AdminRefused, match="STIGMERGY_LIBRARIAN_REPO_URL"):
-            service.pages_delete(actor="ops@example.com", paths=["wiki/notes/Old Memo.md"],
-                                 why="superseded")
-
-    assert repair_store.recent(conn) == [], "a refusal before the clone leaves no row at all"
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0

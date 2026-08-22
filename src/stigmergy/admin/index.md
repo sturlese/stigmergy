@@ -10,7 +10,7 @@ Narrative: [`docs/reference/admin-console.md`](../../../docs/reference/admin-con
 **It is a skin, not a subsystem.** Every act lands on a seam another package owns and tests:
 `capture.retention`, `capture.queue` (reads, plus `release_expired`), `capture.latency`,
 `gardener.store`, `digest.run`, `index.check`, `index.store`, `repair.store`,
-`server.review.commission_registration`, `server.review.delete_and_record`,
+`server.review.commission_registration`, `server.review.queue_deletion`,
 `server.pilot_report` (the report and its per-day classifier), `kernel.registry`. The only state
 it owns is `admin_actions`.
 
@@ -76,7 +76,7 @@ cannot need a token to render).
 | POST | `/admin/api/entities/create` | `entity_create()` — `name`/`entity_type`/`about` required, `entity_id`/`aliases` optional; commissions the entity by queueing a capture and answers the queued row (`id`, `status`, `entity_id`, `name`, `message`). Off the event loop, for the archive write. The page is the librarian's to write, and the identity is born confirmed by the actor | yes |
 | GET | `/admin/api/repairs` | `repairs_list()` — the newest `REPAIR_RECENT_LIMIT` repairs whatever their outcome, each carrying the diff it pushed, the whole table's `counts` by status, and the repair pass's `job_runs` history. Read-only: a repair is applied by the pass, and this page is the reading afterwards ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)) | yes |
 | GET | `/admin/api/repairs/{id:int}` | `repair_show()` | yes |
-| POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, applied in the same call through `server.review.delete_and_record`, the same sequence MCP's `brain_delete` runs. It passes NO per-path guard and no `can_read`: the operator token is the authorization and the console is not a read surface over pages, which makes this its most consequential button. Off the event loop | yes |
+| POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, QUEUED through `server.review.queue_deletion`, the same seam MCP's `brain_delete` runs, and performed by the librarian worker (ADR 044 D3). It passes no per-path guard: the operator token is the authorization, which makes this the console's most consequential button. What comes back is a queue acknowledgement, and the per-page diffs are read afterwards on the capture | yes |
 | GET | `/admin/api/activity` | `activity()` | yes |
 | GET | `/admin/api/worker` | `worker_status()` | yes |
 | GET | `/admin/api/crons` | `crons_state()` | yes |
@@ -128,14 +128,13 @@ ordering hazard back with it.
   nothing is caught inside `_do`, so `_mutate` records the library's OWN class name in
   `admin_actions` before the `except (EntityError, CaptureError)` outside it raises `AdminRefused`
   with the library's sentence.
-- `server.review.delete_and_record` — `pages_delete`'s whole seam, and the same function the MCP
+- `server.review.queue_deletion` — `pages_delete`'s whole seam, and the same function the MCP
   deletion door runs, so which door a person acted from changes the recorded `source` and nothing
-  else. It lands the commit through the governed door, then the row. `repair.apply` is reached by
-  that sequence, never from this package — its import allowlist grants `repair.store`,
-  `repair.schema` and `repair.errors` only, and `stigmergy.entities.remote` is absent for the same
-  reason. The exception mapping stays HERE for `commission_registration`'s reason: nothing is
-  caught inside `_do`, so `_mutate` records `RepairError` in `admin_actions` before the `except`
-  outside it raises `AdminRefused`. Every one of them is passed `source=ADMIN_DOOR` — this
+  else. It writes a `delete` capture row and no more: no clone, no commit, no credential — the
+  worker performs it, and this package could not push if it wanted to. The exception mapping stays
+  HERE for `commission_registration`'s reason: nothing is caught inside `_do`, so `_mutate` records
+  the library's own class name in `admin_actions` before the `except` outside it raises
+  `AdminRefused`. Every one of them is passed `source=ADMIN_DOOR` — this
   package's one spelling of its own name, so a console act is told apart from an MCP one on the row
   itself rather than by inference.
 - `queue.outcomes_by_day` — the metrics' capture series, beside `counts_by_status` in the queue

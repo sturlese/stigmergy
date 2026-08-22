@@ -47,7 +47,9 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    fly secrets set STIGMERGY_EVIDENCE_BUCKET="stigmergy-evidence-staging"
    fly secrets set STIGMERGY_EVIDENCE_ACCESS_KEY_ID="..."
    fly secrets set STIGMERGY_EVIDENCE_SECRET_ACCESS_KEY="..."
-   # the librarian worker (`worker` group)
+   # the librarian GitHub App — the `worker` group PUSHES with it, and the `app` group's index
+   # webhook READS with it (Contents API, no clone). It is the only git credential in the
+   # deployment, and since ADR 044 D3 the `app` group has no write path of its own to spend it on.
    fly secrets set STIGMERGY_LIBRARIAN_APP_ID="123456"
    fly secrets set STIGMERGY_LIBRARIAN_INSTALLATION_ID="87654321"
    fly secrets set STIGMERGY_LIBRARIAN_PRIVATE_KEY="$(cat ~/.config/stigmergy/librarian.private-key.pem)"
@@ -407,8 +409,8 @@ anything in this repo. Every zone has a closed set of writers:
 | `wiki/notes,decisions,concepts/` | the librarian, filing a capture through the nine gates |
 | `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `brain_submit(kind="meeting", …)` |
 | `sources/slack/`, `sources/documents/` | the librarian's source attachment, from the 🧠 gesture and a `brain_submit(kind="document", …)` |
-| `wiki/entities/` (+ `ops/entity-registry.json`) | one writer, and no second: `librarian.identity` CREATES an entity page inside the capture's own commit, `approved_by:` naming whoever captured ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1), and appends new facts, connections and spellings to a registered entity's page. An approved repair may later EDIT such a page (an alias merge, a body rewrite); nothing but the librarian creates one |
-| `views/` | `stigmergy.views` **only** — either `stigmergy-views regenerate` by hand, or the librarian's best-effort trigger right after a meeting files |
+| `wiki/entities/` (+ `ops/entity-registry.json`) | one writer, and no second: `librarian.identity` CREATES an entity page inside the capture's own commit, `approved_by:` naming whoever captured ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1), and appends new facts, connections and spellings to a registered entity's page. A repair the worker applies may later EDIT such a page (an alias merge, a body rewrite); nothing but the librarian creates one |
+| `views/` | `stigmergy.views` **only**, and only from the librarian worker: the convergence sweep on its idle branch (the guarantee) and the best-effort trigger right after a meeting files. There is no command, because there is no second writer |
 
 After any bulk re-seed: rebuild the index (next section) and run `make index-check`.
 
@@ -507,37 +509,58 @@ file itself.
 
 ## Removing pages
 
-**A deletion is decided by the person who asks for it, and it happens in that call** — there is
-nothing to approve afterwards ([ADR 043](../decisions/043-a-sweep-is-written.md)). Two doors, and
-the same sequence behind both:
+**A removal is decided by the person who asks for it, and performed by the librarian** — there is
+nothing to approve afterwards, and nothing but the worker writes to the knowledge repo
+([ADR 043](../decisions/043-a-sweep-is-written.md),
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). Two doors, and the same seam behind
+both:
 
 - **MCP**: `brain_delete(paths=["wiki/notes/Old Memo.md"], why="what makes it stale")`. It requires
   an **UNRESTRICTED identity** — one with no audience restriction in `ops/identities.json` — and
-  nothing else ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). That is the one
-  question the server can answer at the door without a clone: a removal touches the pages it names
-  AND every page that refers to them, a set nobody knows before the clone exists, and only a caller
-  who can see the whole corpus can be entitled to all of it. A scoped caller gets the lane's
-  anonymous refusal — *"there is nothing for you to decide at that id"* — which is also why no
-  refusal can reveal a referrer.
+  nothing else. That is the one question the server can answer at the door: a removal touches the
+  pages it names AND every page that refers to them, a set nobody knows until the corpus is read,
+  and only a caller who can see the whole corpus can be entitled to all of it. A scoped caller gets
+  the door's one anonymous refusal — *"there is nothing for you to remove at those paths"*, the same
+  sentence whether or not the paths exist — which is also why no refusal can reveal a referrer.
 - **The console**, Repairs → **Remove pages**. Its token is the whole authorization there, which
   makes it the most consequential button on that console.
 
-What happens in the call: the pages go; every page that referred to one has its `related:`/`sources:`
-entries dropped by code and its BODY rewritten by a model, so a sentence that cited a removed page
-still reads and a callout that only existed because of one is gone; the nine gates judge the result;
-one App-authored commit lands with your name in an `Approved-by:` trailer.
+**What comes back from either door is a queue acknowledgement, not a commit.** Both write one
+`capture_queue` row of kind `delete` — the reason as its material, the pages in its hints, your name
+as its submitter — and the worker takes it from there: the pages go; every page that referred to one
+has its `related:`/`sources:` entries dropped by code and its BODY rewritten by a model, so a
+sentence that cited a removed page still reads and a callout that only existed because of one is
+gone; the nine gates judge the result; the knowledge repo's own linter is run over the whole tree to
+prove no dead link survives; and one App-authored commit lands with your name in an `Approved-by:`
+trailer.
 
-**Read the diff it hands back.** Nobody read that prose before it landed — that is the trade the ADR
-states rather than softens — so the response (and the console's dialog) carries a unified diff per
-rewritten page, ACL-scoped and fenced. A diff you may not read is named rather than dropped.
+**Read the row back, and read the diff on it.** Nobody read that prose before it landed — that is
+the trade the ADR states rather than softens — so the report on the capture carries a unified diff
+per rewritten page alongside the paths that stopped existing. **`brain_submissions` is where that
+reading happens**: it renders each diff ACL-scoped per path and fenced, and NAMES any path it
+withholds, so a page you may not read still shows as changed. The console's Captures page carries
+the same row and the librarian's sentences about it; `stigmergy-queue show <id>` gives the row's
+trace and status but not the report.
 
-It refuses whole, changing nothing, on: an entity page (an identity is merged away by a repair, never
-deleted at this door), a path outside the corpus, more than ten pages in one call, a reason matching
-a likely secret, a page whose frontmatter is not a shape this can read (CRLF, a BOM, an unterminated
-`---`), a reference in a frontmatter field the sweep does not rewrite, and a body the writer could
-not reconcile in one retry. Every refusal names the page. The length bounds on `paths` and `why` are
-checked inside `BrainService.delete_pages`, within the audited seam, so a refusal is an audited call
-rather than a silent one.
+```sh
+.venv/bin/stigmergy-queue list --status queued --status claimed   # is the removal still waiting?
+.venv/bin/stigmergy-queue show <id>                               # its trace, attempts and latency
+```
+
+Refused **at the door**, with nothing queued: a scoped caller, an entity page (an identity is merged
+away by a repair, never deleted at this door), a path outside the corpus, more than ten pages in one
+request, an empty reason. The length bounds on `paths` and `why` are checked inside
+`BrainService.delete_pages`, within the audited seam, so a refusal is an audited call rather than a
+silent one.
+
+Refused **by the worker**, as a `rejected` capture whose report says why and whose `reason_code` is
+`unremovable`: a page that is not there, a page whose frontmatter is not a shape this can read
+(CRLF, a BOM, an unterminated `---`), a plan over `$STIGMERGY_REPAIR_MAX_PLAN_BYTES`, a reference in
+a frontmatter field the sweep does not rewrite, a body the writer could not reconcile in one retry,
+a gate's veto, and a dead link the sweep would have left behind. Every one of those lands nothing at
+all. A reason that matches a likely secret or a personal-data pattern is refused there too, under
+`secret`/`pii`, by the same scan every capture's material passes — the reason becomes a commit
+message, which is the one place no gate looks.
 
 **The undo is `git revert` in the knowledge repo**, by an operator with a checkout. When the sweep
 rewrote a `views/` or `sources/` page, that revert is an operator commit in a machine-owned zone —
@@ -647,41 +670,47 @@ other row is a record of something that actually happened in the corpus.
 
 ### A view that did not catch up
 
-**Usually you do not have to do anything.** The librarian worker converges `views/` to the corpus
-on its own interval, whenever its queue is idle — an ordinary capture, a 🧠 gesture, a submitted
-meeting or document, an applied repair, an entity born and a hand edit are all covered, and so is
-an entity that has never had a view at all. `stigmergy-views` is for when you do not want to wait:
+**There is nothing for you to do, and no command to run.** The librarian worker converges `views/`
+to the corpus from its idle branch, and it is the only thing that can — nothing else in the
+deployment may write that zone ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). An
+ordinary capture, a 🧠 gesture, a submitted meeting or document, a removal, an applied repair, an
+entity born and a hand edit are all covered, and so is an entity that has never had a view at all,
+because the pass asks the corpus what diverges rather than waiting to be told.
 
-```sh
-.venv/bin/stigmergy-views regenerate --entity acme-corp           # exactly this entity
-.venv/bin/stigmergy-views regenerate --stale                      # every entity whose view no longer matches its members or its backlinks
-.venv/bin/stigmergy-views regenerate --sweep                      # what the worker's periodic pass does, right now
-.venv/bin/stigmergy-views regenerate --entity acme-corp --force   # bypass staleness; re-attempt a withheld synthesis
-```
+**Two triggers, so "wait for the interval" is usually not what happens.** The pass is due when its
+interval has elapsed, and ALSO on the first idle tick after the worker took a queued item to a
+terminal state — a filing, a meeting, a document or a removal. That second trigger is why a
+`brain_delete` does not leave a rollup citing pages it deleted for up to fifteen minutes: the queue
+goes quiet, and the sweep runs. What a repair changed is picked up by the interval, or by the next
+queued item.
 
-`--sweep` is the UNION of `--stale` and `--all`, and neither of those alone converges the zone:
-`--stale` cannot create a view for an entity that never had one, and `--all` cannot remove one
-whose members have all disappeared. Prefer `--sweep` when you want the repo correct;
-[`views.md`](./views.md) has the table.
+A withheld synthesis is not a bug: the skeleton (timeline, backlinks) still ships and stays current.
+It is re-attempted when the entity's own inputs change — `member_hash` over the members,
+`backlink_hash` over the backlinks the page renders — and not before. There is no lever that
+re-attempts one on demand, and there is no longer a road that could offer you one.
 
-A withheld synthesis is not a bug: the skeleton (timeline, backlinks) still ships, and
-`--force` is the operator-triggered retry — the periodic pass will not retry one on its own,
-because neither staleness signal changed (`member_hash` over the members, `backlink_hash` over the
-backlinks the page renders). Re-running against an unchanged corpus is a no-op.
-
-**The two knobs on the periodic pass** (both on the librarian worker, both documented in full in
+**The knobs on the pass** (all on the librarian worker, all documented in full in
 [`librarian.md`](./librarian.md)'s environment table):
 
 | Var | Default | What it does |
 |---|---|---|
-| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | `900` | how often the idle worker converges `views/`. `0` turns the pass off entirely; a negative value is refused at startup |
+| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | `900` | the BACKSTOP interval; the post-work trigger above fires regardless of it. `0` turns the pass off entirely, which leaves only the post-meeting hook; a negative value is refused at startup |
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | `10` | how many entities ONE pass may regenerate or remove — each is a model call. The surplus is picked up by the next pass |
-| `STIGMERGY_VIEWS_MODEL` | the librarian's DEFAULT (`anthropic:claude-sonnet-5`) | the model a view's synthesis is WRITTEN with. It defaults to the librarian's compile-time default rather than to `CLEAN_MODEL`, because every unattended caller runs inside the worker, whose boot strips `$OPENAI_API_KEY` on purpose — a view agent inheriting the read path's model can only raise there. Note the edge: setting `STIGMERGY_LIBRARIAN_MODEL` moves the FILING agent and not this one — views and repair each hold their own knob, one model per artifact. One knob moves the worker and an operator's own `stigmergy-views regenerate` together |
+| `STIGMERGY_VIEWS_MODEL` | the librarian's DEFAULT (`anthropic:claude-sonnet-5`) | the model a view's synthesis is WRITTEN with. It defaults to the librarian's compile-time default rather than to `CLEAN_MODEL`, because every caller runs inside the worker, whose boot strips `$OPENAI_API_KEY` on purpose — a view agent inheriting the read path's model can only raise there. Note the edge: setting `STIGMERGY_LIBRARIAN_MODEL` moves the FILING agent and not this one — views and repair each hold their own knob, one model per artifact |
 
-The pass records itself in `job_runs` under the job name `views-sweep` (distinct from `views`, an
-operator's own run, and `views-on-meeting`, the post-filing hook), and prints a `view sweep:` line
+The pass records itself in `job_runs` under the job name `views-sweep` (distinct from
+`views-on-meeting`, the post-filing hook), and prints a `view sweep:` line
 on the worker's stdout when it moved something. What a ceiling deferred is in that row's
-`stats.skip_reasons`, spelled `run-ceiling-reached(N)` — the same wording the repair proposer uses.
+`stats.skip_reasons`, spelled `run-ceiling-reached(N)` — the same wording the repair pass uses.
+
+```sql
+SELECT job, status, finished_at, stats FROM job_runs
+WHERE job LIKE 'views%' ORDER BY started_at DESC LIMIT 10;
+```
+
+If a view is still listed by the gardener's `stale-view` check after several passes have run, that
+row is where to look: a ceiling that keeps deferring, a fault the pass swallowed, or a sweep that
+never ran because the queue is never idle.
 
 ### Postgres backup / restore
 
@@ -746,8 +775,11 @@ to cut off a leaked token faster than a deploy** — if that is not fast enough,
 
 ### The librarian GitHub App + the filing model's provider key
 
-Both live in Fly secrets, which are app-wide — the public server's environment carries them too,
-the accepted residual of one app for three process groups. If either is suspected:
+Both live in Fly secrets, which are app-wide. The public server's environment carries the filing
+model's key as the accepted residual of one app for three process groups; it carries the App
+deliberately, because the index webhook reads the knowledge repo's pushed files with it. What it
+cannot do with either is write: no code in that process commits or pushes
+([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). If either is suspected:
 
 1. **App** — GitHub → the App's page → *Install App* → uninstall it from the knowledge repo.
    Every push then fails, in-flight items land `failed`, and **nothing is lost**: the captures
@@ -980,7 +1012,7 @@ it: `make index-rebuild` locally, `make rebuild-staging` for staging.
 **Every `ask` erroring at once after a registry commit.** Malformed
 `ops/entity-registry.json` — see Recovery; the one-line `python3 -c` check settles it.
 
-**`brain_delete` refuses with "there is nothing for you to decide at that id".** The caller's
+**`brain_delete` refuses with "there is nothing for you to remove at those paths".** The caller's
 identity is audience-RESTRICTED in `ops/identities.json`, and a removal needs an unrestricted one
 (see Removing pages). The sentence is deliberately anonymous — it is the same one for a caller who
 may not act and for a path that does not exist — so it never confirms a page or a referrer. The fix

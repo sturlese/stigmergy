@@ -216,9 +216,13 @@ def check_stale_views(repo: str) -> list[dict]:
             check=CHECK_STALE_VIEW, severity=SEVERITY_WARN, subject=entity_id,
             detail="the view no longer matches the corpus — its member set or the backlinks it "
                    "cites have changed since it was last generated",
-            # Backticks baked into the stored string, so `--json` and the printed report carry
-            # the identical value; the runnable command is the text between them.
-            suggested_action=f"`stigmergy-views regenerate --entity {entity_id}`",
+            # No command: the worker's own sweep converges `views/` from state, and it runs on
+            # every idle branch (ADR 044 D3). A finding that told an operator to run something
+            # would be an executable promise nothing keeps — what this one says is that it will
+            # take care of itself, and roughly when.
+            suggested_action="no command — the librarian worker regenerates it on its next idle "
+                             "pass; a view still listed here after several is worth checking the "
+                             "worker's job runs for",
         )
         for entity_id in view_staleness.list_stale_entities(repo)
     ]

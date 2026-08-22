@@ -311,6 +311,176 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None)
             raise
 
 
+# ── the removal flow: a person's own deletion, performed by the ONE writer (ADR 044 D3) ───────
+# The third kind that does not ride `process_item`, and the only one whose material is not material
+# at all: a `delete` row carries the REASON a person gave, and its hints carry the pages. What it
+# shares with every other row is everything that makes a queue worth having — a durable row, a
+# lease, an attempt count, an audited submitter, and `brain_submissions` to read the outcome from.
+#
+# The judgment was made at the door: only an identity that can see the whole corpus may queue one,
+# because a removal touches every page that refers to the ones it names. Nothing here re-decides
+# that. What runs here is the part that needs a checkout and a credential — and this process is
+# the only one that has either.
+_STALE_BASE_TAIL_DELETE = (
+    "against a commit the remote may have moved past, so the pages it would remove and the pages "
+    "it would rewrite are both read from a stale tree. The removal is left in the queue")
+
+
+def process_delete_item(conn, item: dict, deps: Deps) -> Result:
+    """Take one claimed `delete` row to a terminal state.
+
+    The sequence, and why each step is where it is:
+
+    1. **`_pre_agent`, unchanged.** The reason is text a person wrote, so it is scanned for secrets
+       and personal data exactly as any capture's material is — a token pasted into "why" would
+       otherwise land in a commit message, where no gate looks.
+    2. **Plan against THIS item's base**, in a fresh worktree: which pages go, and which pages
+       refer to them. A refusal here is the person's to act on (a page that is not there, a path
+       the lane may not touch), so it is `rejected` with the lane's own sentence, never `failed`.
+    3. **A model writes the pages that stay** (`repair.sweep`), because dropping a reference is a
+       prose problem: a sentence that cited a removed page still has to read.
+    4. **The nine gates judge the diff**, told the two facts only this caller knows — which paths
+       it may remove, and the exact bytes it computed for every page it rewrites.
+    5. **Commit and push**, through the same lease-fenced seam every filing uses. The trailer names
+       the person: this is the one write in the system a human decided (ADR 043 D2).
+
+    The per-page diffs go into the row's `report`, and that is the whole of ADR 043 D5 in the new
+    shape: nobody read that prose before it landed, so the reading happens afterwards, wherever the
+    row is read back.
+    """
+    from stigmergy.repair import brief as repair_brief
+    from stigmergy.repair import deletion as repair_deletion
+    from stigmergy.repair import sweep as repair_sweep
+    from stigmergy.repair.errors import RepairError
+    from stigmergy.repair.settings import RepairSettings
+
+    material, early = _pre_agent(conn, item, deps)
+    if early is not None:
+        return early
+    settings = deps.settings
+    paths = schema.delete_paths(item.get("hints"))
+    base, deps = _resolve_filing_base(item, deps, log_noun="removal",
+                                      stale_tail=_STALE_BASE_TAIL_DELETE)
+    repair_settings = RepairSettings.from_env()
+
+    with base_inputs.linter_at(deps.repo, base) as linter_path, \
+            gitcmd.ephemeral_worktree(deps.repo, base.sha, settings.worktree_root) as worktree:
+        spend: list = []
+        try:
+            ops = repair_deletion.plan(worktree, paths)
+            oversize = repair_deletion.oversize_reason(ops, repair_settings.max_plan_bytes)
+            if oversize:
+                raise RepairError(oversize)
+            ops = repair_sweep.write_sync(worktree, ops,
+                                          skill_text=repair_brief.read_skill(worktree),
+                                          model_name=repair_settings.model, spend=spend)
+            diffs = repair_deletion.unified_diffs(worktree, ops)
+            edited, findings = repair_deletion.apply_declared(worktree, ops)
+        except RepairError as ex:
+            # Every sentence this lane raises is written to be published (its own module
+            # docstrings), so it travels verbatim into a report the person who asked reads back.
+            return Result(schema.REJECTED, "", report.rejected_unremovable(reason=str(ex)))
+        if findings:
+            return Result(schema.REJECTED, "", report.rejected_unremovable(
+                reason=f"the pages moved under this removal "
+                       f"({', '.join(sorted({f.code for f in findings}))}) — nothing was deleted"))
+        return _commit_delete(conn, item, deps, worktree, ops, diffs, edited, material,
+                              linter_path=linter_path, model_calls=len(spend))
+
+
+def _commit_delete(conn, item: dict, deps: Deps, worktree: str, ops: list, diffs: dict,
+                   edited: list, material: str, *, linter_path: str, model_calls: int) -> Result:
+    """The gates, the commit and the push for a performed removal.
+
+    `material=""` and `outcome=None` are honest: nothing was captured and no filing agent wrote
+    here — the ops came off a row a person typed. Every gate that reads either is scoped to CREATED
+    pages, and this diff has none.
+    """
+    from stigmergy.repair import deletion as repair_deletion
+
+    settings = deps.settings
+    ctx = gates.GateContext(
+        worktree=worktree, entries=gitcmd.diff_entries(worktree),
+        added=gitcmd.added_lines(worktree),
+        material="", outcome=None, registry=deps.registry,
+        linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
+        # The three caller-scoped facts this flow is allowed to declare, each derived from the ops
+        # that were just performed: the lane the plan spans, the paths it may REMOVE, the bytes it
+        # computed for every page it rewrites, and — among those — the machine-zone pages whose
+        # provenance stamps it only ever removes a link from.
+        write_prefixes=repair_deletion.lane_for(ops),
+        deletions_allowed=frozenset(repair_deletion.deleted_paths(ops)),
+        expected_bytes=repair_deletion.expected_bytes(ops),
+        provenance_pages=repair_deletion.provenance_scrubs(ops))
+    veto = gates.vetoes(gates.run_gates(ctx))
+    if veto:
+        return Result(schema.REJECTED, "", report.rejected_unremovable(
+            reason=f"the gates refused this removal, so nothing was committed or pushed: "
+                   f"{'; '.join(f'{f.gate}/{f.code}' for f in veto)}"))
+    surviving = _surviving_dead_links(worktree, linter_path, ops)
+    if surviving:
+        return Result(schema.REJECTED, "", report.rejected_unremovable(reason=surviving))
+
+    message = _delete_commit_message(item, ops, material)
+    sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this removal")
+    return Result(schema.FILED, f"{repair_deletion.deleted_paths(ops)[0]}@{sha}",
+                  report.filed_delete(deleted=repair_deletion.deleted_paths(ops),
+                                      rewritten=diffs, commit=sha, model_calls=model_calls))
+
+
+def _surviving_dead_links(worktree: str, linter_path: str, ops: list) -> str:
+    """The knowledge repo's OWN linter, over the whole tree, asked one question: does anything
+    still link to a page this sweep removed? Returns the refusal, or `""`.
+
+    `gate_contract` filters the linter's findings to the pages a diff TOUCHED, which is right for
+    every other flow and blind for this one — a deletion's blast radius is the whole graph, and a
+    page the sweep never planned is exactly where a missed reference would sit. Scoped to the
+    deleted stems rather than vetoing on ANY error: a corpus that already carries an unrelated
+    contract error is not this removal's fault.
+    """
+    from stigmergy.repair import deletion as repair_deletion
+
+    stems = {repair_deletion.page_stem(path) for path in repair_deletion.deleted_paths(ops)}
+    report_json = gates.lint_report(worktree, linter_path)
+    surviving = set()
+    for finding in report_json.get("findings", []):
+        if finding.get("check") != gates.DEAD_LINKS_CHECK or finding.get("severity") != "error":
+            continue
+        target = gates.dead_link_target(
+            gates.Finding("contract", gates.DEAD_LINKS_CHECK, str(finding.get("message", ""))))
+        if target and repair_deletion.link_stem(target) in stems:
+            surviving.add((str(finding.get("file", "")), target))
+    if not surviving:
+        return ""
+    named = ", ".join(f"{path} still links [[{target}]]" for path, target in sorted(surviving))
+    return (f"this removal would leave the corpus with a dead link, so nothing was committed or "
+            f"pushed: {named}. The sweep did not plan a rewrite of that page — if it happens "
+            f"twice, the reference is spelled in a shape the sweep does not read")
+
+
+def _delete_commit_message(item: dict, ops: list, reason: str) -> str:
+    """The commit a removal lands as. `Approved-by:` names the person who asked for it — this is
+    the ONE write in the system a human decided, and the trailer is half of how `git log` answers
+    who authorized a change to the corpus (the other half is the App author line).
+
+    `reason` is the MATERIAL the flow already read and already scanned for secrets, handed in
+    rather than re-read off the row here: the bytes that go into a permanent commit message must be
+    the same bytes `_pre_agent` cleared, and a second read is a second chance for the two to be
+    different text.
+    """
+    from stigmergy.repair import deletion as repair_deletion
+
+    removed = repair_deletion.deleted_paths(ops)
+    stems = [repair_deletion.page_stem(path) for path in removed]
+    first = stems[0] if stems else "the knowledge repo"
+    subject = (f"chore(repair): delete {len(removed)} page(s) — {first}"
+               + ("…" if len(stems) > 1 else ""))
+    reason = " ".join(str(reason or "").split())
+    actor = " ".join(str(item.get("submitted_by") or "").split())
+    return (f"{subject}\n\n{reason}\n\n"
+            f"Capture #{item['id']}.\nApproved-by: {actor}")
+
+
 def _run_in_worktree(conn, item: dict, deps: Deps, material: str, worktree: str,
                      passes: "AgentPasses | None" = None, *, linter_path: str = "") -> Result:
     """The retry POLICY: one pass, one corrective pass, then refuse. `OutcomeShapeError` reaches

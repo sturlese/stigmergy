@@ -57,8 +57,9 @@ DEFAULT_POLL_INTERVAL_S = 3.0
 # its OWN clock — an empty queue polls every few seconds, and the pass costs a corpus parse.
 VIEW_SWEEP_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S"
 DEFAULT_VIEW_SWEEP_INTERVAL_S = 900.0
-# `0` is a real setting, not a broken one: it turns the pass off, leaving the post-meeting hook and
-# `stigmergy-views regenerate` as the only roads — what this deployment had before the pass existed.
+# `0` is a real setting, not a broken one: it turns the pass off, leaving the post-meeting hook as
+# the only road — which converges nothing else, so `views/` then goes stale and stays stale. The
+# switch to reach for while somebody investigates something, never a steady state.
 VIEW_SWEEP_OFF = 0.0
 
 # How many entities ONE pass may regenerate or remove. #69's lesson, applied to a second unattended
@@ -140,8 +141,8 @@ def is_repo_checkout(path: str) -> bool:
 
     `.git` is a DIRECTORY in an ordinary clone but a FILE (a `gitdir:` pointer) in a
     `git worktree add` checkout, so `isdir` alone is the bug: it refuses a genuine worktree. That
-    was a real disagreement, not a hypothetical — an operator CLI refused a worktree
-    `stigmergy-views` accepted, for the same directory.
+    was a real disagreement, not a hypothetical — one operator CLI refused a worktree another
+    accepted, for the same directory.
 
     Bare `exists` is the OTHER bug: it accepts a stray file named `.git` — a leftover, a note, a
     binary — and the caller then commits with the operator's own identity into a directory git does
