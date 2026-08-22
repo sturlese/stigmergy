@@ -99,8 +99,10 @@ def test_a_row_that_was_waiting_on_a_person_becomes_a_skip_when_the_ddl_runs(con
 
     The ORDER is what this test really pins, and `schema._ALL_DDL` calls it load-bearing: the
     status migration runs BEFORE the CHECK swap. Reversed, the swap would refuse the very rows the
-    migration exists to fix, and the DDL would fail on every start against a real deployment. The
-    constraint is dropped here on purpose — that is the state the old release left the column in.
+    migration exists to fix.
+
+    It drops the constraint first, which is NOT the state a real upgrade starts from — the twin
+    below is the one that starts from the real state, and it is the one that caught this.
     """
     with conn.cursor() as cur:
         cur.execute(f"ALTER TABLE repairs DROP CONSTRAINT IF EXISTS {schema.STATUS_CHECK_NAME}")
@@ -115,6 +117,61 @@ def test_a_row_that_was_waiting_on_a_person_becomes_a_skip_when_the_ddl_runs(con
     assert row["status"] == schema.STATUS_SKIPPED
     assert "waiting on a person" in row["reason"]
     assert row["content_key"] == "was-waiting", "the row is migrated, never rewritten"
+
+
+def test_the_migration_runs_against_the_constraint_the_old_release_actually_left(conn):
+    """**Found on the deployment, and this suite had the blind spot written into it.**
+
+    OLD BEHAVIOUR: the whole DDL sequence aborted with `CheckViolation` on any database carrying a
+    row whose status was retired. `ALTER TABLE ... RENAME` brings the table's CONSTRAINTS with it,
+    so an upgraded database still has `repair_proposals_status_check` — which allows
+    `pending|approved|rejected|applied|failed` and does NOT allow `skipped`. The migration's own
+    `UPDATE ... SET status = 'skipped'` therefore violated the constraint that was still standing,
+    before the swap that would have replaced it ever ran. The server exited 2 on every start with
+    "cannot read the index (CheckViolation)", and the app crash-looped.
+
+    The test above passes because it DROPS the constraint first — it constructs the one state in
+    which the migration works and asserts that. This one starts where a real upgrade starts: the
+    old constraint in place, a retired row under it.
+
+    The fix is one statement of ordering: the legacy constraint is dropped BEFORE the migration
+    writes a value it does not permit, and the swap adds the new one after. That is three steps,
+    not two, and it cannot be expressed as one atomic drop-and-add around an UPDATE."""
+    with conn.cursor() as cur:
+        # Exactly what `ALTER TABLE repair_proposals RENAME TO repairs` leaves behind.
+        cur.execute(f"ALTER TABLE repairs DROP CONSTRAINT IF EXISTS {schema.STATUS_CHECK_NAME}")
+        cur.execute("ALTER TABLE repairs DROP CONSTRAINT IF EXISTS repair_proposals_status_check")
+        cur.execute("ALTER TABLE repairs ADD CONSTRAINT repair_proposals_status_check "
+                    "CHECK (status IN ('pending', 'approved', 'rejected', 'applied', 'failed'))")
+        cur.execute("INSERT INTO repairs (kind, target_paths, ops, content_key, status) "
+                    "VALUES (%s, '[]'::jsonb, '[]'::jsonb, 'was-rejected', 'rejected') "
+                    "RETURNING id", (schema.KIND_EDITS,))
+        rejected_id = cur.fetchone()[0]
+
+    schema.ensure_repair_schema(conn)          # red before the fix: CheckViolation
+
+    assert store.repair(conn, rejected_id)["status"] == schema.STATUS_SKIPPED
+    with conn.cursor() as cur:
+        cur.execute("""SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                        WHERE conrelid = 'repairs'::regclass AND contype = 'c'""")
+        defs = " ".join(r[0] for r in cur.fetchall())
+    assert schema.STATUS_SKIPPED in defs, "the new vocabulary never got installed"
+    assert "'pending'" not in defs, "the legacy constraint survived the swap"
+
+
+def test_the_ddl_is_still_idempotent_on_a_database_that_has_already_migrated(conn):
+    """The benign twin of the fix: dropping the legacy constraint before the migration must not
+    make a second run do anything. Every deployed process runs this DDL at every start."""
+    schema.ensure_repair_schema(conn)
+    applied_id = _applied(conn, key="already-here")
+
+    schema.ensure_repair_schema(conn)
+
+    assert store.repair(conn, applied_id)["status"] == schema.STATUS_APPLIED
+    with conn.cursor() as cur:
+        cur.execute("""SELECT count(*) FROM pg_constraint
+                        WHERE conrelid = 'repairs'::regclass AND contype = 'c'""")
+        assert cur.fetchone()[0] == 2, "a repeat run left a duplicate or a missing CHECK"
 
 
 def test_one_repair_per_content_key_WHATEVER_its_outcome(conn):

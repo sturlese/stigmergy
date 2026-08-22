@@ -120,6 +120,23 @@ _REPAIRS_COLUMNS = (
 # never applied and never refused: it is a repair that did not happen, which is what `skipped`
 # means. The reason says so rather than leaving a status a reader has to remember the history of.
 # Idempotent by construction — after the first run no row matches.
+# **Dropped BEFORE the migration below, and this ordering is the whole of a production defect.**
+# `ALTER TABLE ... RENAME` carries a table's CONSTRAINTS with it, so an upgraded database still has
+# `repair_proposals_status_check` — which permits `pending|approved|rejected|applied|failed` and
+# does NOT permit `skipped`. The migration's own UPDATE therefore violated the constraint that was
+# still standing, before the swap that replaces it ever ran: the whole DDL sequence aborted with
+# CheckViolation, the server exited 2 on every start, and the app crash-looped. It shipped green
+# because the test covering the migration dropped this constraint first — constructing the one
+# state in which the sequence works, which is not the state an upgrade starts from.
+#
+# So the swap is three steps, not two: drop the old vocabulary, write the new value, add the new
+# vocabulary. It cannot be one atomic drop-and-add, because an UPDATE has to happen in between.
+# The window where the column is unconstrained is inside `startup_ddl_lock` and closes two
+# statements later.
+_DROP_LEGACY_STATUS_CHECK = (
+    "ALTER TABLE repairs DROP CONSTRAINT IF EXISTS repair_proposals_status_check"
+)
+
 _MIGRATE_RETIRED_STATUSES = f"""
 UPDATE repairs
    SET status = '{STATUS_SKIPPED}',
@@ -193,9 +210,12 @@ _REPAIRS_KIND_CHECK = _check_swap("kind", KIND_CHECK_NAME, "repair_proposals_kin
 _REPAIRS_STATUS_CHECK = _check_swap("status", STATUS_CHECK_NAME, "repair_proposals_status_check",
                                     _STATUS_SQL_LIST)
 
-# Order is load-bearing: rename, then create, then columns, then the status migration, THEN the
-# CHECK swaps — a swap run before the migration would refuse the rows the migration exists to fix.
-_ALL_DDL = (_RENAME_FROM_PROPOSALS, _REPAIRS_DDL, *_REPAIRS_COLUMNS, _MIGRATE_RETIRED_STATUSES,
+# Order is load-bearing, and in BOTH directions — which is what the first version of it got wrong.
+# Rename, create, columns, then DROP THE LEGACY STATUS CHECK, then the status migration, then the
+# CHECK swaps. A swap run before the migration would refuse the rows the migration exists to fix;
+# a migration run before the legacy drop is refused by the constraint the rename brought with it.
+_ALL_DDL = (_RENAME_FROM_PROPOSALS, _REPAIRS_DDL, *_REPAIRS_COLUMNS,
+            _DROP_LEGACY_STATUS_CHECK, _MIGRATE_RETIRED_STATUSES,
             *_DROP_DECISION_COLUMNS, _REPAIRS_KIND_CHECK, _REPAIRS_STATUS_CHECK,
             _DROP_PENDING_KEY_INDEX, _REPAIRS_CONTENT_KEY_INDEX, _REPAIRS_STATUS_INDEX)
 
