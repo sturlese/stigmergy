@@ -9,8 +9,12 @@ being true (the case ADR 043 records). So the bodies are written, in ONE model c
 referring set — a question about how a set of pages refers to something must see the set — and
 code proves the bounds a reader would otherwise have to check by eye:
 
-  · the set of pages written IS the set of pages that refer to a going page — none outside it,
-    none missing, none twice;
+  · the set of pages written IS the set of AUTHORED pages that refer to a going page — none
+    outside it, none missing, none twice. A `views/` page is regenerated wholesale and a
+    `sources/` page is a filed document's provenance, so those stay code's: asking a model to
+    argue with a generated file produces bytes the next regeneration overwrites, and the first
+    real call on the deployment refused for exactly that reason — its own brief forbids editing
+    those zones, and it was right;
   · a body's title line stays, a body never opens a `---` block, a body is never emptied, and a
     body never GROWS past a small slack — a sweep reconciles references, it does not write;
   · and through `deletion.validate`, the same two bounds the apply proves again against the clone:
@@ -174,11 +178,13 @@ def compose(head: str, original_body: str, body_markdown: str) -> str:
     the frontmatter, a single trailing newline."""
     if body_markdown.strip("\n") == original_body.strip("\n"):
         return head + original_body
-    # The blank line belongs BETWEEN a frontmatter block and a body, and only there: a page with
-    # no readable head would otherwise gain a leading blank line on every sweep, which is a byte
-    # the sweep's blast radius has to account for and nobody asked for.
-    separator = "\n" if head else ""
-    return head + separator + body_markdown.strip("\n") + "\n"
+    # The separator is the page's OWN, never one this normalises to: the contract's usual shape is
+    # a blank line after the frontmatter, and a page written without one gained a byte on every
+    # sweep — observed on the deployment, on `wiki/entities/Hermes AI Labs.md`. A page that gained
+    # a byte is a page in the sweep's blast radius for a change nobody made, which is the rule
+    # `scrubbed` states about the closing fence one function over.
+    lead = original_body[:len(original_body) - len(original_body.lstrip("\n"))]
+    return head + lead + body_markdown.strip("\n") + "\n"
 
 
 # ── the prompt: the index, the marker, the fenced halves ─────────────────────────────────────
@@ -225,7 +231,7 @@ def validate_draft(worktree: str, ops, draft: SweepDraft) -> tuple[list[dict], l
     back is the one handed in.
     """
     reasons: list[str] = []
-    expected = set(deletion.scrubbed_paths(ops))
+    expected = set(deletion.written_paths(ops))
     returned = [str(p.path) for p in draft.pages]
     seen: set[str] = set()
     for path in returned:
@@ -243,10 +249,12 @@ def validate_draft(worktree: str, ops, draft: SweepDraft) -> tuple[list[dict], l
     stems = deletion.going_stems(ops)
     written: list[dict] = []
     for op in ops:
-        if str(op.get(schema.OP_KIND_KEY, "")) != deletion.OP_SCRUB:
+        path = str(op.get("path", ""))
+        if str(op.get(schema.OP_KIND_KEY, "")) != deletion.OP_SCRUB or path not in expected:
+            # A deletion op, or a machine-written page code already scrubbed whole — neither is
+            # the writer's, and both ride through untouched.
             written.append(dict(op))
             continue
-        path = str(op["path"])
         head, original = split_head(str(op.get("planned_after", "")))
         body = bodies[path]
         reasons += _body_reasons(path, original, body, stems)
@@ -319,14 +327,16 @@ async def write(worktree: str, ops, *, skill_text: str, model_name: str | None =
     the bounds, one retry carrying the reasons, the bounds again — and then a refusal, never a
     deterministic stand-in (the module docstring says why).
     """
-    scrubbed = deletion.scrubbed_paths(ops)
-    if not scrubbed:
+    authored = deletion.written_paths(ops)
+    if not authored:
+        # Nothing a person wrote refers to the going pages: the machine zones are code's whole
+        # answer, so there is no prose to reconcile and no model is asked.
         return [dict(op) for op in ops]
     stems = deletion.going_stems(ops)
     removed = {path: deletion.read_text(worktree, path) or ""
                for path in deletion.deleted_paths(ops)}
     bodies = {str(op["path"]): split_head(str(op.get("planned_after", "")))[1]
-              for op in ops if str(op.get(schema.OP_KIND_KEY, "")) == deletion.OP_SCRUB}
+              for op in ops if str(op.get("path", "")) in set(authored)}
     prompt = build_sweep_prompt(removed, bodies)
     agent = build_sweep_writer(skill_text, model_name=model_name)
     deps = SweepContext(worktree=worktree, stems=frozenset(stems))
@@ -342,7 +352,7 @@ async def write(worktree: str, ops, *, skill_text: str, model_name: str | None =
     except UsageLimitExceeded as ex:
         raise RepairError(
             f"the sweep writer ran out of its model budget before it could write the "
-            f"{len(scrubbed)} page(s) that refer to this deletion; nothing was stored and nothing "
+            f"{len(authored)} page(s) that refer to this deletion; nothing was stored and nothing "
             f"was changed — delete fewer pages at a time, or retry") from ex
     if reasons:
         raise RepairError(

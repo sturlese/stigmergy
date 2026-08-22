@@ -2,6 +2,7 @@
 and drive it over stdio with a real MCP client — the transport layer is part of the contract, so
 nothing here is an in-process shortcut. Skips without postgres."""
 import asyncio
+import json
 import time
 
 import pytest
@@ -33,6 +34,56 @@ def test_server_exposes_the_read_tools_and_ask_over_stdio(indexed):
             # `test_mcp_adapter.py::test_the_mounted_tool_list_is_exactly_the_eight_supported_tools`
             # — that one proves `build_mcp()`'s own output; this one proves the REAL entry point
             # mounts the same set over the wire.
+    _run(go())
+
+
+def test_brain_delete_answers_over_the_protocol_and_never_with_a_class_name(indexed):
+    """**Found on the deployment, not in the suite** (#132), and kept because the class of defect
+    outlived its cause.
+
+    OLD BEHAVIOUR: `brain_delete` cloned, ran a model over every referring page, scanned, linted
+    and pushed INSIDE the call. FastMCP drives a sync tool on the event-loop thread, so the sweep
+    writer's `asyncio.run` raised `RuntimeError: cannot be called from a running event loop`, and
+    the first real call over HTTP answered `brain_delete failed (RuntimeError)`. Every unit and
+    Postgres test passed, because every one of them called the service from an ordinary thread.
+    The fix ran the whole sequence in a worker thread.
+
+    That sequence is no longer here at all: the tool authorizes and QUEUES, and the librarian
+    worker does the writing (ADR 044 D3), so nothing on this path can await, clone or push and the
+    worker-thread hop went with the work. What survives is the property the fix was actually
+    defending, which no unit test can reach: driving the REAL server over the REAL transport, a
+    caller gets a caller-facing sentence rather than a class name. A tool that reaches an
+    unhandled exception is a tool whose behaviour on the deployment nobody has seen."""
+    _, fx = indexed
+
+    async def go():
+        async with mcp_session(fx, fx.STEWARD) as session:
+            out = await call_json(session, "brain_delete",
+                                  paths=["wiki/notes/Whatever.md"], why="a reason")
+            blob = json.dumps(out)
+            assert "Error" not in blob and "Exception" not in blob, (
+                f"brain_delete answered with a class name over the protocol: {blob}")
+            # An unrestricted identity, so it is queued rather than refused — and the queue
+            # acknowledgement is what a caller reads back through `brain_submissions`.
+            assert out.get("id"), blob
+            assert out.get("status") == "queued", blob
+
+    _run(go())
+
+
+def test_a_scoped_identity_is_refused_by_name_over_the_protocol(indexed):
+    """The benign twin's opposite half: the refusal must also arrive as a sentence. Removal is the
+    unrestricted identity's act, and a scoped caller has to be told so in words they can act on —
+    over the transport, where the whole stack is in play."""
+    _, fx = indexed
+
+    async def go():
+        async with mcp_session(fx, fx.ANA) as session:
+            out = await call_json(session, "brain_delete",
+                                  paths=["wiki/notes/Whatever.md"], why="a reason")
+            assert out.get("error"), json.dumps(out)
+            assert "Error" not in out["error"] and "Exception" not in out["error"], out["error"]
+
     _run(go())
 
 

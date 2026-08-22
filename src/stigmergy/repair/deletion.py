@@ -236,10 +236,16 @@ def _readable_frontmatter(text: str) -> bool:
 
 
 # ── the sweep, on one page's bytes ────────────────────────────────────────────────────────────
-def scrubbed(text: str, stems: set[str]) -> str:
+def scrubbed(text: str, stems: set[str], *, machine_written: bool = False) -> str:
     """Code's half of ONE page's planned bytes: the frontmatter with every entry naming a going
     page dropped, and the body VERBATIM — the body is the writer's (`repair.sweep`), and this is
     the page it is handed and the frontmatter `validate` holds its answer to.
+
+    `machine_written` scrubs the BODY too, deterministically, and it is how the machine zones are
+    treated: a `views/` page is REGENERATED wholesale by the view sweep, and a `sources/` page is a
+    filed document's provenance. Neither is prose anybody reconciles, so handing one to a writer
+    asks a model to argue with a generated file and produce bytes the next regeneration overwrites.
+    There, unlinking IS the right answer — ADR 039 B3's own rule, kept exactly where it was right.
 
     Pure, and byte-exact about the parts it does not touch: the frontmatter block is reassembled
     from its own lines and the body is spliced rather than re-rendered, so a page whose `related:`
@@ -250,14 +256,50 @@ def scrubbed(text: str, stems: set[str]) -> str:
     if len(text) == len(rest):
         # No frontmatter block at all. The linter refuses such a page for other reasons; the body
         # is still the writer's to reconcile rather than left pointing at a page that is gone.
-        return text
+        return _unlinked_body(text, stems) if machine_written else text
     # The separator is taken FROM THE FILE rather than assumed: a page whose closing `---` has no
     # newline after it would otherwise gain one, and a page that gained a byte is a page in the
     # sweep's blast radius — a scrub op, a model call, a commit — for a change nobody made.
     head = text[:len(text) - len(rest)]
     front_lines = _scrubbed_front(front.split("\n"), stems)
+    body = _unlinked_body(rest, stems) if machine_written else rest
     return ("---\n" + "\n".join(front_lines) + "\n---" + ("\n" if head.endswith("\n") else "")
-            + rest)
+            + body)
+
+
+# A markdown link WITH its text: `_MD_LINK_RE` asks only where a link points, which is the
+# reference question; unlinking needs what to leave behind.
+_MD_LINK_WITH_TEXT_RE = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+
+
+def is_machine_written(path: str) -> bool:
+    """Is this page one nobody authored — a derived view, or a filed document's provenance? THE
+    one place that question is asked, because it decides which half of a sweep owns the body."""
+    return str(path or "").startswith(PROVENANCE_ZONE_PREFIXES)
+
+
+def _unlinked_body(text: str, stems: set[str]) -> str:
+    """Unlink, never delete — ADR 039 B3's rule, kept for the machine zones alone. `[[X]]` becomes
+    `X`, `[[X|alias]]` becomes `alias`, a markdown link becomes its text, so the line that named a
+    page survives the page."""
+    out, cut = [], 0
+    for match, stem in _live_links(text):
+        if stem not in stems:
+            continue
+        target, _, alias = match.group(1).partition("|")
+        display = alias.strip() or target.split("#", 1)[0].strip()
+        out.append(text[cut:match.start()])
+        out.append(display)
+        cut = match.end()
+    out.append(text[cut:])
+
+    def _md(match):
+        target = _md_target(match.group(2))
+        if not target or link_stem(urllib.parse.unquote(target)) not in stems:
+            return match.group(0)
+        return match.group(1)
+
+    return _MD_LINK_WITH_TEXT_RE.sub(_md, "".join(out))
 
 
 def _scrubbed_front(front_lines: list[str], stems: set[str]) -> list[str]:
@@ -439,7 +481,7 @@ def plan(worktree: str, paths) -> list[dict]:
         text = read_text(worktree, rel)
         if text is None:
             continue                    # unreadable as text: it declares no wikilink either
-        after = scrubbed(text, stems)
+        after = scrubbed(text, stems, machine_written=is_machine_written(rel))
         if references(text, stems) and not _readable_frontmatter(text):
             raise RepairError(
                 f"{rel} refers to a page this deletion removes, and its frontmatter is not a shape "
@@ -458,6 +500,13 @@ def plan(worktree: str, paths) -> list[dict]:
         ops.append({schema.OP_KIND_KEY: OP_SCRUB, "path": rel,
                     "expected_before_hash": sha256(text), "planned_after": after})
     return ops
+
+
+def written_paths(ops) -> list[str]:
+    """The scrubbed pages a MODEL writes: the authored ones. A machine-written page is code's
+    whole answer (`scrubbed(..., machine_written=True)`), so it is never in a writer's prompt and
+    never one of the pages it must hand back."""
+    return [path for path in scrubbed_paths(ops) if not is_machine_written(path)]
 
 
 def going_stems(ops) -> set[str]:
@@ -651,6 +700,13 @@ def validate(worktree: str, ops) -> list[gates.Finding]:
         current = read_text(worktree, path)
         if not planned or current is None:
             continue                    # already refused above, by name
+        if is_machine_written(path):
+            if planned != scrubbed(current, stems, machine_written=True):
+                out.append(_finding(FRONTMATTER_REWRITTEN_CODE,
+                                    f"the planned bytes of {path} are not code's own scrub of it — "
+                                    f"a derived or provenance page is nobody's prose to write",
+                                    path))
+            continue
         if _frontmatter_of(planned) != _frontmatter_of(scrubbed(current, stems)):
             out.append(_finding(FRONTMATTER_REWRITTEN_CODE,
                                 f"the planned bytes of {path} carry a frontmatter that is not "

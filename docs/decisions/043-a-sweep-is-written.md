@@ -63,7 +63,14 @@ referred to one of them (B3's unit of approval stands). What changes is who writ
   pointers naming a going page are dropped exactly as today (`_scrubbed_front` and what it calls).
   That is structured data and the decision is a lookup; a model asked to do it would be asked to
   re-derive a fact the parser already states.
-- **The body is the model's.** It is handed the doomed pages (what is disappearing, and what it
+- **The machine zones stay code's, body and all.** A `views/` page is REGENERATED wholesale by
+  the view sweep and a `sources/` page is a filed document's provenance: neither is prose anybody
+  reconciles, so both are unlinked deterministically — ADR 039 B3's rule, kept exactly where it
+  was right. Discovered on the first real deletion: handed two views and two entity pages, the
+  writer returned nothing at all, because the brief it shares with the proposer forbids editing
+  those zones. It was right twice over — a model arguing with a generated file produces bytes the
+  next regeneration overwrites.
+- **The body of an AUTHORED page is the model's.** It is handed the doomed pages (what is disappearing, and what it
   said), every page that names one of them, and the plan code already made, and it returns each
   referencing page's body with the references reconciled — a sentence rewritten, a callout that
   only existed because of the doomed page removed, a markdown link retired along with the
@@ -71,8 +78,8 @@ referred to one of them (B3's unit of approval stands). What changes is who writ
   a set of pages refers to something must see the set, the lesson the duplicate-identity pass
   learned about pairs.
 - **Code proves the bounds**, and they are the bounds a steward would check by eye:
-  1. the set of pages the model returned IS the set of pages that refer to a going page — none
-     outside it, none missing, none twice;
+  1. the set of pages the model returned IS the set of AUTHORED pages that refer to a going page
+     — none outside it, none missing, none twice;
   2. each returned page's frontmatter is byte-identical to code's own scrub of it;
   3. each body keeps its `# Title` line, opens no `---`, is never emptied, grows by at most a
      sentence or two, and loses at most a handful of lines that referred to nothing being removed.
