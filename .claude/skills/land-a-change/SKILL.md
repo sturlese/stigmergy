@@ -75,4 +75,4 @@ variables, which `.env` stores under `R2_*` names for the smoke check. Getting t
 wrong is silent and fatal — the row lands in the deployment's queue while the bytes go to a
 local store, and the capture fails seconds later inside the worker. No CLI enqueues any more (a
 capture is `brain_submit` or the console), so nothing refuses that combination on your behalf:
-check both halves point at the same deployment before you drop anything.
+check both halves point at the same deployment before you submit anything.

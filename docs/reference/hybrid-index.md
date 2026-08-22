@@ -127,11 +127,12 @@ than raising, so startup surfaces the `--rebuild` hint instead of a raw `Undefin
 This Postgres holds more than a cache. `capture_queue`, `audit_log`, `job_runs` and
 `ingest_errors` (`stigmergy.capture.schema.DURABLE_TABLES`) are **durable**: a queued capture exists
 nowhere else until the librarian files it, so it cannot be rebuilt from git the way `pages_index`
-can. `review_decisions` (the append-only verdict record, created by
-`stigmergy.server.review.ensure_review_schema`) shares the database on the same terms. That is why
-`store.init_schema` drops `pages_index` **by name** and always must — a "drop the schema and
-rebuild" shortcut would take the queue with the cache. `stigmergy-index --rebuild` leaves all four
-durable tables standing, asserted by
+can. `repairs`, `gardener_findings` and `admin_actions` share the database on the same terms — the
+ledger of what the worker did to the corpus, which is the reading nobody gave it beforehand
+([ADR 044](../decisions/044-the-capture-is-the-approval.md)). That is why `store.init_schema` drops
+`pages_index` **by name** and always must — a "drop the schema and rebuild" shortcut would take the
+queue with the cache. `stigmergy-index --rebuild` leaves all four durable tables standing,
+asserted by
 `tests/capture/test_queue_pg.py::test_capture_queue_survives_stigmergy_index_rebuild`.
 See [capture.md](./capture.md).
 

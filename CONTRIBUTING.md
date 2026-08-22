@@ -61,7 +61,7 @@ line. A layering that lives only in a README is decoration; these are tests:
 | the librarian never imports the server | one direction only; every cross-package reach is a named, exercised exception |
 | every reader of `pages_index` names an ACL predicate, or is on a declared exception list | `acl.visible()` is the ONE place read access is decided |
 | the UNTRUSTED-DATA fence is built only in `stigmergy.text` | six separate copies once existed and one took the weak variant, so hostile content could close the fence early |
-| the librarian reaches `stigmergy.entities` from its proposal writer only, and only for the birth fold, the generator and its errors | filing and governance share exactly one seam; a second import site is a second place an identity could be born without the fold that keeps twins out |
+| the librarian reaches `stigmergy.entities` from `librarian/identity.py` only, and only for the birth fold, the generator and its errors | filing and governance share exactly one seam; a second import site is a second place an identity could be born without the fold that keeps twins out |
 | every declared exception must still be used | an exception list nobody prunes becomes a permission slip |
 | the README's countable claims match the code | `tests/test_readme_claims.py` — four of them had already drifted |
 | the reference docs name no command, variable or count the code does not have | `tests/test_docs_claims.py` — 60k words nobody can afford to re-read, so the checkable part is checked. `docs/decisions/` is exempt: an ADR records a decision, not the present |

@@ -12,8 +12,8 @@ description: >
 # validate-deployment: does the deployed stack actually work?
 
 The test suite proves the code. This proves the **deployment**: real Postgres, real evidence
-store, real Slack workspace, real models, real GitHub Actions. Every defect this exists to
-catch lives in the gap between them — configuration, wiring, and copy that stopped being true.
+store, real Slack workspace, real models, real unattended passes inside the deployment. Every
+defect this exists to catch lives in the gap between them — configuration, wiring, and copy that stopped being true.
 
 Budget ~90 minutes. Work in order: each block leaves the state the next one needs.
 
@@ -82,30 +82,28 @@ list-level buttons) · Entities (the registry browser — every registered entit
 who introduced it — and **Register an entity**, which commissions a capture: you say what it is,
 the console takes you to that capture, and the entity's page appears here when the librarian files
 it, born confirmed by you; the name is checked live against the registry as you type) ·
-Repairs (pending proposals, recently decided ones, the proposer's own run history, and **Remove
-pages**) · Gardener ·
-Index (the substrate check runs in-process) · Worker · Jobs (Run now, Enable, Disable for the four
-workflows — needs the fine-grained PAT; without it the page is read-only and says so) · Digest
-(Preview is byte-identical to the post) · Activity.
+Repairs (the ledger of what the worker already applied, each with the diff that landed, and
+**Remove pages**) · Gardener ·
+Index (the substrate check runs in-process) · Worker · Jobs (the night shift, read-only — there is
+nothing to dispatch) · Digest (Preview is byte-identical to the post) · Activity.
 
 Three things worth proving here specifically:
 
 - **Retention purge** runs its dry run for you and shows the result inside the confirmation —
   there is no separate checkbox, and you cannot purge without having seen what would go.
-- **Run-now on `index-rebuild`** must move the Index tab's `built_at`. That column is the only
-  truth for that workflow: it writes no `job_runs` row, and a cron skipped for an unset
-  `STIGMERGY_KNOWLEDGE_REPO` variable is *green* in Actions.
-- **Approve on Repairs commits to the knowledge repo**, so read the detail card's ops table before
-  clicking it: the evidence is the commit named in the response, carrying an `Approved-by:` trailer
-  and nothing in its diff but the ops you just read. Decline a different one — its reason is the
-  dismissal memory, so the evidence is a `rejected` row the next `repair-propose` run leaves alone.
-  With nothing pending (`stigmergy-repair list` against the staging DSN settles it), report an
-  empty tab as an empty tab: it proves the route serves, never that a repair applies.
-- **Remove pages on Repairs decides and writes in the same act** (ADR 043): there is no second
-  click, so the evidence is the commit it names PLUS the diffs it hands back in the dialog — read
-  them, because nobody read that prose before it landed. Delete a page something else refers to in
-  PROSE, not only in `related:`, or the sweep writer never runs and the step proves nothing.
-  `brain_delete` over MCP is the same act from the other door.
+- **The Jobs page is the night shift's only report, and it has no levers.** The gardener and the
+  retention purge run inside the worker; the index rebuild is a command the page NAMES, because
+  the worker holds no embedding key. Prove the reporting rather than a button: note each pass's
+  last run and its stats, then check them against `job_runs` over the staging DSN. A pass whose
+  last run is days old on a healthy worker is the finding.
+- **Repairs is READ-ONLY, and reading it is the point** (ADR 044): the worker derived, applied and
+  recorded each row without anybody approving it, so the diff on the card is prose nobody read
+  before it landed. Read one. An empty ledger is an empty ledger — it proves the route serves,
+  never that a repair applies; the gardener drill below is what makes one appear.
+- **Remove pages decides and writes in the same act**: there is no second click, so the evidence
+  is the commit it names PLUS the diffs it hands back — read them. Delete a page something else
+  refers to in PROSE, not only in `related:`, or the sweep writer never runs and the step proves
+  nothing. `brain_delete` over MCP is the same act from the other door.
 
 ### The deletion drill
 
@@ -120,7 +118,7 @@ brain_delete(paths=["wiki/notes/<a junk page>.md"], why="<what makes it stale>")
 Evidence: the commit it names, present in the knowledge repo with an `Approved-by:` trailer; the
 page gone; each referring page reconciled — a sentence that cited it still reading, a callout that
 only existed because of it gone; and the diffs the response carries, which are the only reading
-that prose gets. A `repair_proposals` row in `applied`, never `pending`, decided by you.
+that prose gets.
 
 Then the refusals, each landing nothing: an entity page, and a **scoped** identity — deletion is
 the unrestricted identity's act, and a caller without that reach must be refused by name.
@@ -165,6 +163,29 @@ changes the corpus. To watch one happen, read `job_runs` for `views-sweep`.
 
 Entity registration is NOT on this list any more: it is a capture like every other write, from the
 console's **Register an entity** or from `brain_submit`, and the worker writes the page.
+
+Neither is a repair: the worker derives and applies them on its own interval, and the Repairs page
+is where you read what it did.
+
+### The night-shift drill
+
+The passes that used to be crons somebody could dispatch now schedule themselves, so proving they
+work means proving the CHAIN, not clicking anything. Run the gardener by hand once to seed it —
+`.venv/bin/stigmergy-gardener --repo $STIGMERGY_REPO` against the staging DSN — and then leave the
+worker alone for one `STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S` (default an hour).
+
+Evidence, in order: a `gardener` row in `job_runs` with findings; then a `repair` row after it;
+then rows in `repairs` with status `applied` and a `diff`, each with a commit in the knowledge repo
+carrying `Repair: <check> #<finding>`; then those same repairs on the console's Repairs page.
+
+Two things this drill is specifically looking for, because neither can fail in the test suite:
+
+- **the worker must not garden while captures are waiting.** Submit something and watch: the
+  capture files first. A maintenance pass that delayed a filing is a defect, not a slow night.
+- **a daily pass must not run twice across a restart.** Note the gardener's `job_runs` row, restart
+  the worker (`fly apps restart` or a deploy), and check that no second row appears for today.
+  Due-ness is read from that row rather than from an in-process timer, and this is the only place
+  that property is exercised against a real restart.
 
 **The failure to watch for**: the queue and the evidence store are configured independently, so
 an environment that names the deployment's database and this machine's MinIO files a row whose

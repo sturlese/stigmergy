@@ -269,7 +269,7 @@ beside it in the source; the bare module at the top is small enough to be its ow
 | `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook and entity navigation. It writes nothing to the knowledge repo: even a person's own page removal is queued here and performed by the librarian |
 | `answer/` | the answering agent + deterministic verifier: powers the `ask` tool |
 | `capture/` | the durable capture queue: submit, claim, the evidence plane, retention — ONE vocabulary of four kinds (`raw`, `page`, `meeting`, `document`) for every door; and `stigmergy-queue`, the operator's view of the write path without a SQL client |
-| `librarian/` | the filing engine: the worker, the agent, the nine gates, the commit; the identities it writes into the same commit as the page, the deployed worker, the meeting flow |
+| `librarian/` | the filing engine: the worker, the agent, the nine gates, the commit; the identities it writes into the same commit as the page, the meeting flow, and the **night shift** — the view sweep, the repair pass, the gardener and the retention purge, all on the idle branch, none of them ever while a capture is waiting |
 | `entities/` | a LIBRARY, and nothing else: the rules of entity birth (the name gate, the collision fold, the page render the librarian runs) and the registry generator that derives `ops/entity-registry.json` from `wiki/entities/`. It has no CLI and no decision door — an entity is introduced by a capture, and the librarian is the one caller |
 | `slack/` | the Slack transport: 🧠 capture, `@brain` Q&A, and the push-channel poller that files what a channel publishes |
 | `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis. A LIBRARY with no CLI and no entry point — the librarian worker is its only caller, on the idle branch and right after a meeting files |
@@ -308,6 +308,14 @@ Scope discipline, not a roadmap. These are ruled out rather than pending:
   human clicking afterwards is confirming what code already decided — a backlog with a person's name
   on it. The undo is `git revert` in a repository they own
   ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md)).
+- **A second human in the write path, anywhere.** Not for an entity, not for a spelling, not for a
+  repair. The person who captured already read the material and decided the brain should hold it;
+  asking a second one to confirm it moves the decision away from the only person who had the
+  context, and turns a working system into a queue.
+- **A scheduler outside the deployment.** Every unattended pass runs on the librarian worker's idle
+  branch, so maintenance can never start while a capture is waiting, "did it run" is one table, and
+  nothing needs a credential for a service that could start a job somewhere else. A scheduled job
+  that can be silently skipped is worse than no schedule, because green and dead look the same.
 
 ## Documentation
 
