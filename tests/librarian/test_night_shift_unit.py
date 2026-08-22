@@ -12,6 +12,7 @@ what this one adds is the half a monotonic interval cannot express:
 """
 import dataclasses
 import datetime
+import types
 
 import pytest
 
@@ -254,3 +255,119 @@ def test_the_purge_line_is_printed_only_when_something_was_purged():
         "retention: purged the payload of 3 terminal capture(s)")
     assert worker.retention_clause({"purged": 0}) == ""
     assert worker.retention_clause(None) == ""
+
+
+# ── the pass functions themselves, not a stand-in ──────────────────────────────────────────────
+# Every test above injects the pass, which is right for the SCHEDULE — but it means `run_garden`
+# and `run_retention` were never executed by this file. They were not executed anywhere: both
+# import their library inside the function (so the filing path does not load a model stack at
+# import time), and a name that does not exist inside a function body is invisible until it runs.
+# `GardenerSettings.from_env()` was written here and shipped green; the class has no such
+# classmethod. This is the test that would have said so.
+def test_the_garden_pass_calls_the_gardener_the_way_the_gardener_is_actually_built(rig, monkeypatch):
+    """Not a test of what the gardener DOES — that is `tests/gardener/`'s whole suite. This pins
+    the SEAM: the symbols `run_garden` reaches for exist and take what it passes them."""
+    _env, deps = rig
+    seen = {}
+
+    async def fake_run_gardener(conn, *, repo, settings):
+        seen.update(repo=repo, settings=settings)
+        return types.SimpleNamespace(findings=[{"check": "x"}], pages_checked=7,
+                                     entities_checked=2)
+
+    monkeypatch.setattr("stigmergy.gardener.run.run_gardener", fake_run_gardener)
+    # A fake key, because `run_garden` checks it before it calls anything — the check's own tests
+    # are above. Nothing here reaches a provider: `run_gardener` itself is the double.
+    monkeypatch.setenv("OPENAI_API_KEY", "not-a-real-key")
+    stats = worker.run_garden(FakeConn(), deps)
+
+    assert stats == {"findings": 1, "pages_checked": 7, "entities_checked": 2}
+    assert seen["repo"] == deps.repo
+    # Built through the gardener's OWN constructor, so a rename there fails here rather than at
+    # 05:07 on a deployment.
+    assert seen["settings"].model
+
+
+def test_the_retention_pass_calls_the_purge_the_way_the_purge_is_actually_built(rig, monkeypatch):
+    """`run_garden`'s twin, for the same reason and against the same class of slip."""
+    _env, deps = rig
+    seen = {}
+
+    def fake_purge(conn, *, older_than_days):
+        seen["older_than_days"] = older_than_days
+        return {"purged": 2, "ids": [1, 2], "dry_run": False}
+
+    monkeypatch.setattr("stigmergy.capture.retention.purge", fake_purge)
+    result = worker.run_retention(FakeConn(), deps)
+
+    assert result["purged"] == 2
+    assert seen["older_than_days"] == deps.settings.retention_days
+
+
+# ── the second model the night shift brought into this process ────────────────────────────────
+def test_a_garden_pass_whose_model_this_worker_cannot_authenticate_is_refused(rig):
+    """**The trap ADR 044 D6 created, and it is invisible to this keyless suite by construction.**
+
+    The gardener's default model is a BARE id, which resolves through the OpenAI Responses API —
+    and `OPENAI_API_KEY` is exactly what `bootstrap.READ_PATH_ONLY_ENV` strips before exec'ing the
+    deployed worker. Left alone, the deterministic checks (which need no model) would keep working
+    and every night would record a `partial` run: a pass that looks alive forever while two of its
+    three model passes have never once run.
+
+    The refusal has to name the DEAD END rather than say "export it", because in that container
+    there is nothing to export — the strip happens after.
+
+    It fails the PASS rather than the worker's startup, which is the same rule every other pass
+    here follows: filing must never depend on maintenance, and refusing to boot over a nightly
+    sweep would take the queue down for the one thing that does not need it."""
+    _env, deps = rig
+    with pytest.raises(Exception) as caught:
+        worker.check_garden_model(deps.settings, environ={"ANTHROPIC_API_KEY": "x"})
+
+    message = str(caught.value)
+    assert "OPENAI_API_KEY" in message
+    assert "strips" in message, "the refusal does not say the key is stripped, so it reads as a typo"
+    assert config.GARDEN_AT_ENV in message and config.DAILY_OFF in message, (
+        "the refusal offers no way out — an operator who does not want a garden pass must be told "
+        "how to say so")
+
+
+@pytest.mark.parametrize("environ, garden_at", [
+    ({"OPENAI_API_KEY": "k"}, "05:07"),        # the key is there: nothing to refuse
+    ({}, config.DAILY_OFF),                    # no pass at all: nothing to authenticate
+])
+def test_the_garden_model_check_does_not_fire_when_it_should_not(rig, environ, garden_at):
+    """The benign twins. A refusal that fired on a correctly configured worker would cost a
+    nightly pass for nothing."""
+    _env, deps = rig
+    settings = dataclasses.replace(deps.settings, garden_at=garden_at)
+
+    worker.check_garden_model(settings, environ=environ)
+
+
+def test_a_garden_pass_that_fails_records_a_row_so_it_is_visible_and_does_not_retry(rig, ledger):
+    """The half that makes the refusal above worth having.
+
+    A pass that only logged would be invisible — nothing reads a worker's stderr on a schedule —
+    and, worse, `_daily_due` reads the ledger, so with no row written the pass would re-fire on
+    every idle tick until morning. The error row is both the operator's signal (the console's Jobs
+    page reads these rows) and the thing that makes the failure cost one night rather than a loop.
+    """
+    _env, deps = rig
+    recorded = []
+    w = _worker(deps, garden=_CountingPass(raises=RuntimeError("no key")), conn=ledger)
+    w.conn = ledger
+
+    import stigmergy.capture.ops as ops_module
+    original = ops_module.record_job_run
+    try:
+        ops_module.record_job_run = lambda conn, job, **kw: recorded.append((job, kw))
+        assert w.maybe_garden() is True
+    finally:
+        ops_module.record_job_run = original
+
+    assert recorded, "a failed garden pass wrote no job_runs row — it is invisible and will retry"
+    job, kwargs = recorded[0]
+    assert job == worker.GARDEN_JOB_NAME
+    assert kwargs["status"] == "error"
+    assert "no key" in kwargs["error"]

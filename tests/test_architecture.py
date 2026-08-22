@@ -413,6 +413,7 @@ _LIBRARIAN_GARDENER_SYMBOLS = frozenset({
     "stigmergy.gardener.store",              # the findings the repair pass answers (ADR 044 D2)
     "stigmergy.gardener.run.run_gardener",   # the pass itself, imported inside `run_garden`
     "stigmergy.gardener.settings.GardenerSettings",   # its ceilings, likewise
+    "stigmergy.gardener.settings.MODEL_ENV",  # named by the startup refusal, so the fix is typeable
 })
 
 

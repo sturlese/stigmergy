@@ -241,6 +241,19 @@ it carries its own concrete cheap-class default, so "model is configuration" rea
 than "model is whatever the shared one happens to be". Escalating past that default is an
 evidence-driven decision from reading real weeks of findings, not a guess made up front.
 
+**On a deployment that default is not usable, and the worker says so at startup.** Since the garden
+pass moved into the librarian worker ([ADR 044](../decisions/044-the-capture-is-the-approval.md)
+D6), it runs where `stigmergy-librarian-boot` has stripped `OPENAI_API_KEY` — deliberately, because
+that key belongs to the read path's embedder and Fly secrets are app-wide. The cheap-class default
+is a BARE model id, which resolves through the OpenAI Responses API, so it authenticates with
+nothing there. Set `STIGMERGY_GARDENER_MODEL` to a provider-prefixed model whose key the worker
+holds; the filing model's own provider is the obvious one. A garden pass whose model this worker cannot
+authenticate FAILS BY NAME and records a `job_runs` error row an operator reads on the console's
+Jobs page — rather than refusing to boot, because filing must never depend on maintenance. The
+alternative is the failure that hides: the deterministic checks need no model and would keep working, so every
+night would record a `partial` run with real findings while two of the three model passes had never
+once run.
+
 An outage of ANY pass (a hard model-call failure, or nothing surviving even the one retry) never
 takes the deterministic findings from the same run down with it, and never takes another pass down
 either — they fail independently and are reported independently. Any failure commits `partial`

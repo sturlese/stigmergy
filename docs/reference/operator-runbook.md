@@ -98,6 +98,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    | `STIGMERGY_LIBRARIAN_GARDEN_AT` | `05:07` | when the daily gardener pass runs, UTC `HH:MM`, or `off` |
    | `STIGMERGY_LIBRARIAN_RETENTION_AT` | `04:42` | when the daily retention purge runs, UTC `HH:MM`, or `off` |
    | `STIGMERGY_RETENTION_DAYS` | `30` | how long a terminal capture keeps its payload |
+   | `STIGMERGY_GARDENER_MODEL` | **must be set** | the gardener's model. Its own default is a bare id resolving through the OpenAI Responses API, and the worker has no `OPENAI_API_KEY` — the boot strips it. Use a provider-prefixed model whose key the worker holds (`fly.toml` ships `anthropic:claude-sonnet-5`). A garden pass whose model this worker cannot authenticate fails by name and records a `job_runs` error row, rather than stopping the worker — filing never depends on maintenance |
 
    A pass never starts while a capture is waiting in the queue, and yields between units, so
    maintenance cannot delay a filing. "Did it run" is answered from `job_runs` — the same rows the

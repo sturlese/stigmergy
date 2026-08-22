@@ -41,6 +41,10 @@ JOB_NAME = "librarian"
 # The gardener's own `job_runs` name, imported rather than repeated: `maybe_garden` asks when it
 # last ran, and a second spelling of it would make the pass run every idle tick forever.
 GARDEN_JOB_NAME = gardener_schema.JOB_NAME
+# How much of a failed garden pass's reason reaches its `job_runs` row. Generous, because the one
+# refusal an operator most needs to read whole is the model-key one: it names the variable, the
+# strip that makes an export useless, and the way to turn the pass off.
+GARDEN_ERROR_CHARS = 2000
 
 
 def human_duration(seconds) -> str:
@@ -154,6 +158,59 @@ def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> str:
         raise LibrarianConfigError(
             f"the librarian skill at {where} could not be read ({ex})") from ex
     return agent_module.validate_skill(text, where=where)
+
+
+def check_garden_model(settings, *, environ: dict | None = None) -> None:
+    """The gardener's own model key, checked before the pass runs — because the night shift moved
+    INTO this process and brought a second model with it (ADR 044 D6).
+
+    This is not the librarian's check repeated for tidiness. It closes a trap the move created:
+    `gardener.settings.DEFAULT_GARDENER_MODEL` is a BARE model id, which `kernel.llm` resolves
+    through the OpenAI Responses API — and `OPENAI_API_KEY` is exactly what
+    `bootstrap.READ_PATH_ONLY_ENV` strips before exec'ing this worker. So the default that is
+    correct on a laptop authenticates with nothing on a deployment.
+
+    **Deliberately NOT a startup refusal**, though it was written as one first. A worker whose
+    gardener model is unconfigured must still file captures: refusing to boot over a nightly
+    maintenance pass would take the queue down for the one thing that never depends on it, which
+    is this package's own rule everywhere else in the night shift. So it fails the PASS, and
+    `maybe_garden` records the refusal as a `job_runs` error row — which is what makes it loud
+    rather than a log line nobody reads, and what stops it re-firing on every idle tick.
+
+    What that would look like WITHOUT this check is the reason it is a refusal at all: the
+    deterministic checks need no model and would keep working, so every night would produce a
+    `partial` run with real findings and a quiet `sweep_error` — a pass that looks alive, forever,
+    while two of its three model passes have never once run. Fail closed and loud, at startup, by
+    name, is this package's posture for every other secret; the night shift does not get an
+    exemption for being maintenance.
+    """
+    from stigmergy.gardener.settings import MODEL_ENV, GardenerSettings
+    from stigmergy.librarian import bootstrap, pydantic_backend
+
+    if str(settings.garden_at or "").strip().lower() == config.DAILY_OFF:
+        return
+    model = GardenerSettings.from_args(None).model
+    source = os.environ if environ is None else environ
+    provider = pydantic_backend.provider_of(model)
+    key_env = pydantic_backend.PROVIDER_KEY_ENV.get(provider) if provider else "OPENAI_API_KEY"
+    if key_env is None or source.get(key_env):
+        return
+    stripped = key_env in bootstrap.READ_PATH_ONLY_ENV
+    raise LibrarianConfigError(
+        f"the nightly garden pass would run {model!r}, which authenticates with ${key_env}, and "
+        f"${key_env} is not set in this worker's environment."
+        + (f" **On the DEPLOYED worker that is a dead end rather than a missing export**: "
+           f"`stigmergy-librarian-boot` strips {key_env} on purpose, because it belongs to the "
+           f"READ path's embedder and Fly secrets are app-wide. Nothing you export in that "
+           f"container survives the strip. Set ${MODEL_ENV} to a provider-prefixed model whose "
+           f"key this worker holds — the filing model's own provider is the obvious one "
+           f"({settings.model!r})."
+           if stripped else
+           f" Export {key_env}, or set ${MODEL_ENV} to a model whose provider key this worker "
+           f"holds.")
+        + f" Or set ${config.GARDEN_AT_ENV}={config.DAILY_OFF} to run no garden pass at all — a "
+          f"deliberate 'not here' is fine; a pass that reports findings every night while its "
+          f"model half has never run is not.")
 
 
 def _check_pydantic_backend(settings, *, environ: dict | None = None) -> None:
@@ -411,7 +468,8 @@ def run_garden(conn, deps: processing.Deps) -> dict:
     from stigmergy.gardener.run import run_gardener
     from stigmergy.gardener.settings import GardenerSettings
 
-    result = asyncio.run(run_gardener(conn, repo=deps.repo, settings=GardenerSettings.from_env()))
+    check_garden_model(deps.settings)
+    result = asyncio.run(run_gardener(conn, repo=deps.repo, settings=GardenerSettings.from_args(None)))
     return {"findings": len(result.findings), "pages_checked": result.pages_checked,
             "entities_checked": result.entities_checked}
 
@@ -827,7 +885,13 @@ class Worker:
             return False
         try:
             stats = self._garden(self.conn, self.deps)
-        except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
+        except Exception as ex:  # noqa: BLE001 — best-effort maintenance; see the docstring
+            # A row, not just a log line, and for two reasons: `_daily_due` reads the ledger, so
+            # without one this retries on every idle tick until morning; and the console's Jobs
+            # page reads the same rows, so this is what turns "the garden is quietly not running"
+            # into something an operator can see.
+            ops.record_job_run(self.conn, GARDEN_JOB_NAME, status="error",
+                               error=str(ex)[:GARDEN_ERROR_CHARS])
             log.error("the nightly garden pass failed; the queue keeps draining", exc_info=True)
             return True
         clause = garden_clause(stats)
