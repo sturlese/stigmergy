@@ -472,7 +472,7 @@ def test_filed_meeting_with_zero_decisions_says_so_rather_than_omitting_the_line
 # ── births: the page landed AND the capture introduced these identities ──────────────────────
 def test_filed_with_a_born_entity_says_so_beside_the_anchor_and_carries_the_fact_set():
     """OLD BEHAVIOUR: the sentence said the identity was "created unconfirmed" and that a steward
-    still "confirms, merges or declines" it. ADR 044: the capture is the approval, so the submitter
+    still "confirms, merges or declines" it. the capture is the approval, so the submitter
     is told what their capture INTRODUCED and who confirmed it — them — with nothing left pending.
     "filed" alone would still hide that the registry grew."""
     reg = _registry()

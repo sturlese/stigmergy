@@ -70,7 +70,7 @@ VIEW_SWEEP_OFF = 0.0
 VIEW_SWEEP_CEILING_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING"
 DEFAULT_VIEW_SWEEP_CEILING = 10
 
-# The worker's SECOND maintenance pass (ADR 044): it answers the gardener's findings by deriving
+# The worker's SECOND maintenance pass: it answers the gardener's findings by deriving
 # repairs and applying them. Same idle branch, same "on its own clock" reasoning, and a longer
 # default because what it answers arrives once a night — a pass costs model calls, and there is
 # nothing new to answer between two gardener runs. The pass has its own watermark on top of this
@@ -79,7 +79,7 @@ DEFAULT_VIEW_SWEEP_CEILING = 10
 REPAIR_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S"
 DEFAULT_REPAIR_INTERVAL_S = 3600.0
 
-# The night shift's two daily passes (ADR 044 D6), as "HH:MM" UTC. They replaced scheduled crons
+# The night shift's two daily passes, as "HH:MM" UTC. They replaced scheduled crons
 # calling an HTTP endpoint with a token: a pass that runs INSIDE the worker cannot fire while a
 # capture is being filed, and needs no credential that could be used for anything else.
 # `librarian.schedule` owns the due-ness arithmetic; these are only the times and the switch.
@@ -123,7 +123,7 @@ _TRUTHY = ("1", "true", "yes")
 
 # The two repo-sourced inputs, RELATIVE TO THE REPO ROOT — one spelling each, so the reads at
 # `base.sha` and the checkout paths below can never disagree. There were three: `ops/acl.json`
-# went with the path resolver (ADR 045 D2 — the audience is the door's, on the row).
+# went with the path resolver — the audience is the door's, carried on the capture's row.
 REGISTRY_RELPATH = "ops/entity-registry.json"
 LINTER_RELPATH = ".claude/tools/stigmergy_lint.py"
 
@@ -200,7 +200,7 @@ def minimum_visibility_timeout_s(*, timeout_s: int = DEFAULT_TIMEOUT_S) -> int:
     The GATHER is assumed to fit inside `VISIBILITY_HEADROOM_S` rather than being a term here: it
     is the one per-item cost that grows with the size of the knowledge repo. Re-measure at roughly
     5,000 pages, and past that add a corpus-derived term to `GATE_BUDGET_S`. Nothing converts
-    before the first agent pass any more: a document arrives as text (ADR 044 D4).
+    before the first agent pass any more: a document arrives as text.
     """
     return MAX_AGENT_ATTEMPTS * int(timeout_s) + GATE_BUDGET_S
 

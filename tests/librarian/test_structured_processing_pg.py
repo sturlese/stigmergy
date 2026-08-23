@@ -1,8 +1,8 @@
 """The STRUCTURED ordinary flow, end to end: a real Postgres queue, a real git repo + bare remote,
 the eight real gates, the real contract linter, and a conforming backend that carries the page's
-text home instead of writing it (ADR 033).
+text home instead of writing it.
 
-**No shipped backend takes this road today, and that is precisely why the file stays** (ADR 034).
+**No shipped backend takes this road today, and that is precisely why the file stays**.
 The ordinary pydantic-ai run holds tools and writes its own page again, so the content-carrying
 branch of `processing._one_pass` — `_require_page_content`, `_write_ordinary_page`, the filename
 rules, the placement table, the cross-check against a code-written diff — is production code whose
@@ -136,7 +136,7 @@ def _account(*, title: str = "Acme Corp Renewal Window", page_type: str = "note"
 def _model(account: FilingAccount) -> FilingAccount:
     """The account ONE pass answers with.
 
-    **This used to build a `TestModel` and it no longer can** (ADR 034). The pydantic-ai backend's
+    **This used to build a `TestModel` and it no longer can**. The pydantic-ai backend's
     ordinary run has no output schema to fill: it holds tools, writes its own page and returns its
     account as `.librarian-outcome.json`. So the injected seam moved one layer out — from "the model
     a real backend calls" to "the account a structured backend returns" — and every call site below
@@ -154,7 +154,7 @@ class _StructuredAgent:
     **What this file measures did not change; what produces the account did.** Every test below is
     about `processing`'s content-carrying branch — `_require_page_content`, the code-written page,
     the filename rules, the cross-check, the stamp, the nine gates — and that branch is production
-    code with no shipped backend behind it since ADR 034 gave the ordinary flow tools. `processing`
+    code with no shipped backend behind it since the agentic pydantic harness gave the ordinary flow tools. `processing`
     reads the PORT and never a class, so a stand-in that declares the shape takes byte-identically
     the same road a fourth structured backend would.
 
@@ -253,7 +253,7 @@ def test_a_structured_capture_files_one_page_written_by_code_and_the_run_costs_m
     Every property of the page is CODE's: the folder came from `page.FOLDER_BY_TYPE` (the account
     named a type, never a location), the filename from the title, the frontmatter from the account,
     the H1 from the title, `related:` from `links_created`, and the server-owned fields from
-    `_stamp` — which is the whole of ADR 033 D3 in one artifact.
+    `_stamp` — which is the whole of the structured filing flow in one artifact.
 
     **`cost_usd > 0` is what a double cannot say.** The offline double reports `0.0` on every run,
     honestly, so every existing ordinary-flow test is compatible with a backend that never priced
@@ -657,7 +657,7 @@ class _PathClaimingAgent:
     """A conforming structured backend whose account claims a `page_path` it did not write.
 
     **Why a stand-in rather than the real backend**: `pydantic_backend.FilingAccount` has no
-    `page_path` field at all — the omission is deliberate (ADR 033 D3: a field the model could fill
+    `page_path` field at all — the omission is deliberate (the structured filing flow: a field the model could fill
     is a path the model could steer), so the real backend physically cannot make this claim. The
     defence that catches it, `_cross_check_outcome`, still runs on this path, and a defence nothing
     can reach is a defence nobody knows works. So the hostile account is injected at the PORT,
@@ -985,7 +985,7 @@ def test_the_second_pass_gathers_again_over_a_worktree_that_was_put_back(
 
 def test_a_backend_that_wants_no_context_is_never_gathered_for_at_all(tmp_path, clean_queue,
                                                                       require_gitleaks, monkeypatch):
-    """The specificity half of the branch, and ADR 034 sharpened what it is about. It used to read
+    """The specificity half of the branch, and the agentic pydantic harness sharpened what it is about. It used to read
     "an exploring backend is never gathered for" — which stopped being true the moment the shipped
     exploring backend asked for a SEED. The question the flow actually asks is `wants_gathered`, and
     a backend that declares `False` must not pay for a `corpus.load_pages` walk per pass whose
@@ -1107,7 +1107,7 @@ def test_a_slack_capture_files_the_verbatim_thread_beside_the_structured_synthes
 
 
 def test_the_flow_note_reaches_the_structured_prompt(tmp_path, clean_queue, require_gitleaks):
-    """ADR 028's own lesson, on the new path: the attachment cannot stay invisible to the agent.
+    """the Drive door's own lesson, on the new path: the attachment cannot stay invisible to the agent.
     The brief's genre rules make a whole document read as `type: source`, which the fast lane may
     not create — so the first real drive capture PARKED a capture whose source half was already
     handled. The fact is TOLD, never inferred, and it has to arrive on this shape too.
@@ -1428,7 +1428,7 @@ def test_a_title_at_exactly_the_byte_ceiling_files_all_the_way_through(tmp_path,
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # The TOLERANCE direction: a model that answers INCOMPLETELY, through the whole worker
 #
-# **ADR 033's own meta-finding, as a standing discipline.** Every other structured test in this
+# **the structured filing flow's own meta-finding, as a standing discipline.** Every other structured test in this
 # file hands the flow a complete, hand-built account — which measures what the worker does with a
 # GOOD answer and nothing about what it does with a bad one. That is exactly the blind spot the
 # first paid golden fell into: five ordinary captures died on a shape no offline test had ever
@@ -1439,7 +1439,7 @@ def test_a_title_at_exactly_the_byte_ceiling_files_all_the_way_through(tmp_path,
 # (`test_structured_schema_unit.py`); this is the one that proves the SAVING at the layer the
 # money is spent in.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-# **RETIRED with the ordinary flow's output schema (ADR 034).** Two tests stood here:
+# **RETIRED with the ordinary flow's output schema.** Two tests stood here:
 #
 #   `test_an_incomplete_first_answer_is_repaired_without_spending_a_worker_pass` — a real
 #       `FunctionModel` answering `{"decision": "file"}` first and completely second, proving the
@@ -1461,7 +1461,7 @@ def test_a_title_at_exactly_the_byte_ceiling_files_all_the_way_through(tmp_path,
 #
 # **What genuinely has no owner yet is the ordinary flow's NEW equivalent**: a model that never
 # writes an outcome file, or writes an unparseable one, landing terminal with nothing written and
-# the pass priced. That is a defense test for the road ADR 034 opened rather than a pin this change
+# the pass priced. That is a defense test for the road the agentic pydantic harness opened rather than a pin this change
 # moved — the tester owns it, and `agent.read_outcome`'s two refusals are its seam.
 
 
@@ -1565,7 +1565,7 @@ def test_an_account_with_no_page_body_at_all_fails_honestly_when_the_retry_canno
 
 def test_the_declaration_is_what_selects_the_shape_and_not_the_backends_class(
         tmp_path, clean_queue, require_gitleaks):
-    """**ADR 033 D2's refused alternative, exercised.** `processing` reads
+    """**the structured filing flow's refused alternative, exercised.** `processing` reads
     `agent.structured_ordinary`, never `isinstance(agent, PydanticFilingAgent)` — so a stand-in
     that declares `True` takes the structured branch by DECLARING the right thing rather than by
     being the right class. That is what makes a fourth backend possible without editing

@@ -166,7 +166,7 @@ def test_answer_sys_names_the_third_tool():
 def test_entity_text_over_the_real_service_resolves_a_scoped_id(answer_indexed):
     """"globex" is anchored in the fixture corpus but registered nowhere (the fixture repo has
     no ops/entity-registry.json) — exactly the anchored-but-unregistered case `describe_entity`
-    resolves by scoped-id membership (ADR 022 D5). The timeline must show the globex pages and
+    resolves by scoped-id membership. The timeline must show the globex pages and
     the hostile title must arrive neutralized by the service, never re-fenced here."""
     conn, fx = answer_indexed
     brain = AnswerBrain(brain_service(conn, fx, "steward"))

@@ -1,4 +1,4 @@
-// Repairs: the LEDGER of what the repair pass did to the corpus, newest first (ADR 044). Nothing
+// Repairs: the LEDGER of what the repair pass did to the corpus, newest first. Nothing
 // on this page decides anything and nothing on it waits — a repair is derived from a gardener
 // finding, validated, gated and applied in ONE pass, and this page is where a person finds out
 // afterwards.
@@ -193,7 +193,7 @@ function diffCard(row) {
     row.diff
       ? el("pre", { class: "pre", style: { maxHeight: "560px", overflow: "auto" } }, row.diff)
       : emptyState("no diff was recorded for this repair",
-          "a repair applied before ADR 044 landed has none — the column did not exist when it was pushed"));
+          "a repair applied before the diff column existed has none — it was pushed before the column was"));
 }
 
 // What the outcome MEANS for the person reading it. Three sentences and not one, because the
@@ -247,9 +247,9 @@ export async function repairDetailView(host, id) {
   });
 }
 
-// The ONE act on this page, and the only thing here a person decides: removing pages (ADR 043).
+// The ONE act on this page, and the only thing here a person decides: removing pages.
 // It waits on nobody — the judgment is the operator's — but it does not land in this call either
-// (ADR 044 D3): the librarian worker is the one writer the corpus has, so what this button does is
+//: the librarian worker is the one writer the corpus has, so what this button does is
 // QUEUE the removal in the operator's name. The confirm still has to carry the whole consequence,
 // because nothing else will ask.
 async function deleteFlow() {

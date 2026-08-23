@@ -6,13 +6,6 @@ surface in this repository: a quarter of all commits touch it. Prose that costs 
 true is prose nobody can afford to VERIFY by reading — so the parts of it a machine can settle are
 settled here, and a reader gets to trust the rest because the checkable parts are checked.
 
-**`docs/decisions/` is deliberately exempt from the existence checks below.** An ADR is a dated
-record of a decision, not a description of the present: ADR 023 names `stigmergy.loop`, which was
-deleted, and says so in its own second line. Asserting that an ADR's identifiers still resolve
-would force the records to be rewritten every time the system moves past them, which is the one
-thing an ADR must never be. Their links still have to resolve, and the index still has to list
-them — that is all.
-
 Scope, as next door: only claims with a single unambiguous source of truth. Design prose belongs
 to `test_architecture.py`, which checks the design rather than the sentence about it.
 """
@@ -30,7 +23,6 @@ from stigmergy.librarian.page import FAST_LANE_TYPES, PAGE_TYPES
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 REFERENCE = DOCS / "reference"
-DECISIONS = DOCS / "decisions"
 INDEX = DOCS / "README.md"
 
 WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
@@ -49,7 +41,7 @@ def _rel(path: pathlib.Path) -> str:
 
 # ── the index knows exactly which documents exist ─────────────────────────────────────────────
 # `docs/README.md` is a table of contents someone has to remember to update, which is the same
-# shape of promise the README's package table makes — and it had already drifted: ADR 030 shipped
+# shape of promise the README's package table makes — and it had already drifted: server-side entity minting shipped
 # and the table did not learn about it, so the one page whose job is "here is everything" was
 # quietly missing a record.
 
@@ -60,15 +52,11 @@ def _linked(pattern: str) -> set[str]:
     return found
 
 
-@pytest.mark.parametrize("directory, pattern", [
-    (REFERENCE, r"^\| \[`reference/([a-z0-9-]+\.md)`\]"),
-    (DECISIONS, r"^\| \[\d{3}\]\(\./decisions/([0-9a-z-]+\.md)\)"),
-])
-def test_the_index_lists_exactly_the_documents_that_exist(directory, pattern):
-    listed = _linked(pattern)
-    real = {p.name for p in directory.glob("*.md")}
+def test_the_index_lists_exactly_the_reference_docs_that_exist():
+    listed = _linked(r"^\| \[`reference/([a-z0-9-]+\.md)`\]")
+    real = {p.name for p in REFERENCE.glob("*.md")}
     assert listed == real, (
-        f"docs/README.md and {_rel(directory)}/ disagree. "
+        f"docs/README.md and {_rel(REFERENCE)}/ disagree. "
         f"Listed but absent: {sorted(listed - real)}. Present but unlisted: {sorted(real - listed)}")
 
 
@@ -112,7 +100,7 @@ ROOT_DOCS = sorted(p for p in ROOT.glob("*.md"))
 CODE_MAPS = sorted((ROOT / "src" / "stigmergy").glob("*/index.md")) + [ROOT / "evals" / "index.md"]
 
 # The module-existence check below runs over the code maps AND `docs/reference/`. It used to be
-# the code maps alone, and that scoping cost it the one thing it exists for: ADR 045 deleted
+# the code maps alone, and that scoping cost it the one thing it exists for: the audience-from-the-door change deleted
 # `librarian/acl_rules.py`, the code map's row was removed, and `docs/reference/librarian.md`
 # went on naming the module with nothing noticing. A reference document names modules for the
 # same reason a code map does, so it rots the same way.
@@ -223,7 +211,8 @@ def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
     A variable in neither is one an operator would set to no effect.
 
     There is no third place any more: `deploy/workflows/` held cron templates that read a handful
-    of variables Python never did, and ADR 044 moved every unattended pass into the worker."""
+    of variables Python never did, and the capture-is-the-approval change moved every unattended
+    pass into the worker."""
     def declared(paths) -> set[str]:
         return {name for path in paths if path.is_file()
                 for name in _ENV_NAME_RE.findall(

@@ -79,7 +79,7 @@ SECRET = f"Acme Corp handed us their CI token to debug the webhook: {payloads.GI
 
 # A name the seeded registry does not carry. Nothing parks on it: the librarian creates the entity
 # page with `approved_by` EMPTY, regenerates the registry and files the note anchored to the
-# newborn, all in ONE commit, born confirmed by whoever captured (ADR 044).
+# newborn, all in ONE commit, born confirmed by whoever captured.
 PROPOSES_AN_ENTITY = "DOUBLE:propose=Globex Corp\nA note about the Globex Corp pilot.\n"
 PROPOSED_ID = "globex-corp"
 PROPOSED_NAME = "Globex Corp"
@@ -437,7 +437,7 @@ def main() -> int:
 
         # OLD BEHAVIOUR: this capture parked on a question to its submitter and produced no page
         # and no commit; then it filed with the identity waiting on a steward. It files now and the
-        # identity is born confirmed by whoever captured (ADR 044).
+        # identity is born confirmed by whoever captured.
         proposes = rows["proposes"]
         check("the capture about an unregistered entity was FILED, not parked",
               proposes["status"] == schema.FILED, proposes["report"].get("summary", "")[:120])

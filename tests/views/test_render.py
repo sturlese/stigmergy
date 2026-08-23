@@ -65,7 +65,7 @@ def test_withheld_synthesis_never_ships_prose_and_says_why():
 
 
 def test_a_view_carries_NO_acl_line_whatever_its_members_are_labelled():
-    """ADR 045 D5. A view is the OPEN rollup: `skeleton.members_of` has already dropped every
+    """The audience-from-the-door change. A view is the OPEN rollup: `skeleton.members_of` has already dropped every
     member that may not be rendered onto an open page, so there is nothing left on this page to
     restrict — and a page with no `acl:` is the contract's spelling of open.
 
@@ -86,7 +86,7 @@ def test_the_collapse_this_replaced_is_what_a_label_here_would_mean():
     title.
 
     This recomputes the retired rule on the fixture that made it collapse, so the reason the line
-    is gone stays legible next to its absence rather than only in an ADR."""
+    is gone stays legible next to its absence rather than only in a commit message."""
     def retired_intersection(member_acls):
         sets = [set(a) for a in member_acls if a is not None]
         return None if not sets else sorted(set.intersection(*sets))

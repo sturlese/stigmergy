@@ -338,7 +338,7 @@ def test_the_ceiling_counts_regenerations_not_entities_examined(tmp_path):
 
 # ── ACL: pinned HERE, because this change adds a caller ────────────────────────────────────────
 def test_a_sweep_over_labelled_members_writes_an_OPEN_view_without_them(tmp_path):
-    """A view carries no label and renders open members only (ADR 045 D5). Pinned on the SWEEP
+    """A view carries no label and renders open members only. Pinned on the SWEEP
     path rather than trusted from `regenerate_entity`'s own test, because the periodic pass is an
     unattended caller of it — and this is the pass that would silently republish the retired
     behaviour across the whole corpus."""

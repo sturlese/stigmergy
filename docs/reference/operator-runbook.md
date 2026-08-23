@@ -10,7 +10,7 @@ console on the `app` group, and the golden evals under `evals/` with the release
 (`make gates`) over them.
 
 **Nothing here runs in GitHub Actions.** Every unattended pass runs inside the deployment, on the
-librarian worker's idle branch ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D6) —
+librarian worker's idle branch —
 so there is no second place to configure, no schedule that can be silently skipped, and no
 credential for another service to keep. The one exception is the index REBUILD, which needs the
 embedding key the worker deliberately does not have; it stays a command an operator runs.
@@ -18,8 +18,7 @@ embedding key the worker deliberately does not have; it stays a command an opera
 Organized by OPERATION: Deploy · Wipe & re-seed · Capturing a meeting or a document ·
 Index rebuild · Removing pages · Recovery · Revocation · Release gates & drills · Troubleshooting.
 
-There is no read site: navigation happens through `read_page` and the entity tools
-([ADR 022](../decisions/022-entity-navigation.md)).
+There is no read site: navigation happens through `read_page` and the entity tools.
 
 ## Deploy
 
@@ -55,7 +54,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    fly secrets set STIGMERGY_EVIDENCE_SECRET_ACCESS_KEY="..."
    # the librarian GitHub App — the `worker` group PUSHES with it, and the `app` group's index
    # webhook READS with it (Contents API, no clone). It is the only git credential in the
-   # deployment, and since ADR 044 D3 the `app` group has no write path of its own to spend it on.
+   # deployment, and the `app` group has no write path of its own to spend it on.
    fly secrets set STIGMERGY_LIBRARIAN_APP_ID="123456"
    fly secrets set STIGMERGY_LIBRARIAN_INSTALLATION_ID="87654321"
    fly secrets set STIGMERGY_LIBRARIAN_PRIVATE_KEY="$(cat ~/.config/stigmergy/librarian.private-key.pem)"
@@ -72,9 +71,9 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    # the incremental index webhook (`app` group) — the KNOWLEDGE repo, the one being pushed to
    fly secrets set STIGMERGY_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
    fly secrets set STIGMERGY_GITHUB_REPO="<owner>/stigmergy-brain"
-   # the admin console (`app` group, ADR 029) — OPTIONAL; unset = the console does not exist.
+   # the admin console (`app` group) — OPTIONAL; unset = the console does not exist.
    # Hash from `stigmergy-admin-token`. That hash is the console's ENTIRE credential surface: it
-   # holds no token for any other service, because it drives none (ADR 044 — the passes it used
+   # holds no token for any other service, because it drives none (the passes it used
    # to dispatch through a GitHub PAT now run in the worker). The digest channel id is not
    # sensitive; secrets are simply Fly's env mechanism.
    fly secrets set STIGMERGY_ADMIN_TOKEN_HASH="<from stigmergy-admin-token>"
@@ -279,7 +278,7 @@ fly deploy --image <that image ref>   # redeploy it directly
 
 All of it runs inside the `worker` process group. **No pass starts while a capture is waiting**,
 and each yields between units, so maintenance can never put itself between a capture and its
-filing ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D6).
+filing.
 
 The two DAILY passes decide "is today's run still owed" by reading their own last `job_runs` row,
 not an in-process timer — which is why a redeploy at 05:08 does not garden a second time, and why
@@ -312,7 +311,7 @@ SELECT * FROM ingest_errors WHERE NOT resolved ORDER BY last_at DESC;
 The console's Jobs page is the same rows with the times spelled out, and its Repairs page is what
 the repair pass did with the gardener's findings ([repair.md](./repair.md)).
 
-`stigmergy-digest` is deliberately NOT on the night shift ([ADR 026](../decisions/026-the-purge.md) D6): run
+`stigmergy-digest` is deliberately NOT on the night shift: run
 `.venv/bin/stigmergy-digest --repo $STIGMERGY_REPO` (or `--dry-run`) by hand; its watermark means each
 post covers exactly the window since the previous one.
 
@@ -346,7 +345,7 @@ ORDER BY started_at DESC LIMIT 5;
 
 ### The admin console
 
-`/admin` on the `app` process group (ADR 029) — the daily loop (queue drain, the night shift,
+`/admin` on the `app` process group — the daily loop (queue drain, the night shift,
 gardener, repairs, digest, index, activity) in a browser instead of a terminal. Inert 404s until
 `STIGMERGY_ADMIN_TOKEN_HASH` is set; everything it can do, each degraded mode and the rotation
 drills are in [admin-console.md](./admin-console.md). It is management-only: nothing on it reads
@@ -408,7 +407,7 @@ anything in this repo. Every zone has a closed set of writers:
 | `wiki/notes,decisions,concepts/` | the librarian, filing a capture through the nine gates |
 | `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `brain_submit(kind="meeting", …)` |
 | `sources/slack/`, `sources/documents/` | the librarian's source attachment, from the 🧠 gesture and a `brain_submit(kind="document", …)` |
-| `wiki/entities/` (+ `ops/entity-registry.json`) | one writer, and no second: `librarian.identity` CREATES an entity page inside the capture's own commit, `approved_by:` naming whoever captured ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1), and appends new facts, connections and spellings to a registered entity's page. A repair the worker applies may later EDIT such a page (an alias merge, a body rewrite); nothing but the librarian creates one |
+| `wiki/entities/` (+ `ops/entity-registry.json`) | one writer, and no second: `librarian.identity` CREATES an entity page inside the capture's own commit, `approved_by:` naming whoever captured, and appends new facts, connections and spellings to a registered entity's page. A repair the worker applies may later EDIT such a page (an alias merge, a body rewrite); nothing but the librarian creates one |
 | `views/` | `stigmergy.views` **only**, and only from the librarian worker: the convergence sweep on its idle branch (the guarantee) and the best-effort trigger right after a meeting files. There is no command, because there is no second writer |
 
 After any bulk re-seed: rebuild the index (next section) and run `make index-check`.
@@ -418,8 +417,7 @@ After any bulk re-seed: rebuild the index (next section) and run `make index-che
 Both enter over `brain_submit`, from whatever client already holds the text. There is no operator
 command for either and no Google credential anywhere in the deployment: the CLIENT is the extractor
 — a Claude session with the Drive connector reads the document and submits it, a person with the
-file open sends what it says, a script sends what it already has
-([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
+file open sends what it says, a script sends what it already has.
 
 | What | The call |
 |---|---|
@@ -508,9 +506,8 @@ file itself.
 ## Removing pages
 
 **A removal is decided by the person who asks for it, and performed by the librarian** — there is
-nothing to approve afterwards, and nothing but the worker writes to the knowledge repo
-([ADR 043](../decisions/043-a-sweep-is-written.md),
-[ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). Two doors, and the same seam behind
+nothing to approve afterwards, and nothing but the worker writes to the knowledge repo.
+Two doors, and the same seam behind
 both:
 
 - **MCP**: `brain_delete(paths=["wiki/notes/Old Memo.md"], why="what makes it stale")`. It requires
@@ -533,7 +530,7 @@ prove no dead link survives; and one App-authored commit lands with your name in
 trailer.
 
 **Read the row back, and read the diff on it.** Nobody read that prose before it landed — that is
-the trade the ADR states rather than softens — so the report on the capture carries a unified diff
+the trade, stated rather than softened, — so the report on the capture carries a unified diff
 per rewritten page alongside the paths that stopped existing. **`brain_submissions` is where that
 reading happens**: it renders each diff ACL-scoped per path and fenced, and NAMES any path it
 withholds, so a page you may not read still shows as changed. The console's Captures page carries
@@ -670,7 +667,7 @@ other row is a record of something that actually happened in the corpus.
 
 **There is nothing for you to do, and no command to run.** The librarian worker converges `views/`
 to the corpus from its idle branch, and it is the only thing that can — nothing else in the
-deployment may write that zone ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). An
+deployment may write that zone. An
 ordinary capture, a 🧠 gesture, a submitted meeting or document, a removal, an applied repair, an
 entity born and a hand edit are all covered, and so is an entity that has never had a view at all,
 because the pass asks the corpus what diverges rather than waiting to be told.
@@ -763,8 +760,7 @@ that dict. So a revoked token keeps working until the machines running the old p
 **There is no role file to revoke from.** No map grants anybody authority over the write path:
 what a person may do is decided by their token (does it resolve to an identity at all) and by that
 identity's audience scope in `ops/identities.json` (unrestricted or not — which is what
-`brain_delete` asks). Both rows above are the whole surface
-([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3).
+`brain_delete` asks). Both rows above are the whole surface.
 
 **Editing `ops/identities.json` alone changes nothing about the running server**: the file it reads
 per request is the baked `/app/identities.json`, not the one in your checkout. And **there is no way
@@ -776,8 +772,8 @@ to cut off a leaked token faster than a deploy** — if that is not fast enough,
 Both live in Fly secrets, which are app-wide. The public server's environment carries the filing
 model's key as the accepted residual of one app for three process groups; it carries the App
 deliberately, because the index webhook reads the knowledge repo's pushed files with it. What it
-cannot do with either is write: no code in that process commits or pushes
-([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). If either is suspected:
+cannot do with either is write: no code in that process commits or pushes.
+If either is suspected:
 
 1. **App** — GitHub → the App's page → *Install App* → uninstall it from the knowledge repo.
    Every push then fails, in-flight items land `failed`, and **nothing is lost**: the captures

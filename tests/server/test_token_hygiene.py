@@ -80,7 +80,7 @@ def test_issue_token_never_writes_the_plaintext_anywhere_but_stdout(capsys):
 
 @pytest.mark.parametrize("rel_path", ["fly.toml", "scripts/deploy_staging.sh"])
 def test_deploy_artifacts_never_hardcode_a_secret_value(rel_path):
-    """Secrets travel as Fly secrets (ADR 013 §7) — the deploy artifacts must reference them by
+    """Secrets travel as Fly secrets — the deploy artifacts must reference them by
     name only, never embed one."""
     text = _read_text(rel_path)
     assert text is not None, f"{rel_path} is not tracked — the deploy needs it"

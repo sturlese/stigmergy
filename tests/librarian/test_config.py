@@ -134,7 +134,7 @@ def test_visibility_timeout_outlives_one_items_worst_case_rather_than_inheriting
 
 
 def test_a_raised_agent_timeout_raises_the_derived_visibility_with_it(monkeypatch):
-    """ADR 028: the deployed worker (`stigmergy-librarian-boot`, no CLI flags) must stay
+    """the Drive door: the deployed worker (`stigmergy-librarian-boot`, no CLI flags) must stay
     BOOTABLE when the agent budget is tuned through its env var — the derivation the module
     docstring promises is real, not a static constant. A measured 600s tune in `fly.toml` against
     a 900s static visibility default was a startup refusal nothing deployed could answer."""
@@ -300,7 +300,7 @@ def test_settings_never_reads_the_environment_outside_from_args(monkeypatch):
 def test_registry_and_linter_paths_are_derived_from_repo():
     settings = config.Settings(repo="/some/repo")
     assert not hasattr(settings, "acl_path"), (
-        "`acl_path` went with the path resolver (ADR 045 D2) — a capture's audience is the door's "
+        "`acl_path` went with the path resolver — a capture's audience is the door's "
         "decision on its own queue row, and no repo file decides a label any more")
     assert settings.registry_path == "/some/repo/ops/entity-registry.json"
     assert settings.linter_path == "/some/repo/.claude/tools/stigmergy_lint.py"
@@ -380,7 +380,7 @@ def test_the_lease_derives_from_this_settings_objects_own_budget(monkeypatch):
         timeout_s=settings.timeout_s) + config.VISIBILITY_HEADROOM_S
 
 
-# ── prompt caching (ADR 036) — same eager-refusal doctrine as the agent budget above ────────────
+# ── prompt caching — same eager-refusal doctrine as the agent budget above ────────────
 # `resolved_prompt_cache` is a plain-value domain check with no dependency on which backend or
 # model is configured (unlike `max_turns`, whose `< 2` refusal is scoped to the pydantic backend
 # in `worker.startup_checks` because only an ITERATING run reads it) — so it sits beside

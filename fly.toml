@@ -76,18 +76,18 @@ kill_timeout = "300s"
   # path stays independent of the read path's embedder.
   PORT = "8080"
   # The real deployed hostname, allowlisted alongside localhost for the MCP SDK's DNS-rebinding
-  # Host-header check (pilot bug fix, ADR 013 amendment) — without this, EVERY real client 421s.
+  # Host-header check (the pilot's own 421 bug) — without this, EVERY real client 421s.
   # Not a secret; comma-separated if the app is ever reachable at more than one hostname.
   # MUST match the deployed hostname — if it drifts from `app` above, every real client 421s.
   STIGMERGY_PUBLIC_HOST = "CHANGEME-your-fly-app.fly.dev"
-  # ADR 029: where the deploy bakes the digest's audience-scoping map (always written — `{}`
+  # Where the deploy bakes the digest's audience-scoping map (always written — `{}`
   # stub when the sibling repo has none). A path, not a secret. The console itself stays INERT
   # until STIGMERGY_ADMIN_TOKEN_HASH is set as a Fly secret (docs/reference/admin-console.md);
   # nothing here turns it on.
   STIGMERGY_ADMIN_CHANNELS_PATH = "/app/slack-channels.json"
 
   # ── the worker group's configuration ─────────────────────────────────────────────────────────
-  # `[env]` is app-wide, so every process group sees these — and since ADR 044 D3 the server group
+  # `[env]` is app-wide, so every process group sees these — and the server group
   # READS none of them. It holds no git credential and writes nothing to the corpus: a removal is
   # queued at `brain_delete` and performed by the worker, which is the one writer there is.
   # The knowledge repo it clones and files into — yours to set. https, not ssh: the App
@@ -112,12 +112,12 @@ kill_timeout = "300s"
   # is a bare id, which resolves through the OpenAI Responses API — and `stigmergy-librarian-boot`
   # strips OPENAI_API_KEY from the worker before exec'ing it, on purpose (it belongs to the READ
   # path's embedder, and Fly secrets are app-wide). Since the night shift moved into the worker
-  # (ADR 044 D6) the gardener runs THERE, so the only provider key it can reach is the app-wide
+  # the gardener runs THERE, so the only provider key it can reach is the app-wide
   # ANTHROPIC one. An unset value fails the nightly pass by name, with the reason in its
   # `job_runs` row — rather than recording a `partial` run every night for a model half that
   # never ran, or stopping a worker that has captures to file.
   STIGMERGY_GARDENER_MODEL = "anthropic:claude-sonnet-5"
-  # Tuned BY MEASUREMENT (ADR 028): the default 300s was calibrated for paste-sized captures; a
+  # Tuned BY MEASUREMENT: the default 300s was calibrated for paste-sized captures; a
   # real figure-dense Drive deck (7.7 KB extracted, overlapping an entity with existing coverage)
   # exceeded it twice while a simpler deck filed just under it. Deck-sized documents earn a
   # document-sized budget. The visibility timeout DERIVES from this value

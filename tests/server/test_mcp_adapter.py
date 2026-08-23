@@ -60,7 +60,7 @@ def test_the_mounted_tool_list_is_exactly_the_eight_supported_tools(fake_service
     eighth vanishing (a surface removed without one) both turn this red by name.
 
     `brain_reply` went with the parks: nothing a submitter captures ever waits on them.
-    `review_queue`/`review_decide` went with ADR 044 — the capture is the approval, so there is no
+    `review_queue`/`review_decide` went when the capture became the approval — so there is no
     inbox to read and no verdict to record. What is left of the write half is the two acts a person
     performs: `brain_submit` (which now carries every kind, meetings and documents included) and
     `brain_delete`, decided and applied in the same call."""
@@ -105,7 +105,7 @@ def test_search_brain_does_not_echo_a_malformed_registrys_path(fake_service):
     `entity_aliases._load_entities` names the registry PATH on purpose — that message is written
     for the operator who has to fix the file — and it was a plain `ValueError`, which this closure
     echoes because its OWN unknown-filter rejection is safe to show a caller. The two were
-    compatible until entity-first resolution moved inside the search path (ADR 022 D4), and then
+    compatible until entity-first resolution moved inside the search path, and then
     the loader's message started arriving at a branch chosen for a different error entirely.
 
     `list_entities` has always refused to echo this exact exception
@@ -395,7 +395,7 @@ def test_adversarial_submitted_by_by_contrast_DOES_reach_the_service_because_it_
 #
 # #135 moved `brain_delete` off the loop for a different and now-extinct reason: it used to clone,
 # run a model, scan, lint and push inside this process, and the sweep writer's `asyncio.run` RAISED
-# on the loop. That work is the librarian worker's now (ADR 044 D3) — so the crash is gone, the
+# on the loop. That work is the librarian worker's now — so the crash is gone, the
 # blocking is not, and this pair is what keeps the fix from being quietly undone with the crash it
 # was mistaken for.
 def _on_the_event_loop_probe(service, method: str):

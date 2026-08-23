@@ -64,7 +64,7 @@ FROZEN_MARKERS = (
 _SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
 
 # ── the one state a frozen copy may be in WITHOUT a sha, and only until its PR lands ───────────
-# ADR 033 rewrote the librarian brief, and the platform PR and the knowledge-repo PR land together:
+# the structured filing flow rewrote the librarian brief, and the platform PR and the knowledge-repo PR land together:
 # at the moment these bytes were copied here, the commit that carries them did not exist yet. A sha
 # row naming the PREVIOUS brief would be worse than a placeholder, because it would look answered —
 # `eval_history.corpus_provenance` copies `PROVENANCE.json`'s value into every `suite: "filing"`
@@ -104,13 +104,13 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 # of event: not an edit to a yardstick but a NEW yardstick, which retires the series with it per
 # `evals/README.md`.
 #
-#   1. ADR 033 rewrote the brief backend-NEUTRAL (no tool mechanics in it at all).
+#   1. the structured filing flow rewrote the brief backend-NEUTRAL (no tool mechanics in it at all).
 #   2. The `sdk` retirement closed that rewrite's last debt: the brief's environment paragraph still
 #      told its reader that "some runs of this skill hold tools and a checkout, and write the page
 #      themselves", which stopped being true of ANY run when the tool-holding backend went. That
 #      paragraph became the tool-less statement, at knowledge-repo commit
 #      `c1e0996ed497e70a9df82661c367294b48207a16`.
-#   3. ADR 034 gave the ordinary run its tools BACK, so a brief describing one run style stopped
+#   3. the agentic pydantic harness gave the ordinary run its tools BACK, so a brief describing one run style stopped
 #      being true again — in the other direction. The preamble is now environment-CONDITIONAL
 #      ("your run is described in the preamble above this skill"; a short tools paragraph that
 #      applies when the run holds them), which is the only shape that stays true of both a
@@ -123,7 +123,7 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 #      12 after the rewrite. The same edit added a `**A wikilink stays on one line.**` sub-bullet
 #      ahead of the existing "claim that a page exists" one. Knowledge-repo commit
 #      `03aab8799f9778087ab78cc23fbbf9a809d52d5b`.
-#   5. ADR 041 — file first, govern after. The brief stops answering a name the registry does not
+#   5. the file-first write path — file first, govern after. The brief stops answering a name the registry does not
 #      know with a question to the submitter and answers it with a PROPOSAL: the agent declares the
 #      identity it read out of the material and `librarian.identity` creates the page, with
 #      `approved_by:` empty, in the same commit as the capture. Knowledge-repo commit
@@ -175,7 +175,7 @@ def registry():
 
 
 def _expect_blocks(entry: dict) -> list:
-    """Every scored moment an entry declares — exactly one since ADR 041 retired the park.
+    """Every scored moment an entry declares — exactly one since the file-first write path retired the park.
 
     Kept as a list rather than inlined: every loop below walks it, and the day a capture legitimately
     scores twice again they should all follow without being found one at a time.
@@ -234,7 +234,7 @@ def test_the_consistency_check_refuses_a_key_the_scorer_would_silently_ignore(ex
 
 @pytest.mark.parametrize("key", run_filing.RETIRED_ENTRY_KEYS)
 def test_the_consistency_check_refuses_the_retired_ask_back_keys(key, expectations, manifest):
-    """**INVERTED by ADR 041.** This refusal used to demand that `reply` and `after_reply` travel
+    """**INVERTED by the file-first write path.** This refusal used to demand that `reply` and `after_reply` travel
     TOGETHER — half an ask-back case was measured on its first phase alone and the table said
     nothing. Nothing waits on a person any more: `BrainService.reply` is gone, `_drive` scores one
     phase per capture, and an entry carrying either key would have that half read by nobody. So the
@@ -269,7 +269,7 @@ def test_the_shipped_set_carries_neither_retired_key(entries):
 #
 # **Both refusals are PRE-EMPTIVE today, and that is recorded rather than glossed.** The title-less
 # capability is live in `_decisions_match`, but no shipped expectation uses it — every decision
-# entry in the set names a `title`. Since ADR 041 removed F09's stored reply, BOTH of its decision
+# entry in the set names a `title`. Since the file-first write path removed F09's stored reply, BOTH of its decision
 # entries are titles with NO anchor: the reply is what used to name a registered entity, and a
 # proposed identity's id is slugified from a name the agent chose, so there is no anchor left to
 # assert. That is the older "scores the title alone" shape and a different thing from omitting
@@ -453,7 +453,7 @@ def test_the_facet_names_the_bars_file_carries_are_the_scorers_own(entries):
 
 
 def test_every_expected_status_is_a_terminal_status_the_queue_can_actually_reach(entries):
-    """**NARROWED by ADR 041.** The reachable set used to include `needs_input` and `triage`, the two
+    """**NARROWED by the file-first write path.** The reachable set used to include `needs_input` and `triage`, the two
     states a capture waited on a person in; they are `schema.RETIRED_STATUSES` now and the queue's
     own CHECK constraint refuses them by name. `resolved` is deliberately absent too: it survives
     read-only on rows a steward closed by hand and nothing reaches it. So the set a claim can be
@@ -561,7 +561,7 @@ def test_every_expected_edit_path_is_a_page_that_already_exists_in_the_fixture_r
 # ── the proposal the two unregistered names measure ────────────────────────────────────────────
 
 def test_every_proposing_expectation_files_and_names_what_it_must_propose(entries):
-    """**INVERTED by ADR 041.** This used to assert the ask-back loop's two halves: a `needs_input`
+    """**INVERTED by the file-first write path.** This used to assert the ask-back loop's two halves: a `needs_input`
     expectation carried a `park_question`, a `reply` and an `after_reply` block, and without all
     three the loop those two captures existed for was never exercised.
 
@@ -614,7 +614,7 @@ def test_every_proposed_name_is_absent_from_the_registry_and_present_in_its_own_
 
 
 def test_the_two_proposing_captures_reach_the_two_flows_that_can_propose(manifest, entries):
-    """One fast-lane capture and one meeting, which is the property ADR 041 is about: the same input
+    """One fast-lane capture and one meeting, which is the property the file-first write path is about: the same input
     used to behave differently per door — a name typed into a capture parked, the same name in a
     transcript parked the whole page SET. Two captures on one flow would leave the other door
     unmeasured and the instrument would agree that the doors behave alike without having looked.
@@ -679,7 +679,7 @@ def test_the_registry_sits_where_the_librarian_reads_it(registry):
     `proposals` scores 1.00 for a run in which nothing was recognised at all.
 
     `ops/acl.json` used to be asserted beside it and is gone from both the fixture and the real
-    knowledge repo: a capture's audience is the door's decision on its own queue row (ADR 045 D2),
+    knowledge repo: a capture's audience is the door's decision on its own queue row,
     so no repo file decides a label and there is nothing here for the librarian to read."""
     assert (REPO / librarian_config.REGISTRY_RELPATH).is_file()
     assert not (REPO / "ops" / "acl.json").exists()

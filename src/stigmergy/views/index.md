@@ -14,12 +14,12 @@ or the backlinks it is allowed to cite. This package is the ONLY writer of
 capture, a 🧠 gesture, a submitted meeting or document, an applied repair, a page REMOVED, an entity
 born, a hand edit. Two entry points, one guarantee and one latency optimisation on top of it: the
 worker's sweep (the guarantee) and the post-meeting hook in `librarian.processing` (best-effort,
-same run as the filing). There is no operator command — ADR 044 D3 removed it — and what replaces
+same run as the filing). There is no operator command — it was removed — and what replaces
 it is that the sweep also runs on the first idle tick AFTER the worker did something, so the wait
 is a poll interval rather than a sweep interval.
 
-A view carries **no `acl:` at all** ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md)
-D5): it is the OPEN rollup. `skeleton.members_of` admits only members that `flows_into` an open
+A view carries **no `acl:` at all**: it is the OPEN rollup. `skeleton.members_of` admits only
+members that `flows_into` an open
 page, and the backlink feed — a governed but NON-member source — passes the same gate. It used to
 be the INTERSECTION of its members' audiences, which never widened access, correctly, and
 COLLAPSED: two members with disjoint labels produced `acl: []`, which is *nobody*, so one

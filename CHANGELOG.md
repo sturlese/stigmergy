@@ -6,8 +6,8 @@ All notable changes to this project are documented here, in
 
 While the version stays below `1.0.0` the contracts described in
 [`docs/reference/`](./docs/reference) may still move between minor releases. What will not move
-without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
-treats its test suite as the contract.
+without answering to [`docs/DESIGN.md`](./docs/DESIGN.md) is *behaviour*: this project treats its
+test suite as the contract.
 
 ## [0.9.1] - 2026-08-22
 
@@ -27,7 +27,7 @@ treats its test suite as the contract.
 
 ## [0.9.0] - 2026-08-22
 
-**The capture is the approval** ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md), #134).
+**The capture is the approval** (ADR 044, #134).
 Every write used to end in a queue somebody had to come back to: an entity waited to be approved, a
 spelling waited to be approved, a repair waited to be approved, and the doorbell existed to nag the
 person who had already made the decision by capturing. Nothing waits any more. A person's capture IS
@@ -159,7 +159,7 @@ what to do instead, because a deployment upgrading across this release will find
 
 ## [0.8.0] - 2026-08-21
 
-**An entity is born written, and keeps being written** ([ADR 042](./docs/decisions/042-an-entity-is-born-written.md), #131).
+**An entity is born written, and keeps being written** (ADR 042, #131).
 Twelve of the first brain's nineteen entity pages said nothing about the entity: the two hand
 doors rendered the template with the name filled in. There is no deterministic birth any more — a
 steward's registration is a capture, the librarian writes the page from what the steward said and
@@ -200,7 +200,7 @@ its page.
 
 ## [0.7.0] - 2026-08-21
 
-**File first, govern after** ([ADR 041](./docs/decisions/041-file-first-govern-after.md), #125).
+**File first, govern after** (ADR 041, #125).
 A capture never waits on a person any more. A name the registry does not know used to park the
 capture on a question to its submitter and then on a steward; two of five real notes were cancelled
 by their own authors that way. Now the librarian files at once and PROPOSES the entity — a complete

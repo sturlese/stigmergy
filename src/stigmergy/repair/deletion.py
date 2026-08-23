@@ -8,18 +8,18 @@ overlap with it, must not be left saying something that stopped being true. So t
 "remove a file", it is a **sweep**: the pages that go, and the full planned bytes of every page
 that referred to one of them.
 
-**Structure is code's; prose is a model's (ADR 043 D1).** This module owns the deterministic half
+**Structure is code's; prose is a model's.** This module owns the deterministic half
 of the plan — which pages go, which pages refer to them, and their FRONTMATTER with the entries
 that named a going page dropped — and every bound the written half has to satisfy. The bodies of
 the referring pages are written by `repair.sweep`, one model call over the whole referring set,
 and land here as the same `planned_after` bytes. Which pages go is never a model's: a person names
 them, or `duplicate_source_groups` derives them for exact-duplicate `sources/` pages, where the
-decision is a lookup (ADR 039's second amendment, which stands).
+decision is a lookup.
 
 Three properties buy this kind its safety, and each is asked of a different thing:
 
   · **The zone is a whitelist.** `wiki/entities/` is absent by construction — an identity is
-    retired through governance, not deletion (ADR 016) — and so is everything outside the corpus.
+    retired through governance, not deletion — and so is everything outside the corpus.
   · **The plan proves its own bounds, at both ends.** `validate` — run when a plan is stored and
     again against the clone it lands on — proves every scrubbed page's frontmatter is code's own
     scrub of the page as it stands, and that no planned page still names a going one. A base hash
@@ -245,7 +245,7 @@ def scrubbed(text: str, stems: set[str], *, machine_written: bool = False) -> st
     treated: a `views/` page is REGENERATED wholesale by the view sweep, and a `sources/` page is a
     filed document's provenance. Neither is prose anybody reconciles, so handing one to a writer
     asks a model to argue with a generated file and produce bytes the next regeneration overwrites.
-    There, unlinking IS the right answer — ADR 039 B3's own rule, kept exactly where it was right.
+    There, unlinking IS the right answer — the older rule, kept exactly where it was right.
 
     Pure, and byte-exact about the parts it does not touch: the frontmatter block is reassembled
     from its own lines and the body is spliced rather than re-rendered, so a page whose `related:`
@@ -279,7 +279,7 @@ def is_machine_written(path: str) -> bool:
 
 
 def _unlinked_body(text: str, stems: set[str]) -> str:
-    """Unlink, never delete — ADR 039 B3's rule, kept for the machine zones alone. `[[X]]` becomes
+    """Unlink, never delete — the older rule, kept for the machine zones alone. `[[X]]` becomes
     `X`, `[[X|alias]]` becomes `alias`, a markdown link becomes its text, so the line that named a
     page survives the page."""
     out, cut = [], 0
@@ -516,8 +516,8 @@ def going_stems(ops) -> set[str]:
 
 def unified_diffs(worktree: str, ops) -> dict[str, str]:
     """`{path: unified diff}` of what this plan does to each page it rewrites, against the page as
-    it stands in `worktree` — what a person reads when the act road hands the result back (ADR
-    043 D5): nobody read the written prose before it landed, so the diff IS the reading. A removed
+    it stands in `worktree` — what a person reads when the act road hands the result back:
+    nobody read the written prose before it landed, so the diff IS the reading. A removed
     page is listed by its deletion op and needs no diff."""
     out: dict[str, str] = {}
     for path in scrubbed_paths(ops):
@@ -658,7 +658,7 @@ def validate(worktree: str, ops) -> list[gates.Finding]:
     """Every reason this plan could not be performed against `worktree`, or `[]`.
 
     The SHAPE half — that the ops are well-formed and every path they name is a page this kind
-    may touch in this tree — and the two bounds a written sweep has to satisfy (ADR 043 D1): every
+    may touch in this tree — and the two bounds a written sweep has to satisfy: every
     scrubbed page's frontmatter is code's own scrub of the page as it stands here, byte for byte,
     and no planned page still refers to a page that is going. Both are asked of the stored bytes
     against THIS tree, which is what lets the same function prove a plan at propose time and again
@@ -726,7 +726,7 @@ def validate(worktree: str, ops) -> list[gates.Finding]:
 # ── the one automatic road, and it asks no model ──────────────────────────────────────────────
 # Two `sources/` pages declaring the same `content_hash:` are the same captured document filed
 # twice. Which one goes is not a judgment — it is a lookup — so it is CODE's, and this is the one
-# deliberate exception to "a model proposes" (ADR 039's second amendment). A model asked "are these
+# deliberate exception to "a model proposes". A model asked "are these
 # duplicates?" would be asked to re-derive a fact the frontmatter already states, and would
 # sometimes get it wrong.
 SOURCES_ZONE_PREFIX = "sources/"
@@ -838,8 +838,8 @@ PLAN_DRIFT_CODE = "plan-drift"
 def apply_declared(worktree: str, ops) -> tuple[list[str], list[gates.Finding]]:
     """Validate, prove the corpus did not move, then perform — all-or-nothing.
 
-    Two questions replace the recomputation ADR 039 B4 ran, because a written sweep cannot be
-    recomputed (ADR 043 D3). The base hash every scrub op carries says whether a page the plan
+    Two questions replace the recomputation the unlinking sweep ran, because a written sweep cannot be
+    recomputed. The base hash every scrub op carries says whether a page the plan
     rewrites changed since the plan was made; a walk of the corpus says whether a page the plan
     does NOT rewrite now refers to a going page — the latecomer that would otherwise survive the
     deletion as a dead link. Either refuses the whole plan: the corpus moved, delete again. On the

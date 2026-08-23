@@ -68,7 +68,7 @@ def _materialized(text: str, relpath: str):
 
 # ── the two wrappers: one per input, each keeping its own semantics ───────────────────────────
 # There were three. `load_acl` read `ops/acl.json` at `base` and is gone with the resolver it fed:
-# a capture's audience is the DOOR's decision, carried on its own queue row (ADR 045 D2), so no
+# a capture's audience is the DOOR's decision, carried on its own queue row, so no
 # repo-sourced input decides a label any more and there is nothing to pin to a commit.
 def load_registry(repo: str, base: gitcmd.BaseRef):
     """`ops/entity-registry.json` at `base`, materialized so the kernel's own path-taking reader

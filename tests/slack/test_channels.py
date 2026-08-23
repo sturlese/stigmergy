@@ -53,7 +53,7 @@ def test_a_channel_value_that_is_not_a_list_of_strings_fails_closed(channels_pat
 
 
 def test_the_reserved_group_all_is_refused_here_too(tmp_path):
-    """One grammar for both control files (ADR 045 D7): the roster's rules are this map's rules,
+    """One grammar for both control files: the roster's rules are this map's rules,
     so a reserved name cannot be legal in one file and refused in the other."""
     path = tmp_path / "reserved.json"
     path.write_text(json.dumps({"C_X": ["all"]}))

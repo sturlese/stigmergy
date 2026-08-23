@@ -2,8 +2,6 @@
 
 Two operator commands over the corpus: `stigmergy-gardener` finds what needs a human's judgment and
 says so; `stigmergy-digest` posts what happened to Slack.
-Design record: [ADR 024](../decisions/024-gardener-digest.md) — it holds the decisions this
-document only shows the results of.
 What a finding's path to zero looks like is [`repair.md`](./repair.md); view staleness is covered
 in [`views.md`](./views.md). This document describes what these two commands add on top of them.
 Code maps, one per command:
@@ -48,8 +46,7 @@ and pushes it — nobody is asked, and the reading happens afterwards, from the 
 stored. None of that reaches back here: this package still detects and fixes nothing, and it
 neither imports nor calls the one that repairs.
 The narrative is [repair.md](./repair.md), decided in
-[ADR 039](../decisions/039-governed-repair-loop.md) and amended by
-[ADR 044](../decisions/044-the-capture-is-the-approval.md) D2.
+[`repair.md`](./repair.md).
 
 ## The eleven deterministic checks
 
@@ -93,7 +90,7 @@ string, so an operator's grep finds both eras — and the line it draws is the h
 the irreversible, the gardener flags conventions.**
 
 **`link-to-narrower-page` is the one link a model can no longer write and a person still can.**
-Since [ADR 045](../decisions/045-audience-from-the-door.md) D3 every page a model reads while
+Every page a model reads while
 writing is scoped to what that page may cite, so the librarian cannot LEARN of a page it may not
 link to. What remains is a name the capture's own material supplies — a human writing a restricted
 page's title into open material — the same act
@@ -107,7 +104,7 @@ leaks), and deleting it edits somebody's words. The finding names the pair and s
 **`entity-placeholder-body` is one of the two checks with a repair kind of its own.** An entity
 page written today is born with a body — `entities.birth.render_page` refuses one that says nothing
 about the entity and strips the template's stubs
-([ADR 042](../decisions/042-an-entity-is-born-written.md)) — so what this check finds is a page
+ — so what this check finds is a page
 born under the older contract, carrying `ops/templates/entity.md`'s angle-marked placeholders
 verbatim, or one whose body is blank below its title. Nothing counted those pages before this
 check — the orphan check exempts entity pages by type, and no other check reads a body — so an
@@ -253,8 +250,8 @@ than "model is whatever the shared one happens to be". Escalating past that defa
 evidence-driven decision from reading real weeks of findings, not a guess made up front.
 
 **On a deployment that default is not usable, and the worker says so at startup.** Since the garden
-pass moved into the librarian worker ([ADR 044](../decisions/044-the-capture-is-the-approval.md)
-D6), it runs where `stigmergy-librarian-boot` has stripped `OPENAI_API_KEY` — deliberately, because
+pass moved into the librarian worker, it runs where `stigmergy-librarian-boot` has stripped
+`OPENAI_API_KEY` — deliberately, because
 that key belongs to the read path's embedder and Fly secrets are app-wide. The cheap-class default
 is a BARE model id, which resolves through the OpenAI Responses API, so it authenticates with
 nothing there. Set `STIGMERGY_GARDENER_MODEL` to a provider-prefixed model whose key the worker
@@ -342,8 +339,8 @@ model slug picks one of the two explicitly, at its own definition, rather than i
 that pages a person and no Slack credential in a gardener process: the package imports no Slack
 gateway, no channels file and no ACL predicate, and `tests/test_architecture.py` pins that as its
 import edge. A finding reaches a person two ways — `stigmergy-digest`'s corpus-health section, and
-the console's Gardener page — and what answers one is the worker's repair pass
-([ADR 044](../decisions/044-the-capture-is-the-approval.md)), not a human woken up by a message.
+the console's Gardener page — and what answers one is the worker's repair pass,
+not a human woken up by a message.
 
 ## The digest's two sections
 
@@ -361,8 +358,8 @@ overrides it; 7 days on a genuine first run), two sections, in this order:
 
    A birth is a filing: the librarian's report names the identities its own capture introduced
    (`report.entities_born`), so the number is the sum of
-   `jsonb_array_length(report -> 'entities_born')` over the window's FILED captures
-   ([ADR 044](../decisions/044-the-capture-is-the-approval.md)). There is no ledger to read and no
+   `jsonb_array_length(report -> 'entities_born')` over the window's FILED captures.
+There is no ledger to read and no
    second table that could disagree with the commits, and the line reads `N entities born` because
    that is now exact — every counted birth is a page in the repo.
 
@@ -383,7 +380,7 @@ are their own kind of dishonest report. Section 1 needs no filter because it nam
 — only counts by severity and check slug — and neither does the rest of section 2: the
 entities-born number is a count taken off the filings' own reports, and the repairs number a count
 off the ledger, by kind. Which is exactly why they are counts. The digest is the one gardener-adjacent surface that
-broadcasts, so it is the one that needed this from birth (ADR 024 D5); until the first labelled page exists the filter is
+broadcasts, so it is the one that needed this from birth; until the first labelled page exists the filter is
 indistinguishable from no scoping at all, and it becomes load-bearing the moment one exists.
 
 **The digest is Slack mrkdwn, composed as such from the start — never CommonMark, never
@@ -413,7 +410,7 @@ post, because its own watermark says so; only timeliness is lost by not scheduli
 
 **The gardener's daily run happens inside the librarian worker**, on its idle branch, at
 `STIGMERGY_LIBRARIAN_GARDEN_AT` (default 05:07 UTC) — see
-[ADR 044](../decisions/044-the-capture-is-the-approval.md) D6 and the
+the night shift and the
 [operator runbook](./operator-runbook.md). Three properties come from living there rather than in
 a scheduled GitHub Actions run:
 
@@ -431,7 +428,7 @@ a scheduled GitHub Actions run:
 It needs no Slack credential, and it holds no push credential either: it persists findings and
 returns them. What ANSWERS those findings is the worker's repair pass, on its own interval — a lane
 that does push, which is exactly why it lives inside the deployment that already holds the App key
-([repair.md](./repair.md), [ADR 044](../decisions/044-the-capture-is-the-approval.md) D2). Its
+([repair.md](./repair.md)). Its
 coupling to this report is a watermark rather than an offset: it answers the latest COMPLETED
 gardener run, once, and a pass that finds no completed run — or nothing answerable in one — records
 that it did nothing and carries on.

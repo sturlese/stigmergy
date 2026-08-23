@@ -281,7 +281,7 @@ class _QuotedKeyForgeAgent:
 
     def __init__(self, inner):
         self.inner = inner
-        # The declared port member, copied from what this wraps (ADR 033). Plain attribute
+        # The declared port member, copied from what this wraps. Plain attribute
         # access with NO default: `processing._one_pass` refuses an agent that carries no
         # `structured_ordinary` rather than defaulting it, so a wrapper that swallowed the
         # declaration would silently change which shape of the ordinary flow runs behind it.
@@ -333,7 +333,7 @@ class _QuotedKeyEntityForgeAgent:
 
     def __init__(self, inner):
         self.inner = inner
-        # The declared port member, copied from what this wraps (ADR 033). Plain attribute
+        # The declared port member, copied from what this wraps. Plain attribute
         # access with NO default: `processing._one_pass` refuses an agent that carries no
         # `structured_ordinary` rather than defaulting it, so a wrapper that swallowed the
         # declaration would silently change which shape of the ordinary flow runs behind it.
@@ -612,8 +612,8 @@ def test_adversarial_cat1_added_lines_counts_hunks_rather_than_matching_prefixes
 # A check that stops running must be impossible to miss, so what left is listed here instead of
 # vanishing from the file. The tests below drove a HALLUCINATED FIGURE through the fast lane and
 # asserted that a figure-verification gate vetoed it, that one corrective retry recovered it, or
-# that the resulting report carried the right verdict. That gate is gone
-# ([ADR 026](../../docs/decisions/026-the-purge.md) D2): ingest-time figure verification went with
+# that the resulting report carried the right verdict. That gate is gone:
+# ingest-time figure verification went with
 # the trust layer, deliberately, and the accepted consequence is stated there — **an invented
 # figure CAN sit on a page.** The reader's protection is the verbatim source one click away, the
 # gardener, and `answer.verify_answer` at query time.

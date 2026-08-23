@@ -1,5 +1,5 @@
 """The librarian worker's periodic repair pass: its own interval, its own watermark, and a fault
-that is logged and swallowed (ADR 044 D2).
+that is logged and swallowed.
 
 Keyless and Postgres-free. `Worker.maybe_run_repairs` is exercised with an injected clock and an
 injected pass — the interval is a timing contract, and a test that had to wait one out could only

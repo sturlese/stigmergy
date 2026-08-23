@@ -49,7 +49,7 @@ def test_build_prompt_omits_the_hints_paragraph_when_there_are_none():
 
 
 def test_build_prompt_carries_the_flow_note_above_the_material_and_omits_it_by_default():
-    """ADR 028: the flow note is SERVER text — instruction-side, above the fenced material,
+    """the Drive door: the flow note is SERVER text — instruction-side, above the fenced material,
     exactly like the corrective brief's standing — and absent means absent (the ordinary
     capture's prompt is byte-identical to before the parameter existed)."""
     from stigmergy.librarian.agent import build_prompt
@@ -640,7 +640,7 @@ def test_the_hints_are_still_labelled_as_suggestions_and_still_reach_the_agent()
 
 # ── births: the account's two new lists, bounded at the boundary like every other field ───────
 # A name the registry does not know is no longer a park: the account DECLARES the entity and
-# `librarian.identity` creates it, confirmed by the submitter (ADR 044). The boundary's job is the
+# `librarian.identity` creates it, confirmed by the submitter. The boundary's job is the
 # same as for every field — coerce, bound, refuse a half-declaration correctably — and
 # `decision: "triage"` is nothing at all now.
 def test_triage_is_no_longer_a_decision_the_boundary_knows():
@@ -701,7 +701,7 @@ def test_the_meeting_account_carries_the_same_proposal_shape():
     assert outcome.new_aliases == ({"entity": "acme-corp", "alias": "Acme Corporation"},)
 
 
-# ── `entity_updates` (ADR 042): what a filing adds to a registered entity's page ──────────────────
+# ── `entity_updates`: what a filing adds to a registered entity's page ──────────────────
 def test_entity_updates_are_parsed_bounded_and_an_update_naming_no_line_is_dropped():
     from stigmergy.librarian import agent
     raw = {"decision": "file", "title": "A note", "page_type": "note",

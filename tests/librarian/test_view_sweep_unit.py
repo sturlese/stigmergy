@@ -83,7 +83,7 @@ def test_the_loop_sweeps_on_the_idle_branch(rig, monkeypatch):
 
 # ── the tick after work: derived pages must not describe a corpus that moved ──────────────────
 def test_the_idle_tick_after_work_sweeps_even_though_the_interval_has_not_elapsed(rig, monkeypatch):
-    """**The property ADR 044 D3 added**: a capture, a repair or a removal has just changed the
+    """**The property the capture-is-the-approval change added**: a capture, a repair or a removal has just changed the
     corpus, and `views/` is DERIVED from it. Waiting out a whole interval would leave a rollup
     describing a page that is no longer there — the window where a view is most likely to be wrong
     is exactly the moment after something landed.

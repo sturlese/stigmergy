@@ -42,8 +42,8 @@ def members_of(repo: str, entity_id: str, *, rows=None) -> list[Member]:
     sorted by path — the one member set every other computation (staleness hash, synthesis
     prompt, `members:` count) is built from.
 
-    **A view carries no audience of its own** ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md)
-    D5), so the filter is `flows_into(member.acl, None)`: open members only. Before that, a view's
+    **A view carries no audience of its own**, so the filter is `flows_into(member.acl, None)`:
+    open members only. Before that, a view's
     audience was the INTERSECTION of its members' — which never widened, correctly, but
     COLLAPSED: one leadership-only note anchored to a popular entity made that entity's view
     vanish for everyone else, and the timeline still named every member's path and title on the
@@ -151,7 +151,7 @@ def backlinks_of(repo: str, entity_page: Member | None, *,
     A backlink is a governed source OUTSIDE the member set, so it passes the same gate a member
     does and never contributes to the page's own audience: a backlink is excluded from this list,
     never a reason to narrow anything. **Production always passes `None`** — a view is open
-    (ADR 045 D5) — and the parameter stays because it is `flows_into`'s own argument and its truth
+ — and the parameter stays because it is `flows_into`'s own argument and its truth
     table is worth exercising at other audiences rather than only at the one this caller uses. The
     `None` default is also the fail-closed one: it admits equally-open backlinks and nothing else.
     The match is against RESOLVED link paths, exact even on an ambiguous stem.

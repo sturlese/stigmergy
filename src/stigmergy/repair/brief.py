@@ -2,7 +2,7 @@
 code-owned frame is composed in front of it.
 
 Shared by every model road in this package — the three the proposer runs overnight and the sweep
-writer the server runs in the act (ADR 043 D4) — and by nothing else. A separate module rather than
+writer the server runs in the act — and by nothing else. A separate module rather than
 a corner of `proposer.py` because the server reaches the sweep writer and must not drag the
 proposer's orchestration (findings, the gardener store, `job_runs`) in with it; this module loads no
 model stack and no store, only the filesystem seam.

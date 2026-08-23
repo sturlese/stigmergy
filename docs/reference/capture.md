@@ -2,8 +2,8 @@
 
 The front half of the fast lane: the durable queue a capture lands in, the exactly-once claim
 primitive that drains it, the content-addressed evidence archive, the operational spine and
-retention. Design record: [ADR 014](../decisions/014-capture-queue-and-attribution.md); the two
-MCP tools that reach it are served by [server.md](./server.md), which owns identity, rate limiting
+retention. The two MCP tools that reach it are served by [server.md](./server.md), which owns
+identity, rate limiting
 and audit; what a filing does to the identity layer is
 [librarian.md → Writing an identity](./librarian.md#writing-an-identity-what-a-filing-does-to-the-registry).
 Code map: [`src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md).
@@ -16,7 +16,7 @@ figure at write time**: the only deterministic figure check runs at ANSWER time 
 **Nothing here ever waits on a person.** A capture is queued, claimed and finished; a name the
 registry does not know does not stop it — the librarian writes that entity's page inside the same
 commit as the note, born CONFIRMED by whoever captured, and nobody is asked afterwards: **the
-capture is the approval** ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). The two
+capture is the approval**. The two
 states a capture used to park in are retired (see [The queue](#the-queue)).
 
 ## Module map
@@ -44,7 +44,7 @@ supplies it.
 
 | Tool | What it does |
 |---|---|
-| `brain_submit(kind, material, hints?, audience?)` | queue a capture. `kind` names the SHAPE of the material, and it is `SUBMITTABLE_KINDS` — the whole of what any door may ask for: `raw` (a conversation excerpt, a decision, a gotcha), `page` (markdown you drafted), `meeting` (a transcript) or `document` (the text of a document you already hold). ONE vocabulary for every door — no door has a kind of its own, so nothing here is narrower than anywhere else ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4). The QUEUE's `KINDS` is wider by exactly one, `delete`, and `reject_unsubmittable_kind` is what keeps that difference real: a removal is queued by the door that authorized it, and submitting one here would be that authorization side-stepped (D3). The material cap is per kind, in UTF-8 bytes: 256 KB for `raw` and `page`, 1 MB for `meeting` and `document` (`MATERIAL_CAP_BYTES`, read through `max_material_bytes(kind)`; `MAX_MATERIAL_BYTES` is the largest of them, which is what a transport's request-body limit has to fit). `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists carry provenance rather than placement (`SOURCE_HINT_KEYS` for the Slack transport, `MEETING_HINT_KEYS` — `meeting_date`, `attendees`, `source_label` — and `DOCUMENT_HINT_KEYS` — `source_url`), and a fifth PINS an identity instead of placing a page: `REGISTER_HINT_KEYS` (`register_name`, `register_type`, `register_aliases`, `register_source`), accepted from every door — see [A registration is a capture](#a-registration-is-a-capture). Exactly one provenance subset is door-gated: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`, `source_channel_id`), refused at the client seam because the Slack TRANSPORT asserts that trio, not a person — and since [ADR 045](../decisions/045-audience-from-the-door.md) D2 the channel id is an ACCESS-CONTROL key (the groups the capture is filed at), which is why it joined the gated set from the inert suggestion it used to be. Neither a meeting's hints nor a document's are refused from anybody: what a submitter asserts about their own material has the standing the material itself has, and is attributed to them the same way. `ALLOWED_HINT_KEYS` is the union of all five lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises. `audience` is the ONE access decision a caller makes ([ADR 045](../decisions/045-audience-from-the-door.md) D2): the groups this material is for, as a list of group names, omitted to file OPEN. It is a REQUEST — the door resolves it, checks it with `acl.visible()` against the caller's OWN groups (you may file only what you could read afterwards) and stores the answer on `capture_queue.acl`, which the worker stamps on every page the capture writes, the verbatim `sources/` page included. A caller naming a group they do not hold is refused with one sentence and nothing is queued. |
+| `brain_submit(kind, material, hints?, audience?)` | queue a capture. `kind` names the SHAPE of the material, and it is `SUBMITTABLE_KINDS` — the whole of what any door may ask for: `raw` (a conversation excerpt, a decision, a gotcha), `page` (markdown you drafted), `meeting` (a transcript) or `document` (the text of a document you already hold). ONE vocabulary for every door — no door has a kind of its own, so nothing here is narrower than anywhere else. The QUEUE's `KINDS` is wider by exactly one, `delete`, and `reject_unsubmittable_kind` is what keeps that difference real: a removal is queued by the door that authorized it, and submitting one here would be that authorization side-stepped (D3). The material cap is per kind, in UTF-8 bytes: 256 KB for `raw` and `page`, 1 MB for `meeting` and `document` (`MATERIAL_CAP_BYTES`, read through `max_material_bytes(kind)`; `MAX_MATERIAL_BYTES` is the largest of them, which is what a transport's request-body limit has to fit). `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists carry provenance rather than placement (`SOURCE_HINT_KEYS` for the Slack transport, `MEETING_HINT_KEYS` — `meeting_date`, `attendees`, `source_label` — and `DOCUMENT_HINT_KEYS` — `source_url`), and a fifth PINS an identity instead of placing a page: `REGISTER_HINT_KEYS` (`register_name`, `register_type`, `register_aliases`, `register_source`), accepted from every door — see [A registration is a capture](#a-registration-is-a-capture). Exactly one provenance subset is door-gated: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`, `source_channel_id`), refused at the client seam because the Slack TRANSPORT asserts that trio, not a person — and the channel id is an ACCESS-CONTROL key (the groups the capture is filed at), which is why it joined the gated set from the inert suggestion it used to be. Neither a meeting's hints nor a document's are refused from anybody: what a submitter asserts about their own material has the standing the material itself has, and is attributed to them the same way. `ALLOWED_HINT_KEYS` is the union of all five lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises. `audience` is the ONE access decision a caller makes: the groups this material is for, as a list of group names, omitted to file OPEN. It is a REQUEST — the door resolves it, checks it with `acl.visible()` against the caller's OWN groups (you may file only what you could read afterwards) and stores the answer on `capture_queue.acl`, which the worker stamps on every page the capture writes, the verbatim `sources/` page included. A caller naming a group they do not hold is refused with one sentence and nothing is queued. |
 | `brain_submissions(limit?, status?)` | what happened to what you captured: your own submissions, newest first, with state, timestamps, `result_ref`, the librarian's `report` (which names the page, the anchor, and any entity or spelling the capture INTRODUCED), the row's `events` and a fenced excerpt. An unrestricted identity sees the whole queue with `mine` marking its own rows. A capture refused for a secret or PII echoes nothing — see [Withheld material](#withheld-material) |
 
 Both ride `BrainService._call`, so they inherit per-identity rate limiting, the audit row and
@@ -55,7 +55,7 @@ the error shaping the read tools have — one seam, not a second write path.
 Through `brain_submit`, like everything else. Both kinds carry TEXT the CLIENT already holds, and
 the client is what extracted it: an agent session with a Drive connector, a person with the file
 open in front of them, a script. Nothing is fetched or converted server-side — no Google credential
-exists there ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
+exists there.
 
 | Kind | Material | Required hints | Optional hints | Cap |
 |---|---|---|---|---|
@@ -80,7 +80,7 @@ There is no reply tool, and no state a capture sits in waiting for one. A name n
 registry resolves is INTRODUCED: the librarian creates the entity page in the same commit as the
 note, with `approved_by:` naming the submitter, anchors the page to it, and files. The report says
 which identities the capture bore, and that is the whole of it — no queue, no second click, nothing
-to decide ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). The mechanism is
+to decide. The mechanism is
 [librarian.md → Writing an identity](./librarian.md#writing-an-identity-what-a-filing-does-to-the-registry).
 What a wrong identity costs is paid afterwards, not before: a second identity for one thing is what
 the gardener's duplicate-identity pass finds and a merge repair fixes
@@ -151,7 +151,7 @@ spelling is in the haystack the librarian checks a declared name against), and
 capture's `submitted_by` is you, which is what the entity page's `approved_by` is born carrying —
 exactly as it is for an identity the librarian read out of the material itself.
 
-**Every door may assert one** ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). A
+**Every door may assert one**. A
 registration PINS the name and type the librarian would otherwise infer, and it carries no
 authority, because there is no authority left to carry: the identity is born confirmed by whoever
 captured either way. So the hints ride `brain_submit` like any other, and the console's *Register
@@ -185,8 +185,7 @@ Retention still nulls `outcome` along with `payload`/`hints`.
 
 Every status but `queued` and `claimed` is terminal (`TERMINAL_STATUSES`), and `finish` may move a
 claim into `filed`, `rejected` or `failed` only (`FINISHED_STATUSES` — `resolved` is absent because
-nothing reaches it). `error` is the one "why is this row where it is" field
-([ADR 014](../decisions/014-capture-queue-and-attribution.md)).
+nothing reaches it). `error` is the one "why is this row where it is" field.
 
 ### The two retired states, and the migration that empties them
 
@@ -264,7 +263,7 @@ never written is a capture whose evidence cannot be produced on demand.
 
 **No CLI enqueues any more.** Every capture enters at `brain_submit`, inside a deployment whose
 queue and evidence plane are configured from one environment — so the split-stores guard went with
-the drop doors it protected (ADR 044 D4), refusal, exit code, escape hatch and all. The hazard it
+the drop doors it protected, refusal, exit code, escape hatch and all. The hazard it
 existed for was an operator's: a remote queue paired with a loopback evidence endpoint files a row
 whose bytes the deployed worker can never read, and the capture dies with `NoSuchKey` seconds after
 being claimed. A future door that enqueues from somebody's own machine brings that hazard back with
@@ -368,7 +367,7 @@ FROM capture_queue WHERE status NOT IN ('filed', 'rejected') ORDER BY created_at
 
 The purge runs **nightly inside the librarian worker**, on its idle branch, at
 `STIGMERGY_LIBRARIAN_RETENTION_AT` (default 04:42 UTC; `off` turns it off) — see
-[ADR 044](../decisions/044-the-capture-is-the-approval.md) D6. `stigmergy-queue purge` is the same
+the night shift's own pass. `stigmergy-queue purge` is the same
 pass run by hand, and the console's Captures page previews it. All three null `payload`, `hints`
 and `outcome` on rows **terminal for more than 30 days** (`retention.DEFAULT_RETENTION_DAYS`,
 `$STIGMERGY_RETENTION_DAYS`). What survives: `id`, `submitted_by`, `status`, all
@@ -467,7 +466,7 @@ row keeps its payload, and therefore keeps both.
 - **Never add a transition that moves a row on a person's behalf.** A capture is finished by the
   worker holding its claim or by the expiry sweep; the parked states and the three dispositions over
   them are retired, and nothing is decided about a capture after it is submitted — the capture is
-  the approval ([ADR 044](../decisions/044-the-capture-is-the-approval.md)).
+  the approval.
 - **Never generalize the index rebuild's `DROP`.** `store.init_schema` drops `pages_index` by
   name; the four tables in `schema.DURABLE_TABLES` share that database and cannot be rebuilt from
   git — [hybrid-index.md → Sharing the database with the durable

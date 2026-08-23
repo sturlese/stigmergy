@@ -122,7 +122,7 @@ def _capture(material: str, kind: str = "raw") -> dict:
 
 
 def test_a_proposing_capture_is_scored_as_ONE_phase_that_filed(rig, tmp_path):
-    """**REPLACES the two-phase ask-back test (ADR 041).** A capture naming something the registry
+    """**REPLACES the two-phase ask-back test.** A capture naming something the registry
     does not know used to park, wait for a reply through `BrainService.reply`, and be scored twice.
     It files in one pass now: the entity page, the regenerated registry and the note land in a
     single commit, born confirmed by whoever captured — no inbox, and no measurement
@@ -149,7 +149,7 @@ def test_a_proposing_capture_is_scored_as_ONE_phase_that_filed(rig, tmp_path):
 
 def test_the_page_a_proposing_capture_filed_is_anchored_to_an_id_the_fixture_never_carried(rig,
                                                                                            tmp_path):
-    """The claim underneath ADR 041's D1, read off the COMMIT rather than off the report: the note
+    """The claim underneath the file-first write path's D1, read off the COMMIT rather than off the report: the note
     is anchored to an entity that did not exist when the capture was claimed. `_observe` reads the
     anchor from the filed page's server-stamped `entity:`, so this is the resolved registry id and
     not the agent's spelling — and `gate_anchoring` resolves it against the registry the commit
@@ -187,7 +187,7 @@ def test_a_capture_that_proposes_nothing_yields_one_phase_and_an_empty_proposals
     assert phases[0]["observed"]["proposals"] == []
 
 
-# **DELETED with the ask-back loop (ADR 041):**
+# **DELETED with the ask-back loop:**
 # `test_a_parking_capture_is_scored_as_two_phases_across_the_real_ask_back_loop`,
 # `test_the_re_file_after_a_reply_is_counted_as_its_own_agent_pass` and
 # `test_a_backend_that_never_parks_still_produces_the_second_phase_as_a_miss`. The first drove a

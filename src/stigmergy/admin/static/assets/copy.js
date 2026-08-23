@@ -147,7 +147,7 @@ export function severity(word) {
 
 // ── the night shift ──────────────────────────────────────────────────────────────────────────
 // What runs unattended, in a reader's terms. There is no `consequence` any more because there is
-// no button: these passes run on the librarian worker's idle branch (ADR 044), so the page
+// no button: these passes run on the librarian worker's idle branch, so the page
 // describes them and shows when each last ran rather than offering levers.
 export const JOB = {
   gardener: {

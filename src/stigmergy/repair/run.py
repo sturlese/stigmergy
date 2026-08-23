@@ -1,4 +1,4 @@
-"""The repair pass: findings in, commits out — the worker's second maintenance loop (ADR 044).
+"""The repair pass: findings in, commits out — the worker's second maintenance loop.
 
 The AGENT half is structurally incapable of writing: its two tools read, and no third one exists.
 What it produces is a declaration — a set of additive edits, one page's drafted body, or which of
@@ -72,7 +72,7 @@ JOB_NAME = schema.JOB_NAME
 # means a `search_pages` for candidates nobody handed over, reading the two or three that look
 # plausible, and a second query when the first was the wrong words — six calls, and that is the
 # floor below which the proposer can only confirm what it was told. Exploration is the feature
-# and it is not negotiable for tokens (ADR 034: deterministic code may seed the context and must
+# and it is not negotiable for tokens (deterministic code may seed the context and must
 # not replace the model's ability to decide the context is not enough) — a proposer that reads
 # only the two pages a finding names cannot notice that a third page is the better link target.
 MIN_TOOL_CALLS_PER_FINDING = 6
@@ -164,7 +164,7 @@ EDIT_PROPOSABLE_CHECKS = frozenset({
 # the same drafted body, which is why they share a road rather than each getting one.
 #
 # Nothing else reaches it — a repair that replaces prose is a different question for the gates
-# (ADR 039, "entity-body: the second kind"), and widening this set past "this page's body does not
+# and widening this set past "this page's body does not
 # say what the corpus knows" is what would make it a general rewrite tool.
 BODY_PROPOSABLE_CHECKS = frozenset({
     gardener_checks.CHECK_ENTITY_PLACEHOLDER_BODY,
@@ -173,7 +173,7 @@ BODY_PROPOSABLE_CHECKS = frozenset({
 # The merge road: ONE check, and it is the only finding in this system that names a PAIR of
 # identities. It rides its own road because what the model is asked for is neither an edit nor a
 # body — it is a CHOICE between two pages, and the sweep code computes everything that follows from
-# it (ADR 039, "entity-alias: the fourth kind").
+# it.
 ALIAS_PROPOSABLE_CHECKS = frozenset({gardener_sweep.CHECK_MODEL_DUPLICATE_ENTITY})
 
 # The remaining checks are absent by NAME, not by oversight: an aging seed needs somebody to write,
@@ -288,7 +288,7 @@ class ProposerContext:
         self._lock = threading.Lock()
 
     # THE audience this proposer reads and writes at, and it is OPEN — deliberately, not by
-    # inheriting a default ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D3).
+    # inheriting a default.
     #
     # A repair has no capture behind it: it is derived from the corpus, so there is no human act
     # naming an audience for it. Running it at open means it may read only open pages and can
@@ -816,7 +816,7 @@ BATCH_CEILING_REASON = "batch-exceeds-ceiling({n}>{ceiling})"
 # What a model asking to remove something is told, and why it is a SENTENCE rather than the generic
 # "not one of the three kinds". The generic reason is true and useless: it reads as a spelling
 # mistake, so the one corrective retry gets spent hunting for the right word for a road that does
-# not exist. This closes the door instead (ADR 039's second amendment).
+# not exist. This closes the door instead.
 NO_MODEL_DELETIONS = (
     "deletion is not something you can propose, in any spelling: judging that a page is stale is a "
     "person's decision and it is typed at `stigmergy-repair delete`. Propose an additive repair or "
@@ -1399,12 +1399,12 @@ def _apply_one(conn, repair: dict, *, result: RepairRunResult, repo: str, branch
 # that page, quoting an excerpt of it verbatim (`gardener.sweep`), and the gardener's own sweep
 # reads every page body with no audience at all — so the findings ledger is the one road by which
 # a restricted page's path and text can reach a prompt this loop writes OPEN pages from. Counted
-# rather than silently dropped: ADR 045's third residual promises "a lost convenience", and a
+# rather than silently dropped: what the scoping costs is a lost convenience, and a
 # lost convenience nobody can observe is a lost invariant.
 UNREADABLE_SUBJECT_REASON = (
     "unreadable-subject({paths}) — this loop cannot read those pages, so nothing about them "
     "reaches a prompt. Two causes, deliberately not told apart: the page is gone from the base "
-    "commit, or it is out of this loop's audience (ADR 045 D3 — a repair has no capture behind "
+    "commit, or it is out of this loop's audience (a repair has no capture behind "
     "it, so it runs at open and a restricted page is not repaired). The paths are named because "
     "`job_runs` is an operator surface, and an operator is inside the trust boundary by "
     "construction — the same argument the gardener's own findings rest on")
@@ -1437,7 +1437,7 @@ async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str,
     corpus_paths = {row.path for row in deps.corpus().rows}
     # The SCOPED vocabulary, off the same rows every other read answers from — not a
     # filesystem walk, which would hand the model every restricted page's title as a
-    # name it may link to (ADR 045 D3).
+    # name it may link to.
     link_names = list(deps.corpus().link_names)
     pages = {p: _page_body(deps, p)
              for f in fresh for p in (f.get("subjects") or []) if p in corpus_paths}
@@ -1690,7 +1690,7 @@ async def _propose_duplicate_sources(*, repo: str, settings, answered_page_sets:
                                      skill_text: str, budget: int, ceiling: int,
                                      spend: list | None = None) -> tuple[list[dict], list[str]]:
     """The one road that asks no model WHICH pages go: exact-duplicate `sources/` pages, one
-    proposal per group, derived by a lookup. What it does ask a model for — since ADR 043 — is the
+    proposal per group, derived by a lookup. What it does ask a model for is the
     bodies of the pages that refer to the copy that goes, exactly as a person's deletion does:
     `sweep.write`, one call over the referring set, or a recorded skip when the writer refuses.
 

@@ -52,7 +52,7 @@ def test_submit_with_no_resolved_identity_is_fail_closed():
 
 def test_submit_takes_every_kind_in_the_one_vocabulary_meeting_and_document_included():
     """OLD BEHAVIOUR: `kind="meeting"` and `kind="drive"` were refused here by name — the drop
-    CLIs were "the only doors" onto those flows. ADR 044 D4: there is no narrower list for this
+    CLIs were "the only doors" onto those flows. the capture-is-the-approval change: there is no narrower list for this
     door. Proven WITHOUT Postgres the way the Slack-door twin below is: on a bare service the call
     falls through to the NEXT guard (no evidence store wired), so a `CaptureError` naming the
     store is the proof that no kind check stood in front of it."""
@@ -116,7 +116,8 @@ def test_submit_end_to_end_creates_a_queued_row_with_the_material(indexed):
 
 
 def test_submit_meeting_and_document_land_as_their_own_kinds_carrying_their_hints(indexed):
-    """ADR 044 D4, end to end: a transcript and a document's text enter at THIS door, each as its
+    """The capture-is-the-approval change, end to end: a transcript and a document's text enter at
+    THIS door, each as its
     own kind with the hints its flow reads — the meeting's date, the document's provenance claim —
     stored exactly as `prepare_submission` validated them."""
     conn, fx = indexed
@@ -484,7 +485,7 @@ def test_submissions_report_is_present_and_its_fence_token_neutralized(indexed):
 
 def test_submissions_report_strips_the_operator_cost_telemetry(indexed):
     """`_without_operator_telemetry` — OLD BEHAVIOUR: `report.cost_usd` (the item's real model
-    spend, stamped by the librarian since ADR 031) rode `brain_submissions` to every submitter
+    spend, stamped by the librarian since the suppression-gated retry) rode `brain_submissions` to every submitter
     and steward, while `ask`'s own `usage` counts were deliberately popped from the MCP wire —
     the same operator telemetry, opposite treatments, and no recorded decision behind the
     asymmetry. Both wires now draw the same line: the STORED row keeps the figure for operators
@@ -505,7 +506,7 @@ def test_submissions_report_strips_the_operator_cost_telemetry(indexed):
     assert "cost_usd" not in row["report"]             # …without the operator telemetry
 
 
-# ── the ONE report that carries page bytes: a performed removal (ADR 044 D3, ADR 043 D5) ───────
+# ── the ONE report that carries page bytes: a performed removal ───────
 # Nobody read the prose a deletion's sweep wrote before it was pushed, so the per-page diff travels
 # on the row and THIS is where it is read. That makes `brain_submissions` a surface that echoes
 # page bytes, which it had never been — so it obeys the two rules every such surface obeys:
@@ -822,7 +823,7 @@ def test_the_submit_ack_names_no_bucket_and_no_endpoint(indexed):
 
 def test_submit_accepts_registration_hints_from_every_door(indexed):
     """OLD BEHAVIOUR: a `register_*` hint was refused at this seam from every client door, because
-    registering was an act of authority only two steward doors could perform. ADR 044 D1: an
+    registering was an act of authority only two steward doors could perform. the capture-is-the-approval change: an
     identity is born confirmed by whoever captured either way, so a registration pins the name and
     type the librarian would otherwise infer and carries no authority at all — every door may send
     one, and the hints are stored for the worker to read."""

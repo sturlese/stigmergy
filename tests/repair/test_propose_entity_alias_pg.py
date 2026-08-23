@@ -91,7 +91,7 @@ def test_the_rationale_is_the_MODELS_and_it_rides_into_the_commit_that_landed(co
 def test_the_files_the_ledger_named_are_exactly_the_files_the_commit_changed(conn, repo_env,
                                                                              settings):
     """The propose-time proof used to be asserted here — "what is on the table is what the applier
-    would perform". Under ADR 044 the two moments are one pass, so the property is the cross-check
+    would perform". The two moments are one pass now, so the property is the cross-check
     made visible: `target_paths` is a second stored fact, and the diff that landed has to be
     exactly it."""
     _seed(conn, repo_env)
@@ -153,7 +153,8 @@ def test_the_refusal_says_the_road_only_ever_has_two_answers_and_a_park():
 
 def test_an_empty_survivor_is_the_PARK_and_is_recorded_rather_than_refused(conn, repo_env,
                                                                            settings, monkeypatch):
-    """**The answer this road most wants to be able to give**, and ADR 044 raised its stakes: a
+    """**The answer this road most wants to be able to give**, and the capture-is-the-approval
+    change raised its stakes: a
     wrong merge re-anchors a page's whole history onto the wrong company, nobody reads it first and
     no later run undoes it. So "these two are NOT one entity" has to be a first-class answer — not
     a validation failure the retry pushes the model off."""

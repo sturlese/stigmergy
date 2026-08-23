@@ -1,4 +1,4 @@
-"""Anthropic prompt caching on the ORDINARY run (ADR 036) — the settings-dict helper, pure; the
+"""Anthropic prompt caching on the ORDINARY run — the settings-dict helper, pure; the
 wire shape it produces, proven against a real framework call; the ORDINARY flow's `Agent(...)` call
 actually wired to the helper's result; and the meeting flow's exclusion — both wiring facts pinned
 as the decisions they are rather than left to be rediscovered from the source.
@@ -214,12 +214,12 @@ def test_run_wires_the_pure_helpers_result_into_its_own_agent_as_model_settings(
         "anthropic_cache_messages": "5m",
     }, (
         f"the ordinary flow's Agent(...) call carried model_settings={captured.get('model_settings')!r} "
-        f"— ADR 036 D1 wires the pure helper's result here, and this pins that wiring")
+        f"— prompt caching wires the pure helper's result here, and this pins that wiring")
 
 
 # ── the meeting flow's exclusion is a DECISION, and decisions get a pin ────────────────────────
 def test_run_meeting_builds_its_agent_with_no_model_settings_at_all(tmp_path):
-    """`_run_meeting` is untouched by ADR 036 on purpose: one request per capture means a cache
+    """`_run_meeting` is untouched by prompt caching on purpose: one request per capture means a cache
     WRITE with no read ever — a pure surcharge (Anthropic charges 1.25x base input to write a
     cache entry) — so caching this flow would only ever cost money. Pinned on the actual
     construction call, not on reading the source, the same way any other backend decision here
@@ -259,4 +259,4 @@ def test_run_meeting_builds_its_agent_with_no_model_settings_at_all(tmp_path):
 
     assert "model_settings" not in captured, (
         f"the meeting flow's Agent(...) call carried model_settings={captured.get('model_settings')!r} "
-        f"— ADR 036 excludes this flow deliberately, and this pins that exclusion")
+        f"— prompt caching excludes this flow deliberately, and this pins that exclusion")

@@ -275,7 +275,8 @@ def test_the_external_reference_grep_sees_the_object_literal_spelling():
 
 # REPLACES `test_the_one_external_link_is_gated_on_githubs_own_host`. That test pinned the prefix
 # guard in front of the Jobs page's Actions-run link — the console's only anchor built from an API
-# response. The link went with the crons (ADR 044: the night shift runs in the librarian worker, so
+# response. The link went with the crons (the capture-is-the-approval change: the night shift runs
+# in the librarian worker, so
 # there is no Actions run to link to), and a guard test over a deleted line would be permanently
 # green — coverage in name only.
 #
@@ -333,7 +334,7 @@ def test_every_confirm_form_states_its_consequence():
 # RETIRED with the dispatch form it guarded: `test_the_retention_purge_dispatch_defaults_to_a_dry_run`
 # pinned the Run-now checkbox for the retention purge as TICKED, so a console dispatch previewed
 # by default instead of deleting user material. There is no dispatch form: the purge runs on the
-# worker's idle branch (ADR 044) and the console only reports what it did.
+# worker's idle branch and the console only reports what it did.
 #
 # The property has not moved somewhere else to be re-pinned — it stopped existing, because the
 # console no longer has a button that deletes anything nightly. The dry-run PREVIEW an operator
@@ -345,7 +346,7 @@ def test_every_confirm_form_states_its_consequence():
 def test_the_jobs_page_offers_no_lever_at_all():
     """The positive half of that retirement, and the thing worth pinning now: the Jobs page is a
     read. A `confirmForm`, a `mutate` or a POST reappearing on it would mean somebody rebuilt a
-    lever for a pass that schedules itself — which is exactly what ADR 044 removed."""
+    lever for a pass that schedules itself — which is exactly what the capture-is-the-approval change removed."""
     jobs = (STATIC / "assets" / "views" / "jobs.js").read_text(encoding="utf-8")
     for lever in ("confirmForm", "mutate(", "api.post"):
         assert lever not in jobs, (
@@ -491,7 +492,7 @@ def test_each_detail_route_parses_its_own_id():
     every id happened to be a row number and a 404 the moment one was not: the entity detail
     page's segment was a registry slug (`acme-corp`), so the first click on a proposal asked the
     API for `entities/NaN` — the one defect a Python test over the routes could never see. That
-    page is gone with the proposals it existed to show (ADR 044); the rule it bought is what keeps
+    page is gone with the proposals it existed to show; the rule it bought is what keeps
     the next non-numeric segment from repeating it, so each route still names its OWN parser and
     the shared coercion must not come back."""
     app = (STATIC / "assets" / "app.js").read_text(encoding="utf-8")

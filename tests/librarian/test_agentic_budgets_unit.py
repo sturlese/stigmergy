@@ -1,4 +1,4 @@
-"""What BOUNDS an iterating filing run, and what it costs to have iterated (ADR 034, D5–D6).
+"""What BOUNDS an iterating filing run, and what it costs to have iterated (the agentic pydantic harness, D5–D6).
 
 Two ceilings and one instrument, all three exercised against a real `pydantic_ai.Agent` driven by a
 scripted `FunctionModel` over a real git checkout. No key, no network, no provider: the model is
@@ -41,7 +41,7 @@ MATERIAL = "The Acme Corp renewal window was confirmed at the sync."
 
 # A well-formed account in the LEGACY envelope's shape — the agent names the page it wrote and
 # carries no page text, which is what `structured_ordinary = False` obliges. Written to the outcome
-# FILE by the model's own `write_page` call, because that is the whole channel change in ADR 034.
+# FILE by the model's own `write_page` call, because that is the whole channel change in the agentic pydantic harness.
 ACCOUNT = {
     "decision": "file",
     "page_path": "wiki/notes/Acme Corp Renewal Window.md",
@@ -318,8 +318,9 @@ def test_the_counters_are_read_defensively_off_whatever_usage_object_arrives():
 
 
 def test_a_blown_budget_fault_carries_no_loop_counters_by_decision(tmp_path):
-    """**Finding 2 resolved as option b, pinned so the narrowing does not silently regress.** ADR 034
-    D6 was narrowed: `turns`/`tool_calls` are real on the RETURNING road and are deliberately NOT
+    """**Finding 2 resolved as option b, pinned so the narrowing does not silently regress.** the
+    agentic pydantic harness was narrowed: `turns`/`tool_calls` are real on the RETURNING road and
+    are deliberately NOT
     attached to a fault. The only thing a fault must carry is the spend (`run_cost_usd`), which
     `report.failed_system` reads; nothing downstream reads a counter off an exception.
 
@@ -341,7 +342,7 @@ def test_a_blown_budget_fault_carries_no_loop_counters_by_decision(tmp_path):
 def test_the_submitters_report_carries_no_turn_counter_for_anything_to_choke_on():
     """The port's own claim, pinned where it would break: `report.filed` composes what a submitter
     and an operator read, and it has no field for a loop's counters at all. So a backend that
-    started reporting real `turns` (ADR 034) changes nothing downstream — there is no key to
+    started reporting real `turns` changes nothing downstream — there is no key to
     collide with, no consumer to surprise, and no `jsonb` column that grew.
 
     Asserted over every KEY the report carries, at any depth, rather than over a hand-picked one —
@@ -373,7 +374,7 @@ def _every_key(node) -> list:
 # AC3 — the money: usage accumulates PER REQUEST, through the M1 pricing seam
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 def test_an_iterating_run_costs_strictly_more_the_more_it_iterates(tmp_path):
-    """**The claim ADR 034's cost consequence rests on**, measured rather than assumed: the usage
+    """**The claim the agentic pydantic harness's cost consequence rests on**, measured rather than assumed: the usage
     accumulator is handed to `Agent.run` and pydantic-ai adds every request's tokens to it, so a run
     that searched four times costs strictly more than the same run that searched none.
 

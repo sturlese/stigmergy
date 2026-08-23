@@ -17,7 +17,7 @@ total or added beside it. So the cases that pin that behaviour configure a genui
 rate through `$STIGMERGY_LIBRARIAN_PRICING` — the same door the module tells an operator to use, and
 the only way to make the two conventions produce different dollars.
 
-**The shape itself is under test here, twice over (ADR 036).** `PRICES` rows and a CURRENT override
+**The shape itself is under test here, twice over.** `PRICES` rows and a CURRENT override
 are four figures — `(input, cached input, cache write, output)` — and a LEGACY three-figure override
 is still read, with the missing cache-write figure normalized to the input rate: today's semantics
 for an operator's existing variable, kept so widening the shape is optional rather than forced. Both
@@ -97,15 +97,15 @@ def test_every_id_the_table_ships_is_priced(model):
 
 
 def test_the_anthropic_rows_cache_figures_derive_from_its_input_rate():
-    """The one row this milestone actually verified (ADR 036): Anthropic's own standing
+    """The one row this milestone actually verified: Anthropic's own standing
     multipliers — 0.1x for a cache read, 1.25x for a five-minute cache write — applied to the $2
-    input rate ADR 032 already prices this model at, confirmed PERMANENT by Anthropic's own
+    input rate the filing port already prices this model at, confirmed PERMANENT by Anthropic's own
     2026-08-12 pricing notice (`pricing.PRICES`'s own comment carries the citation). Pinned so an
     edit to the base rate cannot silently leave the cache figures stale beside it.
 
     **Two checks, not one, because they catch different mistakes.** The literal tuple pins TODAY's
     figures against a regression that moves the whole row together — a base rate that silently
-    reverts to the $3 step this ADR explicitly says does not apply, carried through proportionally
+    reverts to the $3 step the pricing seam explicitly says does not apply, carried through proportionally
     to `cached`/`write`, would keep the ratios below intact and would NOT be caught by them alone
     (confirmed by mutation: a `(3.00, 0.30, 3.75, 10.00)` row passes the ratio assertions below
     unchanged). The ratio assertions pin the ARITHMETIC — 0.1x / 1.25x of whatever the input rate
@@ -113,7 +113,7 @@ def test_the_anthropic_rows_cache_figures_derive_from_its_input_rate():
     move actually needs, and which the literal tuple alone would not restate.
     """
     assert pricing.PRICES["anthropic:claude-sonnet-5"] == (2.00, 0.20, 2.50, 10.00), (
-        "today's ADR-036 figures — $2.00 input (confirmed permanent), $0.20 cached (0.1x), $2.50 "
+        "today's prompt caching figures — $2.00 input (confirmed permanent), $0.20 cached (0.1x), $2.50 "
         "cache write (1.25x), $10.00 output. An intentional edit updates this literal pin; a drift "
         "that leaves it stale is exactly what this assertion exists to catch")
     input_rate, cached_rate, write_rate, _output_rate = pricing.PRICES["anthropic:claude-sonnet-5"]
@@ -254,7 +254,7 @@ def test_a_non_finite_rate_is_refused_naming_the_model_and_the_position(monkeypa
     Driven through the REAL `json.loads` on a real environment string, never a hand-built `float`
     object: the whole point is that the JSON parser lets these through, and a test that constructed
     `float("nan")` in Python would prove nothing about the door they actually come in by. Exercised
-    on the CURRENT four-figure shape, `cache write` included, since that is the position ADR 036 added.
+    on the CURRENT four-figure shape, `cache write` included, since that is the position prompt caching added.
     """
     row = {"input": [literal, "2.0", "2.0", "12.0"],
            "cached input": ["2.0", literal, "2.0", "12.0"],
@@ -526,7 +526,7 @@ def test_the_frameworks_own_documentation_still_says_the_buckets_are_inclusive()
 
 
 def test_a_cache_write_is_billed_at_its_own_rate(monkeypatch):
-    """**The fourth-element follow-up (ADR 036), landed.** A cache write is billed at its OWN
+    """**The fourth-element follow-up, landed.** A cache write is billed at its OWN
     rate — distinct from the input rate here on purpose, so this cannot pass by the write rate
     coincidentally equaling the input one."""
     monkeypatch.setenv(pricing.PRICING_ENV, json.dumps({UNPRICED: [2.0, 0.5, 9.0, 12.0]}))

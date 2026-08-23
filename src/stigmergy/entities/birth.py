@@ -2,7 +2,7 @@
 
 Pure functions of a proposal and a registry — a refusal costs no git, no network, no cleanup.
 ONE author reaches this gate: the librarian, writing an entity it read out of a capture, in the
-commit that files that capture and confirmed by whoever captured (ADR 044). It stays a pure gate
+commit that files that capture and confirmed by whoever captured. It stays a pure gate
 rather than the writer's own inlined checks because a second writer that could skip a check would
 be a second registry. Collision is asked
 of the REGISTRY through `normalize` ("would these two ever be confused?"), never of bytes, over
@@ -379,7 +379,7 @@ def render_page(template: str, proposal: Proposal, *, today: str, approved_by: s
     in. Every authored value goes through `_yaml_str`, none through an f-string (module docstring).
 
     `approved_by` names the person whose capture introduced this identity, and the writer always
-    has one: the capture is the approval (ADR 044), so there is no unconfirmed state to render.
+    has one: the capture is the approval, so there is no unconfirmed state to render.
     `related` names pages this entity links to — the note the same commit filed, so the newborn
     page is never an orphan.
     """

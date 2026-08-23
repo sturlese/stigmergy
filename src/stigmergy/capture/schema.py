@@ -186,7 +186,7 @@ DURABLE_TABLES = ("capture_queue", "audit_log", "job_runs", "ingest_errors")
 
 # ── the submission contract ───────────────────────────────────────────────────────────────────
 # A kind names the SHAPE of the material and which reader claims the row, never a topic. ONE
-# vocabulary for every door (ADR 044 D4): no operator door has a kind of its own, so nothing here
+# vocabulary for every door: no operator door has a kind of its own, so nothing here
 # is narrower for `brain_submit` than for anyone else.
 RAW = "raw"
 PAGE = "page"
@@ -198,8 +198,8 @@ DOCUMENT = "document"
 SUBMITTABLE_KINDS = (RAW, PAGE, MEETING, DOCUMENT)
 
 # The one kind that is not material at all: a person's REMOVAL. Its "material" is the reason they
-# gave and its `hints` carry the paths, and the worker performs it rather than filing it (ADR 044
-# D3) — one writer for the corpus, and it is the worker.
+# gave and its `hints` carry the paths, and the worker performs it rather than filing it — one
+# writer for the corpus, and it is the worker.
 #
 # It is a KIND rather than a table of its own because everything a capture gets, a removal needs
 # too: a durable row that survives a restart, a lease, an attempt count, an audited submitter, and
@@ -244,7 +244,7 @@ MEETING_HINT_KEYS = ("meeting_date", "attendees", "source_label")
 # The subset of `SOURCE_HINT_KEYS` only the SLACK TRANSPORT may assert, because each is a claim
 # about Slack that only Slack's own API responses can make: `source_client` turns the source-page
 # attachment on, `source_permalink` lands as `url:` on a reader-facing page, and
-# `source_channel_id` is the channel whose groups the door files the capture AT (ADR 045 D2) — an
+# `source_channel_id` is the channel whose groups the door files the capture AT — an
 # access-control key must be the server's observation, never a caller's assertion.
 SOURCE_PROVENANCE_HINT_KEYS = frozenset({"source_client", "source_permalink",
                                          "source_channel_id"})
@@ -255,11 +255,11 @@ SLACK_DOOR = "slack"
 # A document's provenance: where the submitter says it came from. It lands as `url:` on the
 # reader-facing source page with the standing the material itself has — the submitter's claim,
 # attributed to the submitter — which is why it is accepted from every door where the Slack pair
-# above is not: that pair is asserted by a transport, this one by a person (ADR 044 D4).
+# above is not: that pair is asserted by a transport, this one by a person.
 DOCUMENT_HINT_KEYS = ("source_url",)
 
 # The union `normalize_hints` checks a key against.
-# REGISTERING an entity (ADR 042, ADR 044 D1): a capture carrying these says what the person
+# REGISTERING an entity: a capture carrying these says what the person
 # introducing the entity calls it and what type it is, and the librarian writes the page from that
 # material and from what the brain already holds, born confirmed by them. Accepted from every door
 # — pinning a name is not an act of authority, because there is no authority left to hold: an
@@ -285,7 +285,7 @@ ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DOCUMENT
 # declaring the parameter is the only way to REFUSE rather than quietly ignore.
 # `acl` is here and `audience` is deliberately NOT: a caller may REQUEST an audience (the door
 # resolves it, checks it against their own groups and stores the answer on the row), and may never
-# assert the resolved label itself. ADR 045 D2.
+# assert the resolved label itself.
 ATTRIBUTION_FIELDS = frozenset({"submitted_by", "verification", "acl", "content_hash"})
 
 # The queue's own columns, with NO tool parameter — listed so a caller addressing the queue by
@@ -448,7 +448,7 @@ class Registration:
     """What a capture asked the librarian to register, read off its hints: the entity's name and
     type as the person spelled them, the spellings they listed, and which door asked. The
     capture's `submitted_by` is that person, and therefore the `approved_by` the page is born
-    with — as it is for every identity a capture introduces (ADR 044 D1)."""
+    with — as it is for every identity a capture introduces."""
     name: str
     entity_type: str
     aliases: tuple
@@ -456,7 +456,7 @@ class Registration:
 
 
 # The doors a registration can come from. Any client door may pin what the librarian would
-# otherwise infer (ADR 044 D1) — a registration carries no authority, so there is nothing here for
+# otherwise infer — a registration carries no authority, so there is nothing here for
 # a closed list to protect; the tuple stays as the vocabulary a door names itself with.
 REGISTRATION_SOURCES = ("mcp", "admin", "slack")
 
@@ -662,7 +662,7 @@ CREATE TABLE IF NOT EXISTS capture_queue (
     acl TEXT[]                                      -- the DOOR's audience decision (see below)
 )
 """
-# `acl` — the audience the door decided this capture is filed at (ADR 045 D2), and the value the
+# `acl` — the audience the door decided this capture is filed at, and the value the
 # worker stamps on every page it writes. Server-owned like `submitted_by` beside it: `audience` is
 # what a caller may REQUEST, `acl` is what the door RESOLVED, and no client input reaches this
 # column. The index's own dialect, so a row and a page mean the same thing by the same spelling:
@@ -674,7 +674,8 @@ _CAPTURE_QUEUE_REPORT_COLUMN = """
 ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS report JSONB
 """
 
-# Additive, and NULLABLE on purpose: every row queued before ADR 045 was filed under the path
+# Additive, and NULLABLE on purpose: every row queued before the audience came from the door
+# was filed under the path
 # resolver, which produced no label for any of them, and NULL is that same "open" in the new
 # dialect. A default of `{}` would have retro-restricted the whole queue to nobody.
 _CAPTURE_QUEUE_ACL_COLUMN = """

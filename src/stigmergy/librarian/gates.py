@@ -102,14 +102,14 @@ class GateContext:
     # `False` for a caller granting no edit mechanism at all: a status-`M` entry from such a flow
     # is never legitimate, additive or not, because nothing in it could have produced one
     # legitimately. **No caller passes `False` today** — the meeting flow, which did, gained the
-    # fast lane's declared-edit mechanism (ADR-038) and now grants it too. The field and its check
+    # fast lane's declared-edit mechanism and now grants it too. The field and its check
     # stay because the property is a CALLER's to declare, not a fact about which flows exist; the
     # branch is exercised by `test_gates_unit.py`'s explicit contexts, which is where its red proof
     # lives now that no production flow reaches it.
     edits_allowed: bool = True
     # The ONE exception to `gate_body_rewrite`'s additive proof, and it is a set of PATHS rather
     # than a flag: the governed repair loop's `entity-body` kind replaces one entity page's prose
-    # below its own H1 (ADR 039), which no additive proof can admit. A path in here is judged by
+    # below its own H1, which no additive proof can admit. A path in here is judged by
     # the dedicated checks instead — frontmatter unchanged but for `PERMITTED_REWRITE_KEYS`, the
     # page is an entity page, the path is inside this run's lane. TOLD by the caller and never
     # inferred, empty by default: a flow that has never heard of this field permits nothing, which
@@ -124,7 +124,7 @@ class GateContext:
     deletions_allowed: frozenset = field(default_factory=frozenset)
     # `expected_bytes` is `{path: the whole file the caller computed}`, for a modification that is
     # neither additive nor a permitted body rewrite: a sweep REMOVES lines from pages nobody
-    # drafted, to stop them pointing at a page that is going (ADR 039). Byte-equality is a STRONGER
+    # drafted, to stop them pointing at a page that is going. Byte-equality is a STRONGER
     # judgement than the additive proof rather than a softer one — additive says "nothing
     # disappeared", this says "this is precisely the file that was approved, to the byte" — and it
     # is the only proof available when disappearing is the point.
@@ -136,7 +136,7 @@ class GateContext:
     # of PATHS the caller names rather than a flag, and why `gate_zone` also requires each of them
     # to be in `expected_bytes`: the page-shape proof is only suspended for a file whose whole
     # content the caller computed and this run proves byte for byte. The governed repair loop's
-    # `entity-alias` kind is the one caller (ADR 039's third amendment); it names
+    # `entity-alias` kind is the one caller; it names
     # `ops/entity-registry.json`, which the worker rebuilds from the entity
     # pages the same commit rewrites.
     derived_files: frozenset = field(default_factory=frozenset)
@@ -148,12 +148,12 @@ class GateContext:
     # planned edit, which is what makes "the agent never writes an identity" a proof rather than a
     # tool's refusal.
     born_entity_pages: frozenset = field(default_factory=frozenset)
-    # `{path: approver}` for each of them — the person whose capture introduced the identity
-    # (ADR 044 D1). `approved_by` on the page must name exactly them: an identity is born
+    # `{path: approver}` for each of them — the person whose capture introduced the identity.
+    # `approved_by` on the page must name exactly them: an identity is born
     # confirmed, and one that named nobody would be an identity nobody stands behind.
     confirmed_entity_pages: dict = field(default_factory=dict)
-    # The audience THIS capture is filed at — `capture_queue.acl`, the door's own decision
-    # ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D2). `gate_zone` asks it of
+    # The audience THIS capture is filed at — `capture_queue.acl`, the door's own decision.
+    # `gate_zone` asks it of
     # every page this run MODIFIED: material at one audience may only be added to a page whose
     # readers could already read that material. `None` is an open capture, which flows into any
     # page — and is the right default for the flows that carry no capture at all (the repair loop,
@@ -163,7 +163,7 @@ class GateContext:
     # The paths this run wrote as IDENTITY rather than as knowledge — an alias taught to an
     # existing entity page, a spine grown from open material (`librarian.identity`). Told by the
     # caller like every other widening here, empty by default. `gate_zone`'s audience check skips
-    # them: an entity page is the brain's shared vocabulary and carries no audience (ADR 045 D6),
+    # them: an entity page is the brain's shared vocabulary and carries no audience,
     # and what a restricted capture may put on one is bounded at the writer, not here.
     identity_writes: frozenset = field(default_factory=frozenset)
 
@@ -248,8 +248,8 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
         status, path = entry.status, entry.path
         if status == "D":
             # ONE exception, per-PATH and caller-declared, exactly as `body_rewrite_allowed` is:
-            # the governed repair loop's `delete` kind removes pages a person named themselves
-            # (ADR 039). A caller is trusted about WHICH path it approved and about nothing else,
+            # the governed repair loop's `delete` kind removes pages a person named themselves.
+            # A caller is trusted about WHICH path it approved and about nothing else,
             # so the lane is still asked — a permission sitting outside this run's write lane is a
             # permission and a lane that disagree, and neither is honoured.
             if path not in ctx.deletions_allowed:
@@ -263,7 +263,8 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
                                    f"permission and the lane disagree, so neither is honoured",
                                    locator=path, repairable=False))
             continue
-        # ADR 045 D3, the write lane: an EXISTING page may only gain material its own readers
+        # The write lane's half of "a model never reads what it may not cite": an EXISTING page
+        # may only gain material its own readers
         # could already have read. A `[leadership]` capture appending lines to an open note is the
         # leak this closes, and it is asked here rather than at the input scope because the model
         # is not the only way an edit is produced (`edits.apply_declared` performs what the
@@ -271,14 +272,14 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
         # write here too). A new page is not asked: every one this run creates is stamped WITH
         # the capture's own audience, so it is in scope by construction — with one exception that
         # is handled at the writer rather than here, the born ENTITY page, which is stamped with
-        # no audience at all because the registry is the brain's shared vocabulary (ADR 045 D6).
+        # no audience at all because the registry is the brain's shared vocabulary.
         # What a restricted capture may put on one is bounded in `librarian.identity`.
         #
         # TWO exclusions, and both are about what an edit CARRIES rather than about who may make
         # one. A DERIVED file is not a page: `ops/entity-registry.json` is regenerated from the
         # entity pages in this same commit and proven byte for byte (`ctx.expected_bytes`), so
         # asking a JSON file for an audience it cannot have would veto every restricted capture
-        # that births anything. An IDENTITY WRITE is the brain's shared vocabulary (ADR 045 D6):
+        # that births anything. An IDENTITY WRITE is the brain's shared vocabulary:
         # an entity page carries no audience by design, and what a restricted capture may put on
         # one is constrained at the writer (`librarian.identity`, which drops facts and
         # connections) rather than here — an ALIAS is a spelling, not material, and a spelling
@@ -338,7 +339,7 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
             continue
         if path in ctx.derived_files:
             # ONE exception to the page-shape proof, per-PATH and caller-declared exactly as
-            # `deletions_allowed` is (ADR 039's third amendment). A caller is trusted about WHICH
+            # `deletions_allowed` is. A caller is trusted about WHICH
             # derived file its approval covers and about nothing else, so BOTH of the other two
             # facts are still asked: the path is inside this run's lane (checked above), and its
             # whole content was computed ahead of time and is proven byte for byte by
@@ -1435,12 +1436,12 @@ def gate_identity(ctx: GateContext) -> list[Finding]:
 
     A CREATED entity page must be in `ctx.born_entity_pages` and must carry `type: entity` with
     `approved_by` naming EXACTLY the person `ctx.confirmed_entity_pages` says introduced it — the
-    capture is the approval (ADR 044 D1), so a page that named nobody, or named somebody else,
+    capture is the approval, so a page that named nobody, or named somebody else,
     would be an identity nobody stands behind. A MODIFIED entity page must carry a proof CODE
     produced before the diff existed: its planned bytes in `ctx.expected_bytes` (the worker's new
     spelling, a repair's merge or sweep — `gate_body_rewrite` does the comparing, this gate makes
     sure the proof was asked for) or the per-path body-rewrite permission an approved `entity-body`
-    repair tells the apply (`ctx.body_rewrite_allowed`, ADR 039). Both are set by callers code
+    repair tells the apply (`ctx.body_rewrite_allowed`). Both are set by callers code
     controls, never from an outcome. Anything else in the zone is refused, and `repairable=False`:
     no agent could have written it legitimately — the agent's own write tool refuses the zone — so
     the diff is preserved rather than retried.

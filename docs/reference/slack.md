@@ -3,9 +3,8 @@
 A third transport, a sibling of stdio (`server/mcp_server.py`) and HTTP
 (`server/transport_http.py`). It resolves *who is asking* from a Slack event and calls the SAME
 `BrainService`/`AnswerService` every other transport calls — it enforces nothing itself.
-`stigmergy.server.acl.visible()` stays the one enforcement point. Design record:
-[ADR 017](../decisions/017-slack-transport.md); operating it day to day — the `slack` process
-group, the singleton rule, token rotation, the double-handling symptom — is
+`stigmergy.server.acl.visible()` stays the one enforcement point. Operating it day to day — the
+`slack` process group, the singleton rule, token rotation, the double-handling symptom — is
 [operator-runbook.md](./operator-runbook.md).
 Code map: [`src/stigmergy/slack/index.md`](../../src/stigmergy/slack/index.md).
 
@@ -14,7 +13,7 @@ channel/DM ACL split), the 🧠 gesture (capture a thread, verbatim, public chan
 poller that turns a Slack-originated capture's later state changes into replies in the originating
 thread — all on the same process, each documented below. **Nothing here asks anybody for a
 verdict**: the capture is the approval, so this transport captures, answers and reports, and never
-rings ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D2).
+rings.
 
 ## Module map
 

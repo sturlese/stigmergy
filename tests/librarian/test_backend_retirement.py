@@ -12,7 +12,6 @@ lives and `agent.ensure_known_backend` is the one place either refusal is worded
 mid-incident to a command, a document or a model id that does not work burns their trust in the
 next message too:
 
-* the ADR it cites exists and records the retirement (amended, not merely mentioned);
 * the two `fly` commands it prints are the runbook's own Rollback section, verbatim;
 * the model id it offers as the replacement — `anthropic:claude-sonnet-5` — clears every refusal
   BELOW this one, which is the rule `worker.py` records where `_usable_example` used to be: a
@@ -67,8 +66,7 @@ def test_the_retired_value_is_still_in_the_table_the_refusal_is_read_from():
 def test_a_retired_backend_is_refused_by_name_and_not_as_a_typo():
     """**THE message.** An operator did not mistype anything — their configuration aged past the
     code — so the refusal has to say what happened, what replaces it, how to get running again
-    while they make the edit, and where the decision is written down. Each of those four is one
-    assertion, in that order."""
+    while they make the edit. Each of those is one assertion, in that order."""
     message = _refusal(RETIRED_VALUE)
 
     assert "RETIRED" in message                                     # what happened
@@ -77,7 +75,6 @@ def test_a_retired_backend_is_refused_by_name_and_not_as_a_typo():
     assert "anthropic:claude-sonnet-5" in message                   # ...spelled for that backend
     assert "fly releases" in message                                # how to get running again
     assert "fly deploy --image" in message
-    assert "docs/decisions/033-structured-filing-flow.md" in message  # where it is written down
 
 
 def test_the_refusal_names_the_two_places_a_stale_value_actually_lives():
@@ -175,27 +172,6 @@ def test_the_dispatch_refuses_the_retired_value_too_for_the_caller_that_skipped_
 
 
 # ── the EXECUTABLE PROMISES: every artifact the message sends somebody to ──────────────────────
-# This file is the newest bearer of the rule `test_operator_surface.py`'s docstring states — a
-# message containing a command is an executable promise. The retirement refusal names two shell
-# commands, one document and one model id, and each one is run, read or booted below.
-def test_the_decision_record_the_refusal_cites_exists_and_records_the_retirement():
-    """A refusal that cites a document is only as good as the document. Not merely "the file is
-    there": the ADR has to say the gate was SPENT, because the whole message rests on the claim
-    that this was decided rather than dropped."""
-    cited = re.search(r"docs/decisions/\S+\.md", agent_module.RETIRED_BACKENDS[RETIRED_VALUE])
-    assert cited, "the retirement refusal no longer cites a decision record — update this test"
-
-    adr = ROOT / cited.group(0)
-    assert adr.exists(), f"the refusal cites {cited.group(0)}, which is not in this repo"
-
-    text = adr.read_text(encoding="utf-8")
-    assert "retire" in text.lower()
-    assert RETIRED_VALUE in text
-    assert "spent" in text.lower(), (
-        "the ADR does not record the retirement gate as spent — the refusal claims a decision was "
-        "taken, and the document it cites has to be where that decision is")
-
-
 def test_the_two_fly_commands_the_refusal_prints_are_the_runbooks_own_rollback():
     """The one operation the message asks an operator to perform mid-incident, and the reason it is
     quoted rather than paraphrased: it is lifted from the runbook's Rollback section, so the

@@ -18,4 +18,5 @@ Read CONTRIBUTING.md if any line here is surprising.
       corrected in the same commit (`README.md`, `CLAUDE.md`, the package `index.md`, `docs/`).
 - [ ] No prose here indexes anything outside this repository: no ticket number, no private
       checkout, no document that can be archived or made private. Port the explanation instead.
-- [ ] Behaviour changes carry a decision record under `docs/decisions/`, or say why they do not.
+- [ ] Behaviour changes are consistent with `docs/DESIGN.md`, and correct any sentence there they
+      make false.

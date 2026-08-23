@@ -2,8 +2,8 @@
 argument — keylessly, so the claim is checked on every run rather than on the one that has a key.
 
 The seam used to be a CONVENTION: the first two backends and `processing.py` agreed about two
-signatures and one envelope, and nothing stated it anywhere a THIRD implementation could read. ADR
-032 wrote it down as a port; this file is what makes the writing load-bearing — and the port has
+signatures and one envelope, and nothing stated it anywhere a THIRD implementation could read.
+The filing port wrote it down; this file is what makes the writing load-bearing — and the port has
 since outlived one of its implementations without `processing.py` changing a line.
 
 **`isinstance` is not the test, it is the cheapest third of it.** A `runtime_checkable` Protocol
@@ -24,7 +24,8 @@ loaded by any of it: the `pydantic` backend imports its own inside the method. *
 reach the network on any machine that happens to export a provider key, which is the one way a
 keyless suite stops being keyless by accident rather than by decision.
 
-**The port grew a third member in ADR 033 and a fourth in ADR 034**, and neither is a method:
+**The port grew a third member in the structured filing flow and a fourth in the agentic pydantic
+harness**, and neither is a method:
 `structured_ordinary` (which half of the outcome envelope is owed, and who writes the page) and
 `wants_gathered` (whether the deterministic gatherer runs before the call). A `runtime_checkable`
 Protocol counts an annotated attribute as a member, so `isinstance` checks both — which is why
@@ -60,7 +61,7 @@ from tests.librarian import support
 # The two calls `processing.py` makes on `Deps.agent`, and the only two it may make.
 PORT_METHODS = ("run", "run_meeting")
 
-# The port's non-method members (ADR 033, ADR 034) — asserted as part of the protocol's own
+# The port's non-method members — asserted as part of the protocol's own
 # attribute set below rather than assumed, because `isinstance` behaviour depends on them being
 # annotations rather than comments.
 PORT_DECLARATIONS = ("structured_ordinary", "wants_gathered")
@@ -181,7 +182,7 @@ def test_every_backend_declares_which_shape_of_the_ordinary_flow_it_answers(name
 
     **The pair, not each one alone, is the claim worth pinning.** Both shipped backends write their
     own page today, and they differ on the other axis: the pydantic-ai run is seeded with a
-    gathered context and then goes further with its tools (ADR 034), while the offline double is
+    gathered context and then goes further with its tools, while the offline double is
     directive-driven and is handed none. A test asserting only `structured_ordinary` would go green
     on a backend that had quietly lost its seed.
     """
@@ -442,13 +443,14 @@ def test_the_signature_check_catches_a_renamed_argument_too():
 
 
 def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gathered_context():
-    """ADR 033's own drift shape, and the one this milestone made possible: a backend written
+    """the structured filing flow's own drift shape, and the one this milestone made possible: a backend written
     against the M1 port answers both calls, declares its shape, and has no `gathered` parameter at
     all. `processing._one_pass` passes `gathered=` on EVERY ordinary call — empty for an exploring
     backend — so this one raises `TypeError` on the first item it claims, against a real queue row.
     The equality above is what catches it here instead.
 
-    **BOTH calls now, since ADR-038.** `_one_meeting_pass` passes `gathered=` on every meeting call
+    **BOTH calls now, since the distiller's corpus context.** `_one_meeting_pass` passes `gathered=`
+    on every meeting call
     too — unconditionally, because no backend on that flow holds a tool — so a backend predating
     that change is broken on the meeting road exactly as it is on the ordinary one, and asserting
     only the ordinary half would leave the newer of the two drifts uncovered.
@@ -567,7 +569,7 @@ def _filing_account() -> FilingAccount:
     """A well-formed STRUCTURED ordinary account — the shape a `structured_ordinary = True` backend
     returns in its envelope and `processing._write_ordinary_page` writes a page from.
 
-    No shipped backend composes this schema on the ordinary flow any more (ADR 034 gave that flow
+    No shipped backend composes this schema on the ordinary flow any more (the agentic pydantic harness gave that flow
     tools and an outcome FILE), and it is kept here rather than deleted because the schema and the
     branch that reads it both survive: `MeetingAccount` below is its twin on a flow that still works
     exactly this way, and a `structured_ordinary = True` stub is how the content-carrying road is
@@ -589,7 +591,7 @@ def _test_model(account):
     return TestModel(custom_output_args=account.model_dump())
 
 
-# ── the ORDINARY flow's own offline model: one that USES ITS TOOLS (ADR 034) ───────────────────
+# ── the ORDINARY flow's own offline model: one that USES ITS TOOLS ───────────────────
 # The ordinary run holds five tools and returns its account by WRITING `.librarian-outcome.json`
 # with one of them, so a `TestModel` returning a typed object cannot exercise it at all — there is
 # no output schema to fill and nothing would ever be written. A `FunctionModel` scripts the two
@@ -648,7 +650,7 @@ def _raises():
 # What each supports is a fact about the backend, not a choice, and it is worth writing down:
 #
 #   * `pydantic` — **both roads, and it used to have neither.** M1's `run` was a refusal priced at
-#     `0.0`; it is now a real ITERATING run (ADR 034), so the returning half is a real framework
+#     `0.0`; it is now a real ITERATING run, so the returning half is a real framework
 #     loop against a `FunctionModel` that calls the confined `write_page` tool (its `cost_usd` is
 #     computed from real token counts and must be positive) and the faulting half is a model that
 #     cannot be built (priced at `0.0`, honestly: nothing was spent). Driven through
@@ -753,7 +755,8 @@ def test_the_doubles_shape_road_and_its_structural_road_are_both_priced():
 def test_the_iterating_ordinary_pass_is_priced_and_counted_like_the_loop_it_now_is(tmp_path):
     """**The case that replaced M1's refusal, re-aimed at the run that replaced the one-shot.**
 
-    M1's `run` raised, priced at `0.0`. ADR 033 made it one structured call. ADR 034 made it an
+    M1's `run` raised, priced at `0.0`. the structured filing flow made it one structured call. the
+    agentic pydantic harness made it an
     iterating one, and the envelope's claim changed WITH it: a real `Agent.run` loop against a
     `FunctionModel` reports real token counts, `pricing.compute_cost_usd` multiplies them by the
     CONFIGURED model's rates, and `AgentPasses` sums the figure onto the row a person reads.
@@ -822,7 +825,7 @@ def test_the_ordinary_flow_no_longer_refuses_this_backend_at_all(tmp_path):
 
     M1's `run` raised "serves the meeting flow only in this milestone" for every ordinary capture,
     and `worker.startup_checks` refused the backend outright so nobody met it. Both are gone with
-    the limitation (ADR 033 D5). A sentence that came back — here, or in a message a `failed` row
+    the limitation. A sentence that came back — here, or in a message a `failed` row
     carries — would mean the ordinary path had been reverted while the worker still dispatched to
     it, which is the one regression this file is placed to notice.
     """

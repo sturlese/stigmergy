@@ -10,17 +10,12 @@ happens afterwards, on the console, from the diff the ledger stored.
 
 **A person's own deletion is the one repair a human decides.** It enters at an authenticated door —
 `brain_delete` over MCP, or the console's own Remove pages button — where the judgment was already
-theirs, so what a second click would supply is an authentication and there is nobody left to ask
-([ADR 043](../decisions/043-a-sweep-is-written.md)). What the door does is QUEUE it, as a `delete`
-row in the capture queue; the librarian worker performs it, because since
-[ADR 044](../decisions/044-the-capture-is-the-approval.md) D3 the worker is the only process that
-writes to the knowledge repo at all. The reading still happens afterwards — on the capture, not on
+theirs, so what a second click would supply is an authentication and there is nobody left to ask.
+What the door does is QUEUE it, as a `delete` row in the capture queue; the librarian worker
+performs it, because the worker is the only process that writes to the knowledge repo at all. The
+reading still happens afterwards — on the capture, not on
 the ledger.
 
-Design record: [ADR 039](../decisions/039-governed-repair-loop.md), amended by
-[ADR 043](../decisions/043-a-sweep-is-written.md) and
-[ADR 044](../decisions/044-the-capture-is-the-approval.md) — they hold the decisions this document
-only shows the results of.
 The findings themselves are covered in [`gardener-digest.md`](./gardener-digest.md),
 `brain_delete`'s own tool contract in
 [`server.md`](./server.md#the-capture-tools-the-write-path), and the console's panel in
@@ -48,14 +43,14 @@ Deletion is the one kind the covenant reads differently for, and deliberately:
 - **a model may never declare one, in any spelling** — the decision is a person's at an
   authenticated door, or, for exact-duplicate `sources/` pages where it is a lookup rather than a
   judgment, code's own;
-- **a person's own deletion is decided by the request that asked for it** (ADR 043 D2): they
+- **a person's own deletion is decided by the request that asked for it**: they
   already judged it, and asking them to approve their own request supplied an authentication, not a
   second opinion. It is PERFORMED one flow over, in the worker, which is where the checkout and the
-  credential are (ADR 044 D3).
+  credential are.
 
 And its pages are WRITTEN. Code drops the frontmatter entries that named a removed page — a lookup
 — and a model writes the bodies of the pages that referred to it, so a sentence that cited one
-still reads and a callout that only existed because of one is gone (ADR 043 D1).
+still reads and a callout that only existed because of one is gone.
 
 ```
   the librarian worker, queue idle            gardener findings
@@ -152,7 +147,7 @@ fourth ADDITIVE op is a new question nobody has asked the gates —
 `tests/test_architecture.py` pins that vocabulary equal to `page.EDIT_KINDS`.
 
 `entity-body` is the second kind, and the only one that REPLACES text
-([ADR 039's first amendment](../decisions/039-governed-repair-loop.md)). It carries exactly ONE op:
+It carries exactly ONE op:
 
 ```json
 {"op": "entity-body", "path": "wiki/entities/<Name>.md", "body_markdown": "…", "role": ""}
@@ -193,7 +188,7 @@ fourth ADDITIVE op is a new question nobody has asked the gates —
   person finds out what the prose actually said.
 
 `delete` is the third kind, and the only one that removes anything
-([ADR 039's second amendment](../decisions/039-governed-repair-loop.md)). Its unit is a SWEEP, not
+Its unit is a SWEEP, not
 a file, so it carries two op shapes:
 
 ```json
@@ -222,7 +217,7 @@ a file, so it carries two op shapes:
   is by CONSTRUCTION rather than by rule: the entity type carries no folder, so it is not in the
   lane the deletable set extends. Never `ops/` or `.claude/`, and never anything outside the three
   content zones. A whitelist, so tomorrow's zone is undeletable by default.
-- **What the sweep does to everything else**, and it is split down the middle (ADR 043 D1). CODE
+- **What the sweep does to everything else**, and it is split down the middle. CODE
   owns the frontmatter: `related:`/`sources:` entries naming a going page are dropped (an emptied
   field's line goes with it) and `supersedes:`/`superseded_by:` pointers at it are removed — a
   lookup, and a model asked to do it would be re-deriving what the parser already states. Code also
@@ -252,11 +247,12 @@ a file, so it carries two op shapes:
   `capture_queue` row it was queued as, whose report carries the paths that stopped existing and the
   unified diff of every page rewritten. `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one plan
   may carry on both roads, shared with the entity-alias kind because both hold whole pages.
-- **How the apply proves it.** A written sweep cannot be recomputed, so the recomputation ADR 039
-  B4 ran is replaced by three questions asked of the tree the commit is made in (ADR 043 D3): the
+- **How the apply proves it.** A written sweep cannot be recomputed, so the recomputation the
+  older unlinking sweep ran is replaced by three questions asked of the tree the commit is made
+  in: the
   two bounds above, re-run there; the per-page base hash every scrub op carries, so a page that
   CHANGED since the plan was written refuses it; and a walk of the corpus for a page the plan never
-  rewrote that now refers to a going one — the latecomer B4's recomputation used to catch. On a
+  rewrote that now refers to a going one — the latecomer that recomputation used to catch. On a
   person's road all three are a formality that costs one walk, because the plan was made in the very
   worktree the commit is made in. Then the gates are told `deletions_allowed={the pages that go}` and
   `expected_bytes={path: the planned file}`; for a planned path the additive proof is replaced by
@@ -268,7 +264,7 @@ a file, so it carries two op shapes:
 
 
 `entity-alias` is the fourth kind, and the only one that changes what a NAME resolves to
-([ADR 039's third amendment](../decisions/039-governed-repair-loop.md)). Its unit is a merge, so it
+Its unit is a merge, so it
 carries four op shapes and every one of them holds the whole file it would write:
 
 ```json
@@ -384,7 +380,7 @@ brain_delete(paths=["wiki/notes/Old Memo.md"], why="what makes it stale")
 
 One request, and nobody is asked afterwards. **The authorization is one question, asked before
 anything is queued: is the caller an UNRESTRICTED identity** — no audience restriction in
-`ops/identities.json` (ADR 044 D3). It is the one fact the server can settle at the door, and the
+`ops/identities.json`. It is the one fact the server can settle at the door, and the
 right one: a removal touches the pages named AND every page that refers to them, a set nothing
 knows until the corpus is read, so only a caller who can already see the whole corpus may ask for
 it. A scoped caller gets the door's one anonymous refusal — *there is nothing for you to remove at
@@ -393,7 +389,7 @@ a referrer either. The console's Remove pages button reaches the same seam under
 token.
 
 What the door then writes is a `delete` row in `capture_queue`: the reason as its material, the
-pages in its hints, the caller as its `submitted_by`. **The worker performs it** (ADR 044 D3), in
+pages in its hints, the caller as its `submitted_by`. **The worker performs it**, in
 its own ephemeral worktree and with the only git credential the deployment has:
 `deletion.plan` for the frontmatter and the referring set, `sweep.write_sync` for the bodies, the
 nine gates, the knowledge repo's own linter over the whole tree, one App-authored commit with the
@@ -407,8 +403,8 @@ caller in an `Approved-by:` trailer, and a push. The whole of it is
   (it carries both page bytes and fresh model output) and passes every path through
   `acl.visible()` for whoever is reading — one place decides read access, whatever the caller was
   allowed to remove — with a path it withholds NAMED rather than dropped, so nobody reads "nothing
-  happened to it" into a silence. Nobody read that prose before it landed — that is the trade ADR
-  043 D5 states rather than softens — so the diff is the reading, and `git revert` in the knowledge
+  happened to it" into a silence. Nobody read that prose before it landed — that is the trade,
+  stated rather than softened — so the diff is the reading, and `git revert` in the knowledge
   repo is the undo.
 - **It writes no `repairs` row.** The capture row is the record, which is the one place a person's
   removal and a worker-derived repair now part company: the ledger is what the worker derived, and a
@@ -496,7 +492,7 @@ Three independent checks, each chosen because the other two cannot see what it s
    worktree at the pass's base, and every repair before this one has PUSHED since; a page deleted
    in the meantime refuses here. For `delete` this step is the two bounds re-run against that tree,
    plus a base hash per rewritten page and a walk of the corpus for a latecomer that now refers to
-   a going page (ADR 043 D3).
+   a going page.
 2. **`run_gates(ALL_GATES)`** judges the resulting diff exactly as it judges the librarian's own —
    all nine, not a subset, and they have never known who asked. A `delete` apply additionally runs
    the knowledge repo's own linter over the WHOLE tree, because that kind's blast radius is the
@@ -555,7 +551,7 @@ approval used to, so it is worth being exact about which rows carry one:
 
 - **`applied` carries a key**, which is obvious for "do not do it twice" and less obvious for the
   case that matters: it is what makes a repair somebody REVERTED in git stay reverted rather than
-  coming back the next night. A human's "no" is a commit (ADR 044 D5).
+  coming back the next night. A human's "no" is a commit.
 - **`failed` carries a key too**, and that is the deliberate one — see above — except when the
   refusal was a `CorpusMovedError`, which carries none.
 - **`skipped` carries none.** A skipped row is a repair that was never derived: a finding no kind

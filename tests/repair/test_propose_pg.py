@@ -1,7 +1,8 @@
 """One repair pass over the additive road, end to end: real findings, a real checkout, the offline
 double for the model, the real gates, and a real bare remote as the last word.
 
-The property under test throughout is ADR 044's: **a repair that survives derivation is APPLIED**,
+The property under test throughout is the capture-is-the-approval change's: **a repair that survives
+derivation is APPLIED**,
 in the same pass that derived it. So what a test asserts is a commit that really landed and the row
 that records it — a stored row alone would now be half of what happened.
 
@@ -163,7 +164,8 @@ def test_a_finding_naming_no_page_is_never_sent_to_the_model(conn, repo_env, set
 # ── the happy path: derived, applied, pushed, recorded ────────────────────────────────────────
 def test_an_unlinked_mention_lands_as_one_backlink_commit(conn, repo_env, settings):
     """The whole road in one assertion set. The ledger says what was derived; the remote says it
-    happened. Under ADR 044 neither half stands alone — a row nobody could match to a commit is a
+    happened. Under the capture-is-the-approval change neither half stands alone — a row nobody
+    could match to a commit is a
     claim, and a commit nobody recorded is a change with no reading."""
     run_id = support.seed_gardener_run(conn)
     finding_id = support.seed_unlinked_mention(conn, run_id,
@@ -210,7 +212,8 @@ def test_the_ledgers_row_is_the_commit_that_landed_and_carries_the_diff_nobody_r
         conn, repo_env, settings):
     """The propose-time proof used to be asserted here — "what is on the table is what
     `edits.apply_declared` would perform". Nothing is on a table any more, so the property is the
-    one ADR 044 put in its place: the row and the commit are two views of ONE event, and the stored
+    one the capture-is-the-approval change put in its place: the row and the commit are two views of
+    ONE event, and the stored
     diff IS the reading, because nobody gave the change one beforehand."""
     run_id = support.seed_gardener_run(conn)
     support.seed_unlinked_mention(conn, run_id, pages=(support.NOTE_A, support.DECISION))
@@ -481,7 +484,8 @@ def _backlink(finding_id, path, link_path):
 def test_a_batch_over_the_pass_ceiling_is_refused_whole_and_the_model_is_told_why(
         conn, repo_env, monkeypatch):
     """Red before the fix: `validate_batch` had no ceiling at all, so a model answering one batch
-    with any number of repairs had every one of them derived — and under ADR 044 that is not a long
+    with any number of repairs had every one of them derived — and under the capture-is-the-approval
+    change that is not a long
     inbox, it is an afternoon of commits nobody asked for.
 
     Whole-batch and not per-proposal: an answer that overshot the ceiling is one the model should

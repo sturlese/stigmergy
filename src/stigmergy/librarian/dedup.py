@@ -76,7 +76,7 @@ def query_filed_with_digest(conn, *, digest: str, kind: str, exclude_id: int,
     requests, not a retry — collapsing them would report one page for a meeting capture that
     should have produced a page SET.
 
-    `acl` is REQUIRED for two reasons, one per level (ADR 045 D3). At level 1 it stops a
+    `acl` is REQUIRED for two reasons, one per level. At level 1 it stops a
     RESTRICTION being silently discarded: the same person posting the same text openly and then
     in a scoped channel would have the second capture collapsed into the first and be told
     "filed", pointing at the OPEN page. At level 2 it stops this becoming an existence oracle: a

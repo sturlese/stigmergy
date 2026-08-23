@@ -256,7 +256,7 @@ def test_a_page_anchored_to_both_a_live_and_a_retired_id_names_only_the_retired_
 
 
 # ── link-to-narrower-page: the one upward link a human can still write ────────────────────────
-# Since ADR 045 D3 a model cannot LEARN of a page it may not link to, so what remains is a name
+# Since the audience-from-the-door change a model cannot LEARN of a page it may not link to, so what remains is a name
 # the capture's own material supplied. Reported and never repaired — all three repairs would edit
 # somebody's words — which makes this finding the whole of the signal for that residual.
 

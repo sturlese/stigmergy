@@ -1,7 +1,7 @@
 // The Entities desk: the vocabulary the brain has grown, and the one door for a name nobody has
 // captured about yet. Nothing here is waiting on anybody — a capture that meets a name the
 // registry does not know writes the entity page in the same commit that files it, confirmed by
-// whoever captured (ADR 044). What is left to do from a console is READ the vocabulary, and
+// whoever captured. What is left to do from a console is READ the vocabulary, and
 // commission the one entity no capture has introduced.
 
 import { api } from "../api.js";

@@ -2,7 +2,7 @@
 something will happen without one.
 
 `check_stale_views`' `suggested_action` used to be a runnable command (`stigmergy-views regenerate
---entity …`), and this file RAN it. ADR 044 D3 removed that CLI: the librarian worker converges
+--entity …`), and this file RAN it. the capture-is-the-approval change removed that CLI: the librarian worker converges
 `views/` from state on its own idle branch, so what the finding now says is that it will take care
 of itself. That is a promise with the same standing, and it is checked the same way — the sweep the
 worker actually runs is run here, against the same repo the finding was computed from, and it

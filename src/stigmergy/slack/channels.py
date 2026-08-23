@@ -4,13 +4,13 @@ malformed file.
 
 **The empty-set default is the load-bearing property, and it now says the same thing on both
 sides.** A channel not listed is a PUBLIC channel: per `acl.visible()`'s truth table its empty
-group set reads only pages carrying no label, and per ADR 045 D2 a capture taken there is filed
+group set reads only pages carrying no label, and a capture taken there is filed
 OPEN (the door stores `NULL`, never `{}` — no groups is a fact about the channel, not the `acl:
 []` of a page, which means nobody). Widening either side takes a deliberate edit to this file;
 being safe takes none. A channel's scope is ALWAYS a `set[str]`, never `None`: Slack capture and
 Slack answering are public-channel only, so no channel is ever unrestricted.
 
-The grammar is `server.identity`'s, parsed there (ADR 045 D7) so the roster and this map cannot
+The grammar is `server.identity`'s, parsed there so the roster and this map cannot
 come to disagree about what a group may be called — including the reserved name `all`. The WHOLE
 file is validated on every lookup, not only the entry wanted: a malformed neighbour in an
 access-scoping file is a file the server cannot make sense of.

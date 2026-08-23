@@ -181,7 +181,7 @@ def test_a_converged_multi_entity_corpus_moves_neither_the_remote_tip_nor_a_mode
 
 # ── ACL: the intersection rule, with the twin that proves it is an intersection ────────────────
 def test_a_sweep_never_writes_an_acl_line_and_never_names_a_labelled_member(tmp_path):
-    """ADR 045 D5, on the SWEEP path — the unattended caller that would republish a retired rule
+    """The audience-from-the-door change, on the SWEEP path — the unattended caller that would republish a retired rule
     across the whole corpus at once.
 
     Asserted on the FILE as well as on the outcome: the frontmatter is what `server.acl.visible()`

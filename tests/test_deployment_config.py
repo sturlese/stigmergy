@@ -128,7 +128,7 @@ def test_vm_groups_declare_exactly_the_three_process_groups():
     assert vm_processes == {"app", "worker", "slack"}
 
 
-# ── every `COPY deploy/...` needs its e2e placeholder (ADR 029's own CI failure) ───────────────
+# ── every `COPY deploy/...` needs its e2e placeholder (the admin console's own CI failure) ───────────────
 CONTAINER_E2E = ROOT / "scripts" / "e2e_librarian_container.sh"
 
 
@@ -153,7 +153,7 @@ def test_every_deploy_copy_has_a_placeholder_in_the_container_e2e():
     error that names a file, not a cause.
 
     This has happened twice: the first container-e2e run on CI (a bare redirection into a missing
-    directory) and ADR 029's `slack-channels.json` COPY, added without its placeholder. The rule
+    directory) and the admin console's `slack-channels.json` COPY, added without its placeholder. The rule
     lived in a comment both times; it is a test now."""
     script = CONTAINER_E2E.read_text(encoding="utf-8")
     missing = sorted(name for name in _dockerfile_deploy_copies()

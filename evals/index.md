@@ -60,7 +60,7 @@ import nothing heavier than the standard library, so a keyless test scores canne
 exactly the code a real run uses.
 
 ONE capture is ONE scored phase. Two of them used to be two — a park, then a re-file after a stored
-reply travelled back through `BrainService.reply` — and ADR 041 retired the park, the reply and the
+reply travelled back through `BrainService.reply` — and the park, the reply and the
 tool. A name the registry does not know is proposed as an entity in the same commit as the page, and
 the `proposals` facet scores the proposed NAME rather than its id: the id is `slugify` of a name the
 agent chose, so asserting it would score the spelling instead of the judgment.

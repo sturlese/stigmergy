@@ -42,7 +42,7 @@ SubmitRefused = CaptureError
 NOT_YOURS_TO_REMOVE = "there is nothing for you to remove at those paths"
 
 # What a caller is told when they ask to file at an audience they do not hold. The door's whole
-# authorization rule is `acl.visible()` applied to the WRITER (ADR 045 D2): you may file only what
+# authorization rule is `acl.visible()` applied to the WRITER: you may file only what
 # you could read afterwards, because a page nobody who wrote it can see is a page nobody can fix.
 # It names the groups the CALLER holds, never the ones they asked for — the request is theirs
 # already, and echoing a group set back would confirm which groups exist.
@@ -147,7 +147,7 @@ fence = textutil.fence
 
 def _neutralize_entity_record(record: dict) -> dict:
     """A registry record with every authored string neutralized; `id` is a KEY. `approved_by`
-    rides along: it names the person whose capture introduced the identity (ADR 044)."""
+    rides along: it names the person whose capture introduced the identity."""
     return {
         "id": record["id"],
         "name": neutralize_fence(record.get("name", "")),
@@ -575,7 +575,7 @@ class BrainService:
                acl=None, content_hash: str | None = None) -> dict:
         """Queue a capture, attributed to THIS service's resolved identity.
 
-        `audience` is the one thing about a capture a CALLER decides (ADR 045 D2): the groups this
+        `audience` is the one thing about a capture a CALLER decides: the groups this
         material is for, omitted to file it open. It is a REQUEST — the door resolves it, checks it
         against the caller's own groups and stores the answer on the row — which is why `acl`, the
         resolved label, stays in the four fields below.
@@ -676,7 +676,7 @@ class BrainService:
         # The two source hints the fast lane trusts — refused for every door but Slack's own.
         capture_schema.reject_source_provenance_hints(hints, door=self.door)
         # `kind` is MODEL-CHOSEN and `prepare_submission` refuses one outside `KINDS` by name.
-        # This door takes the SUBMITTABLE ones (ADR 044 D4) — the queue's vocabulary is wider by
+        # This door takes the SUBMITTABLE ones — the queue's vocabulary is wider by
         # exactly one, and `delete` is queued by the door that authorized it, never asked for here.
         capture_schema.reject_unsubmittable_kind(kind)
         if self.evidence is None:
@@ -785,12 +785,12 @@ class BrainService:
     # ── the write lane's governed door ─────────────────────────────────────────
     # The queueing lives in `server.review`, which is the ONE seam both removal doors cross (this
     # one and the console's) — so which door a person removed from changes the row's
-    # `delete_source` and nothing else. Nothing here reaches the knowledge repo: since ADR 044 D3
-    # the worker is the only writer, and this process holds neither the checkout nor the credential.
+    # `delete_source` and nothing else. Nothing here reaches the knowledge repo: the worker is
+    # the only writer, and this process holds neither the checkout nor the credential.
 
     def delete_pages(self, paths, why: str = "", *, source: str) -> dict:
         """QUEUE a removal: the pages that go and the reason, as a `delete` row this service's
-        resolved identity is on. The worker performs it (ADR 044 D3) — this process holds no git
+        resolved identity is on. The worker performs it — this process holds no git
         credential and writes nothing to the corpus.
 
         **Authorization is the one question this door can answer, and it answers it here.** A

@@ -1,5 +1,5 @@
 """`repairs`' DDL: idempotent, its two vocabularies really are constraints, and the two migrations
-that carry a deployed database from the lifecycle ADR 044 removed.
+that carry a deployed database from the lifecycle the capture-is-the-approval change removed.
 
 A CHECK constraint that exists in the code's tuple and not in the column is drift nobody sees
 until a write fails in production, so both are asked of the real database rather than of the SQL
@@ -50,7 +50,8 @@ def test_every_status_the_code_can_write_is_one_the_column_accepts(conn):
     caught it.
 
     Written through the THREE WRITERS rather than by UPDATE-ing one row through the tuple, and that
-    is the change ADR 044 made here: a row is written once, when the attempt is already over, and
+    is the change the capture-is-the-approval change made here: a row is written once, when the
+    attempt is already over, and
     never transitions. A test that moved one row through every status would be exercising a
     lifecycle the code no longer has."""
     _applied(conn, key="status-applied")
@@ -91,7 +92,8 @@ def test_a_table_that_predates_a_kind_gains_it_when_the_ddl_runs(conn):
 
 
 def test_a_row_that_was_waiting_on_a_person_becomes_a_skip_when_the_ddl_runs(conn):
-    """The other half of the same migration problem, and the one ADR 044 introduced: a database
+    """The other half of the same migration problem, and the one the capture-is-the-approval change
+    introduced: a database
     upgraded from the previous release carries rows whose status is `pending`, `approved` or
     `rejected`, and the new CHECK names none of them. A row that was WAITING on somebody was never
     applied and never refused — it is a repair that did not happen, which is what `skipped` means,
@@ -175,7 +177,8 @@ def test_the_ddl_is_still_idempotent_on_a_database_that_has_already_migrated(con
 
 
 def test_one_repair_per_content_key_WHATEVER_its_outcome(conn):
-    """The UNIQUE index, asked of the database, and its predicate is the change ADR 044 made: it
+    """The UNIQUE index, asked of the database, and its predicate is the change the
+    capture-is-the-approval change made: it
     used to be `WHERE status = 'pending'`, so a decided row freed its key for a second question.
     Nobody is asked now, so the key is the whole of the memory — an applied repair and a refused
     one both hold theirs forever, and a second pass deriving either meets the index rather than
@@ -212,7 +215,7 @@ def test_the_content_key_is_what_a_repair_would_do_not_the_order_it_says_it_in()
 
 def test_a_reworded_note_is_the_same_question_and_keys_the_same():
     """The memory's whole value: a callout this loop already added to a page must not be added a
-    second time tomorrow with the sentence rephrased — which under ADR 044 is not a repeated
+    second time tomorrow with the sentence rephrased — which under the capture-is-the-approval change is not a repeated
     question, it is a repeated commit."""
     base = [{"op": "contradiction", "path": "a.md", "link": "B", "note": "these disagree"}]
     reworded = [{"op": "contradiction", "path": "a.md", "link": "B", "note": "they contradict"}]
@@ -282,7 +285,7 @@ def test_each_kinds_stored_op_shape_is_named_and_they_do_not_overlap():
     """The shapes, pinned where they are declared. Two readers reshape an op — the console's
     cleaner and the applier — and a reader that assumed the additive shape for a body draft
     rendered an empty cell where the draft should have been. That mattered when a steward read the
-    draft before deciding; under ADR 044 the console IS the reading, and it happens after the
+    draft before deciding; under the capture-is-the-approval change the console IS the reading, and it happens after the
     commit."""
     assert schema.EDIT_OP_FIELDS[0] == schema.ENTITY_BODY_OP_FIELDS[0] == schema.OP_KIND_KEY
     assert schema.DELETE_OP_FIELDS[0] == schema.SCRUB_OP_FIELDS[0] == schema.OP_KIND_KEY

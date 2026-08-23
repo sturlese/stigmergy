@@ -1,10 +1,10 @@
 """Identity → audiences resolution, and the ONE grammar both `ops/` group files are written in.
 
-Two halves, as ADR 013 drew them: the file seam (`ops/identities.json`) and the per-request half
+Two halves: the file seam (`ops/identities.json`) and the per-request half
 (bearer token → sha256 → token store → email → the SAME `resolve_audiences`). Fail-closed on
 EVERY path: any failure raises `IdentityError`; the server never starts open.
 
-**One value shape** (ADR 045 D7): a principal maps to a LIST OF GROUPS and to nothing else —
+**One value shape**: a principal maps to a LIST OF GROUPS and to nothing else —
 `{"marc": ["brain-admins"], "ana": ["finance"], "bob": []}`. The `"*"` and bare-label spellings
 this file once accepted are refused by name, with the line to write instead, because a roster is
 read on every request and three spellings for one fact is three things to get right. Unrestricted
@@ -51,7 +51,7 @@ RESERVED_GROUP_NAMES = frozenset({"all"})
 RETIRED_UNRESTRICTED_SIGIL = "*"
 
 # A group name's own grammar. Deliberately narrow: these names are stamped into page frontmatter
-# (`acl: ["finance"]`) and into a Postgres `text[]`, and since ADR 045 D2 one of them can arrive
+# (`acl: ["finance"]`) and into a Postgres `text[]`, and one of them can arrive
 # from a MODEL through `brain_submit(audience=…)`. A newline or a control character crossing into
 # YAML is a page-contract injection, and there is no legitimate group name that needs one.
 _GROUP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -84,7 +84,7 @@ def _suggest_list(value: str) -> str:
         check_group_names([value], origin="<suggestion>", subject="a group name")
     except IdentityError:
         return ""
-    return f' — a bare label was retired: write {json.dumps([value])} instead (ADR 045)'
+    return f' — a bare label was retired: write {json.dumps([value])} instead'
 
 
 def check_group_names(names, *, origin: str, subject: str,
@@ -103,7 +103,7 @@ def check_group_names(names, *, origin: str, subject: str,
     if not isinstance(names, list):
         detail = ""
         if names == RETIRED_UNRESTRICTED_SIGIL:
-            detail = ' — the "*" spelling was retired: write ["brain-admins"] instead (ADR 045)'
+            detail = ' — the "*" spelling was retired: write ["brain-admins"] instead'
         elif isinstance(names, str) and names.strip():
             detail = _suggest_list(names.strip())
         raise IdentityError(
@@ -123,7 +123,7 @@ def check_group_names(names, *, origin: str, subject: str,
             raise IdentityError(
                 f"{subject} names a group called {name!r} in {origin} — that is the retired "
                 f"unrestricted sigil, not a group. Unrestricted is membership of "
-                f'{UNRESTRICTED_GROUP!r}: write ["{UNRESTRICTED_GROUP}"] (ADR 045)')
+                f'{UNRESTRICTED_GROUP!r}: write ["{UNRESTRICTED_GROUP}"]')
         if "," in name:
             raise IdentityError(
                 f"{subject} names an invalid group {raw!r} in {origin}: a group name must not "
@@ -282,7 +282,7 @@ def audiences_from_text(text: str, identity: str | None, *, origin: str) -> tupl
 
     An identity with `[]` is authenticated and holds no group: it reads every open page and
     nothing else. That is a fact about the PRINCIPAL and is not the `acl: []` of a page, which
-    means nobody — see `server.acl`'s truth table and ADR 045 D9.
+    means nobody — see `server.acl`'s truth table.
     """
     if not identity:
         raise IdentityError("no identity given to resolve")

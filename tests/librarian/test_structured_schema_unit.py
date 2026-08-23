@@ -165,7 +165,7 @@ def test_a_filing_that_omits_a_half_it_obliges_is_refused_with_the_field_named(f
 
 
 def test_a_filing_is_told_to_name_a_TYPE_and_never_a_folder():
-    """ADR 033 D3's confinement claim, said to the model at the one moment it is listening: there
+    """the structured filing flow's confinement claim, said to the model at the one moment it is listening: there
     is no field in this account that can name a location, and the refusal for a missing type says
     so rather than leaving the agent to infer it from the schema's shape."""
     with pytest.raises(ValidationError) as exc_info:
@@ -239,7 +239,7 @@ def test_a_complete_account_parses_through_the_BOUNDARY_unchanged():
 
 
 # ── LEG 4: through the FRAMEWORK — the two roads an incomplete account can now take ────────────
-# **These three moved from the ordinary flow to the MEETING flow in ADR 034, and the move is the
+# **These three moved from the ordinary flow to the MEETING flow in the agentic pydantic harness, and the move is the
 # honest one rather than a convenience.** The mechanism under test is a schema's completeness
 # validator being handed to the FRAMEWORK, so an omission is re-asked for free instead of refused
 # downstream after the worker has paid — and it needs a flow whose account really does come back
@@ -271,7 +271,7 @@ def _run(agent, env):
 
 def test_a_model_that_never_completes_its_account_exhausts_the_framework_and_is_PRICED(tmp_path):
     """**The tolerance direction, driven by a model that really does emit an incomplete account** —
-    which is the discipline ADR 033's own meta-finding asks for: every other structured test in
+    which is the discipline the structured filing flow's own meta-finding asks for: every other structured test in
     this suite hands the flow a COMPLETE account, so none of them would notice the schema getting
     looser.
 

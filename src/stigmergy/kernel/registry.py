@@ -6,7 +6,7 @@ DERIVED from `wiki/entities/*.md` by `entities.generator` and written by nothing
 
 **One lifecycle fact rides beside the identity: who introduced it.** The librarian files a capture
 about a name nothing resolves to by creating the entity page itself, born CONFIRMED by the person
-whose capture it was ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)), so the
+whose capture it was, so the
 note lands anchored and later captures naming the same thing anchor to the same id. `approved_by`
 is that person; empty on a page written before the field existed, and never a waiting state — there
 is none. A spelling the material uses for a registered entity is one of its `aliases`, added in the

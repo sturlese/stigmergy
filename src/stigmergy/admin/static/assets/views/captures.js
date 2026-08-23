@@ -1,7 +1,7 @@
 // Captures: what people sent and what the librarian did with it. The list is a scan, the detail
 // is the read. Nothing here acts on one row and nothing here is a decision: a capture files, is
 // refused by a gate, or fails, and the identities it introduces are born in the same commit
-// (ADR 044) — the Entities desk lists them, it does not govern them.
+// — the Entities desk lists them, it does not govern them.
 
 import { api } from "../api.js";
 import { chartCard, fillDays, partToWhole, stackedColumns } from "../charts.js";

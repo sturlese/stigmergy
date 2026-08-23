@@ -80,7 +80,7 @@ def _render_deltas(deltas: dict) -> list[str]:
         lines.append(f"• {n_pages} {_plural(n_pages, 'page')} filed — {titles}")
 
     n_entities = deltas["entities_born_count"]
-    # "born" is exact now (ADR 044): this sums what the window's FILINGS actually wrote, so every
+    # "born" is exact now: this sums what the window's FILINGS actually wrote, so every
     # counted birth is a page in the repo. It said "approved" while the count came off a ledger of
     # verdicts, where an approval could exist without a page.
     noun = "entity" if n_entities == 1 else "entities"

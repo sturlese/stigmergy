@@ -9,7 +9,7 @@ and the method returns a `RequestUsage` with every count at zero. No warning, no
 exception. A real, paid response reports as if it had cost nothing.
 
 That is the exact failure `librarian.pricing` was built to prevent — a zero that reads as free —
-arrived at from below, and it also zeroes `audit_log.result.usage`, the counters ADR 031 D2 put
+arrived at from below, and it also zeroes `audit_log.result.usage`, the counters the suppression-gated retry put
 there so a model-policy decision starts from recorded numbers.
 
 **Two halves, and the first one is a tripwire rather than a test of our code.**

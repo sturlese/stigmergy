@@ -200,7 +200,7 @@ def test_fake_synthesizer_completes_a_retry_with_empty_history(ask_service, monk
     path — not a stand-in for it — survives being handed `message_history=[]` on its second call.
 
     `verify` is monkeypatched to force one suppression-shaped verdict (`failed`, two citation
-    problems — the shape that spends the retry under ADR 031's suppression-only policy), because
+    problems — the shape that spends the retry under the suppression-gated retry's suppression-only policy), because
     the fake synthesizer's own draft (built verbatim from a page it just read) verifies cleanly on
     the first try against every page in this fixture's corpus — there is no fixture page whose
     fake-drafted answer naturally fails verification, so forcing the branch is the only way to
@@ -231,7 +231,7 @@ def test_partial_first_attempt_ships_without_spending_the_retry(ask_service, mon
     """OLD BEHAVIOUR: ANY non-`verified` first draft spent the corrective retry — a second full
     agent run — including this one, a single-citation-problem draft that ships labelled `partial`
     with or without it, so the second run bought a label (measured on staging 2026-08 as the
-    dominant case: ~41 % of asks retrying, not one answer ever suppressed). ADR 031 confines the
+    dominant case: ~41 % of asks retrying, not one answer ever suppressed). the suppression-gated retry confines the
     retry to drafts the strict gate would SUPPRESS; this is the confinement's benign twin — the
     shippable `partial` draft goes out on ONE run, unretried, still labelled honestly.
 

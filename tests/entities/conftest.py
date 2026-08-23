@@ -36,7 +36,7 @@ sources: []
 # The registry's full on-disk shape, `approved_by` included (`kernel.registry.registry_text`
 # writes every key on every entry), so a fresh regeneration of the seeded repo is byte-identical.
 # The two seeded PAGES carry no `approved_by` at all — they predate the field — and read as
-# introduced by nobody in particular, which is not a waiting state: there is none (ADR 044).
+# introduced by nobody in particular, which is not a waiting state: there is none.
 REGISTRY = {
     "entities": {
         "jordan-reyes": {"aliases": ["Jordan Reyes Gaya"], "approved_by": "",

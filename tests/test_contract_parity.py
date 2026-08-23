@@ -74,7 +74,7 @@ def test_a_stored_value_that_cannot_be_parsed_fails_closed_for_every_client(malf
 # The `[]`-stays-`[]` invariant, pinned. Load-bearing, and unguarded for far too long.
 #
 # `acl: []` means NOBODY at every serving reader (`server.acl.visible`'s own truth table), and
-# `acl:` ABSENT means open. They are two values, not two spellings of one, and ADR 045 D9 makes
+# `acl:` ABSENT means open. They are two values, not two spellings of one, and the audience-from-the-door change makes
 # that a corpus-wide rule after the librarian's old resolver spent years translating a resolved
 # empty list back into "no line at all" — so the one spelling `ops/acl.json` used to restrict
 # meant its opposite once stamped.
@@ -95,15 +95,16 @@ def test_the_retired_acl_symbols_stay_retired():
     `Settings.acl_path`: a deleted access-control function is one autocomplete away from being
     reintroduced, and the reintroduced one would not be wired to anything that tests it.
 
-    `resolve_acl`/`load_acl_config` derived a label from a path (ADR 045 D1/D2); `view_acl`
-    collapsed a view to nobody (D5); `all_visible` never had a caller."""
+    `resolve_acl`/`load_acl_config` derived a label from a path, before the audience came from the
+    door; `view_acl` collapsed a view to nobody; `all_visible` never had a caller."""
     from stigmergy.kernel import acl as kernel_acl
     from stigmergy.server import acl as server_acl
 
     for name in ("resolve_acl", "load_acl_config", "load_acl_config_text", "view_acl"):
         assert not hasattr(kernel_acl, name), (
-            f"kernel.acl.{name} is back — it was deleted by ADR 045, and a second way to answer "
-            f"an access question is a second thing that can answer it differently")
+            f"kernel.acl.{name} is back — it was deleted when the audience came from the door, "
+            f"and a second way to answer an access question is a second thing that can answer it "
+            f"differently")
     assert not hasattr(server_acl, "all_visible"), (
         "server.acl.all_visible is back — it had no caller, and a predicate nothing calls is a "
         "predicate nothing tests")
@@ -112,7 +113,7 @@ def test_the_retired_acl_symbols_stay_retired():
 def test_the_write_side_writes_an_empty_acl_rather_than_omitting_the_key():
     """The two spellings must stay two values on the WRITE side, or the read side's truth table
     below is decorative. `views.render` used to be the only producer of `acl: []` and no longer
-    produces a label at all (ADR 045 D5), so the producer this pins is the stamper every filed
+    produces a label at all, so the producer this pins is the stamper every filed
     page goes through."""
     from stigmergy.librarian.page import stamp_server_fields
 

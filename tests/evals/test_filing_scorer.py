@@ -56,7 +56,7 @@ EVALS_INDEX = ROOT / "evals" / "index.md"
 # reason denominators do not move at all. Scores recorded before and after remain comparable per
 # FACET and are not comparable per run.
 #
-# MOVED again for ADR 041, counted by hand a third time. Four numbers changed and each is a fact
+# MOVED again for the file-first write path, counted by hand a third time. Four numbers changed and each is a fact
 # about the redesign, not an edit made to let something pass:
 #
 #   * `status` 16 -> 14 — the two ask-back captures stopped being two phases each. There is no
@@ -105,7 +105,7 @@ def _perfect(expect: dict) -> dict:
 def _phases(entries: list) -> list:
     """Every scored phase of the golden set, observed perfectly — built through the runner's own
     `_phase`, the same composer `_drive` uses on a real run. One per entry: a capture never waits
-    on a person, so it is never scored twice (ADR 041)."""
+    on a person, so it is never scored twice."""
     return [run_filing._phase(entry["id"], "only", entry["expect"], _perfect(entry["expect"]))
             for entry in entries]
 
@@ -222,7 +222,7 @@ def test_one_facet_collapsing_leaves_every_other_facet_untouched(entries):
 # ── AC7: sensitivity, and the benign twin that keeps it honest ─────────────────────────────────
 
 MUTATIONS = {
-    # `triage` until ADR 041 retired it. A capture reaches one of three terminal states now, so the
+    # `triage` until the file-first write path retired it. A capture reaches one of three terminal states now, so the
     # mutation that proves this facet discriminates has to be one of the OTHER two.
     "status": lambda o: dict(o, status=schema.REJECTED),
     "reason": lambda o: dict(o, reason=schema.REASON_SECRET),
@@ -335,7 +335,7 @@ def test_the_same_page_edited_twice_still_satisfies_the_expectation_once():
                                   {"edits": ["a.md", "a.md"]})["edits"] is True
 
 
-# **DELETED with the phase it guarded (ADR 041):**
+# **DELETED with the phase it guarded:**
 # `test_a_backend_that_never_parked_scores_the_after_reply_phase_as_a_miss`. `_drive` used to record
 # the second phase of a park as a MISS rather than skipping it, because a vanishing phase would
 # shrink its facets' denominators and quietly raise the score of a backend that never asked. There
@@ -553,7 +553,7 @@ def test_the_order_the_decision_pages_were_written_in_does_not_matter():
 
 
 def test_a_decision_expectation_that_names_no_anchor_scores_the_title_alone():
-    """The shape F09 ships since ADR 041: its decisions anchor either to an identity PROPOSED in the
+    """The shape F09 ships since the file-first write path: its decisions anchor either to an identity PROPOSED in the
     same commit — whose id is slugified from a name the agent chose — or company-wide, so pinning
     an anchor there would pin the yardstick to one sample of the agent's own vocabulary."""
     loose = [{"title": "Wren tracked formally"}, {"title": "summary joins the shared"}]
@@ -572,7 +572,7 @@ def test_a_decision_expectation_that_names_no_anchor_scores_the_title_alone():
 # whose title was the model's prose drops to its anchor.
 #
 # The CAPABILITY is what is tested below; no shipped expectation uses it. F09 was its natural home
-# and stopped being one under ADR 041: with the stored reply gone, neither of its decisions has an
+# and stopped being one under the file-first write path: with the stored reply gone, neither of its decisions has an
 # anchor a yardstick can name, so both assert titles alone. See
 # `test_whether_the_shipped_set_uses_the_title_less_shape_at_all` in the fixture suite.
 #
@@ -664,7 +664,7 @@ def test_a_title_less_entry_written_FIRST_starves_its_titled_sibling_and_fails_a
         "greedy pairing became order-independent, that refusal can retire with this test")
 
 
-# **DELETED with the `reuse` facet (ADR 041):**
+# **DELETED with the `reuse` facet:**
 # `test_the_reuse_facet_scores_whether_a_decision_was_LOST_and_not_whether_a_pass_was_saved` and
 # `test_a_re_file_that_reported_no_reuse_block_at_all_is_a_miss_when_preservation_was_expected`.
 # The facet asked whether a meeting re-filed after a park had LOST a decision on the way back; a
@@ -881,7 +881,7 @@ def test_the_row_records_what_the_phases_actually_ended_as(entries):
     `rejected` readable six months later, without still having the report. Sorted, so two reports of
     the same run diff to nothing.
 
-    It used to be spelled with `triage`, the state a steward drained by hand; ADR 041 retired it, and
+    It used to be spelled with `triage`, the state a steward drained by hand; the file-first write path retired it, and
     the counter is unchanged because it counts whatever string a phase ended on rather than a
     vocabulary of its own.
     """
@@ -928,7 +928,7 @@ def test_the_history_row_is_exactly_the_fields_the_series_promises():
     assert metrics == {
         "backend": "sdk",
         "model": "claude-sonnet-5",
-        # Which capture kinds the run measured (ADR 032's `--kinds`). Empty here because this
+        # Which capture kinds the run measured (the filing port's `--kinds`). Empty here because this
         # `aggregate` call names none, exactly as every pre-`--kinds` caller does — the key is
         # always present so a subset row can never be read as a full-set one, and this equality is
         # what made adding it a decision rather than a quiet growth.
@@ -1034,7 +1034,7 @@ def test_the_facet_table_in_the_evals_readme_documents_the_set_that_exists(entri
 
 def test_both_eval_docs_state_the_size_of_the_set_they_describe(entries):
     """The capture and phase counts are countable claims in two documents. They move together with
-    `DENOMINATORS` or not at all — and they moved for ADR 041, which made every capture a single
+    `DENOMINATORS` or not at all — and they moved for the file-first write path, which made every capture a single
     scored phase, so the two numbers are equal for the first time."""
     report = run_filing.aggregate(_phases(entries), backend="double", model="m", wall_s=1.0)
     assert report["counts"] == {"captures": CAPTURES, "phases": PHASES}

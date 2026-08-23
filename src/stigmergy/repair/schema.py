@@ -3,8 +3,7 @@
 Idempotent DDL behind `capture.schema.startup_ddl_lock`, the shared advisory lock — the same
 posture `gardener/schema.py` takes, and for the same reason: two processes may start at once.
 
-**A repair is applied or it is not; nothing waits** — ADR 044,
-`docs/decisions/044-the-capture-is-the-approval.md`.
+**A repair is applied or it is not; nothing waits.**
 The worker derives a repair from a gardener finding, validates it against a real checkout, applies
 it through the nine gates and records what happened here. There is no pending state, no verdict
 and nobody to ask — the three outcomes are `applied`, `failed` and `skipped`.
@@ -28,8 +27,7 @@ JOB_NAME = "repair"
 # and proven additive by `gate_body_rewrite`. `entity-body` is the one kind that REPLACES text, and
 # it is a separate kind rather than a fourth op precisely because it is a different question for
 # the gates: it may only touch a page in the entity zone, only below that page's own H1, and only
-# with the apply telling `GateContext.body_rewrite_allowed` which path was authorized (ADR 039,
-# "entity-body: the second kind").
+# with the apply telling `GateContext.body_rewrite_allowed` which path was authorized.
 #
 # The string doubles as the OP name inside such a repair's single op, deliberately: one
 # vocabulary word for one shape means a surface listing a repair's ops names what happened
@@ -39,14 +37,13 @@ JOB_NAME = "repair"
 # different actions — pages removed, pages rewritten to stop pointing at them — so its ops carry
 # `delete-page`/`scrub-page` (`repair.deletion.OP_NAMES`) and a reader can tell which is which.
 # A single word there would hide the half of the blast radius that is not the pages anybody
-# named (ADR 039, "delete: the third kind").
+# named.
 #
 # `entity-alias` is the fourth, and it breaks the doubling for the same reason `delete` does: one
 # repair performs four different actions — the survivor's page gains the absorbed entity's
 # spellings, the absorbed page is marked superseded, every page anchored to it is re-anchored, and
 # the derived registry is rebuilt — so its ops carry their own names
-# (`repair.entity_alias.OP_NAMES`) and a reader can tell which is which
-# (ADR 039, "entity-alias: the fourth kind").
+# (`repair.entity_alias.OP_NAMES`) and a reader can tell which is which.
 KIND_EDITS = "edits"
 KIND_ENTITY_BODY = "entity-body"
 KIND_DELETE = "delete"
@@ -142,7 +139,7 @@ UPDATE repairs
    SET status = '{STATUS_SKIPPED}',
        reason = CASE WHEN reason <> '' THEN reason
                      ELSE 'this repair was waiting on a person when repairs began applying '
-                          'themselves (ADR 044); it was never applied' END
+                          'themselves; it was never applied' END
  WHERE status IN ('pending', 'approved', 'rejected')
 """
 

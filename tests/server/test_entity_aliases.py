@@ -454,7 +454,8 @@ def test_the_shared_fold_is_the_narrow_one_not_the_collision_key(tmp_path):
 
 def test_load_registry_carries_who_introduced_each_identity(tmp_path):
     """OLD BEHAVIOUR: the reader also carried `proposed` and `proposed_aliases`, the two keys a
-    waiting identity was marked with. ADR 044: an identity is born confirmed by whoever captured,
+    waiting identity was marked with. the capture-is-the-approval change: an identity is born
+    confirmed by whoever captured,
     so `approved_by` is the whole lifecycle — and a registry still carrying the retired keys is
     read WITHOUT them rather than half-understood."""
     repo = _write_registry(tmp_path, {

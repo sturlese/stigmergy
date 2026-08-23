@@ -416,7 +416,7 @@ def test_a_scoped_raw_id_still_resolves_when_the_registry_folds_it_out_of_scope(
     a canonical id that is NOT in scope, the scoped-set fallback was never tried, even though the
     caller's raw input WAS a scoped id.
 
-    That is exactly the drift the fallback exists for (ADR 022 D5, restated in `server/index.md`
+    That is exactly the drift the fallback exists for (entity navigation, restated in `server/index.md`
     and `docs/reference/server.md`): pages anchored to a display name while the registry uses a
     slug. The two tools then disagreed about which ids exist — `list_entities` served it, this one
     called it unknown.

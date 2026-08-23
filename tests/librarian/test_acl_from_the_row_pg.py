@@ -2,7 +2,7 @@
 
 The label used to be resolved from the page's OWN PATH in the knowledge repo, through
 `ops/acl.json`, at the item's base commit — so the only lever for restricting anything was a
-sub-directory under `wiki/`, in a layout where the folder is the page's TYPE. ADR 045 D1/D2
+sub-directory under `wiki/`, in a layout where the folder is the page's TYPE. the audience-from-the-door change
 replaced the derivation whole: a human decides at the door, the decision lands on
 `capture_queue.acl`, and the worker stamps THAT on every page the capture writes.
 
@@ -84,7 +84,8 @@ def test_the_verbatim_source_page_carries_the_same_audience_as_its_synthesis(rig
     was treated as being about nothing — while the page distilled FROM it carried one. So the
     restricted material was readable verbatim by everyone, at a path the synthesis cites.
 
-    Under ADR 045 D2 a source is the ORIGIN of the label, not an exception to it: one capture, one
+    Under the audience-from-the-door change a source is the ORIGIN of the label, not an exception to
+    it: one capture, one
     audience, every page it writes."""
     env, deps = rig
     support.submit_document(clean_queue, deps, "Board pack: renewal terms for Acme Corp.\n",
@@ -115,7 +116,7 @@ def test_every_page_of_a_meeting_set_carries_the_captures_audience(rig, clean_qu
     _path, sha = result.result_ref.rsplit("@", 1)
 
     # `wiki/entities/` is excluded BY DESIGN, not by accident: an entity page is the brain's
-    # shared vocabulary and carries no audience at all (ADR 045 D6). Asserting "every page" would
+    # shared vocabulary and carries no audience at all. Asserting "every page" would
     # demand the wrong behaviour the day a meeting births one.
     pages = [p for p in support.paths_in_commit(env.repo, sha)
              if p.endswith(".md") and not p.startswith("wiki/entities/")]
@@ -127,7 +128,8 @@ def test_every_page_of_a_meeting_set_carries_the_captures_audience(rig, clean_qu
 
 # ── the write lane: material may only be ADDED to a page its readers could already read ───────
 def test_a_scoped_capture_may_not_append_to_an_open_page(rig, clean_queue):
-    """ADR 045 D3's other half. The input scope stops a model READING out of scope; this stops the
+    """The audience-from-the-door change's other half. The input scope stops a model READING out of
+    scope; this stops the
     edit it declares landing out of scope — and edits are not only a model's doing (the deletion
     sweep and the repair loop write here too), so the check belongs at the gate.
 
@@ -246,7 +248,7 @@ def test_an_entity_born_from_restricted_material_carries_no_audience(rig, clean_
 def test_a_restricted_birth_writes_identity_and_What_Who_and_nothing_else(rig, clean_queue):
     """The facts and connections belong to the restricted material and stay on the page this
     capture filed. The one sentence that DOES cross is deliberate and is the smallest thing that
-    can: ADR 042 D3 refuses an entity page with no What / Who at all, so the alternative is no
+    can: the birth-written change refuses an entity page with no What / Who at all, so the alternative is no
     identity — and the same name introduced again next week as a second entity."""
     env, deps = rig
     support.submit(clean_queue, deps, f"DOUBLE:propose=Kestrel Haulage\n{_material('spine')}",
@@ -262,7 +264,7 @@ def test_a_restricted_birth_writes_identity_and_What_Who_and_nothing_else(rig, c
 
 
 def test_the_benign_twin_an_OPEN_birth_still_writes_its_facts(rig, clean_queue):
-    """The specificity half, and the one that carries ADR 042: an open capture's entity page is
+    """The specificity half, and the one that carries the birth-written change: an open capture's entity page is
     RICH — that is what 042 exists for, and D6 must not quietly undo it for everybody."""
     env, deps = rig
     support.submit(clean_queue, deps, f"DOUBLE:propose=Marlowe Rail\n{_material('open-birth')}",
@@ -347,7 +349,7 @@ def test_a_restricted_birth_publishes_no_title_in_the_entity_pages_frontmatter(r
 
 def test_the_benign_twin_an_OPEN_birth_still_links_the_page_that_introduced_it(rig, clean_queue):
     """The specificity half: `related:` is not simply never written. A newborn page is a finished
-    page (ADR 042 D3), and for an open capture it points back at the note that introduced the
+    page, and for an open capture it points back at the note that introduced the
     entity — so the fix cannot be satisfied by dropping the field for everybody."""
     env, deps = rig
     support.submit(clean_queue, deps, f"DOUBLE:propose=Larkspur Rail\n{_material('open-related')}",

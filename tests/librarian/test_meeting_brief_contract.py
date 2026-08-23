@@ -41,7 +41,7 @@ removed code-side rules are covered behaviourally elsewhere (each removal record
 the rows that remain are exactly the pairs where the brief still tells the agent something AND
 the code still enforces it in live behaviour, not in prose about itself.
 
-**It grew again with ADR-038**, by three rows, on the same terms it shrank by: the meeting flow
+**It grew again with the distiller's corpus context**, by three rows, on the same terms it shrank by: the meeting flow
 gained a gathered context and a declared-edit mechanism, so the brief gained rules that a live
 piece of code really enforces — the worker's own gather call, this flow's lane, and the line that
 puts a bad declaration's findings in front of the vetoes. Growth is not the opposite of the
@@ -146,7 +146,8 @@ def test_the_contract_table_is_not_vacuous():
     replaced a skip as much as to the skip."""
     text = _FROZEN_BRIEF.read_text(encoding="utf-8")
     assert len(text) > 5_000 and "meeting" in text.lower()
-    # Ten pairs today — seven, plus the three ADR-038 added. The floor is what makes shrinking the
+    # Ten pairs today — seven, plus the three the distiller's corpus context added. The floor is
+    # what makes shrinking the
     # table a deliberate act.
     assert len(RULE_TABLE) >= 10, "the brief<->gate contract table has gone thin"
 
@@ -310,7 +311,8 @@ RULE_TABLE = [
     # "entirely" because the `sources:`/`related:` repair sits on the NEXT line of the real file
     # (the module docstring's own warning about line breaks).
     ("keep it out of body prose entirely", "date-bearing-body-link"),
-    # ── the three rules ADR-038 added, and the reason each marker is the one it is ──────────────
+    # ── the three rules the distiller's corpus context added, and the reason each marker is the one
+    # it is ──────────────
     # The brief's whole framing of the gathered context rests on one claim: the worker looked, and
     # you cannot look again. The code side is `_one_meeting_pass`' OWN gather call, and the marker
     # is its closing `))` — the ordinary flow's identical-looking call ends `),` because it passes
@@ -318,7 +320,7 @@ RULE_TABLE = [
     # search further. So this marker is not merely "the meeting flow gathers something": the two
     # characters that make it unique are exactly the ones that mean "rendered with
     # `render_gathered`'s no-tools defaults", which is what the brief phrase promises a tool-less
-    # agent. Since ADR 045 D3 the closing characters are the capture's own audience, which is the
+    # agent. Since the audience-from-the-door change the closing characters are the capture's own audience, which is the
     # other half of what a tool-less agent is promised: the block it is handed is everything, AND
     # it is scoped to what this capture may cite. Verified against the concatenated source before
     # use: it occurs exactly once.

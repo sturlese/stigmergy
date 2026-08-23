@@ -252,7 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     # breath; a deployment carrying it is not reading anything.
     ap.add_argument("--backend", default=None, choices=agent_module.BACKENDS,
                     help="'pydantic' runs both flows structured — no tools, a gathered context, "
-                         "code writes the page (ADR 033); it needs a provider-prefixed, priced "
+                         "code writes the page; it needs a provider-prefixed, priced "
                          "model and that provider's key. 'double' runs the offline double "
                          "(default: double)")
     sub = ap.add_subparsers(dest="command", required=True)

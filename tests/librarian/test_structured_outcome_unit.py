@@ -1,6 +1,6 @@
 """The ordinary outcome envelope, which GREW a half — and the rule that both halves stay valid.
 
-ADR 033 D2 is an expand–contract step, and this file is what keeps the "expand" honest. One parser
+the structured filing flow is an expand–contract step, and this file is what keeps the "expand" honest. One parser
 (`agent.parse_outcome`) accepts two shapes: the OLD one, where the agent wrote the page itself and
 declared `page_path`, and the NEW one, where the account CARRIES the page's own text in `page` for
 code to write. Which half is REQUIRED is deliberately not the schema's question — the schema cannot
@@ -9,7 +9,7 @@ declaration.
 
 **Why the additive claim needs a test rather than a reading.** Both shapes are still produced —
 the offline double declares `page_path` and writes its own page, the structured backend carries the
-page's text in `page` — and the old shape is what every page this brain filed before ADR 033 was
+page's text in `page` — and the old shape is what every page this brain filed before the structured filing flow was
 filed by. A parser that quietly started requiring `page`, or that let `page.title` override a
 top-level one, would not fail loudly on either path: the exploring path would begin failing every
 item with a shape finding (visible, at least), and the precedence bug would file pages whose
@@ -82,7 +82,7 @@ def test_the_old_shape_needs_no_page_body_and_is_not_asked_for_one():
     """`page.body` is required by the CALLER, not by the parser, and only of a backend that
     declared the structured shape. A parser that required it would refuse every filing made in the
     exploring shape — which is what the offline double produces on every run of this suite, and what
-    every page filed before ADR 033 was filed by."""
+    every page filed before the structured filing flow was filed by."""
     outcome = agent_module.parse_outcome(OLD_SHAPE)
 
     assert processing._require_page_content(outcome) != []
@@ -107,7 +107,7 @@ def test_the_structured_account_mirrors_its_title_and_type_up_to_the_single_fiel
 
 
 def test_there_is_no_path_in_the_new_half_and_a_structured_account_declares_none():
-    """**The confinement claim, at the schema.** ADR 033 D3's "there is no write to stop" rests on
+    """**The confinement claim, at the schema.** the structured filing flow's "there is no write to stop" rests on
     the account having no field that could name a location: the folder is derived from `page_type`
     through the one placement table and the filename from the title. `page_path` stays empty for a
     structured account, which is what `_cross_check_outcome` then compares the DIFF against."""
@@ -197,7 +197,7 @@ def test_the_meeting_flows_page_bodies_still_truncate_and_that_asymmetry_is_deli
 
     The meeting flow's own page bodies pass `MAX_PAGE_BODY_LEN` through `_prose`, which TRUNCATES.
     Changing that would be a behaviour change to a shipped flow with no measurement behind it, so
-    ADR 033 declared the difference rather than unifying it. Pinned on both sides here: if somebody
+    the structured filing flow declared the difference rather than unifying it. Pinned on both sides here: if somebody
     later unifies them, this test is the thing that makes it a deliberate act.
     """
     long_notes = "z" * (agent_module.MAX_PAGE_BODY_LEN + 500)
@@ -207,7 +207,7 @@ def test_the_meeting_flows_page_bodies_still_truncate_and_that_asymmetry_is_deli
         "decisions": [], "summary": "distilled"})
 
     assert len(meeting.meeting_notes) == agent_module.MAX_PAGE_BODY_LEN, (
-        "the meeting flow's notes stopped truncating — if that was deliberate, ADR 033's declared "
+        "the meeting flow's notes stopped truncating — if that was deliberate, the structured filing flow's declared "
         "asymmetry has changed and this test moves with it")
 
 
@@ -298,7 +298,7 @@ def test_a_well_formed_structured_account_is_required_of_nothing_further():
 def test_the_requirement_is_asked_of_the_OUTCOME_and_not_of_the_backend_class():
     """`_require_page_content` takes an outcome and nothing else — no settings, no agent, no
     `isinstance`. That is what makes the branch above it a DECLARATION (`structured_ordinary`)
-    rather than a type test, which is the thing ADR 033 D2 explicitly refused: a fourth backend, or
+    rather than a type test, which is the thing the structured filing flow explicitly refused: a fourth backend, or
     a double standing in for one, must be able to take the right branch by declaring the right
     thing."""
     import inspect
@@ -311,7 +311,7 @@ def test_the_requirement_is_asked_of_the_OUTCOME_and_not_of_the_backend_class():
 
 # ── the structural/shape split survives the new field ──────────────────────────────────────────
 def test_a_page_nested_past_the_depth_ceiling_is_STRUCTURAL_and_not_a_correctable_shape():
-    """The split ADR 015 made and this milestone had to keep: a resource bound is not something a
+    """The split the agent/gate split made and this milestone had to keep: a resource bound is not something a
     brief can talk an agent out of, so it raises a bare `AgentError` and never reaches the
     corrective retry. `page` is a new place to nest, and the ceiling has to still apply through
     it."""

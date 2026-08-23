@@ -42,7 +42,7 @@ def test_stale_view_fires_when_the_stored_member_hash_does_not_match(repo):
     assert f["severity"] == "warn"
     assert f["subject"] == "acme-corp"
     # OLD BEHAVIOUR: this asserted the exact backticked `stigmergy-views regenerate --entity
-    # acme-corp`. ADR 044 D3 removed that CLI — the worker converges `views/` on its own idle
+    # acme-corp`. the capture-is-the-approval change removed that CLI — the worker converges `views/` on its own idle
     # pass — so what is checked here is the SHAPE the finding must keep: no code span, because a
     # code span reads as a command to run. The sentence itself, and the promise it makes, are
     # `tests/gardener/test_stale_view_promise_pg.py`'s: it runs the sweep the finding names.

@@ -91,7 +91,7 @@ _SIMILARITY_LIMIT = 5
 # "did it run" lives — `job_runs` for the passes that write one, `index_meta.built_at` for the
 # rebuild, which writes none.
 #
-# There are no levers here any more, and that is the change ADR 044 made rather than a gap. These
+# There are no levers here any more, and that is the decision rather than a gap. These
 # passes used to be GitHub Actions crons the console could dispatch, enable and disable through a
 # fine-grained PAT; they now run on the librarian worker's idle branch, so there is no workflow to
 # dispatch and no schedule to switch off from a browser. What an operator gets instead is what
@@ -176,7 +176,7 @@ class AdminService:
         self._server = server_settings
         self._admin = admin_settings
         # The evidence store the queue archives material into — the same instance the MCP server
-        # submits through; registering an entity (ADR 042) submits a capture too.
+        # submits through; registering an entity submits a capture too.
         self._evidence = evidence
 
     # ── meta / overview ───────────────────────────────────────────────────────────────────────
@@ -585,7 +585,7 @@ class AdminService:
     # ── registering an entity: one capture, and the librarian writes the page ─────────────
     def entity_create(self, *, actor: str, name: str, entity_type: str, about: str,
                       entity_id: str = "", aliases: str = "") -> dict:
-        """Introducing an entity the brain does not know (ADR 042): what the person knows about
+        """Introducing an entity the brain does not know: what the person knows about
         it is queued as a capture carrying the registration — `server.review.commission_registration`
         — and the librarian writes the page, anchors the note and births the entity confirmed by
         them. A name the served registry already resolves is refused here, before anything is
@@ -629,12 +629,12 @@ class AdminService:
         except (EntityError, CaptureError) as ex:
             raise AdminRefused(str(ex)) from ex
 
-    # ── the repair ledger: what the worker did, read-only (ADR 044) ──────────────────────────
+    # ── the repair ledger: what the worker did, read-only ──────────────────────────
     def repairs_list(self) -> dict:
         """The last repairs, whatever their outcome, plus the whole table's counts and the worker's
         own pass history.
 
-        Read-only, and that is the change ADR 044 made here: nothing on this page decides anything
+        Read-only, and that is the decision rather than a gap: nothing on this page decides anything
         any more. What it is FOR is the reading nobody gave a repair before it landed — every
         applied row carries the diff that actually landed, and every failed one carries the sentence
         that refused it.
@@ -657,12 +657,12 @@ class AdminService:
     def pages_delete(self, *, actor: str, paths, why: str) -> dict:
         """QUEUE a removal, through `server.review.queue_deletion` — the SAME seam the MCP door
         runs, so which door a person removed from changes the row's `source` and nothing else. The
-        worker performs it (ADR 044 D3); this process writes nothing to the corpus and holds no git
+        worker performs it; this process writes nothing to the corpus and holds no git
         credential.
 
         The MCP door requires an unrestricted identity; this one carries no such check, because
         `actor` is free text behind the operator token and **the console's authorization IS that
-        token** (ADR 029 D3). It is the one door where that is the whole of it — which is why this
+        token**. It is the one door where that is the whole of it — which is why this
         is the console's most consequential button and its confirm says so.
 
         Nothing is caught inside `_do`, so `_mutate` records the library's own class name in
@@ -863,8 +863,8 @@ class AdminService:
         so a new free-text column is a new line in the override list, not a silent pass-through.
 
         `diff` is the one that matters most on this page and the one most obviously untrusted: it
-        is the bytes a model wrote into the corpus, and it is here BECAUSE nobody read them first
-        (ADR 044). Cleaned like everything else, and `_clean` keeps newlines — a diff flattened to
+        is the bytes a model wrote into the corpus, and it is here BECAUSE nobody read them first.
+Cleaned like everything else, and `_clean` keeps newlines — a diff flattened to
         one line is not a diff anybody can read."""
         return {**row,
                 "id": row["id"], "created_at": _iso(row.get("created_at")),
@@ -888,7 +888,7 @@ class AdminService:
         `planned_after` is a whole page per op, and what a reader judges there is which identity
         absorbs which, not four regenerated files.
 
-        A `delete` SCRUB carries its planned bytes through, and that is ADR 043's doing: those
+        A `delete` SCRUB carries its planned bytes through for one reason: those
         bytes are a MODEL's prose, and the ledger's stored `diff` is what somebody reads afterwards.
         Hiding them here would be `entity-body`'s mistake made twice: the only thing worth reading,
         dropped silently, since a missing key renders as an empty cell.

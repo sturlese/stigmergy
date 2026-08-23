@@ -22,7 +22,7 @@ class Settings:
     # production, which is exactly where the fallback has to work.
     entity_registry_path: str = ""
     # A local checkout of the knowledge repo, fetchable from `origin`. Nothing on the serving
-    # path needs it since ADR 044 retired the review lane; it stays because a local stdio server
+    # path needs it since the review lane was retired; it stays because a local stdio server
     # started with `--repo` derives the ops-file paths below from it.
     knowledge_repo: str = ""
     dsn: str | None = None             # Postgres DSN (None -> store.dsn())

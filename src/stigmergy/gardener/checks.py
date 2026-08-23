@@ -51,7 +51,7 @@ CHECK_ENTITY_PLACEHOLDER_BODY = "entity-placeholder-body"
 # the measurable target the filing-time fix (issue #77's other half) converges to zero.
 CHECK_ANCHORED_TO_SUPERSEDED_ENTITY = "anchored-to-superseded-entity"
 
-# The one link a model can no longer write and a person still can (ADR 045 D3): a page whose body
+# The one link a model can no longer write and a person still can: a page whose body
 # wikilinks a page NARROWER than itself. Its readers see a title they cannot open, which is the
 # only thing a link leaks — and nothing is rewritten for it. A human writing a restricted page's
 # title into open material is the same act as posting it in a public channel, and the brain does
@@ -225,7 +225,7 @@ def check_stale_views(repo: str) -> list[dict]:
             detail="the view no longer matches the corpus — its member set or the backlinks it "
                    "cites have changed since it was last generated",
             # No command: the worker's own sweep converges `views/` from state, and it runs on
-            # every idle branch (ADR 044 D3). A finding that told an operator to run something
+            # every idle branch. A finding that told an operator to run something
             # would be an executable promise nothing keeps — what this one says is that it will
             # take care of itself, and roughly when.
             suggested_action="no command — the librarian worker regenerates it on its next idle "
@@ -693,7 +693,7 @@ ORDER BY p.path, q.path
 
 
 def check_link_to_narrower_page(conn) -> list[dict]:
-    """A page whose body links a page its own readers cannot open (ADR 045 D3).
+    """A page whose body links a page its own readers cannot open.
 
     Reported and never repaired. The three things the brain could do instead are all worse:
     narrowing the linking page punishes a human's capture for what somebody else restricted;

@@ -1,7 +1,7 @@
 """What a WORKER on the `pydantic` backend is still refused for — and what it is no longer refused
 for at all.
 
-**The refusal this file was written around is gone (ADR 033 D5).** M1's `worker.startup_checks`
+**The refusal this file was written around is gone.** M1's `worker.startup_checks`
 refused `backend="pydantic"` outright, because config that half-works is the failure this repo
 refuses on principle: a worker's queue carries ordinary captures too, and a backend serving the
 meeting flow only would have drained `raw` and `drive` rows into `failed` one delivery at a time
@@ -54,12 +54,12 @@ def _pydantic(deps, **overrides):
 
 
 # ── the refusal that is GONE, and the four tests that went with it ─────────────────────────────
-# **DELETED here, with the refusal they spent (ADR 033 D5):**
+# **DELETED here, with the refusal they spent:**
 #
 #   `test_a_worker_is_refused_the_meeting_only_backend_before_it_claims_anything` — the refusal
 #       itself: the backend id, the word "meeting", the two `STIGMERGY_LIBRARIAN_BACKEND=` values
 #       it recommended and the "tests only" warning attached to the double.
-#   `test_the_refusal_points_at_a_decision_record_that_exists` — the ADR the refusal cited.
+#   `test_the_refusal_points_at_a_decision_record_that_exists` — the document the refusal cited.
 #   `test_the_worker_refusal_offers_a_model_this_environment_can_actually_price` — the derived
 #       `--model` example, which `worker._usable_example` composed and which no longer exists.
 #   `test_the_meeting_only_rig_passes_the_preflight_the_worker_is_refused_by` — the `meeting_only`
@@ -73,13 +73,13 @@ def _pydantic(deps, **overrides):
 #
 # **The pruning finding this note used to carry is CLOSED, and half of it was wrong when written —
 # which is why the correction stays rather than the paragraph simply being deleted.** It read:
-# `pydantic_backend.ADR` and `pydantic_backend.ORDINARY_ADR` now have NO reader in production.
+# `pydantic_backend`'s two document-pointer constants now have NO reader in production.
 #
-#   * `ADR` — correct, and actioned: it was cited by exactly one message (the refusal above), and
+#   * the first — correct, and actioned: it was cited by exactly one message (the refusal above), and
 #     it is gone, with its own tombstone at the top of `pydantic_backend.py`.
 #   * `ORDINARY_ADR` — **not correct AT THE TIME.** `worker._check_brief_matches_backend` cited it
 #     by name, and acting on the finding as written would have deleted a constant a live refusal
-#     read. It became true one milestone later, when ADR 034 retired that check — and the constant
+#     read. It became true one milestone later, when the agentic pydantic harness retired that check — and the constant
 #     went WITH its reader, in the same change, which is the difference between pruning and
 #     guessing.
 #
@@ -97,7 +97,7 @@ def test_a_fully_configured_pydantic_worker_now_boots_through_the_whole_prefligh
     exported now walks the whole pre-flight and claims items.
 
     Everything else about this rig is production's: the fixture knowledge repo carries the librarian
-    skill at its base commit (`agent.SKILL_READING_BACKENDS` covers this backend since ADR 033), and
+    skill at its base commit (`agent.SKILL_READING_BACKENDS` covers this backend since the structured filing flow), and
     the push identity check returns early because the origin is a local bare path.
     """
     _, deps = rig
@@ -179,7 +179,7 @@ def test_the_double_is_never_refused_over_a_max_turns_it_does_not_read(rig):
 
 def test_the_skill_is_required_of_the_backend_that_injects_it(rig,
                                                               monkeypatch):
-    """ADR 033's one ADDITION to this pre-flight: a backend that injects the brief is proven to
+    """the structured filing flow's one ADDITION to this pre-flight: a backend that injects the brief is proven to
     have one at the base commit — one loud line before the first claim rather than a `failed`
     row per capture. It was added when a SECOND backend started injecting the same brief the
     first one did; it is now the check for the only one that does.
@@ -212,14 +212,14 @@ def test_the_double_is_not_asked_for_a_skill_it_never_reads(rig):
     assert "double" not in agent_module.SKILL_READING_BACKENDS
 
 
-# ── RETIRED with `worker._check_brief_matches_backend` (ADR 034) ───────────────────────────────
+# ── RETIRED with `worker._check_brief_matches_backend` ───────────────────────────────
 # Three tests went with that check, plus the `_with_old_brief` helper that staged its input:
 #
 #   `test_a_structured_worker_is_refused_a_brief_written_for_a_run_that_holds_tools` — the refusal
 #       itself: which file the brief still named, why a tool-less backend could not follow it, the
 #       deploy ORDER that fixed it, and the absence of a `sdk` escape hatch.
-#   `test_the_document_that_refusal_cites_exists_and_decides_the_thing_it_claims` — the ADR that
-#       refusal cited (`pydantic_backend.ORDINARY_ADR`, retired with its only reader).
+#   `test_the_document_that_refusal_cites_exists_and_decides_the_thing_it_claims` — the document that
+#       refusal cited, retired with its only reader.
 #   `test_the_check_reads_what_the_backend_DECLARES_and_not_which_backend_was_named` — that the
 #       check branched on the declaration rather than on the backend's name.
 #
@@ -480,11 +480,11 @@ def test_provider_of_reads_the_prefix_and_answers_empty_for_a_bare_name():
 
 
 # ── the ordinary flow on this backend ──────────────────────────────────────────────────────────
-# **DELETED here (ADR 033):** `test_the_ordinary_flow_refuses_honestly_and_names_the_document` and
+# **DELETED here:** `test_the_ordinary_flow_refuses_honestly_and_names_the_document` and
 # `test_that_refusal_is_unreachable_through_a_worker_which_is_why_it_may_be_terse`. Both were about
 # `PydanticFilingAgent.run` being a REFUSAL — that it raised `AgentError` rather than
 # `NotImplementedError` (so `processing` turned it into a `failed` row with a sentence instead of a
-# traceback), that it cited the ADR, and that no worker could reach it because `startup_checks`
+# traceback), that it cited that document, and that no worker could reach it because `startup_checks`
 # refused the backend first. `run` is a real structured model call now; there is no refusal left to
 # be honest about and no unreachability left to prove.
 #

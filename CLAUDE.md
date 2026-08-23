@@ -19,8 +19,7 @@ Read [`README.md`](./README.md) first for the annotated tree, then the `index.md
 whichever package you are about to touch — each one lists what its modules are for, what to reuse
 and what to avoid. [`docs/DESIGN.md`](./docs/DESIGN.md) is what the system IS — the closed list of what multi-user
 forces, the page vocabulary and the rules; read it before adding a subsystem, and before defending
-one from removal. [`docs/reference/`](./docs/reference) is what each subsystem does;
-[`docs/decisions/`](./docs/decisions) is why it is built that way.
+one from removal. [`docs/reference/`](./docs/reference) is what each subsystem does.
 
 **Two skills live in `.claude/skills/` here and are worth loading before you start.**
 `land-a-change` picks the delivery pipeline a change belongs in, says when the auditor stops being
@@ -51,7 +50,7 @@ Not style — these are enforced, and the enforcement is where to look when one 
 | The librarian reaches `stigmergy.entities` from `librarian/identity.py` only, and only for the birth fold, the generator and its errors — the birth writer is the one seam between filing and identity | `tests/test_architecture.py`, a named exception with its own pruning test |
 | The shared mint sequence carries no authorization, so its caller set is closed to the surfaces that decide their own | `tests/test_architecture.py` — set equality both ways, so a caller that stops calling it fails too |
 | The README's countable claims match the code | `tests/test_readme_claims.py` |
-| `docs/reference/` names no command, variable or count the code does not have, and `docs/README.md` lists every document that exists | `tests/test_docs_claims.py` — ADRs are exempt by design: they record a decision, not the present |
+| `docs/reference/` names no command, variable or count the code does not have, and `docs/README.md` lists every document that exists | `tests/test_docs_claims.py` |
 
 ## Working rules
 

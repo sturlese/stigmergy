@@ -1,7 +1,7 @@
 """The one thing a person still writes to the knowledge repo from the serving process: a page
-removal, decided and applied in the same call (ADR 043 D2).
+removal, decided and applied in the same call.
 
-Everything else that used to live here is gone with the waiting (ADR 044): an identity a capture
+Everything else that used to live here is gone with the waiting: an identity a capture
 introduces is born confirmed by whoever captured it, and a repair is derived and applied by the
 worker without anybody being asked. What is left is the deletion — a judgment only a person can
 make, made at the command they gave it — plus `commission_registration`, which queues a capture
@@ -49,7 +49,7 @@ DELETE_NEEDS_A_REASON = (
 def queue_deletion(conn, evidence, *, paths, why: str, actor: str, source: str) -> dict:
     """QUEUE a removal — the sequence both doors share, and the only thing either of them does.
 
-    The worker performs it (ADR 044 D3): it holds the checkout and the credential, and this process
+    The worker performs it: it holds the checkout and the credential, and this process
     holds neither. What lands here is a durable `delete` row with the person's name on it, and what
     they get back is a queue acknowledgement rather than a commit.
 
@@ -85,7 +85,7 @@ def commission_registration(conn, evidence, *, name: str, entity_type: str, alia
     There is no deterministic birth: what they know about the entity (`about`) is queued as a
     capture carrying the registration, and the librarian writes the entity's page from it and from
     what the brain already holds, anchors the note to it, and births the identity CONFIRMED by
-    `actor` (ADR 042, ADR 044 D1). Nothing here touches git.
+    `actor`. Nothing here touches git.
 
     It carries no authorization of its own: the console decides under its operator token before
     calling it, and `brain_submit` accepts the same `register_*` hints from any door — a

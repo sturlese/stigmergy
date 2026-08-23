@@ -122,8 +122,8 @@ def registry_from_text(text: str | None, origin: str) -> dict[str, dict]:
             "name": _record_name(e),
             "type": str(e.get("type", "") or ""),
             "aliases": _record_aliases(e),
-            # The one lifecycle fact the generator writes: who introduced the identity
-            # (ADR 044). Absent on a registry from before the key existed.
+            # The one lifecycle fact the generator writes: who introduced the identity.
+            # Absent on a registry from before the key existed.
             "approved_by": str(e.get("approved_by", "") or ""),
         }
     return out

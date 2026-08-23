@@ -110,7 +110,7 @@ def test_contract_columns_are_parsed():
     policy = rows["wiki/decisions/refund-policy.md"]
     assert policy.status == "canonical" and policy.owner == "steward"
     assert policy.updated == "2026-07-01"
-    # ADR 026 D2: `verification` is not a contract column — not parsed, not stored, not filtered
+    # the purge: `verification` is not a contract column — not parsed, not stored, not filtered
     # on, not ranked on. Asserted as a NEGATIVE rather than merely dropped: deleting the two
     # assertions below leaves this file silent about the field, and a restored
     # `PageRow.verification` would pass it green. The fixture page still CARRIES

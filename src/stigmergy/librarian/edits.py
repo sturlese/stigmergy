@@ -45,7 +45,8 @@ def page_names(worktree: str, *, confined: bool = False) -> set[str]:
     callers need different answers: `validate` (the default) is answering "would this link be
     dead?", and the answer must be the linter's, whose index has no containment notion (the
     WRITE road refuses symlinks separately). The `confined=True` caller used to be `gather`,
-    whose answer became a list of names in a model's prompt; since ADR 045 D3 that vocabulary
+    whose answer became a list of names in a model's prompt; since a model's reads were scoped
+    to what its page could cite, that vocabulary
     comes off the SCOPED corpus instead (`gather.Corpus.link_names`), because containment says
     nothing about audience and a name is the whole of what a link leaks.
     """

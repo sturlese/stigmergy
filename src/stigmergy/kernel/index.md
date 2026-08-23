@@ -63,7 +63,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 
 - ACL truth table: `flows_into` — open content flows anywhere; nothing labelled flows into an
   open page; otherwise every group of the PAGE must be a group of the CONTENT. `view_acl` was here too, computing a view's own label as
-  the intersection of its members'; ADR 045 D5 retired it, because the intersection collapsed a
+  the intersection of its members'; it was retired, because the intersection collapsed a
   view to nobody the moment two members disagreed. One dialect throughout: `None` is open, `[]` is nobody, and
   nothing here collapses one into the other.
 - `normalize.py`'s suite is `tests/kernel/test_normalize.py`, added with the split that gave it a

@@ -561,7 +561,7 @@ def test_a_thread_read_failure_tells_the_reactor_instead_of_vanishing(indexed, c
 
 
 # ── the audience a 🧠 files at is the channel's, and the reactor must hold it ──────────────────
-# ADR 045 D2. The door's rule is `acl.visible()` asked of the WRITER: you may file only what you
+# The audience-from-the-door change. The door's rule is `acl.visible()` asked of the WRITER: you may file only what you
 # could read afterwards. Asked BEFORE the dedup reservation, so a refusal reads as a refusal
 # rather than as a capture that failed.
 
@@ -661,7 +661,7 @@ def test_the_filed_card_goes_back_to_the_channel_that_set_the_audience(indexed, 
     `slack/poller.py` posts the page path, the source page, the anchor and the names of any
     entities born, into the thread the capture came from — with no `visible()` anywhere. That is
     safe by CONSTRUCTION and not by a filter: the capture was filed at the groups of that very
-    channel (ADR 045 D2), so every page it names is one the channel's members may read, and the
+    channel, so every page it names is one the channel's members may read, and the
     card is posted where they already are.
 
     The construction is what this pins. Two facts have to hold together, and each of them is

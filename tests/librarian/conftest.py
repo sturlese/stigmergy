@@ -120,7 +120,7 @@ def clean_queue(conn):
     database, `tests.testdb` raises before it opens anything else.
 
     It used to wipe `review_decisions` too, because the librarian read that ledger so an
-    identity a steward declined was never proposed again. ADR 044 removed the ledger with the
+    identity a steward declined was never proposed again. the capture-is-the-approval change removed the ledger with the
     lane it served — nothing is proposed to anybody — so there is no table left to isolate."""
     with conn.cursor() as cur:
         cur.execute("DELETE FROM capture_queue")

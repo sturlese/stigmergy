@@ -30,7 +30,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
 RUNBOOK = ROOT / "docs" / "reference" / "operator-runbook.md"
 REFERENCE = ROOT / "docs" / "reference" / "librarian.md"
-ADR = ROOT / "docs" / "decisions" / "015-librarian.md"
 
 
 def _make(*args: str) -> subprocess.CompletedProcess:
@@ -169,7 +168,7 @@ def test_every_phony_target_named_in_the_makefile_is_declared_phony():
     assert declared <= phony, f"not declared .PHONY: {sorted(declared - phony)}"
 
 
-# ── the COMMAND the meeting-only backend's refusal named — GONE with the refusal (ADR 033) ────────
+# ── the COMMAND the meeting-only backend's refusal named — GONE with the refusal ────────
 # **Four tests were deleted here, and the message they pinned no longer exists.**
 #
 #   `test_the_script_the_meeting_only_refusal_names_is_in_this_repo`
@@ -185,7 +184,7 @@ def test_every_phony_target_named_in_the_makefile_is_declared_phony():
 # BOTH refusals below the one that printed it, and an already-correct id is echoed rather than
 # substituted.
 #
-# ADR 033 D5 retired the refusal itself: that backend serves the ordinary flow now, so there is no
+# the structured filing flow retired the refusal itself: that backend serves the ordinary flow now, so there is no
 # limitation to redirect around, `_check_pydantic_backend` lost its `meeting_only` parameter, and
 # `worker._usable_example` — the helper that derived the printed id — was removed with it. Nothing
 # in the librarian prints a command line any more, which is why this section is a comment and not a
@@ -278,17 +277,6 @@ def test_the_reference_doc_explains_that_the_librarian_branches_from_the_remote(
     assert "diverge" in reference
 
 
-def test_the_adr_records_the_four_decisions_it_owes():
-    """The four decisions this ADR owes a reader: why the agent judges and code vetoes, why an
-    ephemeral worktree, why a failed verification bounces the capture instead of filing it with a
-    banner, and why edits are declared."""
-    adr = ADR.read_text(encoding="utf-8")
-    assert "code vetoes" in adr.lower()
-    assert "ephemeral" in adr and "worktree" in adr
-    assert "banner" in adr and "bounces" in adr
-    assert "DECLARED" in adr and "PERFORMED" in adr
-
-
 def test_every_relative_link_in_every_live_doc_resolves():
     """A link to a file that does not exist is a dead end for whoever followed it.
 
@@ -337,7 +325,7 @@ def test_no_librarian_document_links_out_of_this_repo():
     # levels up from there is the repository ROOT, not the outside. The resolution check below is
     # the honest form, and it is strictly stronger — a genuine escape (`../../../other-project`)
     # fails it whether or not the sibling checkout happens to exist on this machine.
-    for path in (ADR, REFERENCE):
+    for path in (REFERENCE,):
         for target in re.findall(r"\]\(([^)]+)\)", path.read_text(encoding="utf-8")):
             assert not target.startswith(("http://", "https://")), f"{path.name} -> {target}"
             resolved = (path.parent / target.split("#")[0]).resolve()

@@ -1,6 +1,6 @@
 """`kernel.acl` — the audience vocabulary: what two label lists mean when they meet.
 
-`flows_into` is the whole of this module now, and it is asked in six places (ADR 045 D3/D5), so
+`flows_into` is the whole of this module now, and it is asked in six places (the audience-from-the-door change), so
 its truth table is pinned here rather than inferred from any one caller.
 
 What this file used to hold went with two decisions. `load_acl_config`, `resolve_acl` and the four
@@ -42,7 +42,7 @@ def test_sharing_one_group_is_NOT_enough():
 
 
 def test_nobody_content_flows_only_into_a_nobody_page():
-    """`[]` is a real value meaning nobody, never "open" — the collapse ADR 045 D9 ends."""
+    """`[]` is a real value meaning nobody, never "open" — the collapse the audience-from-the-door change ends."""
     assert flows_into([], []) is True
     assert flows_into([], ["finance"]) is False
     assert flows_into(["finance"], []) is True     # every group of `[]` is trivially in `finance`

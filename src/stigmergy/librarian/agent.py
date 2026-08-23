@@ -63,8 +63,7 @@ RETIRED_BACKENDS = {
         f"To get this deployment RUNNING again while you make that edit, roll the image back: "
         f"`fly releases` to find the last good release, then `fly deploy --image <that image ref>` "
         f"(docs/reference/operator-runbook.md, Rollback). The queue is durable — nothing claimed is "
-        f"lost while the worker is down.\n"
-        f"Why it was retired, and on what evidence: docs/decisions/033-structured-filing-flow.md"),
+        f"lost while the worker is down."),
 }
 
 
@@ -106,7 +105,7 @@ def fence(body: str) -> str:
 # The one decision there is. The librarian no longer parks a capture on an identity question: a
 # name nothing resolves to is DECLARED in the same account (`new_entities`) and anchored to, and
 # code writes the entity page beside the note (`librarian.identity`), confirmed by whoever
-# captured — the capture is the approval (ADR 044). `DECISIONS` stays a tuple because the
+# captured — the capture is the approval. `DECISIONS` stays a tuple because the
 # structured schemas spell it as a `Literal` and the parsers refuse anything outside it.
 DECISIONS = ("file",)
 
@@ -170,7 +169,7 @@ class Outcome:
     findings: tuple = ()
     new_entities: tuple = ()      # tuple of {name, entity_type, role, aliases, summary, facts, connections}
     new_aliases: tuple = ()       # tuple of {entity, alias}
-    entity_updates: tuple = ()    # tuple of {entity, facts, connections} — ADR 042: the spine accretes
+    entity_updates: tuple = ()    # tuple of {entity, facts, connections} — the spine accretes
     page: "OutcomePage | None" = None
 
 
@@ -411,7 +410,7 @@ def _parse_new_aliases(raw: dict, *, shape: _Shape) -> tuple:
 
 
 def _parse_entity_updates(raw: dict, *, shape: _Shape) -> tuple:
-    """What this filing ADDS to entities the registry already knows (ADR 042): `entity` (an id or
+    """What this filing ADDS to entities the registry already knows: `entity` (an id or
     a registered name) with the `facts` and `connections` the material establishes about it — one
     line each, appended to that entity's page by the worker and proved byte for byte. A line the
     page already carries is not appended twice; an update naming no line is dropped here."""
@@ -838,7 +837,7 @@ def build_prompt(*, material: str, hints: dict, submitted_by: str, corrective: s
 
 
 def registration_note(registration) -> str:
-    """What the brief says when the capture is REGISTERING an entity (ADR 042): the material is
+    """What the brief says when the capture is REGISTERING an entity: the material is
     what the person introducing it knows, the brain may know more, and the account must declare
     that entity — or say the registry already has it. A twin is the one thing it may not create."""
     spellings = (f", also spelled {', '.join(repr(a) for a in registration.aliases)}"

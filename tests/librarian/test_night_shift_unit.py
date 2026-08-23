@@ -1,4 +1,4 @@
-"""The librarian worker's two DAILY passes — the garden and the retention purge (ADR 044 D6).
+"""The librarian worker's two DAILY passes — the garden and the retention purge.
 
 Keyless and Postgres-free. The sibling files for the two INTERVAL passes are
 `test_view_sweep_unit.py` and `test_repair_pass_unit.py`; the four are deliberately parallel, and
@@ -306,7 +306,8 @@ def test_the_retention_pass_calls_the_purge_the_way_the_purge_is_actually_built(
 
 # ── the second model the night shift brought into this process ────────────────────────────────
 def test_a_garden_pass_whose_model_this_worker_cannot_authenticate_is_refused(rig):
-    """**The trap ADR 044 D6 created, and it is invisible to this keyless suite by construction.**
+    """**The trap the capture-is-the-approval change created, and it is invisible to this keyless
+    suite by construction.**
 
     The gardener's default model is a BARE id, which resolves through the OpenAI Responses API —
     and `OPENAI_API_KEY` is exactly what `bootstrap.READ_PATH_ONLY_ENV` strips before exec'ing the

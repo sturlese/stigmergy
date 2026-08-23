@@ -51,7 +51,7 @@ import httpx
 
 from tests.server.conftest import build_test_http_app, issue_test_token, run_http_server
 
-# The exact host from the live symptom — the deployed Fly app (ADR 013 §7), and the value
+# The exact host from the live symptom — the deployed Fly app, and the value
 # `fly.toml`'s [env] STIGMERGY_PUBLIC_HOST is actually set to in production.
 STAGING_HOST = "brain.example.com"
 # A host that must NEVER be legitimately allowlisted — the companion/negative case.

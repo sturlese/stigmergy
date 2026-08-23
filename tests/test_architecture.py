@@ -96,7 +96,7 @@ def test_the_kernel_never_imports_an_agent_framework_at_module_level(path):
 
 def test_the_pipeline_package_is_gone():
     """This codebase once carried an ingestion pipeline under `stigmergy.pipeline`. It was removed
-    whole ([ADR 026](../docs/decisions/026-the-purge.md) D4), and a directory reappearing under
+    whole, and a directory reappearing under
     that name means a purged organ came back without anybody deciding it."""
     assert not (STIGMERGY_ROOT / "pipeline").exists(), (
         "src/stigmergy/pipeline exists again — the ingestion pipeline was removed whole; if "
@@ -149,7 +149,7 @@ def test_server_imports_the_index_as_a_library():
     assert used, "the server no longer imports stigmergy.index — it must consume the index as a library"
 
 
-# ── the answer layer (ADR 007: the answering agent + strict verifier) ──────────────────────────
+# ── the answer layer: the answering agent + strict verifier ───────────────────────────────────
 # `stigmergy.answer` sits ABOVE `stigmergy.server`'s service (it consumes `BrainService`, which is
 # where identity and the ACL predicate are already resolved) and BELOW the MCP adapter
 # (`stigmergy.server.mcp_server` mounts `ask` on top of it). Two edges make that layering
@@ -312,7 +312,7 @@ def test_only_capture_cli_may_import_the_index():
     connection or reads the environment").
 
     It is the ONLY operator CLI left in the package: the meeting and the document flows are
-    entered at `brain_submit` like every other kind (ADR 044 D4), so no second module here opens
+    entered at `brain_submit` like every other kind, so no second module here opens
     a connection or reads the environment. Nothing else in `stigmergy.capture` has an opinion
     about where the queue lives.
 
@@ -398,7 +398,8 @@ def test_librarian_never_imports_server_or_answer(path):
 
 
 # The ONE librarian module that may name `stigmergy.gardener`, and the only symbols it may name.
-# The edge is new with ADR 044: the night shift moved out of GitHub Actions and into the worker's
+# The edge is new with the capture-is-the-approval change: the night shift moved out of GitHub
+# Actions and into the worker's
 # idle branch, so the worker now RUNS the gardener rather than a cron doing it.
 #
 # Kept this narrow because of what it would otherwise cost. `gardener.run` builds a model stack at
@@ -411,7 +412,7 @@ def test_librarian_never_imports_server_or_answer(path):
 _LIBRARIAN_GARDENER_DOOR = "worker.py"
 _LIBRARIAN_GARDENER_SYMBOLS = frozenset({
     "stigmergy.gardener.schema",             # JOB_NAME — which `job_runs` row says it ran today
-    "stigmergy.gardener.store",              # the findings the repair pass answers (ADR 044 D2)
+    "stigmergy.gardener.store",              # the findings the repair pass answers
     "stigmergy.gardener.run.run_gardener",   # the pass itself, imported inside `run_garden`
     "stigmergy.gardener.settings.GardenerSettings",   # its ceilings, likewise
     "stigmergy.gardener.settings.MODEL_ENV",  # named by the startup refusal, so the fix is typeable
@@ -477,7 +478,8 @@ def test_librarian_consumes_capture_and_the_kernel():
         "the librarian no longer imports stigmergy.kernel — the registry/ACL/page seams drifted")
 
 
-# `config.Settings` keeps `max_tool_calls` as a DEPRECATED field (ADR 034: the framework accumulates
+# `config.Settings` keeps `max_tool_calls` as a DEPRECATED field (the agentic pydantic harness: the
+# framework accumulates
 # `RunUsage.tool_calls` and bounds the loop by requests, so a second hand-counted ceiling would need
 # a defect behind it). "Deprecated" is prose until a test enforces it — `config.py`'s own docstring
 # says "read by nothing", and a comment cannot fail. This is the enforcing twin: the ONLY module that
@@ -500,14 +502,14 @@ def _attribute_reads(path: pathlib.Path) -> set[str]:
 def test_no_module_but_config_reads_a_retired_settings_field(path):
     """The pruning half of the deprecation: `max_tool_calls` is defined and parsed in `config.py` and
     read by nothing else. A backend, the worker or `processing` reaching for it would be reviving the
-    hand-counted tool-call ceiling ADR 034 retired — this refuses it at the one module that is not
+    hand-counted tool-call ceiling the agentic pydantic harness retired — this refuses it at the one module that is not
     `config.py`, naming the field so the fix is obvious."""
     reads = _attribute_reads(path) & _RETIRED_SETTINGS_READS
     if path.name == "config.py":
         return
     assert not reads, (
         f"{path.name} reads settings.{', settings.'.join(sorted(reads))} — a retired, deprecated "
-        f"config field (ADR 034). Nothing but config.py may name it as code; reviving it as a run "
+        f"config field. Nothing but config.py may name it as code; reviving it as a run "
         f"ceiling needs a decision and a re-enabled bound, not an attribute read")
 
 
@@ -562,7 +564,7 @@ def test_librarian_never_imports_pydantic_ai_at_module_level(path):
     different package, while a second backend was being added, which is precisely when a
     module-scope import is easiest to add and hardest to notice. That package is gone and this rule
     is the one that inherited the job — `answer` has carried the same rule for its own pydantic_ai
-    edge since ADR 007.
+    edge since that package was built.
     """
     assert not _module_level_pydantic_ai(path), (
         "stigmergy.librarian imports pydantic_ai at module level (move it inside the 'pydantic' "
@@ -621,7 +623,7 @@ def test_the_librarian_really_does_drive_pydantic_ai_somewhere(tmp_path):
 # The librarian is the WRITE path and `stigmergy.index` is the read path's own package. The reach
 # below is a LIBRARY one and it has to stay that: `corpus` is a pure parser over a directory
 # (`load_pages`/`ZONES`/`page_row` — no database handle, no ACL surface, no `pages_index`), and
-# ADR 033 D1 refused reading the INDEX for exactly the reason a wider door would reopen — a
+# the structured filing flow refused reading the INDEX for exactly the reason a wider door would reopen — a
 # write-path worker on the read path's ACL-governed table would need an exception to
 # `server.acl.visible()` for a question it can answer without one.
 #
@@ -635,7 +637,7 @@ def test_the_librarian_really_does_drive_pydantic_ai_somewhere(tmp_path):
 # already has (`capture.cli`, `entities.cli`): one entry point opens the connection and reads the
 # environment, and no other module in its package has an opinion about where the queue lives.
 _LIBRARIAN_ALLOWED_INDEX_SYMBOLS = {
-    "gather.py": ("stigmergy.index.corpus",),   # ADR 033's deterministic gatherer: the repo parser
+    "gather.py": ("stigmergy.index.corpus",),   # the structured filing flow's deterministic gatherer: the repo parser
     "edits.py": ("stigmergy.index.corpus",),    # ZONES: which folders hold pages at all
     "cli.py": ("stigmergy.index.store",),       # the operator CLI's own connection seam
 }
@@ -661,7 +663,7 @@ def test_the_librarian_reaches_stigmergy_index_only_where_it_is_declared(path):
         + "\n  ".join(offenders)
         + "\nThe librarian is the WRITE path. If a new reach is genuinely a pure-parser one, add "
           "it to _LIBRARIAN_ALLOWED_INDEX_SYMBOLS with the reason; if it needs pages_index, it "
-          "needs an ACL predicate and a decision (ADR 033 D1), not a wider import.")
+          "needs an ACL predicate and a decision, not a wider import.")
 
 
 def test_every_declared_librarian_index_door_is_one_something_walks_through():
@@ -732,7 +734,7 @@ _WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS = (
 
 # `server/review.py` used to hold a SECOND declared exception beside webhook.py's, for one
 # primitive: `gates.scan_secrets`, run over a deletion's free-text reason before that reason
-# reached a commit message. **It is gone, and the grant went with it.** Under ADR 044 D3 the
+# reached a commit message. **It is gone, and the grant went with it.** Under the capture-is-the-approval change the
 # review lane writes nothing to the corpus — a removal is a queued `delete` row, and the worker
 # that claims it scans the row's material exactly as it scans every other kind's. So review.py
 # falls under the GENERIC rule below, which admits no librarian import at all: strictly stronger
@@ -753,7 +755,7 @@ def test_server_never_imports_the_librarian(path):
     a slow agent run is happening inside an HTTP request.
 
     `webhook.py` gets the one declared exception above; every other server module — `review.py`
-    included, since ADR 044 D3 left it with no librarian primitive to reuse — is checked exactly
+    included, since the capture-is-the-approval change left it with no librarian primitive to reuse — is checked exactly
     as before.
     """
     if path.name == "webhook.py":
@@ -783,7 +785,7 @@ def test_no_server_module_imports_the_async_librarian_loop(path):
     `_WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS` happens to say at the time.
 
     It was parametrized over webhook.py and review.py alone, back when those were the two modules
-    with a librarian grant. Review's grant is gone (ADR 044 D3), and narrowing this to the one
+    with a librarian grant. Review's grant is gone, and narrowing this to the one
     survivor would have made the rule look like a property of whichever file currently holds an
     exception rather than of the layer."""
     offenders = [f"{path.name}:{line} -> {mod}"
@@ -801,7 +803,7 @@ def test_no_server_module_imports_the_async_librarian_loop(path):
 # names. Both are pure: neither opens a connection, touches `ops/` or writes to git.
 #
 # The grant is this narrow because `stigmergy.entities` is the RULES an identity is born under, and
-# the librarian is what writes through them (ADR 044). A server that imported the package wholesale
+# the librarian is what writes through them. A server that imported the package wholesale
 # would be a second birth path beside the worker's — which is the shape this file exists to refuse.
 # The list was longer when a proposal could be approved, merged or declined from here; those
 # verdicts are gone, not moved.
@@ -835,7 +837,7 @@ def test_server_never_imports_entities_beyond_the_one_declared_review_lane_excep
 # DDL, which `service.build_service` runs at startup and this module re-exports because the table
 # is written on the other side of it.
 #
-# ADR 044 D3 is what emptied the rest. This lane used to enter the write path itself for the one
+# The capture-is-the-approval change is what emptied the rest. This lane used to enter the write path itself for the one
 # repair a person decides: `apply` (the governed door that commits and pushes), `deletion` (code's
 # half of a sweep), `sweep` (the writer, the ONE model road the server entered at all), `brief`
 # and `settings.RepairSettings`. A removal is now a queued row the worker performs, so the serving
@@ -857,7 +859,7 @@ _REVIEW_ALLOWED_REPAIR_SYMBOLS = (
 def test_server_never_imports_repair_beyond_the_one_declared_review_lane_exception(path):
     """The repair loop is the WORKER's, and the server's whole reach into it is a table's DDL.
     Deriving repairs, writing a sweep and applying one all belong to the process that holds the
-    checkout and the credential (ADR 044 D3), never to one answering MCP calls."""
+    checkout and the credential, never to one answering MCP calls."""
     if path.name == "review.py":
         offenders = [f"{path.name}:{line} -> {sym}"
                      for sym, line in _imported_symbols(path)
@@ -895,7 +897,8 @@ def test_review_actually_uses_its_declared_entities_exception():
     `test_review_actually_uses_its_declared_librarian_exception`'s own upgrade from an
     any-intersection check: six symbols declared and one genuinely exercised would still pass the
     loose form, leaving five doors nothing walks through open "just in case". Every name in
-    `_REVIEW_ALLOWED_ENTITIES_SYMBOLS` earns its place independently, ADR 030's mint seam included."""
+    `_REVIEW_ALLOWED_ENTITIES_SYMBOLS` earns its place independently, server-side entity minting's
+    mint seam included."""
     canon_path = SERVER / "review.py"
     if not canon_path.is_file():
         pytest.skip("server/review.py not present yet")
@@ -1254,7 +1257,7 @@ def test_no_call_to_resolve_slack_identity_passes_the_configured_team_id_as_the_
 # `gitleaks_bin` default `guard.py`'s secrets scan reuses rather than re-hardcoding — the same
 # reason `cli.py` already needed it for `--repo`'s own default), `gates` (the secrets scan itself,
 # shared by every governed write through `entities.guard`) and `githubapp` (the App-credential
-# machinery `entities.remote.decide_via_clone` uses to clone/push as the librarian App — ADR 030
+# machinery `entities.remote.decide_via_clone` uses to clone/push as the librarian App — server-side entity minting
 # D3, the SAME precedent `gitcmd`'s own presence here already sets: a door open to the whole
 # library-module bucket even though today only ONE module walks through it). `cli.py`, the front
 # door, additionally reaches `stigmergy.index` (the ONE connection seam, exactly the exception
@@ -1268,9 +1271,9 @@ _ENTITIES_LIBRARY_ALLOWED_PREFIXES = (
     "stigmergy.kernel",         # the registry reader/writer, normalize, the frontmatter parser
     "stigmergy.librarian.gitcmd",
     "stigmergy.librarian.errors",
-    "stigmergy.librarian.config",    # mint.py's gitleaks_bin default (ADR 030)
-    "stigmergy.librarian.gates",     # mint.py's secrets scan, shared by every mint path (ADR 030)
-    "stigmergy.librarian.githubapp", # remote.py's App credential (clone/push identity, ADR 030)
+    "stigmergy.librarian.config",    # mint.py's gitleaks_bin default
+    "stigmergy.librarian.gates",     # mint.py's secrets scan, shared by every mint path
+    "stigmergy.librarian.githubapp", # remote.py's App credential (clone/push identity, server-side entity minting)
     "stigmergy.librarian.page",      # decide.py's frontmatter edits — the ONE set of primitives
                                      # every writer of a page's `entity:`/`aliases:` line uses
 )
@@ -1602,9 +1605,9 @@ _ACL_STORE_READ = re.compile(
     r"(?is)\b(?:from|join)\s+(?:pages_index|observations)\b"      # SQL over the two tables
     r"|\bquery_facts\s*\("                                        # a facts store's read API...
     r"|\bfactstore\s*\.\s*\w+\s*\("                              # ...or any other call into one
-    # The SECOND reader pattern, added with ADR 045 D3. `pages_index` is not the only place a
+    # The SECOND reader pattern, added with the audience-from-the-door change. `pages_index` is not the only place a
     # page's body and title come from: the write path deliberately reads the CHECKOUT instead
-    # (ADR 033 — "no ACL exception is needed for a write-path worker"), and that argument stopped
+    # (the structured filing flow — "no ACL exception is needed for a write-path worker"), and that argument stopped
     # being true the moment a model reading the checkout could be writing a page at a narrower
     # audience than what it read. A checkout read is now the same question as an index read, and
     # the modules that do it must answer it in a reviewed diff like everybody else.
@@ -1685,7 +1688,7 @@ ACL_REACHABILITY_EXCEPTIONS = {
     # shares, rather than three that can disagree about what a member is.
     "views/staleness.py": "hands its parse to views.skeleton, which applies the filter",
     "views/regenerate.py": "hands its parse to views.skeleton, which applies the filter",
-    # The entity zone is OPEN by contract (ADR 045 D6): an entity page never carries an audience,
+    # The entity zone is OPEN by contract: an entity page never carries an audience,
     # because the registry is the brain's shared vocabulary. Both of these read exactly that zone
     # — the registry generator to derive `ops/entity-registry.json` from the pages, the birth
     # writer to grow a spine — and what a RESTRICTED capture may put on one is bounded inside
@@ -1735,7 +1738,7 @@ def test_the_checkout_reader_pattern_sees_a_reader_that_touches_no_database(tmp_
     """**The red proof for the SECOND pattern.** The enumeration was SQL-shaped for its whole
     life, and the write path reads the checkout precisely so it needs no database — which is what
     made it invisible here, and what made "no ACL exception is needed for a write-path worker"
-    (ADR 033) read as an argument rather than as a gap. A module that opens no connection at all
+ read as an argument rather than as a gap. A module that opens no connection at all
     and still puts page bodies in front of a model must be seen by this."""
     checkout_only = tmp_path / "checkout_reader.py"
     checkout_only.write_text(
@@ -1927,7 +1930,7 @@ _GARDENER_ALLOWED_PREFIXES = (
                                        # SAME predicate the write path and the view feeds ask, of
                                        # the same two label lists. A second comparison here would
                                        # be a finding that disagrees with the gate about what an
-                                       # upward link is (ADR 045 D3)
+                                       # upward link is
     "stigmergy.kernel.registry",         # the entity registry loader — the operator-tier reader
                                        # `views/cli.py` already uses, not `server.entity_aliases`
     "stigmergy.kernel.normalize",        # normalize/slugify — the duplicate-identity pass places an
@@ -2335,7 +2338,8 @@ def test_digest_threshold_literals_stay_in_settings(path):
 # in one table, invisible to `test_digest_never_touches_git_plumbing`, whose AST-level check only
 # sees `digest/*.py`'s own import statements and never a transitive reach through an approved edge.
 #
-# That edge was removed rather than ratified (issue #51), and ADR 044 removed the counted ledger
+# That edge was removed rather than ratified (issue #51), and the capture-is-the-approval change
+# removed the counted ledger
 # itself: the digest now counts births off the filings' own reports. The declared set is EMPTY on
 # purpose rather than deleted — an empty frozenset with a live test is what makes a future
 # re-widening turn this red on the first module, where a deleted test would let the whole stack
@@ -2415,8 +2419,8 @@ _REPAIR_ALLOWED_PREFIXES = (
     # The ONE edge into the governed birth door's package, and it exists because the registry has
     # exactly ONE writer. `entity-alias` regenerates `ops/entity-registry.json` from the entity
     # pages its own commit rewrites; hand-building that file here would be a second writer of the
-    # thing every anchoring decision resolves against, which is the property ADR 016 and the
-    # knowledge repo's own linter both rest on. Narrow on purpose: the generator's READER and
+    # thing every anchoring decision resolves against, which is the property the base-commit input
+    # read and the knowledge repo's own linter both rest on. Narrow on purpose: the generator's READER and
     # WRITER (`read_entity_pages`, `registry_of`, `regenerate`, `FIX_COMMAND`) and the error type
     # they raise — never `entities.guard`, `entities.birth`, `entities.remote` or `entities.cli`,
     # which are the mint DOOR and have their own authorization question. The same shape
@@ -2429,7 +2433,7 @@ _REPAIR_ALLOWED_PREFIXES = (
 # would be an import-graph accident nobody would notice — the process would simply get slower and
 # heavier, and the dependency would be real. Declared by NAME so widening it is a decision.
 #
-# `sweep.py` is the second, and it is a DECISION rather than a drift (ADR 043 D4): the deletion
+# `sweep.py` is the second, and it is a DECISION rather than a drift: the deletion
 # road writes its sweep inside the server process, so a model runs there — as one already does for
 # `ask`. What the rule still says, and what `apply.py` must keep proving, is that the APPLY —
 # perform, gates, commit, push — loads none of it: it is handed a finished plan.
@@ -2467,7 +2471,8 @@ def test_repair_library_modules_touch_no_global_state_at_module_scope(path):
 
 @pytest.mark.parametrize("path", REPAIR_SOURCES, ids=lambda p: p.name)
 def test_no_repair_module_opens_a_connection(path):
-    """NO module here opens one, since ADR 044 retired the CLI that did: every entry point into
+    """NO module here opens one, since the capture-is-the-approval change retired the CLI that did:
+    every entry point into
     this package is handed a `conn` — the worker's idle pass, the console, the deletion door — so a
     connection opened here would be a second, undeclared one inside a transaction somebody else
     owns.
@@ -2533,7 +2538,7 @@ def test_the_repair_op_vocabulary_is_exactly_the_librarians_edit_kinds():
     because it is a CROSS-package promise.
 
     None of the repair loop's other three proposal kinds widens this tuple, and none may:
-    `entity-body` (ADR 039's first amendment) REPLACES prose, `delete` (its second) removes pages,
+    `entity-body` (the governed repair loop's first amendment) REPLACES prose, `delete` (its second) removes pages,
     and `entity-alias` (its third) rewrites two identities, re-anchors every page that named one of
     them and regenerates a file that is not a page at all. Each has its own validator, its own
     writer and its own branch in the gates precisely because it could not be judged by the proof
@@ -2555,7 +2560,8 @@ def test_the_repair_op_vocabulary_is_exactly_the_librarians_edit_kinds():
 
 
 def test_the_console_renders_every_op_the_two_non_additive_kinds_perform():
-    """The console is the ONE surface that renders a repair's ops now (ADR 044 retired the CLI that
+    """The console is the ONE surface that renders a repair's ops now (the capture-is-the-approval
+    change retired the CLI that
     also did), and it dispatches on a table, falling through to the ADDITIVE rendering for an op
     name it does not know — so a fifth op inside the `delete` or `entity-alias` kind would be shown
     with a link column the op does not have, on a page whose whole purpose is reading what already
@@ -2606,15 +2612,15 @@ def test_the_index_and_the_server_spell_the_entity_registry_path_the_same_way():
         "mirrored constant above exists only because of that:\n  " + "\n  ".join(offenders))
 
 
-# ── the admin console boundary (ADR 029) ───────────────────────────────────────────────────────
+# ── the admin console boundary ───────────────────────────────────────────────────────
 # `stigmergy.admin` is a SKIN over seams other packages own and test. What it may import is a
 # closed, named set; what may import IT is exactly one module (the composition point); its one
 # reach into the librarian is `config` alone (the worker's lease numbers), the same declared
 # shape as `webhook.py`'s githubapp-only exception.
 #
 # The entities edge is not read-only: **Register an entity** queues a capture under the admin
-# token, with the actor as ATTRIBUTION rather than authorization (ADR 029 D3) — and it is the
-# librarian, not this console, that writes the page (ADR 044). So the grant below is narrow by
+# token, with the actor as ATTRIBUTION rather than authorization — and it is the
+# librarian, not this console, that writes the page. So the grant below is narrow by
 # construction: the console needs the closed entity-type list and the pre-flight registry check,
 # and it needs no write door at all. `stigmergy.entities.remote` and `stigmergy.entities.decide`
 # are absent because they no longer exist.
@@ -2644,7 +2650,7 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
                                      # through it, `entities.errors`' shape one package over.
                                      # `stigmergy.repair.remote` is deliberately ABSENT: the apply
                                      # itself is `server.review.apply_repair_and_record`, the ONE
-                                     # ordering both approving doors run (ADR 039), so the console
+                                     # ordering both approving doors run, so the console
                                      # never reaches the governed door directly — the same reason
                                      # `stigmergy.entities.remote` is not in this set
     "stigmergy.kernel.registry",      # `registry_from_text` + `Registry.collision_id`/`canonical_id`
@@ -2656,7 +2662,7 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
     "stigmergy.server.errors",
     "stigmergy.server.review",        # the three governed sequences a console button runs:
                                      # apply/reject_repair_and_record, delete_and_record and
-                                     # commission_registration (ADR 044)
+                                     # commission_registration
     "stigmergy.server.pilot_report",  # the measurement table, reused whole
     "stigmergy.server.webhook",       # JOB_NAME — the webhook's own job spelling, never re-typed
     "stigmergy.slack.bolt_gateway",   # the Slack SDK's ONE door — lazy-only, see the test below
@@ -2729,7 +2735,7 @@ def test_every_declared_admin_import_prefix_is_actually_imported():
     `test_review_actually_uses_its_declared_entities_exception` already holds for the review lane,
     which this tuple was missing.
 
-    The gap was not hypothetical. ADR 030's mint moved into ONE function
+    The gap was not hypothetical. server-side entity minting's mint moved into ONE function
     (`server.review.decide_and_record`, called by both deciding doors), `admin/service.py`
     stopped importing `stigmergy.entities.remote` — and the grant for the governed mint door sat
     here, live, over a package this console no longer touches, until a human noticed it by hand.
@@ -2808,15 +2814,15 @@ def test_only_the_http_transport_composes_the_admin_branch():
         "stigmergy.admin is imported outside server/transport_http.py:\n  " + "\n  ".join(offenders))
 
 
-# ── ADR 030 D2: who may ENTER the shared mint sequence ─────────────────────────────────────────
-# No door decides an identity any more (ADR 044), so there is no server-driven mint and no second
+# ── server-side entity minting: who may ENTER the shared mint sequence ─────────────────────────────────────────
+# No door decides an identity any more, so there is no server-driven mint and no second
 # COPY of one to look for. What survives is the other half of that guarantee, and it survives
 # because the sequence it guards does: `commission_registration` still queues a capture that
 # births an entity in somebody's name.
 #
 # `commission_registration` is PUBLIC and takes NO authorization argument of any kind: it queues a
 # capture that births an entity CONFIRMED by whoever it names, on behalf of whoever calls it. That
-# is correct (ADR 030 D2: authorization is per-surface, because the console decides under one
+# is correct (server-side entity minting: authorization is per-surface, because the console decides under one
 # shared admin token) and it is exactly why the CALLER SET has to be closed: every entry below is a
 # surface that has ALREADY decided authorization for itself — the MCP lane by resolving an identity
 # from a bearer token, the console by sitting behind the operator token. A Slack handler calling it
@@ -2864,7 +2870,7 @@ def test_the_shared_mint_sequence_is_entered_from_exactly_the_authorizing_surfac
     assert callers == sorted(_MINT_SEQUENCE_CALLERS), (
         f"the shared mint sequence is reached from {callers}, not from "
         f"{sorted(_MINT_SEQUENCE_CALLERS)}. A NEW entry commissions a birth in somebody's name "
-        "through a function that takes no authorization argument (ADR 030 D2) — resolve an "
+        "through a function that takes no authorization argument — resolve an "
         "identity before calling in, or state here why that surface decides authorization for "
         "itself. A MISSING entry means a declared door stopped calling the shared sequence: check "
         "it did not grow its own copy")
@@ -2915,12 +2921,13 @@ def test_the_mint_sequence_caller_pin_can_go_red_in_both_directions(tmp_path):
     assert observed() == ["handlers.py"] != declared
 
 
-# ── ADR 044 D3: the serving process holds no write path at all ─────────────────────────────────
+# ── the capture-is-the-approval change: the serving process holds no write path at all
+# ─────────────────────────────────
 # The two symbols that WRITE to the knowledge repo, named directly rather than left implicit in
 # what the per-package allowlists above happen not to list. `librarian.gitcmd` is the worktree,
 # commit and push primitive; `repair.apply` is the governed door that performs ops, gates them and
 # pushes. Both used to be reachable from `server/review.py`, which cloned and committed inside an
-# MCP call; ADR 044 D3 made the worker the ONE writer, and this is the pin that says so.
+# MCP call; the capture-is-the-approval change made the worker the ONE writer, and this is the pin that says so.
 #
 # Checked INDEPENDENTLY of `_WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS` and `_REVIEW_ALLOWED_REPAIR_SYMBOLS`,
 # for the reason `test_no_server_module_imports_the_async_librarian_loop` is: a widened allowlist
@@ -2945,7 +2952,7 @@ def test_no_server_module_reaches_the_knowledge_repo_write_path(path):
                  if sym in _SERVER_FORBIDDEN_WRITE_SYMBOLS]
     assert not offenders, (
         "a server module reached the knowledge repo's write path — the worker is the one writer "
-        "(ADR 044 D3), and the server hands it work as a queue row:\n  " + "\n  ".join(offenders))
+        ", and the server hands it work as a queue row:\n  " + "\n  ".join(offenders))
 
 
 def test_the_write_path_pin_can_go_red(tmp_path):
@@ -2972,12 +2979,14 @@ def test_the_write_path_pin_can_go_red(tmp_path):
 # The same guarantee the registration sequence gets above, for the act that writes to the corpus
 # with the librarian App's credential: `apply_and_record` performs the ops, gates them, commits,
 # pushes and records the outcome, on behalf of whoever calls it. It takes NO authorization
-# argument, and under ADR 044 there is no approval anywhere behind it — so the CALLER SET is the
+# argument, and under the capture-is-the-approval change there is no approval anywhere behind it —
+# so the CALLER SET is the
 # whole of what says who may write to the knowledge repo this way.
 #
 # ONE caller: the worker's own pass, deriving a repair and applying it with nobody's name on it.
 # It used to be two — the deletion door applied a repair a PERSON asked for, in that person's name,
-# from inside the MCP process. ADR 044 D3 moved that act to the worker as a `delete` capture, which
+# from inside the MCP process. the capture-is-the-approval change moved that act to the worker as a
+# `delete` capture, which
 # rides `librarian/processing.py` and this door not at all. Anything reappearing here is a second
 # way to write to the corpus, and it would arrive with whatever authorization its own surface has.
 #
@@ -3010,7 +3019,8 @@ def _names_symbol(path: pathlib.Path, symbol: str) -> bool:
         for node in ast.walk(tree))
 
 
-# ── ADR 044 D3: who may QUEUE a removal ────────────────────────────────────────────────────────
+# ── the capture-is-the-approval change: who may QUEUE a removal
+# ────────────────────────────────────────────────────────
 # The same guarantee the mint sequence gets above, for the other sequence in `server/review.py` that
 # takes NO authorization argument. `queue_deletion` lands a durable `delete` row with a person's
 # name on it, and the worker performs whatever `delete` row it claims — the row is the whole of
@@ -3046,7 +3056,7 @@ def test_the_removal_queueing_sequence_is_entered_from_exactly_the_authorizing_s
                      if _names_symbol(p, _QUEUE_DELETION_SEQUENCE))
     assert callers == sorted(_QUEUE_DELETION_CALLERS), (
         f"the removal queueing sequence is reached from {callers}, not from "
-        f"{sorted(_QUEUE_DELETION_CALLERS)}. It carries no authorization of its own (ADR 044 D3) — "
+        f"{sorted(_QUEUE_DELETION_CALLERS)}. It carries no authorization of its own — "
         "a new surface either decides who may before calling in, as the MCP door does by requiring "
         "an unrestricted identity, or states here why it decides authorization for itself")
 
@@ -3109,7 +3119,7 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
     assert observed() == ["handlers.py", "run.py"]                    # a stale grant
 
 
-# ── ADR 039's amendments: who may tell the gates to suspend one of their proofs ────────────────
+# ── the governed repair loop's amendments: who may tell the gates to suspend one of their proofs ────────────────
 # FIVE `GateContext` fields are exceptions the caller declares, and each one is the whole of how a
 # thing that is otherwise impossible becomes possible in this system. The count is spelled out
 # because it is the thing that goes stale: this sentence said THREE while listing five, having been
@@ -3142,7 +3152,7 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
 # `provenance_pages` names the source pages that capture just filed. A capture still permits no
 # body rewrite and no deletion.
 #
-# `deletions_allowed` is the removal flow's, and it is new (ADR 044 D3): a `delete` row is a
+# `deletions_allowed` is the removal flow's, and it is new: a `delete` row is a
 # person's own removal, performed by the ONE writer, and `gate_zone`'s oldest veto has to stand
 # aside for exactly the paths that row named — derived from the ops just performed
 # (`processing._commit_delete`), never from the row's hints. **"The librarian never deletes a file"
@@ -3159,7 +3169,7 @@ _TOLD_PERMISSIONS = {
     # just wrote; `repair/apply.py` says so for the machine-zone pages a sweep rewrites, which is
     # the first thing in this system that modifies one at all.
     "provenance_pages": ("librarian/processing.py", "repair/apply.py"),
-    # ADR 045 D6. It suspends `gate_zone`'s audience check for the identity zone, so it IS a
+    # The audience-from-the-door change. It suspends `gate_zone`'s audience check for the identity zone, so it IS a
     # permission and not evidence: the pages it names are exempt from a rule everything else
     # obeys. One granter — the birth writer's own caller, which knows which paths this run wrote
     # as identity (an alias taught, a spine grown) rather than as knowledge. A path prefix here
@@ -3209,7 +3219,7 @@ def test_only_the_declared_surfaces_may_suspend_a_gate_proof(permission, granter
     found = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES if _grants_keyword(p, permission))
     assert found == sorted(granters), (
         f"{permission} is granted by {found}, not by {sorted(granters)}. Permission to suspend one "
-        "of the gates' proofs is a decision with an ADR behind it (039), not a keyword argument a "
+        "of the gates' proofs is a deliberate decision, not a keyword argument a "
         "new flow may pass")
 
 
@@ -3253,7 +3263,7 @@ _GATE_CONTEXT_DATA_KEYWORDS = frozenset({
     "confirmed_entity_pages",
     # `acl` is EVIDENCE, not a permission, and the distinction is the whole point of this test:
     # a permission tells a gate to suspend a proof, and this tells `gate_zone` the fact it judges
-    # AGAINST — the audience the door filed this capture at (ADR 045 D2). It can only ever make a
+    # AGAINST — the audience the door filed this capture at. It can only ever make a
     # run refuse more, never less: `None`, the default and the value every flow that carries no
     # capture passes, is an OPEN capture, which flows into any page and changes nothing.
     "acl",

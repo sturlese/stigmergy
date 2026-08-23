@@ -8,7 +8,7 @@ real service (search_brain + read_page), for both the ways an empty acl can aris
 
 Both must reach the SAME observable state end-to-end: visible to the unrestricted client
 (`steward@example.com`), hidden from every scoped client (`ana@example.com`, `eng@example.com`) —
-never silently open just because the author's YAML was wrong (ADR 012 §4)."""
+never silently open just because the author's YAML was wrong."""
 import pytest
 
 from tests.server.conftest import Fixture, make_service

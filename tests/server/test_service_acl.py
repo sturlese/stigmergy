@@ -13,7 +13,7 @@ def test_search_hits_carry_factors_score_arms_and_index_meta(indexed):
     for h in out["hits"]:
         assert set(h) >= {"path", "title", "snippet", "score", "arms", "factors",
                           "superseded"}
-        # `verification` is deliberately NOT in this shape (ADR 026 D2 amended) — a hit does not
+        # `verification` is deliberately NOT in this shape (the purge amended) — a hit does not
         # report a verdict nothing computes. Pinned as a negative so the key cannot drift back
         # into the payload unnoticed.
         assert "verification" not in h
@@ -59,7 +59,7 @@ def test_read_page_leads_with_trust_signals_and_fences_body(indexed):
     page = make_service(fx, conn, fx.STEWARD).read_page(fx.OPEN_PAGE)
     keys = list(page)
     assert keys[0] == "path" and "title" in keys[:3]      # trust signals lead
-    # `verification` is deliberately NOT a trust signal here (ADR 026 D2 amended). Asserted as a
+    # `verification` is deliberately NOT a trust signal here (the purge amended). Asserted as a
     # negative: the fixture page still carries the key in its frontmatter, so a reader coming back
     # would turn this red rather than pass unnoticed.
     assert "verification" not in page

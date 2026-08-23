@@ -6,10 +6,10 @@ prompt is built by ONE builder whose two caller-declared facts (`gathered_block`
 `outcome_channel`) are the only things a backend varies.
 
 **A whole section of this file retired with the `sdk` backend, and it is worth saying what it
-proved.** ADR 033 split one preamble string into four pieces so a second backend could vary exactly
+proved.** the structured filing flow split one preamble string into four pieces so a second backend could vary exactly
 one of them, and claimed the split was byte-preserving. A byte-preserving refactor is exactly the
 kind of claim that is asserted in a commit message and never checked — so these tests read the
-PRE-ADR-033 source out of git (`git show <pinned sha>:src/.../agent.py`), rebuilt the old constants
+PRE-the structured filing flow source out of git (`git show <pinned sha>:src/.../agent.py`), rebuilt the old constants
 and the old `build_prompt` by `ast`, and compared whole strings. What was at stake was the M3
 retire-or-keep decision: a preamble that drifted by a sentence during the extraction would have
 moved the SDK arm of a comparison between two shapes ON THE SAME MODEL, and the golden would simply
@@ -107,7 +107,7 @@ def test_the_gathered_block_sits_above_the_material_it_is_context_for():
     placement would have nothing left to use it for.
 
     Driven through `build_prompt` itself now: the ordinary run composes its per-item message there
-    directly (ADR 034), where it used to go through `build_structured_prompt`'s thin wrapper.
+    directly, where it used to go through `build_structured_prompt`'s thin wrapper.
     """
     prompt = agent_module.build_prompt(
         material="A renewal note.", hints={}, submitted_by="a@b.test",
@@ -118,7 +118,7 @@ def test_the_gathered_block_sits_above_the_material_it_is_context_for():
 
 
 def test_the_meeting_prompt_puts_the_gathered_block_between_the_registry_and_the_transcript():
-    """The same rule on the meeting side (ADR-038), and BOTH of its bounds.
+    """The same rule on the meeting side, and BOTH of its bounds.
 
     Above the transcript for the reason the ordinary prompt has it there: a reader meets its
     context before the thing the context is for. Below the REGISTRY because the two answer
@@ -156,7 +156,7 @@ def test_the_outcome_channel_names_the_tool_the_account_is_written_with():
     """The channel sentence is the one line of the per-item prompt that varies per backend, and it
     has to be positively true of the run it goes into.
 
-    **It changed direction in ADR 034 and that is exactly why it is pinned.** It used to say "you
+    **It changed direction in the agentic pydantic harness and that is exactly why it is pinned.** It used to say "you
     write no file and you have no tool that could"; this run writes its account as a file, with one
     specific tool, and a sentence naming the file but not the ROUTE is how a model reaches for a
     `Write` it does not have and reports having filed nothing. So: the file, the tool, and the

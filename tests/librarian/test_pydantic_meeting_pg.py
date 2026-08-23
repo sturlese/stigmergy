@@ -3,7 +3,7 @@ remote and a REAL pydantic-ai `Agent` — driven by an offline model, never by a
 
 `test_meeting_processing_pg.py` proves the flow against the offline double. This file proves the
 same flow against the backend that will actually run it, because the two things a double cannot
-stand in for are the two ADR 032 added: **a real framework call** (its usage accounting, its output
+stand in for are the two the filing port added: **a real framework call** (its usage accounting, its output
 schema, its exceptions) and **the money that call costs**. A backend whose port conformance is
 checked keylessly and whose behaviour is only ever exercised through a hand-written stand-in has
 been tested about everything except being a backend.
@@ -277,7 +277,7 @@ def test_a_distillation_that_introduces_the_new_entity_files_the_set_with_the_en
     in `new_entities`, every decision anchors to it, and the commit carries the source page, the
     meeting page, the decisions AND the newborn entity page — with the registry regenerated so
     `entity: ["ledgerly"]` resolves on every decision, and the identity confirmed by whoever
-    submitted the meeting (ADR 044)."""
+    submitted the meeting."""
     declared = NewEntity(name=_UNREGISTERED, entity_type="organization",
                          role="a prospect discussed at the sync", aliases=[],
                          summary="Ledgerly is a prospect the Q3 sync discussed.",

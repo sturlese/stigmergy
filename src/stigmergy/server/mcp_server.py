@@ -169,7 +169,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         `submitted_by`, `acl` and `content_hash` are the SERVER's to compute — who you are, the
         RESOLVED audience label (`audience` above is the request; the server decides and stores
         the answer), and what it hashes to. `verification` is listed beside them for a different
-        reason: nothing computes a verdict any more (ADR 026 D2), so no page may carry one, and
+        reason: nothing computes a verdict any more, so no page may carry one, and
         naming the parameter here is what turns passing it into an explicit ERROR instead of
         something silently ignored. Same for the other three: submitting as someone else requires
         their token, not their name, and a document does not get to declare its own access
@@ -244,7 +244,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             # too, so it uploads its own material before the row lands.
             # It is NOT off the loop for the reason #135 moved it there — that call cloned, ran a
             # model, scanned, linted and pushed inside this process, and none of that is here any
-            # more (ADR 044 D3: the worker writes).
+            # more: the worker writes.
             return json.dumps(
                 await anyio.to_thread.run_sync(
                     functools.partial(service.delete_pages, paths, why, source="mcp")),

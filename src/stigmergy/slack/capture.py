@@ -193,7 +193,7 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
         ctx.gateway, ctx.cache, messages, team_id=team_id, channel_id=channel_id,
         channel_name=channel_name, permalink=permalink)
 
-    # THE audience decision for this capture (ADR 045 D2): the groups of the channel the person
+    # THE audience decision for this capture: the groups of the channel the person
     # reacted in. A channel not listed is public, and public is OPEN — `channel_audiences_live`
     # returns the empty set there, and the door stores `None` rather than `{}`, because "this
     # channel has no groups" is a fact about the channel and never the `acl: []` of a page.

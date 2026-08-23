@@ -47,8 +47,8 @@ repo — whose page format is described in
 [`docs/reference/page-contract.md`](./docs/reference/page-contract.md). Captures arrive on a durable
 queue, a single writer (the librarian) files them as pages through an agent whose output is judged
 by code, and a derived Postgres index serves reads through one MCP server. Start with
-[`README.md`](./README.md), then [`docs/reference/`](./docs/reference) for what each subsystem does
-and [`docs/decisions/`](./docs/decisions) for why it is built that way.
+[`README.md`](./README.md), then [`docs/DESIGN.md`](./docs/DESIGN.md) for what the system IS and
+[`docs/reference/`](./docs/reference) for what each subsystem does.
 
 ## The rules that are enforced, not reviewed
 
@@ -64,7 +64,7 @@ line. A layering that lives only in a README is decoration; these are tests:
 | the librarian reaches `stigmergy.entities` from `librarian/identity.py` only, and only for the birth fold, the generator and its errors | filing and governance share exactly one seam; a second import site is a second place an identity could be born without the fold that keeps twins out |
 | every declared exception must still be used | an exception list nobody prunes becomes a permission slip |
 | the README's countable claims match the code | `tests/test_readme_claims.py` — four of them had already drifted |
-| the reference docs name no command, variable or count the code does not have | `tests/test_docs_claims.py` — 60k words nobody can afford to re-read, so the checkable part is checked. `docs/decisions/` is exempt: an ADR records a decision, not the present |
+| the reference docs name no command, variable or count the code does not have | `tests/test_docs_claims.py` — 60k words nobody can afford to re-read, so the checkable part is checked |
 
 If you need to cross a seam, add the exception **by name with its reason** rather than widening a
 rule. The pruning tests will delete it for you when it stops being used.
@@ -107,32 +107,26 @@ Two things to avoid, both learned the hard way:
 - Branch from `main`. Small and focused beats large and thorough.
 - `make test` and `make lint` green. CI runs the same thing plus four Docker end-to-end proofs and
   a full-history secret scan.
-- Behaviour changes want a decision record. If you are changing *what the system does* rather than
-  how it does it, add or amend an ADR in [`docs/decisions/`](./docs/decisions) in the same PR.
+- Behaviour changes answer to the definition. If you are changing *what the system does* rather
+  than how it does it, [`docs/DESIGN.md`](./docs/DESIGN.md) is what it has to be consistent with —
+  and if the change makes a sentence there false, correct that sentence in the same PR.
 - Documentation is **rewritten, not appended to.** If your change makes a sentence in `README.md`,
   a `docs/reference/` page or a package `index.md` false, correct it in the same commit. A stale
   README is a false premise for everyone who reads it next.
 
-## Writing a decision record
+## Keeping the definition true
 
-Five rules, which `docs/README.md` records as history and are easier to follow stated as rules:
+[`docs/DESIGN.md`](./docs/DESIGN.md) is the one document that says what this system IS — the
+closed list of what multi-user forces, the page vocabulary and the rules. Two rules follow from
+it, and they are the whole of the ceremony:
 
-- **Take the next free number, and never renumber anything.** The sequence has gaps and keeps them.
-  A reference to "ADR 015" in a commit message or a code comment has to still resolve years later,
-  which is worth more than a tidy run of integers.
-- **Open with a `**Status:**` line carrying the date**, and update it in place when a later record
-  changes the decision — including a forward pointer to the record that did. An ADR whose reader
-  cannot tell it was overturned is worse than no ADR.
-- **Amend rather than rewrite.** An ADR is dated evidence of a decision, not a description of the
-  present, which is why `tests/test_docs_claims.py` deliberately exempts `docs/decisions/` from the
-  checks that hold `docs/reference/` to what the code has today. A record naming a module that was
-  since deleted is doing its job, as long as it says so.
-- **When a subject is removed from the system whole, delete its record rather than superseding it**
-  — and name the deletion in `docs/README.md`'s numbering note, so the gap reads as a decision
-  instead of an accident. The exception is a design worth rebuilding from: keep it, and mark it
-  historical in its own opening lines, the way ADR 023 does.
-- **Add the row to `docs/README.md`'s table in the same commit.** A test fails if the index and the
-  directory disagree, in either direction.
+- **A change that makes a sentence there false corrects that sentence in the same PR.** The
+  document describes what exists; a definition nobody maintains is worse than none, because it
+  reads as authority.
+- **The reason a particular guard exists belongs in the comment or the test that owns it** — the
+  attack it defends against, the defect that motivated it, the "if you change this you must also
+  change that". Kept next to the code, a reason cannot go stale without something failing; kept
+  in a separate document, it can.
 
 ## Security
 

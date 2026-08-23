@@ -7,16 +7,13 @@ each with the diff it pushed — and the Remove pages button beside it, which qu
 health, the index and
 the ops files it serves, the worker, the three scheduled jobs, the digest, and who is using the
 brain — served by the SAME `app` process group that serves MCP, behind its own token.
-Design record: [ADR 029](../decisions/029-admin-console.md),
-[ADR 039](../decisions/039-governed-repair-loop.md),
-[ADR 043](../decisions/043-a-sweep-is-written.md) and
-[ADR 044](../decisions/044-the-capture-is-the-approval.md); code map:
+Code map:
 [`src/stigmergy/admin/index.md`](../../src/stigmergy/admin/index.md), which carries the full route
 table.
 
 **Nothing here decides an identity, because nothing is proposed.** A capture that meets a name the
 registry does not know writes that entity's page in the same commit that files it, confirmed by
-whoever captured (ADR 044) — so the Entities page reads the vocabulary and commissions the one
+whoever captured — so the Entities page reads the vocabulary and commissions the one
 entity no capture has introduced, and it holds no verdict at all.
 
 What it deliberately is NOT: a brain client. No search, no page rendering, no `ask` — the
@@ -27,9 +24,9 @@ reads through `list_entities`), and it fetches no page: everything it renders co
 this database, never from the knowledge repo. Two things on it read as page PROSE, and each is
 there because nobody read those bytes before they landed. An applied repair carries the unified
 DIFF it pushed, out of the `repairs` row that recorded it — page bytes, but bytes this console's
-own subject produced, and the whole reason the page exists (ADR 044). A removal carries the same
-thing per rewritten page, on the capture it was queued as — the reading ADR 043 D5 moved to after
-the push rather than before it, and ADR 044 D3 moved to the row rather than the response, because
+own subject produced, and the whole reason the page exists. A removal carries the same
+thing per rewritten page, on the capture it was queued as — the reading that happens after the
+push rather than before it, and on the row rather than in the response, because
 this process is no longer the one that pushes.
 
 **The one thing that boundary does not cover, said plainly:** the Activity page renders the `ask`
@@ -92,7 +89,7 @@ system is not configured", and each says so in its own words.
 
 That is a deliberate subtraction rather than a simplification. The console used to carry a
 fine-grained GitHub PAT with Actions read+write, so that a browser could dispatch, enable and
-disable the nightly crons; [ADR 044](../decisions/044-the-capture-is-the-approval.md) moved those
+disable the nightly crons; the night shift moved those
 passes into the librarian worker, and the credential went with them. A token that can start a
 workflow in somebody's repository is not one to keep for a page that now only reads.
 
@@ -190,7 +187,7 @@ toggle away, and nothing on a chart is reachable only by hovering.
   with the actor as ATTRIBUTION, exactly like every other console mutation — and that actor is the
   name `approved_by:` carries on the page the librarian writes.
 - **Repairs** — what the worker's repair pass made of the gardener's findings
-  ([repair.md](./repair.md), ADR 044). **This page decides nothing**; it is the reading nobody gave
+  ([repair.md](./repair.md)). **This page decides nothing**; it is the reading nobody gave
   a repair before it landed. Repairs by outcome over the whole table, the pass's run strip, and a
   bounded page of the ledger newest first — every outcome together, because the three are one
   history and separating them would invite reading only the good half.
@@ -209,14 +206,13 @@ toggle away, and nothing on a chart is reachable only by hovering.
   hands back the acknowledgement. The librarian performs it — the pages go, every page that referred
   to them is rewritten (its frontmatter by code, its body by a model), the nine gates judge it, and
   one App-authored commit is pushed with an `Approved-by:` trailer naming that actor. There is no
-  second click, because the judgment was the operator's when they typed it
-  ([ADR 043](../decisions/043-a-sweep-is-written.md)); what the console's token buys here is the
+  second click, because the judgment was the operator's when they typed it;
+what the console's token buys here is the
   whole authorization — the MCP door asks for an UNRESTRICTED identity instead, and this token
   stands for the whole deployment — so this is its most consequential control and its confirm says
   so. **The diffs are not on this page.** They land on the capture's own report, where Captures
   reads them: nobody read that prose before it landed, and a revert in the knowledge repo is the
-  undo. This process holds no git credential and pushes nothing
-  ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3).
+  undo. This process holds no git credential and pushes nothing.
 
 - **Gardener** — findings per run over the last runs by severity (from each run's own
   `findings_by_severity`), the latest completed run with its findings, pages walked and model
@@ -272,8 +268,8 @@ it is logged loudly and the work still lands; bookkeeping must never fail the wo
 
 **`admin_actions` is the only ledger this console writes, and there is no second one anywhere.**
 Nothing keeps a governance table: an identity is born in the commit that files the capture that
-introduced it, so the page and the registry ARE the record of who stands behind it
-([ADR 044](../decisions/044-the-capture-is-the-approval.md)), and a repair's whole record lives on
+introduced it, so the page and the registry ARE the record of who stands behind it,
+and a repair's whole record lives on
 its own `repairs` row — `status`, `applied_commit`, and the `diff` it pushed. "What changed the
 corpus, and why" is answered by that row and by `git log`, whose trailer says which kind of act it
 was: `Approved-by:` when a person asked for it, `Repair: <check> #<finding>` when the worker

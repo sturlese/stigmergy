@@ -16,7 +16,7 @@ every field below as "what this page means," not "what gets written next."
 **What actually writes a `sources/` page today** is one function,
 `librarian.processing._build_source_parts`, called from three places: the meeting flow's transcript
 (`sources/meetings/`), the fast lane's attached Slack thread (`sources/slack/`) and a document
-submitted as text (`sources/documents/` — [ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
+submitted as text (`sources/documents/`).
 It drafts `type`, `title`, `source_kind`, `url`, `tags`, `related`, `sources`, and
 `page.stamp_source_fields` then overwrites `status`, `as_of`, `submitted_by`, `content_hash`,
 `extracted_at`, `tier` and `id` on top of whatever the draft said. That fourteen-field shape is the
@@ -121,7 +121,7 @@ corpus.
 `as_of` and `acl` are stamped by the librarian on every page it files — `acl` from the audience
 the DOOR decided for that capture, so a note, the verbatim `sources/` page beside it and every
 page of a meeting set carry the same one. An entity page is the exception and carries none: the
-registry is the brain's shared vocabulary (ADR 045 D6). `supersedes`/
+registry is the brain's shared vocabulary. `supersedes`/
 `superseded_by` are written by a human editing a page (the gardener flags a candidate pair and
 names no command, deliberately). The rest of the table is how to read a page that already carries
 the field — no writer produces one now.
@@ -138,7 +138,7 @@ the field — no writer produces one now.
 | `as_of` | when the CONTENT is valid (`YYYY[-MM]` or `YYYY-QN`), only as precise as the source proves — rank current truth with it |
 | `superseded_by` | a newer version of this document exists — demote for "current" questions; keep for history/"as of" questions |
 | `supersedes` | this page is the current version in a chain |
-| `acl` | audience labels — a serving layer must show this page only to clients holding one of them. Absent = open to all; an **empty** list = visible to nobody. The hybrid index stores the labels verbatim (malformed shapes fail closed — see [ADR 012 §4](../decisions/012-hybrid-index.md)); enforcement lives in the MCP server (`stigmergy.server.acl.visible`) — see [`server.md`](server.md) |
+| `acl` | audience labels — a serving layer must show this page only to clients holding one of them. Absent = open to all; an **empty** list = visible to nobody. The hybrid index stores the labels verbatim (malformed shapes fail closed); enforcement lives in the MCP server (`stigmergy.server.acl.visible`) — see [`server.md`](server.md) |
 
 ## Body rules
 
@@ -202,8 +202,8 @@ generator in this codebase — documented in full at [views.md](./views.md). The
 `type: view`, `tags: [view]`, `tier: 3`, `content_hash` (sha256 of the rendered **body** — a
 derived page has no single raw source), `generated_at`, the two staleness signals `member_hash`
 and `backlink_hash` (the member set, and the backlinks the page actually renders — a view missing
-the second is regenerated on the next convergence pass). They carry **no `acl:` at all**
-([ADR 045](../decisions/045-audience-from-the-door.md) D5): a view is the open rollup, and both of
+the second is regenerated on the next convergence pass). They carry **no `acl:` at all**:
+a view is the open rollup, and both of
 its feeds are filtered to what may appear on an open page rather than the page being labelled to
 match them. They carry no `verification` field either — nothing computes a verdict, so nothing
 stamps one.
@@ -216,7 +216,7 @@ stamps one.
   other page. A page declaring its own `content_hash:` is forged.
 - The entity pipeline-status field (`won`/`lost`/`active`… from the folder name) is
   `entity_status`, not `status`: the contract reserves `status` for **page maturity**, which the
-  index ranks on ([ADR 012](../decisions/012-hybrid-index.md)); the shared name collided. The
+  index ranks on; the shared name collided. The
   maturity axis is `seed` · `developing` · `mature` · `evergreen` (`VALID_STATUS` in the knowledge
   repo's contract linter), and `evergreen` is the value `index.rank` boosts. Every fast-lane page is
   filed as `developing`, forced by `librarian.page.FILED_STATUS` whatever the material claimed about

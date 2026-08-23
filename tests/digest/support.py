@@ -38,12 +38,12 @@ def unlabelled_page(root: str, relpath: str, *, title: str) -> str:
                                   "status": "developing", "updated": "2026-07-01"})
 
 
-# ── entities born — counted off the filings that introduced them (ADR 044) ─────────────────────
+# ── entities born — counted off the filings that introduced them ─────────────────────
 def seed_entity_births(conn, *, count: int = 1, finished_days_ago: int = 0,
                        result_ref: str = "wiki/notes/x.md@abc1234") -> int:
     """A FILED capture whose report names the identities that capture introduced — the shape
     `librarian.report.filed` produces (`entities_born`), and the only place a birth is recorded
-    since ADR 044: an entity is born when a capture introduces it, so the digest counts the
+    since the capture-is-the-approval change: an entity is born when a capture introduces it, so the digest counts the
     filings rather than a second table that could disagree with the commits."""
     born = [{"id": f"e{n}", "name": f"Entity {n}", "type": "organization",
              "confirmed_by": STEWARD} for n in range(count)]
@@ -90,7 +90,7 @@ def seed_gardener_run(conn, *, findings: list[dict] | None = None,
     return run_id
 
 
-# ── repairs applied — the third corpus delta (ADR 044) ────────────────────────────────────────
+# ── repairs applied — the third corpus delta ────────────────────────────────────────
 def seed_applied_repair(conn, *, kind: str = "edits", created_days_ago: int = 1,
                         content_key: str = "") -> int:
     """One `applied` row in the repair ledger, aged like every other fixture here.

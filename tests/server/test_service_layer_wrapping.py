@@ -1,5 +1,5 @@
-"""`BrainService._call` / `.call_async` — the service-layer wrapper both transports share
-(ADR 013 §6): rate-limit check, then run the real call, then an audit write in a `finally` (so it
+"""`BrainService._call` / `.call_async` — the service-layer wrapper both transports share:
+rate-limit check, then run the real call, then an audit write in a `finally` (so it
 fires on success AND on failure). Pure unit tests against fake `rate_limiter`/`audit` doubles —
 `_call`/`call_async` never touch `self.conn`, so no Postgres is needed here; both seams are
 duck-typed and kept injectable for exactly this reason."""
@@ -126,7 +126,7 @@ def test_call_with_no_rate_limiter_or_audit_is_a_pure_noop_wrapper():
 
 
 def test_audit_write_failure_is_not_this_layers_job_to_swallow():
-    """Documents the actual seam (ADR 013 §6): `_call`'s `finally` block calls
+    """Documents the actual seam: `_call`'s `finally` block calls
     `self.audit.write(...)` UNGUARDED — the "never fails the serving call" guarantee is the
     production `AuditWriter.write`'s OWN responsibility (it catches and logs internally, see
     `tests/server/test_audit.py`), not something `_call` re-implements. A double that does not

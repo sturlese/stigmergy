@@ -43,7 +43,7 @@ export async function gardenerView(host) {
             el("div", { class: "card-title" }, el("h2", {}, "Latest completed run"),
               el("div", { class: "sub" }, data.run ? `#${data.run.id} · finished ${relTime(data.run.finished_at)}` : "no completed run yet")),
             el("div", { class: "spacer" })),
-          // The garden runs itself nightly on the worker's idle branch (ADR 044), so there is no
+          // The garden runs itself nightly on the worker's idle branch, so there is no
           // button here. The command stays named for the operator who wants one NOW.
           el("div", { class: "sub" }, "Runs nightly inside the librarian worker, on its idle branch. To run one now: ", mono("stigmergy-gardener"), " from a terminal."),
           data.run ? kv([

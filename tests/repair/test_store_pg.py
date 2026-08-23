@@ -1,6 +1,6 @@
 """`repair.store`: the three writes, the two memories, and the one race that is still real.
 
-The store decides nothing and authorizes nothing, and since ADR 044 it holds no state machine
+The store decides nothing and authorizes nothing, and since the capture-is-the-approval change it holds no state machine
 either — a row is written once, when the attempt is already over, and never transitions. So what is
 worth pinning is exactly what a caller cannot see for itself: that a row comes back the way it went
 in, that the memory remembers the two outcomes it must and forgets the one it must, and that two

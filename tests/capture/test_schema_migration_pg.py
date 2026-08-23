@@ -143,7 +143,8 @@ def test_a_parked_row_is_returned_to_the_queue_and_the_retired_words_are_refused
     for _status, _error, _claimed, trace in rows:
         assert trace[-1]["event"] == schema.MIGRATION_EVENT
         assert trace[-1]["actor"] == schema.MIGRATION_ACTOR
-        # The note has to say what happens INSTEAD of the wait it ends (ADR 044: the identity is
+        # The note has to say what happens INSTEAD of the wait it ends (the capture-is-the-approval
+        # change: the identity is
         # born with the filing, confirmed by whoever captured), not merely that the state retired.
         assert "confirmed by whoever captured" in trace[-1]["note"]
     _insert(old_table_conn, schema.QUEUED)         # the living vocabulary still lands

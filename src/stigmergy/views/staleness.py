@@ -100,7 +100,7 @@ def current_signals(repo: str, entity_id: str, members: list[skeleton.Member], *
     `regenerate.regenerate_entity` cannot come to disagree about what "stale" means.
 
     The backlink half is computed exactly as the section is RENDERED: at the OPEN audience a view
-    carries (ADR 045 D5), with the same self-exclusion and the same `flows_into` gate. That is
+    carries, with the same self-exclusion and the same `flows_into` gate. That is
     what makes a narrowed or deleted source register — it simply stops being one of these rows.
     A narrowed MEMBER registers through the other half: `members_of` drops it, so `member_hash`
     moves.

@@ -75,7 +75,8 @@ def test_frozen_linter_goes_red_on_aliases_that_diverge_and_says_whose_the_fix_i
     registry's disagree.
 
     OLD BEHAVIOUR: the message ended in a runnable command, `stigmergy-entities regenerate`.
-    ADR 044 deleted that command, so the message names WHOSE the fix is instead — and it names the
+    The capture-is-the-approval change deleted that command, so the message names WHOSE the fix is
+    instead — and it names the
     right person: the worker regenerates the registry in a commit that touches the identity zone,
     but it REFUSES to write an identity while the two sides disagree, so the pass that would heal
     the drift is the pass the drift prevents. A message containing a command is an executable

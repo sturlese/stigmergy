@@ -5,7 +5,7 @@ worktree -> agent -> declared edits -> stamp -> gates -> [one corrective retry] 
 The scan runs over the MATERIAL because a capture containing a secret bounces WHOLE. Terminal
 states split by CAUSE, not by gate: content `rejected`, system `failed`. A name nothing resolves
 to does not stop the page: the agent declares the entity in its account, and
-`identity.write_births` writes it in the same commit, confirmed by whoever captured (ADR 044).
+`identity.write_births` writes it in the same commit, confirmed by whoever captured.
 """
 import asyncio
 import dataclasses
@@ -122,7 +122,8 @@ def _capture_acl(item: dict) -> list[str] | None:
     """The audience the DOOR decided this capture is filed at — `capture_queue.acl`, the one input
     to every stamp this run writes.
 
-    `None` is open, and a row queued before ADR 045 has `NULL` here, which is the same "open" the
+    `None` is open, and a row queued before the audience came from the door has `NULL` here,
+    which is the same "open" the
     path resolver produced for every page it ever labelled. An empty list is NOT collapsed to
     `None`: `[]` means nobody, everywhere, and the collapse is the defect D9 ends.
     """
@@ -138,8 +139,8 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     entry, which switches `gate_anchoring` to per-page mode. Stamps `entity: []` for an unresolved
     `entity`-kind outcome, so a partial list cannot survive a gate reordering.
     """
-    # THE label for every page this capture writes: the door's own decision, carried on the row
-    # (ADR 045 D2). Not resolved from the page's path, not read from a config file, not re-derived
+    # THE label for every page this capture writes: the door's own decision, carried on the row.
+    # Not resolved from the page's path, not read from a config file, not re-derived
     # per page — one capture, one audience, so a note and the verbatim source beside it cannot
     # come out labelled differently.
     acl = _capture_acl(item)
@@ -301,7 +302,7 @@ def _resolve_filing_base(item: dict, deps: Deps, *, log_noun: str, stale_tail: s
     # Re-read per item at THIS item's base commit: a registry cached from an older commit would
     # fail an anchor that resolves, or resolve one that no longer does. The ACL config that used
     # to be re-read beside it is gone — the audience is the door's decision, carried on the row,
-    # so there is no repo-sourced input to this item's label at all (ADR 045 D2).
+    # so there is no repo-sourced input to this item's label at all.
     return base, dataclasses.replace(deps,
                                      registry=base_inputs.load_registry(deps.repo, base))
 
@@ -329,7 +330,7 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None)
             raise
 
 
-# ── the removal flow: a person's own deletion, performed by the ONE writer (ADR 044 D3) ───────
+# ── the removal flow: a person's own deletion, performed by the ONE writer ───────
 # The third kind that does not ride `process_item`, and the only one whose material is not material
 # at all: a `delete` row carries the REASON a person gave, and its hints carry the pages. What it
 # shares with every other row is everything that makes a queue worth having — a durable row, a
@@ -360,10 +361,10 @@ def process_delete_item(conn, item: dict, deps: Deps) -> Result:
     4. **The nine gates judge the diff**, told the two facts only this caller knows — which paths
        it may remove, and the exact bytes it computed for every page it rewrites.
     5. **Commit and push**, through the same lease-fenced seam every filing uses. The trailer names
-       the person: this is the one write in the system a human decided (ADR 043 D2).
+       the person: this is the one write in the system a human decided.
 
-    The per-page diffs go into the row's `report`, and that is the whole of ADR 043 D5 in the new
-    shape: nobody read that prose before it landed, so the reading happens afterwards, wherever the
+    The per-page diffs go into the row's `report`, and that is the whole of "the diff IS the
+    reading" in the new shape: nobody read that prose before it landed, so the reading happens afterwards, wherever the
     row is read back.
     """
     from stigmergy.repair import brief as repair_brief
@@ -734,14 +735,14 @@ def _declare_births(ctx: gates.GateContext, births: identity.Births) -> None:
     ctx.confirmed_entity_pages = dict(births.confirmed)
     # The identity-zone pages this run MODIFIED — a spelling taught, a spine grown. Told so
     # `gate_zone`'s audience check skips exactly them and nothing else: an entity page carries no
-    # audience (ADR 045 D6), and what a restricted capture may write on one is bounded in
+    # audience, and what a restricted capture may write on one is bounded in
     # `identity.write_births` rather than by a path prefix here.
     ctx.identity_writes = frozenset(births.alias_pages) | frozenset(births.updated_pages)
     for path, entity_id in births.entity_pages.items():
         # What `gate_frontmatter` re-reads the page against: its own anchor and its own state.
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "entity": [entity_id],
                                      "approved_by": births.confirmed.get(path, ""),
-                                     # An entity page carries NO audience (ADR 045 D6): the
+                                     # An entity page carries NO audience: the
                                      # registry is the brain's shared vocabulary. Declared as
                                      # `None` rather than left out, because `gate_frontmatter`
                                      # reads a `None` expectation as "this page must OMIT the
@@ -1127,7 +1128,7 @@ def _source_attachment(item: dict) -> "SourceAttachment | None":
     """The parameter's ON/OFF switch, decided per item from the row's own `kind` or from a fact
     a DOOR asserted server-side; `None` for every ordinary capture. Two ON positions: a
     `document` (the kind says the material has documentary existence of its own; `source_url` is
-    the submitter's claim of where, attributed like the material — ADR 044 D4) and the Slack door
+    the submitter's claim of where, attributed like the material) and the Slack door
     (the `source_client` hint, which only that transport may assert).
     """
     client = (item.get("hints") or {}).get("client") or {}
@@ -1174,7 +1175,7 @@ def _stamp_one_source(ctx: gates.GateContext, path: str, *, submitted_by: str, a
                       digest: str, extracted_at: str, page_id: str, acl: list[str] | None) -> None:
     """Stamp ONE `sources/` page with the provenance group — THE source stamp for every flow.
 
-    `acl` is the capture's own, like every other page in the set (ADR 045 D2): a provenance page
+    `acl` is the capture's own, like every other page in the set: a provenance page
     that carried no audience while its distilled pages did was the meeting-page leak — the set was
     labelled and the page listing it was not.
     """
@@ -1705,7 +1706,7 @@ def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
     from its siblings'. `as_of` is the meeting's OWN date, never today's."""
     as_of = meeting_meta.get("meeting_date") or deps.as_of()
     # One capture, one audience — the transcript parts, the meeting page and every decision get
-    # the SAME label the door decided (ADR 045 D2). The meeting page carrying none while its
+    # the SAME label the door decided. The meeting page carrying none while its
     # decisions carried theirs is §4 case 5: the set was labelled and the page listing it was not.
     acl = _capture_acl(item)
     source_pages, meeting_pages, decision_pages = (_source_pages(ctx), _meeting_pages(ctx),

@@ -107,7 +107,7 @@ def test_the_fast_lane_vocabulary_is_small_and_stated_once():
     """Not a README claim — a guard on the count that drifted the most widely in prose (eleven
     sites said "six fast-lane types" while there were three). Pinning it here means the next change
     has one obvious place that turns red. (The review lane's item kinds stood beside it until
-    ADR 044 retired the lane whole.)"""
+    The capture-is-the-approval change retired the lane whole.)"""
     assert len(FAST_LANE_TYPES) == 3
 
 

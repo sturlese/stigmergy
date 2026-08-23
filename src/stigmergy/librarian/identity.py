@@ -3,7 +3,7 @@ person whose capture it was.
 
 A capture about a name the registry does not know used to stop here — parked on a question to a
 person who had already left, and then filed with the identity waiting on somebody else. It does
-neither any more (ADR 044): **the capture is the approval.** The agent declares the identity it
+neither any more: **the capture is the approval.** The agent declares the identity it
 read out of the material (`Outcome.new_entities`: name, type, role, aliases, the "What / Who"
 paragraph, the facts, the connections) and CODE does the rest in the same commit as the page:
 validates it through the birth gate every entity passes (`entities.birth.prepare` — forbidden
@@ -69,13 +69,13 @@ class Births:
     aliases: list = field(default_factory=list)         # [{"entity", "alias"}] for the report
     # created path -> the person who introduced the identity (`approved_by`), told to the gates so
     # gate_identity can prove the page names exactly them. Every created page is in here: an
-    # identity is born confirmed by whoever captured (ADR 044).
+    # identity is born confirmed by whoever captured.
     confirmed: dict = field(default_factory=dict)
-    # ADR 042: the registered entity pages this filing ADDED facts or connections to — modified
+    # The registered entity pages this filing ADDED facts or connections to — modified
     # path -> canonical id — and the counts the report reads. Appended lines only, byte-proven.
     updated_pages: dict = field(default_factory=dict)
     updates: list = field(default_factory=list)         # [{"entity", "facts", "connections"}]
-    # ADR 045 D6: what a RESTRICTED capture was not allowed to put on the open entity zone —
+    # What a RESTRICTED capture was not allowed to put on the open entity zone —
     # `[{"entity", "facts", "connections"}]` counted, never quoted. An entity page is the brain's
     # shared vocabulary and carries no audience, so a capture filed at a group may create an
     # identity and say what it IS, and may not publish what its own material established. Reported
@@ -109,14 +109,14 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
     facts about them — or the findings that refuse the account, having written nothing.
 
     `approver` is the capture's submitter, and every entity created here is born confirmed by
-    them (ADR 044). `registration` is what that person asked this capture to register, read off its
+    them. `registration` is what that person asked this capture to register, read off its
     hints by the caller: the entity under the registered name is created under exactly that name
     and type, and an account that declares no such entity while the registry lacks it is refused
     with a brief, so the corrective retry does what they asked.
 
     **`acl` is the capture's audience, and a non-`None` one narrows what may be WRITTEN here
-    rather than labelling anything** ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md)
-    D6). An entity page never carries an audience: the registry is the brain's shared vocabulary,
+    rather than labelling anything**. An entity page never carries an audience: the registry
+    is the brain's shared vocabulary,
     and a corpus where the same customer exists under three spellings because one of them was
     hidden is the failure this system was built to prevent. So a restricted capture may introduce
     an identity — its name, its type, its aliases and one sentence of What / Who — and its `facts`
@@ -125,8 +125,8 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
     reason: the spine is only ever written from open material. Both are counted into
     `Births.withheld` and reach the submitter's report.
 
-    The one sentence that DOES cross is deliberate and is the smallest thing that can: ADR 042 D3
-    refuses to write an entity page with no What / Who at all, so the alternative to a model
+    The one sentence that DOES cross is deliberate and is the smallest thing that can: the birth
+    fold refuses to write an entity page with no What / Who at all, so the alternative to a model
     sentence about what the entity is would be no identity — and then the same name introduced
     again next week as a second entity. Structure is code's, prose is the model's, and the proof
     is the human's: the report shows the submitter the sentence that was born open.
@@ -243,7 +243,7 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
                 brief=f"`new_entities` entry {name!r} is not a valid identity: {ex}"))
             continue
         # EVERY identity is born confirmed by the person whose capture introduced it — a
-        # registration and an ordinary capture alike (ADR 044 D1). The approver is the submitter,
+        # registration and an ordinary capture alike. The approver is the submitter,
         # resolved by the server, never anything the account said.
         text = birth.render_page(template, proposal, today=today, approved_by=approver,
                                  body=body, related=page_related)
@@ -333,7 +333,7 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
                 f"added to it", locator=path, repairable=False))
             continue
         # Straight onto the entity's own `aliases:` — a spelling the material uses IS one of its
-        # names (ADR 044 D1); there is no waiting list for it to sit on.
+        # names; there is no waiting list for it to sit on.
         values = page_policy.list_field_values(front, ALIASES_KEY)
         edited_texts[path] = page_policy.rebuild(
             page_policy.with_list_field(front, ALIASES_KEY, [*values, alias]), tail)
@@ -410,7 +410,7 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
     if findings:
         return findings
     if not births.touched():
-        # Nothing was WRITTEN — but something may have been WITHHELD (ADR 045 D6), and that is
+        # Nothing was WRITTEN — but something may have been WITHHELD, and that is
         # exactly the case where the submitter has to be told: the page they got carries no sign
         # of it, so a report that dropped this would be a silent subtraction from their capture.
         return Births(registry=base_registry, withheld=births.withheld)

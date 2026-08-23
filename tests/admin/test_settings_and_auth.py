@@ -17,7 +17,8 @@ def test_unset_env_means_not_configured():
 def test_the_console_holds_no_credential_for_another_service():
     """The console's whole credential surface is its own token hash, and that is a property worth
     a test rather than an observation: it used to carry a fine-grained GitHub PAT with Actions
-    read+write, so that a browser could dispatch the nightly crons. ADR 044 moved those passes
+    read+write, so that a browser could dispatch the nightly crons. the capture-is-the-approval
+    change moved those passes
     into the librarian worker, and the PAT went with them — a token that can start a workflow in
     somebody's repository is not a credential to keep for a page that now only reads rows.
 
