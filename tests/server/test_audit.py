@@ -1,4 +1,4 @@
-"""`audit_log` (ADR 013 §6): one row per tool call, both transports, written at the service
+"""`audit_log`: one row per tool call, both transports, written at the service
 layer, so every call is attributable to a person. Real Postgres (`indexed` fixture) — DDL, the
 writer's own swallow-on-failure guarantee, and `BrainService` actually producing a row end to end.
 Skips without postgres, same posture as the rest of `tests/server/`."""

@@ -96,7 +96,7 @@ class FilingAgent(Protocol):
         discipline.
 
         `acl` is the audience this capture is filed at, and a backend that holds READ TOOLS must
-        scope them to it ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D3): a
+        scope them to it: a
         model may not read what the page it is writing could not cite. A tool-less backend has
         nothing to scope — the worker already scoped `gathered` — and ignores it. `None` is an
         open page, and the narrow default: a caller that forgets it starves a run rather than

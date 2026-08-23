@@ -23,7 +23,7 @@ from tests.librarian import support
 
 TODAY = "2026-08-20"
 # The capture's own submitter, and therefore the one name every identity this run creates may
-# carry (ADR 044 D1). Told to the writer by the caller, never read out of the account.
+# carry. Told to the writer by the caller, never read out of the account.
 SUBMITTER = "marc@example.com"
 
 
@@ -57,7 +57,8 @@ def _read(repo: str, relpath: str) -> str:
 # ── the birth itself ──────────────────────────────────────────────────────────────────────────
 def test_a_declared_entity_becomes_a_page_confirmed_by_the_submitter_and_a_registry_that_resolves_it(tmp_path):
     """OLD BEHAVIOUR: the page was written with `approved_by: ""` and the registry entry carried
-    `proposed: true`, waiting for a steward to confirm it from an inbox. ADR 044: the capture IS
+    `proposed: true`, waiting for a steward to confirm it from an inbox. the capture-is-the-approval
+    change: the capture IS
     the approval — the page names the submitter, the entry carries no waiting state, and the
     identity is finished the moment it lands."""
     env = support.build_repo(str(tmp_path / "git"))
@@ -163,7 +164,8 @@ def test_an_invalid_identity_is_refused_with_the_birth_gates_own_sentence(tmp_pa
 # ── a new spelling for an entity that already exists ─────────────────────────────────────────
 def test_a_declared_alias_is_appended_to_the_entitys_page_and_resolves_in_the_registry(tmp_path):
     """OLD BEHAVIOUR: a spelling the material used for a registered entity went onto a second
-    frontmatter list, `proposed_aliases:`, until a steward moved it across. ADR 044: a spelling the
+    frontmatter list, `proposed_aliases:`, until a steward moved it across. the
+    capture-is-the-approval change: a spelling the
     material uses IS one of the entity's names, so it goes straight onto `aliases:` and resolves
     from this commit on — there is one list, and no waiting."""
     env = support.build_repo(str(tmp_path / "git"))
@@ -221,7 +223,8 @@ def test_a_drifting_registry_refuses_every_birth_unrepairably(tmp_path):
     """Regenerating would resolve somebody else's drift inside a commit whose message says it filed
     a note. An operator puts the knowledge repo back in step; the capture fails saying so.
 
-    OLD BEHAVIOUR: the refusal ended in `generator.FIX_COMMAND`, then a runnable command. ADR 044:
+    OLD BEHAVIOUR: the refusal ended in `generator.FIX_COMMAND`, then a runnable command. the
+    capture-is-the-approval change:
     both sides are derived and a person hand-editing either is what caused this, so the sentence
     says whose the fix is instead of promising one nobody can run."""
     env = support.build_repo(str(tmp_path / "git"))
@@ -245,7 +248,7 @@ def test_a_checkout_without_the_template_refuses_unrepairably(tmp_path):
     assert [f.code for f in findings] == ["no-template"] and findings[0].repairable is False
 
 
-# ── a registration: the name the capture PINS, born like every other (ADR 042, ADR 044) ───────
+# ── a registration: the name the capture PINS, born like every other ───────
 def _registration(name="Scircle", entity_type="organization", aliases=("S-Circle",), source="admin"):
     from stigmergy.capture import schema
     return schema.Registration(name=name, entity_type=entity_type, aliases=tuple(aliases),
@@ -253,7 +256,7 @@ def _registration(name="Scircle", entity_type="organization", aliases=("S-Circle
 
 
 def test_the_registered_entity_is_born_confirmed_by_the_person_who_registered_it(tmp_path):
-    """Before ADR 042 a person registered an entity through a script that copied the template with
+    """Before the birth-written change a person registered an entity through a script that copied the template with
     the name filled in — twelve of the first brain's nineteen entity pages were born that way, with
     nothing said about the entity. Now their description is a capture, the librarian writes the page
     from it and from what the brain held, and the identity is born CONFIRMED by them: `approved_by`
@@ -279,7 +282,8 @@ def test_the_registered_entity_is_born_confirmed_by_the_person_who_registered_it
 
 def test_a_second_entity_beside_the_registration_is_born_confirmed_by_the_same_person(tmp_path):
     """OLD BEHAVIOUR: a registration confirmed exactly ONE name, and anything else the same account
-    introduced was left `proposed: true` for the inbox. ADR 044: a registration only PINS the name
+    introduced was left `proposed: true` for the inbox. the capture-is-the-approval change: a
+    registration only PINS the name
     and type; it carries no authority the capture did not already carry, so every identity in the
     run is born confirmed by the same submitter."""
     env = support.build_repo(str(tmp_path / "git"))
@@ -332,7 +336,7 @@ def test_registering_a_name_the_registry_already_resolves_asks_nothing_of_the_ac
     assert not births.touched() and births.confirmed == {}
 
 
-# ── the spine accretes (ADR 042): facts a filing ADDS to a registered entity's page ───────────────
+# ── the spine accretes: facts a filing ADDS to a registered entity's page ───────────────
 def _update(entity="acme-corp", facts=("Renewed the contract for another year.",),
             connections=("[[A Note]] — the note that established it",)):
     return {"entity": entity, "facts": tuple(facts), "connections": tuple(connections)}
@@ -344,7 +348,7 @@ def _outcome_with_updates(updates, new_entities=()):
 
 
 def test_an_update_appends_facts_and_connections_to_the_registered_page_and_proves_the_bytes(tmp_path):
-    """Before ADR 042 an entity page was written once — at birth — and everything the brain
+    """Before the birth-written change an entity page was written once — at birth — and everything the brain
     learned afterwards went to notes and views; the spine never grew. A filing may now declare
     what the material established about a REGISTERED entity, and the writer APPENDS it: under the
     page's own `## Facts` / `## Connections`, `updated:` moved to today, the whole file in

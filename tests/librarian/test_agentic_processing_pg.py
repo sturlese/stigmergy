@@ -1,8 +1,8 @@
-"""The ITERATING ordinary flow, end to end (ADR 034): a real Postgres queue, a real git repo + bare
+"""The ITERATING ordinary flow, end to end: a real Postgres queue, a real git repo + bare
 remote, the eight real gates, the real contract linter, and a real `pydantic_ai.Agent` holding the
 five real tools — driven by a scripted `FunctionModel` over the backend's own offline seam.
 
-**This is the road ADR 034 re-opened and the road nothing else covers end to end.**
+**This is the road the agentic pydantic harness re-opened and the road nothing else covers end to end.**
 `test_processing_pg.py` drives the same branch with the offline double (no model, no tools, no
 outcome-file parse), and `test_structured_processing_pg.py` drives the branch where CODE writes the
 page. What only lives here is the pairing the milestone actually ships: a model that WRITES its page
@@ -207,7 +207,7 @@ def _nothing_landed(env, before: set) -> None:
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 def test_an_iterating_run_files_the_page_the_MODEL_wrote_and_the_row_says_what_it_cost(
         tmp_path, clean_queue, require_gitleaks):
-    """**The benign twin the whole file needs, and the shape ADR 034 ships.**
+    """**The benign twin the whole file needs, and the shape the agentic pydantic harness ships.**
 
     Four requests: one search, the page, the account, a final message nobody reads. Everything after
     that is production's — `read_outcome` parses the file, `discard_outcome_file` drains the channel
@@ -401,7 +401,7 @@ def test_an_account_that_still_parks_is_a_shape_fault_on_every_pass(
 
 def test_a_run_that_writes_TWO_pages_is_refused_by_the_cross_check(
         tmp_path, clean_queue, require_gitleaks):
-    """**A hostile shape ADR 034 re-opened, and the tool cannot refuse it.**
+    """**A hostile shape the agentic pydantic harness re-opened, and the tool cannot refuse it.**
 
     `agent.confined_write` bounds each write to ONE new `.md` page in a lane folder — it says
     nothing about how many such writes a run may make, and a `write_page` tool that counted them
@@ -443,7 +443,7 @@ def test_an_iterating_run_that_introduces_the_unknown_entity_files_it_beside_the
     """The case an operator meets constantly, on the road that ships: a capture about something the
     registry does not know. The model writes its note linking the new name, declares the entity in
     `new_entities`, and code creates the page beside the note — one commit, the note anchored to the
-    newborn id, the registry regenerated, the identity confirmed by the submitter (ADR 044)."""
+    newborn id, the registry regenerated, the identity confirmed by the submitter."""
     script = Script([_SEARCH_STEP,
                      _write_page_step(_page_text(anchor="Halcyon Grid")),
                      _write_account_step(_account(

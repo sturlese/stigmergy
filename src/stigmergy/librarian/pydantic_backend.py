@@ -515,7 +515,7 @@ class FilingToolbox:
         self.top_k = max(int(top_k), 1)
         self.excerpt_lines = max(int(excerpt_lines), 0)
         # The audience of the page this run is writing. Every tool below answers from the corpus
-        # scoped to it (ADR 045 D3), so the model cannot read — and therefore cannot cite or link
+        # scoped to it, so the model cannot read — and therefore cannot cite or link
         # to — a page its own output would not be readable beside. `None` is an open page, which
         # admits open rows only: the fail-closed direction for a caller that forgets to pass it.
         # `is None`, never truthiness: `[]` is a value meaning nobody, and collapsing it here
@@ -572,7 +572,8 @@ class FilingToolbox:
         `ops/templates/*.md`, since this run writes a page's own container; everything else stays
         refused, `ops/entity-registry.json` and `ops/identities.json` first.
 
-        The second rule is ADR 045 D3, and it is asked HERE as well as in `corpus()` because this
+        The second rule is "a model never reads what it may not cite", and it is asked HERE as
+        well as in `corpus()` because this
         tool reaches the filesystem rather than the parsed rows: a path the model names directly —
         guessed, or read off a wikilink in material it was given — must meet the same scope its
         searches do. A template is not a corpus page and carries no audience, so it is admitted by
@@ -601,7 +602,7 @@ class FilingToolbox:
 
     def list_page_names(self) -> dict:
         """The wikilink vocabulary, derived from the SAME scoped corpus every other tool answers
-        from (ADR 045 D3) — so a page this run may not cite is not offered as something to link
+        from — so a page this run may not cite is not offered as something to link
         to, which is how the upward link stops being writable rather than being caught afterwards.
 
         Still a subset of what `edits.validate` resolves, so the old promise holds: a name offered

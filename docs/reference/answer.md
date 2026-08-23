@@ -1,10 +1,9 @@
 # The answering half — `stigmergy.answer`
 
 Generate-then-verify, applied at query time: an agent gathers evidence and writes a cited answer,
-and **pure code verifies it before it leaves the server**. The LLM writes; code judges. Design
-record: [ADR 007](../decisions/007-answer-layer.md). The read tools it stands on are the server
-([server.md](./server.md)); the index underneath is
-[ADR 012](../decisions/012-hybrid-index.md).
+and **pure code verifies it before it leaves the server**. The LLM writes; code judges. The read
+tools it stands on are the server ([server.md](./server.md)); the index underneath is
+[hybrid-index.md](./hybrid-index.md).
 Code map: [`src/stigmergy/answer/index.md`](../../src/stigmergy/answer/index.md).
 
 ```
@@ -47,7 +46,7 @@ search-and-read walk.
 
 "Does this query name a registered entity, and should the search scope to it first" is not decided
 in this layer at all. It lives in `BrainService._search` itself
-(`stigmergy/server/service.py`, [ADR 022](../decisions/022-entity-navigation.md)), so
+(`stigmergy/server/service.py`, [navigation.md](./navigation.md)), so
 every MCP client gets it — stdio, HTTP, Slack, `ask`, any future agent — not only this one.
 `AnswerBrain.search_text` is a thin renderer over whatever the service already resolved, nothing
 more. Full mechanism: [navigation.md](./navigation.md).

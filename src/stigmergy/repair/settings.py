@@ -6,7 +6,7 @@ here: a connection argument, not tunable behaviour.
 
 The bounds below are the loop's blast radius, and they belong to code rather than to the skill: a
 brief can be argued with and a constant cannot. They carry more weight than they used to, because
-nobody reads a repair before it lands (ADR 044) — `MAX_OPS_PER_PROPOSAL` is what keeps ONE repair
+nobody reads a repair before it lands — `MAX_OPS_PER_PROPOSAL` is what keeps ONE repair
 from being a corpus-wide rewrite, and the two ceilings below keep one PASS from being one.
 """
 import os

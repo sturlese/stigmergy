@@ -264,7 +264,7 @@ def test_purge_never_touches_the_evidence_blob():
     assert "evidence" not in inspect.signature(retention.purge).parameters
 
 
-# ── a flagged risk: "physically" is honest, not absolute (module/ADR 014 §7
+# ── a flagged risk: "physically" is honest, not absolute (module/the capture queue
 # caveat) — the UPDATE nulls the LIVE row immediately; the previous row version survives as a dead
 # tuple until autovacuum, like any Postgres UPDATE. Asserted mechanically via `ctid` (Postgres's
 # built-in physical-location system column — no extension needed): an UPDATE always assigns the

@@ -225,7 +225,7 @@ def test_metrics_clamps_the_window_and_answers_an_empty_world_with_empty_series(
     assert empty["calls_by_tool"] == [] and empty["filed_latency_ms"] == []
     # The status vocabulary is READ from `repair.schema` rather than typed: it is the repair
     # package's to declare, and a list spelled here would go on asserting a lifecycle that package
-    # had already retired (it did — `pending`/`approved`/`rejected` are gone with ADR 044).
+    # had already retired (it did — `pending`/`approved`/`rejected` are gone with the capture-is-the-approval change).
     assert empty["repairs"] == {"applied": 0,
                                 "by_status": {s: 0 for s in repair_schema.STATUSES},
                                 "recent_by_kind": {}, "recent": []}

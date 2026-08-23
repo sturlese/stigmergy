@@ -8,7 +8,7 @@ model and is actually a broken instrument. It would be discovered after paying f
 nothing in the table would say so.
 
 That is not hypothetical, and this file is where it was caught twice. The plural collapse retired
-`report.needs_input`'s singular ask key and the two park cases here had to move; ADR 041 then
+`report.needs_input`'s singular ask key and the two park cases here had to move; the file-first write path then
 retired `needs_input` itself, and `proposals` reads `entities_born` off the SAME reports that
 carry `page_path` and `pages_edited` — a rename there is exactly as invisible and exactly as
 expensive, so the cases that moved were replaced rather than dropped.
@@ -239,7 +239,7 @@ def test_the_duplicate_refusal_carries_the_reason_code_F04_is_scored_on(filed, e
 
 def test_the_identity_a_filing_proposed_is_observed_off_the_reports_own_key(filed, expectations):
     """**REPLACES the two park cases.** `report.needs_input` used to carry the names a capture had
-    stopped on; ADR 041 removed the function with the state, and the same judgment now arrives as
+    stopped on; the file-first write path removed the function with the state, and the same judgment now arrives as
     `entities_born` on an ORDINARY `report.filed` — the identities the filing created
     unconfirmed, in the commit that landed the page.
 
@@ -332,7 +332,7 @@ def test_a_filed_meeting_meets_F08s_expectation_with_each_decisions_own_anchor(f
 
 
 def test_a_meeting_proposes_through_the_same_key_the_fast_lane_does(filed, expectations):
-    """The meeting half of the proposal observation, and the point ADR 041 argues: the same input
+    """The meeting half of the proposal observation, and the point the file-first write path argues: the same input
     must not behave differently per door. `filed_meeting` is a different builder from `filed` and it
     carries `entities_born` under the same name, so one read serves both flows — which is what
     lets F09 be scored on the facet F02 is scored on rather than on a meeting-shaped variant of it.
@@ -353,7 +353,7 @@ def test_a_meeting_proposes_through_the_same_key_the_fast_lane_does(filed, expec
     assert run_filing.score_phase(entry["expect"], observed)["proposals"] is True
 
 
-# **DELETED with the `reuse` facet (ADR 041):**
+# **DELETED with the `reuse` facet:**
 # `test_a_meeting_that_lost_a_decision_on_the_way_back_is_observed_as_not_preserved`,
 # `test_a_meeting_that_re_filed_its_parked_distillation_intact_is_observed_as_preserved`,
 # `test_a_re_file_that_carried_no_stored_distillation_is_credited_with_preserving_one`,

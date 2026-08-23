@@ -82,8 +82,7 @@ def record_applied(conn, *, run_id: int, finding_ids, target_paths, ops, rationa
     """A repair that landed. Returns its id.
 
     `diff` is stored because nobody read the change before it was pushed: it is the reading, and a
-    console that only listed paths would be showing a summary of prose a model wrote (ADR 043 D5,
-    generalised by ADR 044 to every repair).
+    console that only listed paths would be showing a summary of prose a model wrote.
 
     `target_paths` is stored SEPARATELY from `ops` even though it is derivable from them, and that
     redundancy is the point: the apply cross-checks the diff it produced against this column, so an

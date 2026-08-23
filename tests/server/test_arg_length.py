@@ -247,8 +247,8 @@ def test_brain_delete_at_the_limit_reason_reaches_the_service():
 
     out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md"], why="x" * MAX_ARG_CHARS)
     # Past the guard and into the door's own first refusal — a genuinely different sentence from
-    # the length check's, on a service with no evidence store wired (a removal is QUEUED since ADR
-    # 044 D3, so the capture queue is what this door needs and what this service has not got).
+    # the length check's, on a service with no evidence store wired (a removal is QUEUED,
+    # so the capture queue is what this door needs and what this service has not got).
     assert "evidence store" in out["error"]
     assert "too long" not in out["error"]
 
@@ -266,7 +266,7 @@ def test_a_pydantic_shaped_value_error_is_still_reduced_to_a_class_name(monkeypa
     monkeypatch.setattr("stigmergy.server.review.queue_deletion", _unmarked)
 
     # `poisoned_service` resolves no audiences, so it is unrestricted — the one identity kind
-    # `brain_delete` authorizes (ADR 044 D3), which is what lets the call reach the door at all.
+    # `brain_delete` authorizes, which is what lets the call reach the door at all.
     svc = poisoned_service(audit=FakeAudit())
     mcp = build_mcp(svc)
 

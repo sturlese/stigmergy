@@ -84,7 +84,7 @@ def test_a_slack_capture_files_the_thread_verbatim_beside_the_synthesis(rig, cle
     digest = hashlib.sha256(THREAD_MATERIAL.encode("utf-8")).hexdigest()
     assert f'content_hash: "sha256:{digest}"' in src
     assert "tier: 1" in src
-    # ADR 028 D6: every source part carries its producer-computed `id:` — the Slack
+    # the Drive door: every source part carries its producer-computed `id:` — the Slack
     # caller proves the stamp fires for ALL callers of the shared writer, not only drive's.
     assert f'id: "{SOURCE_STEM}"' in src
     assert f"submitted_by: {support.DEFAULT_SUBMITTER}" in src
@@ -153,7 +153,7 @@ class _UnresolvableAnchorAgent:
 
     def __init__(self, inner):
         self.inner = inner
-        # The declared port member, copied from what this wraps (ADR 033). Plain attribute
+        # The declared port member, copied from what this wraps. Plain attribute
         # access with NO default: `processing._one_pass` refuses an agent that carries no
         # `structured_ordinary` rather than defaulting it, so a wrapper that swallowed the
         # declaration would silently change which shape of the ordinary flow runs behind it.
@@ -203,7 +203,7 @@ def test_a_slack_capture_about_a_new_name_files_the_thread_the_note_and_the_newb
         rig, clean_queue):
     """OLD BEHAVIOUR: parked with no source page written. The set lands in one commit now — the
     verbatim thread, the synthesis anchored to the newborn entity, and the entity page itself,
-    confirmed by whoever captured it (ADR 044)."""
+    confirmed by whoever captured it."""
     env, deps = rig
     item, result = _file(clean_queue, deps,
                          f"DOUBLE:propose=Umbrella Corp\n{THREAD_MATERIAL}",
@@ -264,7 +264,7 @@ def test_a_long_thread_splits_into_slack_parts_through_the_shared_writer():
         source_kind="slack", tags=("source", "slack-thread"), url=PERMALINK)
 
     assert [stem for stem, _pid, _text in parts] == [SOURCE_STEM, f"{SOURCE_STEM}-p2"]
-    # ADR 028 D6: the producer computes each part's EXPLICIT chain identity — the
+    # the Drive door: the producer computes each part's EXPLICIT chain identity — the
     # filename stem carries `-p<n>` (a wikilink target must be a filename), the identity carries
     # the historical `#p<n>` sub-identity convention, and part 1's identity IS the bare stem.
     assert [pid for _stem, pid, _text in parts] == [SOURCE_STEM, f"{SOURCE_STEM}#p2"]

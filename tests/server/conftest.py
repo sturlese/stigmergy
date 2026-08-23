@@ -337,7 +337,8 @@ def run_http_server(app):
 # for real, and a faked one would prove nothing about the property under test.
 #
 # `STEWARD` is UNRESTRICTED in the fixture identities file (`["brain-admins"]`) and `ALICE` is scoped — which is
-# exactly the split `brain_delete` authorizes on since ADR 044 D3. The name is kept because that is
+# exactly the split `brain_delete` authorizes on since the capture-is-the-approval change. The name
+# is kept because that is
 # what a person who may remove pages is called in this repo's prose.
 STEWARD = "steward@example.com"
 ALICE = "alice@example.com"
@@ -378,7 +379,8 @@ def env(tmp_path):
     `STIGMERGY_REPO` shape to resolve their entity registry from.
 
     It used to require gitleaks, because the deletion door ran the write path's gates inside the
-    MCP call. Since ADR 044 D3 no door in this package writes to the corpus at all — a removal is
+    MCP call. Since the capture-is-the-approval change no door in this package writes to the corpus
+    at all — a removal is
     QUEUED here and performed by the worker — so no test here has a gate to run, and gating the
     package on a binary it no longer uses would skip real coverage on any laptop without it. The
     gates keep their coverage where they run: `tests/librarian/` and `tests/repair/`.
@@ -389,7 +391,7 @@ def env(tmp_path):
 
 def make_review_service(env, conn, identity_name=ALICE, *, audiences=None, evidence=None,
                         knowledge_repo=None, entity_registry_path=None):
-    """A service with the queue wired up. Since ADR 044 D3 this process writes nothing to the
+    """A service with the queue wired up. Since the capture-is-the-approval change this process writes nothing to the
     corpus — a removal is QUEUED here and performed by the worker — so there is no repo URL and no
     credential to configure: what a deletion test needs from this fixture is an evidence store and
     an identity."""

@@ -1,4 +1,4 @@
-"""The HTTP transport (ADR 013): a REAL uvicorn server, a REAL MCP `streamablehttp_client`,
+"""The HTTP transport: a REAL uvicorn server, a REAL MCP `streamablehttp_client`,
 driving the exact production wiring (`transport_http.build_http_app`). Local-only, offline: no
 Fly, no Supabase, no R2, no OpenAI key (`ask` runs `ANSWER_LLM=fake`). Skips without postgres,
 same posture as the rest of `tests/server/`.

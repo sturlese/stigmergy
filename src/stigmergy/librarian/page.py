@@ -320,7 +320,7 @@ def stamp_server_fields(text: str, *, submitted_by: str,
     `acl is None` omits the field — the page contract's spelling of "open". An EMPTY LIST is a
     value, not an absence, and is written as `acl: []`: that is the corpus-wide spelling of
     "nobody" (`server.acl.visible`), and collapsing it to "open" is precisely the two-dialect
-    defect ADR 045 D9 exists to end — the librarian's old resolver did exactly that, so the one
+    defect the one-dialect rule exists to end — the librarian's old resolver did exactly that, so the one
     spelling `ops/acl.json` used to restrict meant its opposite once stamped. Nothing derives `[]`
     today (a door with no groups files open, and stores `None`), which is why this is written as a
     rule rather than as a branch anybody exercises.
@@ -350,8 +350,8 @@ def stamp_source_fields(text: str, *, submitted_by: str, as_of: str,
 
     **`acl` does NOT.** A provenance page carried no audience while the label was resolved from a
     page's own path, and a meeting page listing its decision set was the leak that argument
-    produced: the distilled pages were labelled and the page naming them all was not. Under
-    ADR 045 D2 the label belongs to the CAPTURE, so every page it writes carries the same one, and
+    produced: the distilled pages were labelled and the page naming them all was not. The label
+    belongs to the CAPTURE, so every page it writes carries the same one, and
     a source is the origin of that label rather than an exception to it — a source does not
     restrict itself, it restricts what is distilled from it. Same dialect as everywhere:
     `None` omits the line, `[]` is written and means nobody.

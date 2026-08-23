@@ -96,7 +96,7 @@ Three things worth proving here specifically:
   the worker holds no embedding key. Prove the reporting rather than a button: note each pass's
   last run and its stats, then check them against `job_runs` over the staging DSN. A pass whose
   last run is days old on a healthy worker is the finding.
-- **Repairs is READ-ONLY, and reading it is the point** (ADR 044): the worker derived, applied and
+- **Repairs is READ-ONLY, and reading it is the point**: the worker derived, applied and
   recorded each row without anybody approving it, so the diff on the card is prose nobody read
   before it landed. Read one. An empty ledger is an empty ledger — it proves the route serves,
   never that a repair applies; the gardener drill below is what makes one appear.
@@ -130,7 +130,7 @@ attribution is resolved server-side and never claimed by the client — the `app
 newborn entity page and the `Approved-by:` trailer on a deletion both name the caller the SERVER
 resolved, whatever the client said — and a scoped identity's `brain_delete` is refused by name.
 
-**Make the visibility split observable — you can now create one.** Since ADR 045 the audience is
+**Make the visibility split observable — you can now create one.** The audience is
 decided at the DOOR, so there is no config file to inspect and nothing to wait for:
 
 1. `brain_submit(kind="raw", material=…, audience=["finance"])` as the scoped identity, and watch

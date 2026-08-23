@@ -32,7 +32,7 @@ section is the whole answer.
 **The vocabulary has to be agreed, not coined.** A solo wiki can let the model invent a page for
 every name it meets. With several writers that yields three pages for one customer under three
 spellings, and every link pointing at the wrong one. Here an entity is **born through a human act**:
-the capture IS the approval ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md)).
+the capture IS the approval.
 Somebody read the material and decided the brain should hold it, so the identity that material
 introduces is created under the name the material uses and confirmed by them — `approved_by:` on the
 entity page names the submitter and is never empty. A spelling the material uses for an entity the
@@ -172,8 +172,7 @@ service layer, so every client gets it, not only `ask`. Full narrative:
 
 **Eight MCP tools**, and the list is pinned by a test: read — `search_brain`, `read_page`,
 `list_entities`, `describe_entity`, `ask`; write — `brain_submit`, `brain_submissions`,
-`brain_delete`. There is no review pair: the capture is the approval
-([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md)).
+`brain_delete`. There is no review pair: the capture is the approval.
 
 ### The layering, and why it is a test
 
@@ -291,9 +290,9 @@ beside it in the source; the bare module at the top is small enough to be its ow
 |---|---|
 | `tests/` | the behavioural invariant + the architecture tests that make the seams rules |
 | `evals/` | three real instruments, one per model surface — golden retrieval, golden QA and golden filing (the only one that WRITES) — each over a frozen fixture, plus the git-resident score series |
-| `docs/` | [`DESIGN.md`](./docs/DESIGN.md) (what this system is) · `decisions/` (why) · `reference/` (what) |
+| `docs/` | [`DESIGN.md`](./docs/DESIGN.md) (what this system is, and what earns a place in it) · `reference/` (what each subsystem does) |
 | `scripts/` | the end-to-end harnesses, plus the three keyless `walk_*.py` narrations the quick start runs |
-| `deploy/` | **tracked, not gitignored**: the empty `ops/` defaults a deploy bakes your real ones over. Nothing else — every unattended pass runs inside the deployment now (ADR 044), so there is no scheduled job to ship a template for |
+| `deploy/` | **tracked, not gitignored**: the empty `ops/` defaults a deploy bakes your real ones over. Nothing else — every unattended pass runs inside the deployment now, so there is no scheduled job to ship a template for |
 | `docker-compose.yml` · `Dockerfile` · `fly.toml` | the local test stack (postgres+pgvector, minio, a bare git remote), the one image all three process groups run, and the staging deployment that splits them |
 | `.github/` | this repository's OWN CI only — one workflow, plus the issue and PR templates |
 | `.claude/` | this repository's own agent skills: how to land a change here, and how to validate a deployment. Not to be confused with the knowledge repo's `.claude/`, which is where the librarian's operating procedure lives |
@@ -313,8 +312,7 @@ Scope discipline, not a roadmap. These are ruled out rather than pending:
 - **SQL over certified datasets.** This is a knowledge system, not a data warehouse.
 - **A review queue over what the librarian wrote.** Nine gates judge the bytes before they land, so a
   human clicking afterwards is confirming what code already decided — a backlog with a person's name
-  on it. The undo is `git revert` in a repository they own
-  ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md)).
+  on it. The undo is `git revert` in a repository they own.
 - **A second human in the write path, anywhere.** Not for an entity, not for a spelling, not for a
   repair. The person who captured already read the material and decided the brain should hold it;
   asking a second one to confirm it moves the decision away from the only person who had the
@@ -331,7 +329,6 @@ Scope discipline, not a roadmap. These are ruled out rather than pending:
 | How do I contribute? | [`CONTRIBUTING.md`](./CONTRIBUTING.md) |
 | What is this system, and what earns a place in it? | [`docs/DESIGN.md`](./docs/DESIGN.md) — the definition: the closed list of what multi-user forces, the page vocabulary, the rules |
 | What does each subsystem do? | [`docs/reference/`](./docs/reference) — one per package, plus `src/stigmergy/*/index.md` code maps |
-| Why is it built this way? | [`docs/decisions/`](./docs/decisions) — the architecture decision records |
 | How do I operate it? | [`docs/reference/operator-runbook.md`](./docs/reference/operator-runbook.md) |
 | How do I operate it from a browser? | [`docs/reference/admin-console.md`](./docs/reference/admin-console.md) |
 | What does my knowledge repo need to look like? | [`docs/reference/knowledge-repo.md`](./docs/reference/knowledge-repo.md) |

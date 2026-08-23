@@ -192,7 +192,7 @@ def _birth_lists(entities_born, aliases_added) -> tuple[list, list]:
         entry = {"id": _clean_identity(e.get("id", ""), 80),
                  "name": _clean_identity(e.get("name", ""), 120),
                  "type": _clean(e.get("type", ""), 40)}
-        # Who the identity is confirmed by — the capture's own submitter, on every entity (ADR 044).
+        # Who the identity is confirmed by — the capture's own submitter, on every entity.
         if e.get("confirmed_by"):
             entry["confirmed_by"] = _clean_identity(e["confirmed_by"], 120)
         born.append(entry)
@@ -214,7 +214,7 @@ def births_clause(born: list, added_aliases: list, updated: list = (),
     """The sentence telling a submitter the page landed AND which identities their capture
     introduced. Empty when nothing was created, so an ordinary filing's sentence is unchanged.
 
-    `withheld` is the half that only a RESTRICTED capture ever has (ADR 045 D6): what its material
+    `withheld` is the half that only a RESTRICTED capture ever has: what its material
     established could not go on an entity page, because an entity page is the brain's shared
     vocabulary and carries no audience. COUNTED, never quoted — the sentence must not put back
     what it is telling you was kept off an open page — and said at all because the person who
@@ -323,7 +323,7 @@ def filed_retry(*, original_id: int, page_path: str, commit: str) -> dict:
 
 def filed_delete(*, deleted: list, rewritten: dict, commit: str, model_calls: int = 0) -> dict:
     """A removal that landed. The one report that carries page BYTES: nobody read the prose the
-    sweep wrote before it was pushed (ADR 043 D5), so the per-page diff travels in the row and the
+    sweep wrote before it was pushed, so the per-page diff travels in the row and the
     read surfaces show it — ACL-scoped and fenced by whoever renders it, exactly as
     `brain_delete`'s own response used to be.
 

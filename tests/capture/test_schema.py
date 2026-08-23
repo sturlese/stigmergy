@@ -53,8 +53,8 @@ def test_durable_tables_names_exactly_the_four_the_index_rebuild_must_not_take()
 
 def test_submittable_kinds_are_the_one_vocabulary_every_door_shares():
     """`SUBMITTABLE_KINDS` names the SHAPE of captured material — never a topic — and it is the ONE
-    list: there is no narrower `brain_submit` list and no operator door with a kind of its own
-    (ADR 044 D4). A contract change here is tracked rather than silent."""
+    list: there is no narrower `brain_submit` list and no operator door with a kind of its own.
+A contract change here is tracked rather than silent."""
     assert schema.SUBMITTABLE_KINDS == ("raw", "page", "meeting", "document")
     assert schema.MEETING == "meeting"
     assert schema.DOCUMENT == "document"
@@ -62,7 +62,7 @@ def test_submittable_kinds_are_the_one_vocabulary_every_door_shares():
 
 
 def test_delete_is_a_queue_kind_and_not_a_submittable_one():
-    """The one kind that is not captured material: a person's removal (ADR 044 D3). It rides the
+    """The one kind that is not captured material: a person's removal. It rides the
     queue for everything a capture gets — a durable row, a lease, an attempt count, an audited
     submitter — and it is deliberately absent from what any door may SUBMIT, because the door that
     queues one is the door that authorized it."""
@@ -109,7 +109,7 @@ def test_prepare_submission_does_not_require_meeting_hints_for_other_kinds():
     assert submission.kind == "raw"
 
 
-# ── kind=="document" is validated at the SAME enqueue seam (ADR 044 D4) ─────────────────────────
+# ── kind=="document" is validated at the SAME enqueue seam ─────────────────────────
 def test_prepare_submission_refuses_a_document_with_no_title_hint():
     """The title is the source page's identity; without it there is nothing to file the part as."""
     with pytest.raises(SubmissionRejected, match="title"):
@@ -286,7 +286,7 @@ def test_reject_source_provenance_hints_leaves_the_four_untrusted_source_hints_a
 
 
 def test_the_channel_id_is_refused_from_every_door_but_slacks_own():
-    """It became an ACCESS-CONTROL key with ADR 045 D2: the Slack door files a capture at the
+    """It became an ACCESS-CONTROL key with the audience-from-the-door change: the Slack door files a capture at the
     groups of the channel it was taken in, so the channel id must be the SERVER's observation of a
     Slack event and never a caller's assertion. Before that it was an inert suggestion nothing
     read, which is why it sat outside this set."""
@@ -308,7 +308,7 @@ def test_source_provenance_hint_keys_is_exactly_the_trio_the_writer_acts_on():
     """Pinned so a source hint joining the refusal must be a reviewed decision that something
     downstream started acting on it: `source_client` switches the attachment on,
     `source_permalink` lands as `url:` on a reader-facing page, and `source_channel_id` decides
-    the audience every page of the capture is stamped with (ADR 045 D2)."""
+    the audience every page of the capture is stamped with."""
     assert frozenset({"source_client", "source_permalink",
                       "source_channel_id"}) == schema.SOURCE_PROVENANCE_HINT_KEYS
 
@@ -464,7 +464,7 @@ def test_prepare_submission_rejects_material_over_the_kinds_byte_cap():
 
 def test_the_cap_is_per_kind_a_transcript_may_be_four_times_a_note():
     """A 256 KB-and-one paste is refused as a `raw`; the same bytes are a modest `meeting` or
-    `document` (ADR 044 D4) — the refusal names the kind it bounds, and the largest cap is what
+    `document` — the refusal names the kind it bounds, and the largest cap is what
     a transport's body limit has to fit."""
     text = "x" * (256 * 1024 + 1)
     with pytest.raises(SubmissionRejected, match="too large for a raw"):
@@ -576,7 +576,7 @@ def test_clean_note_strips_control_characters_flattens_newlines_and_clips_word_s
     assert schema.clean_note("  a sentence  ", 40) == "a sentence"
 
 
-# ── a steward's registration rides the hints, and only a steward door may set it (ADR 042) ──────
+# ── a steward's registration rides the hints, and only a steward door may set it ──────
 def test_registration_hints_round_trip_through_the_stored_shape():
     """The two doors build the hints with `registration_hints`, the queue stores them through
     `normalize_hints` like every other hint, and the worker reads them back with

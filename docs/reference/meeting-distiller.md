@@ -4,16 +4,12 @@ A transcript a client submits becomes, unattended, one atomic commit of pages: t
 holding the transcript verbatim (permanent evidence), a `meeting` page (provenance), and N
 `decision` pages (knowledge, anchored, dated). The ordinary fast lane files exactly one page per
 capture; the meeting flow is a SECOND flow through the same queue and the same worker, filing a
-page **set** instead. Design record:
-[ADR 020](../decisions/020-meeting-distiller.md) — it holds the
-decisions this document only shows the results of (a second flow rather than a branch, atomic
-page-set filing, per-page anchoring, the provenance stamp the fast lane's own stamp omits, and flow
-policy passed into `GateContext` closed by default).
+page **set** instead. It is a second flow rather than a branch: atomic page-set filing, per-page
+anchoring, the provenance stamp the fast lane's own stamp omits, and flow policy passed into
+`GateContext` closed by default.
 
-The front half — [`capture.md`](./capture.md) and
-[ADR 014](../decisions/014-capture-queue-and-attribution.md) — and
-the back half's ordinary path — [`librarian.md`](./librarian.md) and
-[ADR 015](../decisions/015-librarian.md) — are unchanged and are not repeated here.
+The front half — [`capture.md`](./capture.md) — and the back half's ordinary path —
+[`librarian.md`](./librarian.md) — are unchanged and are not repeated here.
 The flow spans two packages, so it spans two code maps: the queue and its submission contract are
 [`src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md), the meeting flow itself
 [`src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
@@ -47,7 +43,7 @@ capture_queue row, kind="meeting" (claimed by the SAME librarian worker, same fe
        │     submitter (`approved_by: <them>`) with the registry regenerated — the fast lane's
        │     own writer, `related=` naming this set's DECISION pages by stem
        ├─ edits.apply_declared: the account's DECLARED additive edits, performed by code on pages
-       │     that already exist — all-or-nothing, the fast lane's own call (ADR 038)
+       │     that already exist — all-or-nothing, the fast lane's own call
        ├─ _stamp_meeting: PER-PAGE server stamp (source parts get the provenance group;
        │     meeting page gets no entity/acl; each decision page gets its OWN entity:/acl)
        ├─ gates.run_gates(ctx) over the WHOLE diff, ctx scoped to the meeting flow's own lane
@@ -269,7 +265,7 @@ its helpers, are:
 | `decision-count-mismatch` | the outcome describes N decisions and a different number of decision pages was written — again, code disagreeing with itself |
 | `existing-page-collision` | a computed path for this set already exists in the repo; raised by `_write_meeting_pages` before anything is written |
 
-**Declared edits** ([ADR 038](../decisions/038-meeting-distiller-corpus-context.md)). The account
+**Declared edits**. The account
 may name additive edits to pages that already exist, in the ordinary flow's exact vocabulary
 (`backlink`, `overlap`, `contradiction`), bounded by the parser both flows share
 (`agent._parse_edits`) and performed by `edits.apply_declared` between the write phase and the
@@ -287,7 +283,7 @@ so without the mapping a correct declaration is a dead link that refuses the who
 the retry. A `link` that already names a page passes through untouched.
 
 `zone/meeting-edit-refused` is still in `gate_zone`, and **no flow declares the
-`GateContext.edits_allowed=False` that fires it** any more — this one did until ADR 038 gave it the
+`GateContext.edits_allowed=False` that fires it** any more — this one did until it was given the
 mechanism. The field stays because which caller grants an edit mechanism is a caller's declaration
 rather than a fact about which flows exist, and the finding keeps a code that names the flow that
 motivated it because preserved refused diffs on deployed stacks already carry it in their
@@ -321,7 +317,7 @@ account declares `new_entities`/`new_aliases`, `processing` hands them to `ident
 (the SAME writer the fast lane uses — a meeting is not a second way of creating an identity), and
 each decision page anchors to the entity born in its own commit. Each of those identities is born
 CONFIRMED by the person who submitted the transcript — the capture is the approval, and nobody is
-asked afterwards ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). The meeting
+asked afterwards. The meeting
 account carries `entity_updates` too, and it means the same thing here as on the fast lane: facts
 and connections appended to the page of an entity the registry ALREADY knows, in this set's own
 commit.
@@ -358,7 +354,7 @@ afterwards by the gardener's duplicate-identity pass and merged by the repair th
 - `librarian.agent.build_meeting_prompt` / `parse_meeting_outcome` — the agent side: a different
   system prompt (the brief, not the librarian skill), no page-writing tool at all, and a different
   outcome parse (a page SET rather than one page) — sharing `_parse_edits` with the ordinary
-  parser since [ADR 038](../decisions/038-meeting-distiller-corpus-context.md), so a declared edit
+  parser, so a declared edit
   is bounded identically whichever flow produced it. The prompt carries the WORKER's gathered
   block (`gather.gather` → `agent.render_gathered`, no-tools defaults, fenced) between the registry
   and the transcript: context above the thing it is context for, and the derived registry above
@@ -376,10 +372,10 @@ afterwards by the gardener's duplicate-identity pass and merged by the repair th
   own source attachment without a conditional inside any individual gate. Six of them are widened
   by this flow and, differently, by an attached fast-lane capture
   ([librarian.md](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow));
-  `edits_allowed` is declared by neither and keeps its permissive default everywhere since ADR 038.
-- `librarian.pydantic_backend.PydanticFilingAgent` — the flow's SECOND real backend
-  ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md)). It was the only flow that had one
-  until [ADR 033](../decisions/033-structured-filing-flow.md) gave the ORDINARY flow this flow's
+  `edits_allowed` is declared by neither and keeps its permissive default everywhere.
+- `librarian.pydantic_backend.PydanticFilingAgent` — the flow's SECOND real backend.
+It was the only flow that had one
+  until the ORDINARY flow was given this flow's
   shape and the same backend with it. It exists because
   everything above made this flow portable without anybody planning it: the agent holds no
   page-writing tool, explores nothing, and answers with one structured account — so it needs a model
@@ -401,7 +397,7 @@ afterwards by the gardener's duplicate-identity pass and merged by the repair th
   describe the SHAPE of the account, every other word of the skill applies unchanged — rather than
   leaving a model to guess which half of a contradiction is operative.
   `STIGMERGY_LIBRARIAN_BACKEND=pydantic` was refused for a worker at startup while it served this
-  flow alone; ADR 033 lifted that refusal, and the OVERRIDE paragraph above is now the only place
+  flow alone; that refusal was lifted, and the OVERRIDE paragraph above is now the only place
   either flow's preamble contradicts its brief — the ordinary brief was rewritten backend-neutral
   and this one was not.
 - `librarian.double.DoubleAgent.run_meeting` — the offline double's meeting-specific directives,

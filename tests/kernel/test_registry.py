@@ -102,7 +102,8 @@ def test_a_top_level_array_registry_is_refused_loudly_not_an_attribute_error(tmp
 # ── the lifecycle key: who introduced an identity, and absence is not a waiting state ──────────
 def test_a_born_entity_and_its_aliases_resolve_and_round_trip(tmp_path):
     """OLD BEHAVIOUR: an entity the librarian created was `proposed: True` with its extra spellings
-    parked on `proposed_aliases`, waiting for a steward. ADR 044: the capture IS the approval — an
+    parked on `proposed_aliases`, waiting for a steward. the capture-is-the-approval change: the
+    capture IS the approval — an
     entity is born confirmed by whoever captured it, and a spelling the material uses is one of its
     `aliases` from the first commit. So there is one alias list and one lifecycle fact, and both
     survive `save_registry`/`load_registry` intact.
@@ -133,7 +134,7 @@ def test_a_born_entity_and_its_aliases_resolve_and_round_trip(tmp_path):
 
 def test_a_registry_written_before_the_lifecycle_key_reads_as_introduced_by_nobody(tmp_path):
     """The benign twin, and the migration in one line: an entry written before `approved_by`
-    existed names no approver, and that is not a waiting state — there is none (ADR 044). It
+    existed names no approver, and that is not a waiting state — there is none. It
     resolves exactly like an entry that names one."""
     path = _registry_file(tmp_path, {
         "globex": {"name": "Globex", "type": "organization", "aliases": ["GX"]}})

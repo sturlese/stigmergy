@@ -5,7 +5,7 @@ Nothing here is faked. A faked diff would prove nothing about `gate_body_rewrite
 gitleaks nothing about the secrets veto, and a faked remote nothing about the push — and those
 three are the whole of what stands between a derived repair and `main`.
 
-**Nobody reads a repair before it lands** (ADR 044), which is what raised the stakes on every
+**Nobody reads a repair before it lands**, which is what raised the stakes on every
 property below: what used to be an Approve button is now the ledger's memory, two ceilings and
 these gates, and the reading happens afterwards from the stored diff. The harness is the worker's
 own — `gitcmd.ephemeral_worktree` off the fixture checkout, one tree per repair, detached at a base
@@ -56,7 +56,7 @@ pytestmark = pytest.mark.usefixtures("require_gitleaks")
 APP_AUTHOR = githubapp.identity({})
 
 # A person's name on a commit, for the ONE repair somebody performs rather than the worker deriving
-# it — `brain_delete` (ADR 043 D2). Every other test here passes no actor at all, which is the
+# it — `brain_delete`. Every other test here passes no actor at all, which is the
 # point: nobody approved a derived repair, and the trailer says so.
 ACTOR = "steward@example.com"
 
@@ -163,7 +163,8 @@ def test_a_derived_backlink_lands_on_the_remote_as_one_app_authored_commit(conn,
 
 def test_the_commit_is_authored_by_the_app_and_names_the_finding_rather_than_a_person(conn,
                                                                                       repo_env):
-    """The trailer ADR 044 changed. Nobody approved a repair the worker derived, so the commit log
+    """The trailer the capture-is-the-approval change changed. Nobody approved a repair the worker
+    derived, so the commit log
     must not claim one did: `Repair:` names the gardener check and the finding ids, which is the
     whole of the provenance there is, and `Approved-by:` is reserved for a person's own deletion."""
     _apply(repo_env, _repair(BACKLINK_OPS, finding_ids=(7, 9), check="model-unlinked-mention"))
@@ -372,7 +373,8 @@ def test_an_ordinary_note_passes_the_same_gate(conn, repo_env):
 
 # ── the bookkeeping door ──────────────────────────────────────────────────────────────────────
 def test_apply_and_record_stores_the_commit_and_the_diff_that_landed(conn, repo_env):
-    """The diff is the whole point of the row under ADR 044: nobody read this change before it was
+    """The diff is the whole point of the row under the capture-is-the-approval change: nobody read
+    this change before it was
     pushed, so the stored bytes ARE the reading, and a ledger that listed paths alone would be
     offering a summary of prose a model wrote."""
     result = _apply_and_record(conn, repo_env, _repair(BACKLINK_OPS))
@@ -506,7 +508,7 @@ def test_the_clone_road_applies_the_same_repair_the_worktree_road_does(conn, rep
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# The second kind: `entity-body` — the one apply that REPLACES prose (ADR 039 amendment)
+# The second kind: `entity-body` — the one apply that REPLACES prose
 #
 # Everything here runs against the same real remote, the same nine gates and the same real
 # gitleaks as the additive kinds above. That is the point: the kind buys its safety from the SAME
@@ -843,7 +845,7 @@ def test_planned_bytes_that_re_name_the_deleted_page_are_refused(conn, repo_env)
 
 
 def test_planned_bytes_that_rewrite_the_frontmatter_are_refused(conn, repo_env):
-    """The second bound, and the division ADR 043 D1 draws: the writer owns the BODY and nothing
+    """The second bound, and the division the written sweep draws: the writer owns the BODY and nothing
     else, so a plan whose frontmatter is not code's own scrub of the page as it stands is refused
     against the tree — a sweep that quietly changed what a page DECLARES could otherwise ride in
     on a plan that was only ever judged for what it says."""
@@ -861,7 +863,7 @@ def test_planned_bytes_that_rewrite_the_frontmatter_are_refused(conn, repo_env):
 
 
 def test_prose_in_planned_bytes_still_meets_the_gates(conn, repo_env):
-    """**The residual, stated rather than implied** (ADR 043 D3). ADR 039 B4 recomputed the whole
+    """**The residual, stated rather than implied**. the governed repair loop recomputed the whole
     sweep at apply time, so ANY edit to `planned_after` was refused; a WRITTEN sweep cannot be
     recomputed, so the prose a model put there is prose the gates judge — exactly `entity-body`'s
     posture and exactly its exposure.
@@ -1166,8 +1168,8 @@ def test_an_additive_repair_racing_a_foreign_push_still_rebases_and_lands(conn, 
 
 
 def test_the_absorbed_entitys_page_still_EXISTS_on_the_remote_after_the_merge(conn, repo_env):
-    """An identity is retired by being superseded, not by `rm` (ADR 016, ADR 039's second
-    amendment). The page stays, demoted and superseded, and knowing that these two names were once
+    """An identity is retired by being superseded, not by `rm`. The page stays, demoted and
+    superseded, and knowing that these two names were once
     two entities is the whole record of the decision."""
     pages = support.seed_duplicate_pair(repo_env)
 
@@ -1357,7 +1359,7 @@ def test_a_merge_diff_containing_an_ADDED_file_is_refused_by_the_cross_check(con
     `return`.**
 
     The `entity-alias` kind is the one caller allowed to write a file that is not a page
-    (`ctx.derived_files`, ADR 039's third amendment), and `gate_zone` says so in its own comment:
+    (`ctx.derived_files`, the governed repair loop's third amendment), and `gate_zone` says so in its own comment:
     the page-shape proof is suspended, and what still stops this kind from CREATING an arbitrary
     file is that every entry in its diff must be a modification. That is enforced by
     `_cross_check`'s `entity-alias` branch falling THROUGH to the shape check — the `delete` branch

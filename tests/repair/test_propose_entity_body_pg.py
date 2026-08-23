@@ -4,7 +4,8 @@ a rewritten page on the remote out — or a recorded reason why not.
 The two properties this file exists for, both of them about what does NOT happen:
 
   · **an entity with fewer than two anchored pages never reaches the model.** A body drafted from
-    nothing is the placeholder with better grammar, and under ADR 044 it would not cost a steward a
+    nothing is the placeholder with better grammar, and under the capture-is-the-approval change it
+    would not cost a steward a
     decision — it would cost the corpus a commit nobody asked for.
   · **the additive road is untouched.** Both kinds ride the same pass, the same ceiling and the
     same memory, and a finding of one kind must never be answered in the other's vocabulary.
@@ -76,7 +77,7 @@ def test_a_placeholder_finding_lands_as_one_body_commit(conn, repo_env, settings
 
 def test_the_body_the_ledger_stored_is_the_body_that_landed(conn, repo_env, settings):
     """The propose-time proof used to be asserted here — "what is on the table is what the applier
-    would perform". Nothing is on a table any more, so the property is the one ADR 044 put in its
+    would perform". Nothing is on a table any more, so the property is the one that took its
     place: the op the row carries and the prose on the remote are the same bytes, and the stored
     diff IS the reading nobody gave this page beforehand."""
     _seed(conn, repo_env)

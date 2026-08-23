@@ -166,7 +166,7 @@ def test_health_the_benign_twin_a_completed_sweep_prints_no_note():
 
 
 # ── corpus deltas ───────────────────────────────────────────────────────────────────────────────
-# "N entities born" is exact (ADR 044): `entities_born_count` sums what the window's FILINGS
+# "N entities born" is exact: `entities_born_count` sums what the window's FILINGS
 # wrote, and the librarian is the only writer of an entity page — so every counted birth is a page
 # that exists. It is still a COUNT and never a list of names: the report carries the names, but a
 # digest that named them would be publishing identities past the destination channel's audiences.

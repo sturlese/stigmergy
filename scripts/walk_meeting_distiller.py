@@ -5,7 +5,7 @@ flow claim it, read the filed page-set report, then drop a transcript naming two
 registry has never heard of and watch the librarian INTRODUCE them and file the set anyway. Real
 Postgres, real git, real gates, the offline double for the agent.
 
-Nothing parks and nobody is asked a question, before or after (ADR 044). An unknown name becomes an
+Nothing parks and nobody is asked a question, before or after. An unknown name becomes an
 entity page born CONFIRMED by the person whose capture introduced it, written into the SAME commit
 as the meeting's pages, and the capture ends `filed`. The last step reads the identities and their
 approver out of a clone of the remote the walk just pushed to.

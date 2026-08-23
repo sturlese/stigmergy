@@ -3,7 +3,7 @@
 Real Postgres through `tests.testdb` (never a faked queue — the house rule), with exactly ONE
 network edge faked: where a digest posts (the digest suite's own posture — `gateway=None` plus
 env, since only dry-run runs in this suite). The console reaches no other service at all: the
-GitHub Actions gateway it once drove the crons through is gone with them (ADR 044 — the night
+GitHub Actions gateway it once drove the crons through is gone with them (the capture-is-the-approval change — the night
 shift runs in the librarian worker), so there is no second fake here to keep honest.
 
 No console mutation writes to the knowledge repo any more either (registering an entity and
@@ -158,8 +158,8 @@ def build_bare_knowledge_repo(root: str) -> str:
 
 
 # The diff every landed fixture row carries. Short, and deliberately a real unified diff: the
-# console's Repairs page exists to show the reading nobody gave the change before it was pushed
-# (ADR 044), so a fixture row with an empty `diff` would let that page look right while showing
+# console's Repairs page exists to show the reading nobody gave the change before it was pushed,
+# so a fixture row with an empty `diff` would let that page look right while showing
 # nothing.
 LANDED_DIFF = ("diff --git a/wiki/notes/Renewals.md b/wiki/notes/Renewals.md\n"
                "--- a/wiki/notes/Renewals.md\n+++ b/wiki/notes/Renewals.md\n"
@@ -174,7 +174,7 @@ def landed_repair(conn, *, path="wiki/notes/Renewals.md", link="Existing Note", 
     row whose two stored facts disagree (the disagreement `apply._cross_check` exists to catch is
     worth reaching by tampering, never by a careless fixture).
 
-    APPLIED rather than pending, because there is no pending any more (ADR 044): the console reads
+    APPLIED rather than pending, because there is no pending any more: the console reads
     what the worker already did, and every row it lists is an attempt that is over.
     """
     ops = [{"op": kind, "path": path, "link": link, "note": note}]
@@ -250,7 +250,7 @@ def no_real_github_app(monkeypatch):
 
 # ── what the librarian leaves behind: proposals, pushed to the bare remote and published ──────
 def _entity_page(name: str, entity_type: str, aliases, approved_by: str) -> str:
-    """One entity page as the librarian writes it (ADR 044): born confirmed by the person whose
+    """One entity page as the librarian writes it: born confirmed by the person whose
     capture introduced it, with every spelling the material used among its own `aliases`."""
     from stigmergy.entities import generator
     listed = "[" + ", ".join(f'"{a}"' for a in aliases) + "]"

@@ -4,7 +4,7 @@ The gardener DETECTS and fixes nothing. This package gives a finding somewhere t
 handing a model a write path: an agent DECLARES a concrete change; CODE validates it twice — when
 it is derived and again in the tree it will be committed from, through the SAME gates the
 librarian's own declared edits pass; and code applies EXACTLY those ops as one App-authored commit.
-Nobody approves it (ADR 044). What stands in the way of a bad repair is the validator, the nine
+Nobody approves it. What stands in the way of a bad repair is the validator, the nine
 gates, the ceilings and the ledger's permanent memory — not a person reading a queue.
 
 What replaces the reading is that the diff is STORED: every applied repair carries the unified diff

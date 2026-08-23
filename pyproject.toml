@@ -45,7 +45,7 @@ stigmergy-librarian-credential = "stigmergy.librarian.gitcredential:main" # git 
 stigmergy-slack = "stigmergy.slack.app:main"                             # the Slack transport — the third process group's entry point, Socket Mode, one process
 stigmergy-pilot-report = "stigmergy.server.pilot_report:main"            # the pilot-checkpoint table, from real audit_log/capture_queue rows — reads only
 stigmergy-gardener = "stigmergy.gardener.cli:main"                       # eleven deterministic corpus-health checks plus three model passes, findings + job_runs persisted, severity-grouped report — posts nothing to anybody
-stigmergy-admin-token = "stigmergy.admin.cli:main"                       # admin console (ADR 029): mint the console's ONE bearer credential — prints plaintext once + the STIGMERGY_ADMIN_TOKEN_HASH line, stores nothing
+stigmergy-admin-token = "stigmergy.admin.cli:main"                       # admin console: mint the console's ONE bearer credential — prints plaintext once + the STIGMERGY_ADMIN_TOKEN_HASH line, stores nothing
 stigmergy-digest = "stigmergy.digest.cli:main"                           # the week in one Slack post — corpus health and corpus deltas; --dry-run to preview
 
 # Last table in `[project]` on purpose: a sub-table ENDS the parent's key/value section, so

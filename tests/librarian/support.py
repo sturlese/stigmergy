@@ -13,7 +13,7 @@ nothing about the worktree/diff/commit/push properties these tests exist to pin.
 **The fixture knowledge repo** (`fixtures/repo/`) mirrors the real knowledge repo's shape closely
 enough to file against: `ops/entity-registry.json` with one registered entity (`Acme Corp`,
 aliased `Acme`) — and NO `ops/acl.json`, because there is no such file any more: a capture's
-audience is the door's decision, carried on its own queue row (ADR 045 D2). Then a pre-existing
+audience is the door's decision, carried on its own queue row. Then a pre-existing
 entity page the registered name resolves to, a pre-existing note page for the
 additive-edit/overlap/delete/rewrite scenarios, and `.claude/tools/stigmergy_lint.py` — a frozen
 copy of the real contract linter from the knowledge repo, copied rather than referenced so the
@@ -255,7 +255,7 @@ def submit(conn, deps: processing.Deps, material: str, *, submitted_by: str = DE
     """Archive + enqueue one capture through the real queue primitive, using `deps.evidence` so
     `processing._material` can read back what was just written.
 
-    `acl` is what a DOOR would have decided for this capture (ADR 045 D2) — the authorization that
+    `acl` is what a DOOR would have decided for this capture — the authorization that
     produced it lives at `BrainService.resolve_submit_audience`, one layer up, and is not this
     seam's to re-check."""
     return queue.submit(conn, deps.evidence, kind="raw", material=material, hints=hints,
@@ -299,7 +299,7 @@ class DelayedAgent:
     of guessing with a fixed sleep (mirrors `tests/capture/test_cli.py`'s `_read_until`).
 
     **It copies `structured_ordinary` and `wants_gathered` for the reason
-    `evals/run_filing.CountingAgent` does** (ADR 033, ADR 034): this stands where `processing`
+    `evals/run_filing.CountingAgent` does**: this stands where `processing`
     expects a `filing_port.FilingAgent`, and a wrapper that swallows a declared port member
     silently changes which branch of the ordinary flow runs behind it and what context that branch
     builds. Plain attribute access with no default, so a backend that forgot to declare either

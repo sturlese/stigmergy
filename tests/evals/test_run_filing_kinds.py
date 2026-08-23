@@ -1,12 +1,12 @@
 """`--kinds`: a subset is a DIFFERENT measurement, and every part of the instrument has to say so.
 
-The filing golden was one set, scored whole, against pinned denominators. ADR 032 gave it a subset
+The filing golden was one set, scored whole, against pinned denominators. the filing port gave it a subset
 mode so a backend that served the meeting flow only could be measured at all — and a subset is where
 a score series can quietly start lying: three phases and twelve phases both render a table with the
 same column headings, and a row in `history.ndjson` read two years later has nothing but its own
 fields to say which one it was.
 
-**ADR 033 lifted the RESTRICTION and kept the flag.** `_require_measurable_subset` — which refused
+**the structured filing flow lifted the RESTRICTION and kept the flag.** `_require_measurable_subset` — which refused
 `--backend pydantic` anything but `--kinds meeting` — is gone with the limitation it described:
 that backend serves every kind the golden set carries now. The four tests that pinned the refusal
 went with it (see the code comment that replaced the function in `evals/run_filing.py`, which keeps
@@ -206,7 +206,7 @@ def test_a_subset_still_owes_the_three_checks_that_are_true_of_any_set(golden):
 
 
 # ── the backend/subset pairing, after the restriction was lifted ───────────────────────────────
-# **DELETED here, with the restriction they pinned (ADR 033):**
+# **DELETED here, with the restriction they pinned:**
 # `test_the_meeting_only_backend_refuses_a_subset_it_could_not_measure`,
 # `test_the_meeting_only_backend_refuses_the_whole_set_too`,
 # `test_the_meeting_only_subset_is_accepted_and_declares_itself_meeting_only` and
@@ -302,8 +302,8 @@ def parse(monkeypatch):
     convenience. Argument shapes alone are asserted through `build_parser()` above, with no stub at
     all.
 
-    **The stub's signature is `_run`'s own**, deliberately: `meeting_only` went with the refusal
-    (ADR 033), and a stub that kept accepting `**kwargs` would swallow a keyword `main` stopped
+    **The stub's signature is `_run`'s own**, deliberately: `meeting_only` went with the refusal,
+and a stub that kept accepting `**kwargs` would swallow a keyword `main` stopped
     passing — or one it started passing — without a single test noticing.
     """
     def _parse(*argv):

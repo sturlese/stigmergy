@@ -1,7 +1,6 @@
 # The hybrid derived index — `stigmergy.index`
 
-What this package is and how to drive it. The **why** lives in
-[ADR 012](../decisions/012-hybrid-index.md); this is the what and the where.
+What this package is and how to drive it — the what and the where.
 Code map: [`src/stigmergy/index/index.md`](../../src/stigmergy/index/index.md).
 
 A derived, disposable search layer over a checkout of the knowledge repo: Postgres +
@@ -17,7 +16,7 @@ ranking. Never a source of truth — wipe it and rebuild it from git whenever co
 | `backends/fake_embedder.py` | deterministic hashed bag-of-words double (tests/CI; keyless) |
 | `store.py` | all SQL DDL and writes: `pages_index` (dropped/recreated per rebuild; carries `links` + its GIN index and `generated_at`), `embedding_cache` (survives; keyed by model + content_hash), `index_meta`, `ops_file_snapshot` (survives; the relpath-keyed cache of the knowledge repo's `ops/` control files, read/written/cleared through `read_ops_file`/`write_ops_file`/`clear_ops_file` — see "The ops files ride along" below), `webhook_deliveries` (survives; the applied-delivery ids behind the webhook's replay protection); `upsert_pages`/`delete_pages`/`current_content_hashes` are the webhook's incremental primitives, beside `insert_pages`, never a second row shape; `existing_paths` is the webhook's one-query snapshot for outbound-link resolution; `pages_with_page_id_prefix`/`set_superseded_by` are the webhook's split-chain propagation primitives. `create_search_indexes` runs **after** the bulk load, never before |
 | `build.py` | `rebuild(conn, repo_dir, embedder, fts_config="english")` — the full rebuild, cache-aware: init schema → insert rows → build the search indexes → reconcile the entity-registry snapshot from the checkout |
-| `rank.py` | pure ranking: RRF fusion (`RRF_K` 60, `CANDIDATE_POOL` 40 per arm, `TOP_K` 5) + the six contract factors (ADR 012), snippets; `today` injected for staleness so a ranking is reproducible instead of wall-clock dependent. RRF is higher-is-better, so the factor constants DIVIDE the score — penalties > 1, boosts < 1. **Two things live here that a reader might expect elsewhere**: the entity boost fires on an `entity_hint` the service resolved and passed DOWN (never re-inferred from query tokens), and `rank()` collapses a split document's parts to ONE top-k slot before the `[:k]` cut |
+| `rank.py` | pure ranking: RRF fusion (`RRF_K` 60, `CANDIDATE_POOL` 40 per arm, `TOP_K` 5) + the six contract factors, snippets; `today` injected for staleness so a ranking is reproducible instead of wall-clock dependent. RRF is higher-is-better, so the factor constants DIVIDE the score — penalties > 1, boosts < 1. **Two things live here that a reader might expect elsewhere**: the entity boost fires on an `entity_hint` the service resolved and passed DOWN (never re-inferred from query tokens), and `rank()` collapses a split document's parts to ONE top-k slot before the `[:k]` cut |
 | `search.py` | the shared base query: both SQL arms under the same frontmatter filters, fusion, `search()` / `search_arms()`; `FILTER_COLUMNS` is the allowlist. It threads `entity_hint` (to the ranker) and `fts_expansion` (registry aliases OR-ed into the LEXICAL arm only — the vec arm embeds the raw query untouched) |
 | `check.py` | the retrieval-substrate lint behind `stigmergy-index --check` — deterministic SQL over `pages_index` asking the questions an operator would not think to ask until something already looked wrong. See "Linting the index" below |
 | `golden.py` | golden-set loading + per-arm Recall@k scoring (pure); it carries each question's `filters` through to the runner but never interprets them (no `search` import, no DB) |
@@ -128,8 +127,8 @@ This Postgres holds more than a cache. `capture_queue`, `audit_log`, `job_runs` 
 `ingest_errors` (`stigmergy.capture.schema.DURABLE_TABLES`) are **durable**: a queued capture exists
 nowhere else until the librarian files it, so it cannot be rebuilt from git the way `pages_index`
 can. `repairs`, `gardener_findings` and `admin_actions` share the database on the same terms — the
-ledger of what the worker did to the corpus, which is the reading nobody gave it beforehand
-([ADR 044](../decisions/044-the-capture-is-the-approval.md)). That is why `store.init_schema` drops
+ledger of what the worker did to the corpus, which is the reading nobody gave it beforehand.
+That is why `store.init_schema` drops
 `pages_index` **by name** and always must — a "drop the schema and rebuild" shortcut would take the
 queue with the cache. `stigmergy-index --rebuild` leaves all four durable tables standing,
 asserted by
@@ -225,7 +224,7 @@ one optional file read of the registry.
 
 **WARN — worth an operator's eyes, never an exit code:** a dangling `superseded_by` (the named
 successor is not in the index — may be legitimately historical), and an anchored-but-unregistered
-entity (it resolves for navigation under ADR 022 D5, but gets no aliases, no entity-first search
+entity (it resolves for navigation, but gets no aliases, no entity-first search
 and no TOLD boost).
 
 `--check` reads its id set through `kernel.registry`, never through `stigmergy.server`: the index

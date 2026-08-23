@@ -63,7 +63,7 @@ def render(entity_id: str, entity_title: str, members: list[Member], *, member_h
          # exactly the silence #85 was filed for — so `backlink_hash` is REQUIRED here, and a
          # view written without one reads as stale until it has been regenerated once.
          f'member_hash: "{member_hash}"', f'backlink_hash: "{backlink_hash}"']
-    # NO `acl:` line, ever (ADR 045 D5). A view is the OPEN rollup: `skeleton.members_of` admits
+    # NO `acl:` line, ever. A view is the OPEN rollup: `skeleton.members_of` admits
     # only members that may be rendered onto an open page, and `backlinks_of` gates the
     # non-member feed the same way, so there is nothing on this page to restrict. The label it
     # used to carry was the intersection of its members' — which never widened access, correctly,

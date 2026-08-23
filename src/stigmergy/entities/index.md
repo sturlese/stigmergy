@@ -7,7 +7,7 @@ fold, the body builder, the page render — and the generator that derives
 agent, and **nothing here writes to git**: it answers questions and renders text, and
 `librarian.identity` does the writing.
 
-**The capture is the approval** ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
+**The capture is the approval**.
 An entity page's `approved_by:` names the person whose capture introduced the identity and is
 never empty; a spelling the material uses for a registered entity is one of its `aliases:`. There
 is no proposed state, no inbox and no decision — which is why this package has no CLI, no clone

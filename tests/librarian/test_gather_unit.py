@@ -1,5 +1,5 @@
 """The deterministic gatherer: what the structured filing agent is HANDED instead of what it went
-looking for (ADR 033 D1).
+looking for.
 
 `gather.gather` is a pure function of `(worktree, registry, material)` plus two bounds, so this
 whole file is a directory of markdown files, a `Registry` built from a real registry file, and no
@@ -867,7 +867,7 @@ def test_the_gathered_object_is_frozen_because_it_is_evidence(tmp_path):
 
 
 # ── STOP-1: the gatherer reads only what is really INSIDE this capture's checkout ──────────────
-# The claim ADR 033 D1 makes is "the reader moved, the data ORIGIN did not". It is true only
+# The claim the structured filing flow makes is "the reader moved, the data ORIGIN did not". It is true only
 # because of `_confined`: the exploring agent's reads went through a `PreToolUse` hook that
 # resolved `realpath` first, and `corpus.load_pages` — the INDEX's parser — has no such notion. So
 # without this filter the structured shape would read strictly MORE than the shape it replaces,
@@ -1108,7 +1108,7 @@ def test_a_block_whose_constant_members_alone_blow_the_budget_says_the_list_is_e
     assert agent_module.GATHERED_ALL_TRIMMED_NO_TOOLS in block, (
         "an all-trimmed block must tell the agent what to do with no candidates at all")
     assert "park" not in agent_module.GATHERED_ALL_TRIMMED_NO_TOOLS, (
-        "the brief offered parking as an outcome after ADR 041 retired it")
+        "the brief offered parking as an outcome after the file-first write path retired it")
 
 
 def test_an_ordinary_gather_renders_no_trim_sentence_at_all(tmp_path):

@@ -136,7 +136,7 @@ MODEL_SUGGESTED_ACTIONS = {
         "no command — the worker's repair pass drafts a body from the pages anchored to this "
         "entity and commits it; the diff is on the Repairs page, and `git revert` is the undo"),
     # Names no command, like every action above it, and for the same reason: the answer to this
-    # check is a repair the worker applies, not something anybody types (ADR 044 D2).
+    # check is a repair the worker applies, not something anybody types.
     # `entity-alias` is the repair kind that performs it — the survivor gains the absorbed
     # entity's spellings, every page anchored to it is re-anchored, the absorbed page is marked
     # superseded and the registry is regenerated, as one commit. That they are genuinely two

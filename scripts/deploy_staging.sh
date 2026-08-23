@@ -51,7 +51,7 @@ if [ ! -f "$STIGMERGY_REPO/ops/identities.json" ]; then
 fi
 
 # The roster must parse under the grammar the SERVER will read it with, before the image that
-# reads it ships. Since ADR 045 D7 there is one value shape, and a leftover `"*"` invalidates the
+# reads it ships. There is one value shape, and a leftover `"*"` invalidates the
 # WHOLE file rather than one entry — so deploying ahead of the roster rewrite is a total 401
 # outage, not a partial one. Same posture as the missing-file check above: exit 2, with the
 # parser's own sentence, which names the line to write instead.
@@ -123,7 +123,7 @@ else
        "entity-first resolution until one exists (not a failure)" >&2
 fi
 
-# ADR 029: the digest's audience-scoping map, for the admin console's in-process digest. Same
+# The digest's audience-scoping map, for the admin console's in-process digest. Same
 # always-written posture as the registry above so the Dockerfile COPY never fails; `{}` is a
 # valid empty mapping — every audience then falls back to the safe empty default.
 if [ -f "$STIGMERGY_REPO/ops/slack-channels.json" ]; then

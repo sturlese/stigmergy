@@ -2,7 +2,7 @@
 other.
 
 A merge is a SUPERSESSION, never a removal. `wiki/entities/` is absent from every deletable set by
-construction (ADR 016, ADR 039's second amendment): the absorbed page STAYS, marked
+construction: the absorbed page STAYS, marked
 `superseded_by:` the survivor, demoted by `index.rank` exactly as any superseded page is, and still
 readable — knowing that these two names were once two entities is the whole record of the decision.
 
@@ -25,8 +25,8 @@ linter refuses an alias that names an existing page — `alias 'X' collides with
 wiki/entities/X.md` — because the wikilink namespace is keyed on page STEMS, and the absorbed
 page's file is still there by governance. So the survivor claims the absorbed entity's ALIASES and
 never its own name, and `_unclaimable` refuses such an alias at PLAN time with a sentence rather
-than letting `gate_contract` veto it at apply time. The consequence is stated plainly in ADR 039's
-third amendment and is not hidden here: the absorbed name keeps resolving to the absorbed page's
+than letting `gate_contract` veto it at apply time. The consequence is stated plainly rather than
+hidden: the absorbed name keeps resolving to the absorbed page's
 retired identity, which now says what it was merged into.
 
 Three properties buy this kind its safety, and each is asked of a different thing — `deletion.py`'s

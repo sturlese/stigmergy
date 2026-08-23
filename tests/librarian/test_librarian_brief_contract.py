@@ -2,7 +2,7 @@
 
 `test_meeting_brief_contract.py`'s twin, for the brief the ORDINARY flow reads — and it exists for
 the reason that file's own history gives: dropping a rule from one side while the other keeps
-promising it is invisible to 3,000 green tests. ADR 033 made the exposure worse rather than better.
+promising it is invisible to 3,000 green tests. the structured filing flow made the exposure worse rather than better.
 The brief is backend-NEUTRAL — it documents a worker that hands the agent its context and
 writes the page from a structured account — and any backend that departs from it says so in an
 ENVIRONMENT preamble on the platform side. One shape answers it today; when a second one existed
@@ -120,7 +120,7 @@ def test_the_frozen_brief_records_the_commit_it_was_taken_from():
     """A copy with no recorded provenance cannot be resynced with confidence — "is this behind or
     ahead?" has no answer without the sha the copy was taken at.
 
-    **40 hex OR the placeholder, and it goes green either way.** ADR 033's two PRs land together,
+    **40 hex OR the placeholder, and it goes green either way.** the structured filing flow's two PRs land together,
     so the brief's own commit is minted after these bytes are copied here; a sha row that named the
     PREVIOUS brief would be worse than a placeholder, because it would look answered. This is
     deliberately NOT a skip: a skipped test proves nothing about the row's SHAPE, and the shape is
@@ -169,7 +169,7 @@ def test_the_pending_sha_cannot_survive_the_knowledge_repo_landing():
     if source.read_bytes() != _FROZEN_BRIEF.read_bytes():
         pytest.skip(
             f"the knowledge repo's brief is not yet these bytes, so {_PENDING_SHA} is still the "
-            f"honest answer: the PR carrying ADR 033's brief has not landed. (If it landed with "
+            f"honest answer: the PR carrying the structured filing flow's brief has not landed. (If it landed with "
             f"DIFFERENT bytes, the drift test above is the one that says so.)")
 
     pending_names = ", ".join(str(p.relative_to(_PLATFORM_ROOT)) for p in still_pending)
@@ -201,7 +201,7 @@ def test_the_contract_table_is_not_vacuous():
 def _code_text() -> str:
     """The six modules the ordinary flow's contract actually lives in.
 
-    Wider than the meeting version's two, because ADR 033 spread the flow: `gather` builds the
+    Wider than the meeting version's two, because the structured filing flow spread the flow: `gather` builds the
     context the brief promises, `edits` validates the declarations it documents, and `agent` owns
     the outcome boundary that decides which half of the account is well-formed.
 
@@ -227,7 +227,7 @@ def _code_text() -> str:
 # check cannot cross the line breaks between them, so each entry sits inside one line of the real
 # file).
 RULE_TABLE = [
-    # The injection vocabulary, unchanged from the pre-ADR-033 brief and still the fixed set
+    # The injection vocabulary, unchanged from the pre-the structured filing flow brief and still the fixed set
     # `processing._injection_categories` filters an account's findings against.
     ("`declare-canonical` · `write-outside-lane` · `reveal-credentials`", "INJECTION_CATEGORIES"),
     # The confinement-by-construction claim, on both sides. The brief tells the agent it names a
@@ -265,7 +265,7 @@ RULE_TABLE = [
     #    the difference between an ownerless page and a declared company-wide one.
     ("2. **COMPANY-WIDE, with a written reason** — when the material genuinely is about the "
      "company as", "declared company-wide scope with no written reason"),
-    # 3. INTRODUCE: the outcome that replaced the park, and then the proposal (ADR 044). The
+    # 3. INTRODUCE: the outcome that replaced the park, and then the proposal. The
     #    brief tells the agent an unknown name is introduced and FILED; the marker is the ordinary
     #    flow's call into the one module that writes those pages before the diff is judged. A brief
     #    promising the identity lands in the same commit is only true because this call precedes
@@ -290,7 +290,7 @@ RULE_TABLE = [
      "_build_ordinary_page"),
     # The wikilink vocabulary the brief hands over is the SAME set `edits.validate` later answers
     # "does this link resolve" with — one reading, so the gatherer cannot offer a name the edit
-    # validator refuses. Since ADR 045 D3 the names come off the SCOPED corpus rather than a
+    # validator refuses. Since the audience-from-the-door change the names come off the SCOPED corpus rather than a
     # filesystem walk, which is a strictly smaller set (still contained, and now also within this
     # capture's audience) — so the promise the brief makes holds a fortiori. The marker is the
     # derivation itself: pinned to `parsed.link_names`, it goes red the day the vocabulary stops
@@ -299,7 +299,7 @@ RULE_TABLE = [
      "It is", "names = list(parsed.link_names)"),
     # Exactly one page per ordinary capture, unchanged by the restructure.
     ("One capture yields **one** page.", "multiple-pages"),
-    # Edits are DECLARED and performed by code — the split ADR 015 §3 made and this flow kept.
+    # Edits are DECLARED and performed by code — the split the agent/gate split made and this flow kept.
     ("You never write to them. You declare the edit and the worker performs it.", "apply_declared"),
     # ...and an entity page is not editable, whatever it was anchored to.
     ("declare an edit on the entity page you anchored to, nor on one you are introducing.", "outside-lane"),
@@ -337,7 +337,7 @@ RULE_TABLE = [
     # matched to the gatherer field that keeps it, because a promise the gatherer stopped keeping
     # is not a thinner prompt — it is an anchor the agent cannot declare or a link it cannot make,
     # with nothing anywhere saying why.
-    # **Re-aimed by ADR 034**, and the re-aim is the row's own subject. The brief used to open "You
+    # **Re-aimed by the agentic pydantic harness**, and the re-aim is the row's own subject. The brief used to open "You
     # do not go looking for anything", which was true of every run while one shipped shape existed
     # and false the moment the ordinary run got its tools back. What survives — and what the
     # gatherer still keeps — is the promise that a context is ASSEMBLED BEFORE THE CALL, whether or
@@ -389,7 +389,7 @@ RULE_TABLE = [
     # `c1e0996ed497e70a9df82661c367294b48207a16`, "chore(skills): the brief describes one run
     # style", rewrote the environment note to describe ONE run style.
     #
-    # **And then ADR 034 made even THAT too specific, which is the lesson this tombstone is now
+    # **And then the agentic pydantic harness made even THAT too specific, which is the lesson this tombstone is now
     # worth keeping for.** The ordinary run got its tools back, so a brief describing one run style
     # was false again — in the opposite direction, and for the same structural reason both times: a
     # brief that names mechanics is a brief that goes stale whenever a backend changes shape. The

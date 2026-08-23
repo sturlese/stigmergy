@@ -4,11 +4,9 @@ A view (`views/<entity-id>.md`) is the page that answers "what do we know about 
 now" without a reader assembling N pages and cross-checking which figure is current. It is
 **derived, never hand-maintained**: one page per entity, regenerated from the entity's own
 anchored pages whenever they change.
-Design record: [ADR 021](../decisions/021-views.md) (the audience rule's two gates, one commit
-per entity, the withheld-synthesis pattern, and the branch-tip contract change a meeting filing
-produces), amended by [ADR 044](../decisions/044-the-capture-is-the-approval.md) D3, which left the
-librarian worker as the only process that writes anything to the knowledge repo. The pages a view's
-timeline is made of come from [the meeting distiller](./meeting-distiller.md).
+The librarian worker is the only process that writes anything to the knowledge repo, views
+included. The pages a view's timeline is made of come from
+[the meeting distiller](./meeting-distiller.md).
 Code map: [`../../src/stigmergy/views/index.md`](../../src/stigmergy/views/index.md).
 
 `stigmergy.views` is the **only** view generator in this codebase, and every live name is `views`
@@ -75,7 +73,7 @@ a member document changed, which is the exact drift the derived-view doctrine fo
 `stigmergy.views` is the **only writer of `views/` anywhere in this
 codebase**: the fast lane's confinement (`gates.ALLOWED_WRITE_PREFIXES`,
 `processing.MEETING_WRITE_PREFIXES`) never includes it, so this is a distinct code path with its own
-commit — reached only from the worker, which since ADR 044 D3 is the one process in this system that
+commit — reached only from the worker, which is the one process in this system that
 writes to the knowledge repo at all.
 
 ## The skeleton — deterministic, and why it must not wait on the synthesis
@@ -170,8 +168,8 @@ The skeleton is complete and current the whole time.
 ## The audience rule — a view is open, and its feeds are filtered to match
 
 **The load-bearing rule this package is the sole owner of**: a view carries **no `acl:` at all**,
-and every feed that renders content onto it is filtered to what may appear on an open page
-([ADR 045](../decisions/045-audience-from-the-door.md) D5). Members: `skeleton.members_of` keeps a
+and every feed that renders content onto it is filtered to what may appear on an open page.
+Members: `skeleton.members_of` keeps a
 page only when `stigmergy.kernel.acl.flows_into(member.acl, None)` — open members. Backlinks, a
 governed source that is *not* a member: the same gate, at the same audience
 (`skeleton.backlinks_of`). The synthesis agent reads the filtered member set, so it cannot cite
@@ -224,7 +222,7 @@ it. Four details are load-bearing:
   Actions run holding the librarian App's private key is a push credential sitting in a runner's
   environment. The worker already holds that credential and already runs continuously with
   `job_runs` bookkeeping, so this adds no credential surface — the same argument that moved the
-  repair loop here and, in the end, everything else too (ADR 044: there is no scheduled job outside
+  repair loop here and, in the end, everything else too (there is no scheduled job outside
   the deployment any more).
 - **It builds its OWN worktree.** The post-meeting hook BORROWS the capture's, and that is where
   `guarded=False`'s justification comes from ("the librarian worker, whose ephemeral worktree is
@@ -365,7 +363,7 @@ standing.
   `errors.py`. See
   [`../../src/stigmergy/views/index.md`](../../src/stigmergy/views/index.md) for the full code
   map. **This package has no CLI and no entry point**: the worker is the only caller, which is the
-  whole of ADR 044 D3 as it applies here.
+  whole of "the worker is the one writer" as it applies here.
 - `librarian.worker.run_view_sweep` and `Worker.maybe_sweep_views(due_now=…)` — the convergence pass
   and its two triggers; `librarian.config`'s `VIEW_SWEEP_INTERVAL_ENV`/`VIEW_SWEEP_CEILING_ENV` are
   its two knobs. See

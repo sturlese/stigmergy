@@ -1,4 +1,4 @@
-"""The five tools' BODIES, with no agent framework anywhere near them (ADR 034).
+"""The five tools' BODIES, with no agent framework anywhere near them.
 
 `pydantic_backend.FilingToolbox` exists as a plain object rather than five closures inside `_run`
 for one reason, and this file is that reason made load-bearing: **every refusal has to be reachable
@@ -187,7 +187,7 @@ HOSTILE_READS = [
     ("dot-claude-the-agents-own-brief", ".claude/skills/librarian/SKILL.md"),
     ("ops-acl", "ops/acl.json"),
     ("ops-entity-registry", "ops/entity-registry.json"),
-    ("templates-traversal-as-the-ADR-spells-it", "ops/templates/../acl.json"),
+    ("templates-traversal-as-the-contract-spells-it", "ops/templates/../acl.json"),
     ("templates-traversal-that-only-the-shape-test-refuses", "ops/templates/../secret.md"),
     ("templates-subdirectory", "ops/templates/nested/x.md"),
     ("symlinked-leaf", SYMLINKED_LEAF),
@@ -225,7 +225,7 @@ def test_the_two_traversal_shapes_are_refused_for_two_DIFFERENT_reasons(toolbox)
     """The attribution twin for the pair above, because two rows that pass for one reason are one
     row wearing a costume.
 
-    `ops/templates/../acl.json` is the spelling ADR 034 names, and it never reaches the segment
+    `ops/templates/../acl.json` is the spelling the agentic pydantic harness names, and it never reaches the segment
     test: it is not a `.md` file, so the extension rule refuses it first. Only
     `ops/templates/../secret.md` — a real markdown file that resolves INSIDE the worktree — can
     isolate the three-segment shape rule. Asserted by construction: the `.md` twin exists on disk
@@ -808,7 +808,7 @@ def test_the_checkout_is_parsed_ONCE_however_often_the_model_searches(toolbox, m
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # H1 — tool RESULTS are untrusted content coming back INTO the prompt, and the page-body half is
-# FENCED exactly as the seed road fences the gathered block (ADR 034, the auditor's STOP)
+# FENCED exactly as the seed road fences the gathered block (the agentic pydantic harness, the auditor's STOP)
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The earlier argument — "an escaped JSON string cannot end its own data span, so no fence is
 # needed" — was true of STRUCTURE and false of SEMANTICS: escaping stops a page body breaking the

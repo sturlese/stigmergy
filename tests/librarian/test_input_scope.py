@@ -1,6 +1,7 @@
 """A model never reads what the page it is writing could not cite.
 
-ADR 045 D3. The upward link — an open page carrying a restricted page's title — is not something a
+the audience-from-the-door change. The upward link — an open page carrying a restricted page's title
+— is not something a
 human did: the librarian's agent searched the brain unrestricted, found the page and wrote its
 title. So the correction is on the INPUT side. Every page a model sees while writing a page at
 label L satisfies `flows_into(page.acl, L)`, and the wikilink vocabulary it is offered comes off

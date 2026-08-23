@@ -1,7 +1,6 @@
 # Entity navigation — the read path walks the house
 
-How the graph is served and how to use it. The **why** lives in
-[ADR 022](../decisions/022-entity-navigation.md); this is the what and the where. The pattern
+How the graph is served and how to use it — the what and the where. The pattern
 underneath: *search finds the door; the agent walks the house* — it reads full pages and follows
 wikilinks one hop. The code is the server's, so the code map is
 [`src/stigmergy/server/index.md`](../../src/stigmergy/server/index.md), shared with
@@ -115,7 +114,7 @@ caller), each enriched from `ops/entity-registry.json`:
 ```
 
 `approved_by` is the one lifecycle fact the registry carries: the person whose capture introduced
-the identity ([ADR 044](../decisions/044-the-capture-is-the-approval.md)). There is no `proposed`
+the identity. There is no `proposed`
 state to serve — an identity is born confirmed — and a record from before the field existed carries
 it empty.
 
@@ -131,7 +130,7 @@ navigation).
 `describe_entity(entity)` answers "everything anchored to X" structurally, in three layers.
 `entity` accepts a registered id, its canonical name, or a
 declared alias — normalized exact match through `entity_aliases.resolve_exact`, the SAME registry
-loader `list_entities` and entity-first search read — **or** (ADR 022 D5) EXACT raw-string
+loader `list_entities` and entity-first search read — **or** EXACT raw-string
 membership of the caller's own scoped-id set, never
 normalized, when no registry match exists: the same existence rule the absence check below already
 consults, not a second resolver.
@@ -143,7 +142,7 @@ consults, not a second resolver.
    visible; `null` otherwise. The lookup itself is UNSCOPED on purpose: the path is needed to
    exclude that page from the timeline structurally, whether or not THIS caller can see it.
 2. **`view`** — `{path, title, generated_at}` when `views/<id>.md` exists and
-   is visible (the path is deterministic, computed inline rather than imported — see ADR 022);
+   is visible (the path is deterministic, computed inline rather than imported);
    `null` otherwise. The view BODY is read via `read_page` as a second hop, never inlined here.
 3. **`timeline`** — every OTHER page anchored to the entity (excluding its own page and its
    view): `{path, title, type, status, as_of}`, dated entries first (newest `as_of` first),
@@ -158,13 +157,13 @@ behind an ACL the caller does not hold all return the byte-identical
 scoped`) decides all three, mirroring `read_page`'s own "unknown page" rule: existence itself
 is scoped.
 
-**An anchored-but-unregistered id agrees with `list_entities`, not against it** (ADR 022 D5).
+**An anchored-but-unregistered id agrees with `list_entities`, not against it**.
 `list_entities` surfaces such an id honestly as
 `{"id": ...}` alone, because it enumerates EXISTENCE — and `describe_entity` resolves it too,
 via the scoped-set fallback above, with no registry metadata invented (`name: ""`, `aliases: []`).
 Resolving STRICTLY through the registry made the same id "known" to one tool and "unknown" to the
 other — which broke the very navigation loop
-(`list_entities` -> `describe_entity` -> `read_page`) this surface exists to build; see ADR 022
+(`list_entities` -> `describe_entity` -> `read_page`) this surface exists to build; see
 D5 for the full reasoning and the ruling that replaced it.
 
 ## Entity-first search, everywhere — and `ask` knows the topology
@@ -184,7 +183,7 @@ also matches, and a two-letter alias like "gx" cannot match inside an unrelated 
 original shape and it eclipsed rather than layered: any hits at all for the resolved entity meant
 the blended ranking never ran, so a company-wide page (`entity: []` — a policy, a process, a
 cross-cutting decision) was unreachable through every query naming a registered company. Resolving
-an entity can now only change the ORDER of the results, never their membership (ADR 022 D4,
+an entity can now only change the ORDER of the results, never their membership (
 amended).
 
 **There is no filter left to drop, and the hint is the whole mechanism.** The rank-time boost and

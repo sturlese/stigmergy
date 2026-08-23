@@ -5,11 +5,7 @@ the one field that carries an **entity page's own lifecycle** (`approved_by:`).
 It sits beside [`brain-page-contract.md`](brain-page-contract.md),
 which documents the wider `sources/` frontmatter dialect (`entity: initech # resolved from
 the folder path`); this file is the one place the FAST-LANE anchor rule itself is written down.
-Design records: [ADR 008](../decisions/008-entity-registry.md) (the
-registry itself), [ADR 016](../decisions/016-human-loop-and-entity-governance.md) (the routing an
-unresolved anchor used to take),
-[ADR 044](../decisions/044-the-capture-is-the-approval.md) (the capture is the approval, so the
-lifecycle has one state).
+The capture is the approval, so that lifecycle has exactly one state.
 
 ## The ruling: aboutness, never mention
 
@@ -141,7 +137,7 @@ knowledge repo is doing ordinary editorial work, not making a forged trust claim
 This field lives on `type: entity` pages **only**. It exists because an identity is created by the
 librarian while it files a capture, which means the page enters the corpus in the same commit as
 the note that is about it — and the field records who stands behind it. The capture IS the
-approval ([ADR 044](../decisions/044-the-capture-is-the-approval.md)): the person who captured is
+approval: the person who captured is
 the person named here, so there is no waiting state, no second field, and nothing to confirm
 afterwards. `ops/entity-registry.json` is a derived view of the page;
 `entities.generator.APPROVED_BY_KEY` is the one spelling of the name.

@@ -41,7 +41,7 @@ MAX_EXCERPT_LINE = 400
 # surface an entry the material never spells: without one, a registry of a thousand entities could
 # put hundreds into a prompt on a single common token. `entities_total` beside the list is what
 # keeps a cut list from reading as "the registry holds nothing else" — the same rule `link_names`
-# has carried since ADR 033.
+# has carried since the gatherer existed.
 MAX_ENTITIES = 25
 
 # The shortest token run that may surface an entry it is only PART of. `_TERM_RE` already floors a
@@ -149,7 +149,7 @@ def _by_key(rows) -> dict:
 def may_read(worktree: str, parsed: "Corpus", resolved_rel: str) -> bool:
     """Is a CONFINED path also one this run's audience may read? The second half of every read
     tool's gate, beside `confined_page`, which answers containment and says nothing about
-    audience (ADR 045 D3).
+    audience.
 
     Shared by both model-facing read tools — the filing toolbox and the repair proposer — because
     two implementations of one confinement rule is exactly how the second one misses a change the
@@ -184,7 +184,8 @@ def load_corpus(worktree: str, *, acl: list[str] | None = None) -> Corpus:
     """Parse, scope and tokenize the checkout once — one parse, one containment filter, one
     audience filter, one tokenization, whoever is asking.
 
-    **`acl` is the audience of the page ABOUT TO BE WRITTEN, and this is where ADR 045 D3 lives.**
+    **`acl` is the audience of the page ABOUT TO BE WRITTEN, and this is where "a model never
+    reads what it may not cite" lives.**
     Every row is kept only when `flows_into(row.acl, acl)`: writing at open, a model sees open
     pages and nothing else; writing at `[leadership]`, it sees open and leadership. The upward
     link — an open page carrying a restricted page's title — is not something a human did, it is

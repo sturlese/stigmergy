@@ -51,8 +51,7 @@ drained them. What a human decides now is an IDENTITY, after the filing, through
 - **`schema.registration_hints` / `registration_from_hints`** — the ONE way an entity registration
   is written into a capture's hints and the ONE way it is read back. Every door builds them here so
   none can describe a registration differently, and every door MAY: a registration pins the name and
-  type the librarian would otherwise infer, and carries no authority to refuse
-  ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md) D1).
+  type the librarian would otherwise infer, and carries no authority to refuse.
 - **`queue.query_submissions`** — the ONE listing query (scope, filter, paging, the withheld rule
   in Postgres). New surfaces attach through `list_own_submissions` / `list_all_submissions`,
   never a second `SELECT ... FROM capture_queue`.
@@ -80,7 +79,7 @@ drained them. What a human decides now is an IDENTITY, after the filing, through
   `release_expired` / `finish`, and there is no transition a person performs on a row.
 - **Never reintroduce a state that waits on somebody.** `RETIRED_STATUSES` and the startup
   migration exist so the two old words cannot come back — and nothing waits on a person after the
-  filing either: the capture is the approval (ADR 044).
+  filing either: the capture is the approval.
 - **Never import `stigmergy.server`, `stigmergy.answer`, `stigmergy.librarian` or
   `stigmergy.entities`** (pinned by `tests/test_architecture.py`). Only `cli.py` may reach
   `stigmergy.index` (for `store.connect` / `store.dsn`), open a connection, or read the
@@ -88,14 +87,13 @@ drained them. What a human decides now is an IDENTITY, after the filing, through
   module scope.
 - **Never give a door a kind of its own.** `SUBMITTABLE_KINDS` is the one vocabulary every door
   speaks (`raw`, `page`, `meeting`, `document`), and what a kind requires is enforced at
-  `prepare_submission`, never at one door
-  ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md) D4).
+  `prepare_submission`, never at one door.
 - **`delete` is the one kind nothing may SUBMIT**, and the distinction is load-bearing rather than
   tidy. `KINDS` is what the QUEUE accepts; `SUBMITTABLE_KINDS` is what a caller may ask for, and
   `reject_unsubmittable_kind` is what keeps the difference real — without it,
   `brain_submit(kind="delete", …)` would queue a removal without ever meeting the
   unrestricted-identity check the removal door exists to run, and the worker performs whatever
-  `delete` row it claims (ADR 044 D3).
+  `delete` row it claims.
 - **Never compose a submitter-facing sentence outside `librarian.report`.**
   The shared shape lives in `schema.py`; the wording belongs to the package that authored the
   outcome.

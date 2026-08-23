@@ -30,12 +30,12 @@ TEMPLATE_RELPATH = "ops/templates/entity.md"
 
 # The PAGE-side spelling of the one lifecycle fact; `kernel.registry` carries the registry side,
 # and `registry_of` is where the two meet. `approved_by` names the person whose capture introduced
-# the identity — born confirmed, never waiting on anybody (ADR 044). A page with no such key at
+# the identity — born confirmed, never waiting on anybody. A page with no such key at
 # all predates the field and reads the same way.
 APPROVED_BY_KEY = "approved_by"
 
 # What a drift between the entity pages and the derived registry costs a reader. There is no
-# command any more (ADR 044 retired the CLI that had one), and a message containing a command is an
+# command any more (the CLI that had one was retired), and a message containing a command is an
 # executable promise — so this sentence names whose the fix is instead, and it must not promise the
 # worker will heal it: `librarian.identity` REFUSES a capture that would write an identity while
 # the two sides disagree, so the pass that would regenerate the file is the pass that never runs.
@@ -48,7 +48,7 @@ FIX_COMMAND = ("an operator puts the pages and the registry back in step in the 
 # own comment (the human-facing source of truth); the linter does not enum-check the field, so this
 # is the only enforcement. `birth.prepare` refuses anything outside it; the generator is LENIENT on
 # read — one bad pre-existing page must not make the whole registry unregenerable. `project` is a
-# governed identity like the rest (ADR 037 D3): an ongoing initiative earns a page of its own and a
+# governed identity like the rest: an ongoing initiative earns a page of its own and a
 # regenerated view, which is why it is an entity here and NOT a page type.
 ENTITY_TYPES = ("person", "organization", "product", "tool", "repository", "place", "project")
 

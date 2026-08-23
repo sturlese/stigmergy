@@ -11,7 +11,7 @@ The two properties this file exists for:
 
   · **the model road can never produce a deletion.** Not "does not today" — `validate_batch` drops
     one by name, in every spelling, so a compromised skill or a confused model reaches nothing.
-  · **this road removes pages with nobody asked** (ADR 044), so every test says what reached the
+  · **this road removes pages with nobody asked**, so every test says what reached the
     remote: which page is gone from the tree, and what the pages that cited it now say.
 
 Real findings, a real checkout, the offline doubles for the model, the real gates, and a real bare
@@ -58,7 +58,8 @@ def test_a_model_answer_claiming_a_deletion_is_dropped_by_name(spelling):
     """OLD BEHAVIOUR: an out-of-vocabulary op came back as `op 'delete-page' is not one of
     (...)` — true, and useless. That reason reads as a SPELLING mistake, so the one retry's job
     becomes finding the right word for a road that does not exist. Naming deletion specifically is
-    what turns a guessing game into a closed door — and under ADR 044 the door matters more, since
+    what turns a guessing game into a closed door — and under the capture-is-the-approval change the
+    door matters more, since
     what is on the other side of it is a commit nobody reviews."""
     spec = repair_run.ProposalSpec(
         finding_ids=[1],
@@ -130,7 +131,8 @@ def test_on_a_tie_the_older_filing_stays_and_the_newer_one_goes(conn, repo_env, 
 
 
 def test_two_different_documents_are_not_duplicates(conn, repo_env, settings):
-    """The benign twin for the whole road, and ADR 044 is what sharpens it: the rule is EXACT hash
+    """The benign twin for the whole road, and the capture-is-the-approval change is what sharpens
+    it: the rule is EXACT hash
     equality, and a road that removed anything else would be deleting somebody's evidence with
     nobody in the way."""
     support.write_source(repo_env, "One Document", content_hash=HASH_A, push=False)
@@ -152,7 +154,7 @@ def test_the_derived_repair_records_that_no_model_was_asked(conn, repo_env, sett
     """`model_id` is where "a model wrote something here" stays true after the pass is gone.
     Nothing refers to either copy, so no page had to be written and the column is empty — which is
     also the durable statement that no model chose this deletion, the one thing that is true of
-    this kind whatever the column says (ADR 043 D1)."""
+    this kind whatever the column says."""
     _two_filings(repo_env)
     _seed_run(conn)
 
@@ -166,12 +168,13 @@ def test_the_derived_repair_records_that_no_model_was_asked(conn, repo_env, sett
 
 def test_the_pages_that_cited_the_doomed_copy_are_WRITTEN_and_land_reconciled(conn, repo_env,
                                                                                settings):
-    """The nightly road takes the same split as the act road (ADR 043 D1): code drops the
+    """The nightly road takes the same split as the act road: code drops the
     frontmatter entry, and the sweep writer reconciles the BODY — so the bytes a model wrote are
     the bytes that land, and `model_id` names who wrote them.
 
-    Red before ADR 043: this road stored a body with `[[Uncited Copy]]` unlinked and the sentence
-    around it untouched. Red before ADR 044: nothing here reached a page at all until somebody
+    Red before the written sweep: this road stored a body with `[[Uncited Copy]]` unlinked and the sentence
+    around it untouched. Red before the capture-is-the-approval change: nothing here reached a page
+    at all until somebody
     approved it, so the reconciliation was only ever asserted against a stored plan."""
     support.write_source(repo_env, "Cited Copy", content_hash=HASH_A, push=False)
     support.write_source(repo_env, "Uncited Copy", content_hash=HASH_A, push=False)

@@ -206,7 +206,7 @@ def test_an_ordinary_capture_claiming_meeting_type_is_refused_as_the_librarians_
 def test_several_unregistered_names_are_born_together_and_the_set_files(rig, clean_queue):
     """OLD BEHAVIOUR: one ask naming both, the whole set parked until a person answered. The
     distiller declares both entities in its account; code creates both pages beside the set,
-    confirmed by whoever submitted the meeting (ADR 044), each decision anchored to its own
+    confirmed by whoever submitted the meeting, each decision anchored to its own
     newborn, one commit."""
     env, deps = rig
     item, result = _file_meeting(
@@ -414,7 +414,8 @@ def test_sabotage_proof_a_second_meeting_page_is_refused_by_the_arity_veto(
 # filed — a behavioural lock on the property "this flow files only NEW pages", whose own docstring
 # named the condition for its removal: *"If this call is intended, that refusal is the contract that
 # has to change first — and this test then needs to be replaced by the test of whatever mechanism
-# replaces it."* Both halves of that condition are met by ADR-038: the meeting flow now HAS the fast
+# replaces it."* Both halves of that condition are met by the distiller's corpus context: the
+# meeting flow now HAS the fast
 # lane's declared-edit mechanism, `_one_meeting_pass` calls `edits.apply_declared` on every pass,
 # and `GateContext.edits_allowed` keeps its `True` default here. The test is removed rather than
 # inverted because its subject no longer exists.
@@ -423,7 +424,7 @@ def test_sabotage_proof_a_second_meeting_page_is_refused_by_the_arity_veto(
 # benign and adversarial halves.
 
 
-# ── the worker hands this flow the corpus it files into (ADR-038) ───────────────────────────────
+# ── the worker hands this flow the corpus it files into ───────────────────────────────
 def test_the_worker_hands_the_meeting_agent_the_gathered_context_it_files_into(rig, clean_queue):
     """The asymmetry #37 names, closed: the meeting flow's agent now receives the SAME deterministic
     gathered context the ordinary flow's does, built by the WORKER from this item's own worktree.
@@ -471,7 +472,7 @@ def test_the_worker_hands_the_meeting_agent_the_gathered_context_it_files_into(r
         f"the assertions above would pass on a context that holds nothing:\n{gathered}")
 
 
-# ── the declared-edit mechanism this flow gained (ADR-038) ──────────────────────────────────────
+# ── the declared-edit mechanism this flow gained ──────────────────────────────────────
 # The meeting agent still holds no tool that can reach any page: it DECLARES the edit in its account
 # and the worker performs it (`edits.apply_declared`), which is the fast lane's own arrangement,
 # reached through the same functions and judged by the same `gate_body_rewrite`.
@@ -650,7 +651,8 @@ def _leak_an_undeclared_edit_into_the_meeting_flow(monkeypatch, path: str, mutat
 
 def test_a_declared_backlink_from_a_meeting_lands_on_the_existing_page_and_is_reported(
         rig, clean_queue):
-    """**The mechanism ADR-038 gave this flow, end to end.** The account declares a `backlink` on a
+    """**The mechanism the distiller's corpus context gave this flow, end to end.** The account
+    declares a `backlink` on a
     decision page an earlier meeting filed; the WORKER performs it (`edits.apply_declared`), it
     lands inside the meeting's OWN commit as a status-`M` entry, every gate passes, and the report a
     human reads names the page that was touched.
@@ -781,7 +783,7 @@ def test_a_declared_meeting_edit_never_reaches_a_page_this_capture_created(rig, 
 # `as_an_m` and `test_a_genuinely_additive_edit_to_an_existing_in_lane_page_is_refused_terminally`.
 # They were the two halves of one proof about `GateContext.edits_allowed=False`: with the control
 # off a genuinely additive callout filed as an `M`, with it on the same callout was refused
-# terminally on `zone/meeting-edit-refused`. ADR-038 removes their subject — this flow declares
+# terminally on `zone/meeting-edit-refused`. the distiller's corpus context removes their subject — this flow declares
 # `edits_allowed` no longer, because it HAS an edit mechanism, so the refusal they proved is not a
 # thing this flow does any more and the "world before it existed" they reproduced is the world we
 # are now in. Re-pointing them at the loosened flow would leave two tests asserting that an edit
@@ -1007,8 +1009,8 @@ def test_ordinary_meeting_material_raises_no_steering_finding(rig, clean_queue):
     assert result.findings == []
 
 
-# ── the date-in-wikilink convention STEPPED DOWN from veto to gardener finding
-# ([ADR 027](../../docs/decisions/027-the-contraction.md)). This test is re-purposed rather than
+# ── the date-in-wikilink convention STEPPED DOWN from veto to gardener finding.
+# This test is re-purposed rather than
 # deleted, because when a check stops applying you restate it or name its replacement — you never
 # silently weaken it: the veto is GONE on purpose, so the same capture now FILES, and the
 # convention's enforcement lives in `gardener.checks.check_date_bearing_body_links` (tested with
@@ -1151,8 +1153,8 @@ def test_only_the_touched_entitys_view_regenerates_a_sibling_is_untouched(
 # A check that stops running must be impossible to miss, so what left is listed here instead of
 # vanishing from the file. The tests below drove a HALLUCINATED FIGURE through the fast lane and
 # asserted that a figure-verification gate vetoed it, that one corrective retry recovered it, or
-# that the resulting report carried the right verdict. That gate is gone
-# ([ADR 026](../../docs/decisions/026-the-purge.md) D2): ingest-time figure verification went with
+# that the resulting report carried the right verdict. That gate is gone:
+# ingest-time figure verification went with
 # the trust layer, deliberately, and the accepted consequence is stated there — **an invented
 # figure CAN sit on a page.** The reader's protection is the verbatim source one click away, the
 # gardener, and `answer.verify_answer` at query time.

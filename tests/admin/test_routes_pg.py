@@ -179,7 +179,7 @@ def test_a_malformed_body_is_a_400_not_a_traceback(conn, app):
 
 
 def test_entities_create_commissions_over_http(conn, admin_settings):
-    """ADR 042: the route queues the steward's account as a capture carrying the registration
+    """The birth-written change: the route queues the steward's account as a capture carrying the registration
     and answers with the row — no commit, no ledger row, the librarian does the writing."""
     from stigmergy.capture.evidence import MemoryEvidenceStore
     app = compose(_inner, conn=conn, server_settings=Settings(), admin_settings=admin_settings,
@@ -226,7 +226,7 @@ def test_entities_create_error_mapping_over_http(conn, app):
 # ── the night shift over HTTP: the wire shape ─────────────────────────────────────────────────
 def test_the_jobs_endpoint_is_read_only_over_http(app, conn):
     """One GET, and nothing else. The three POSTs this page used to expose — dispatch, enable,
-    disable — are gone with the crons themselves (ADR 044), so the assertion is not only that the
+    disable — are gone with the crons themselves, so the assertion is not only that the
     read works but that the writes are NOT routed: a console that still accepted a dispatch would
     be accepting it for a workflow file that no longer exists anywhere."""
     ops.record_job_run(conn, GARDENER_JOB, status="ok", stats={"findings": 1})
@@ -252,7 +252,7 @@ def test_an_unexpected_failure_names_the_class_only(conn, app, monkeypatch):
     assert response.json() == {"error": "the operation failed (RuntimeError)"}
 
 
-# ── repairs over HTTP: a read-only page (ADR 044) ─────────────────────────────────────────────
+# ── repairs over HTTP: a read-only page ─────────────────────────────────────────────
 def test_repairs_list_and_show_over_http(conn, app):
     """The two routes that survive, and there are no others: nothing on this page decides anything
     any more, so the console reads what the worker already did."""
@@ -276,7 +276,7 @@ def test_repairs_list_and_show_over_http(conn, app):
 ])
 def test_the_doors_that_decided_a_repair_are_gone_from_the_router(conn, app, verb, path):
     """Asked of the ROUTER rather than of the code that used to be behind it. A repair is applied
-    by the worker without anybody being asked (ADR 044), so a console still offering Approve and
+    by the worker without anybody being asked, so a console still offering Approve and
     Decline would be offering a decision that changes nothing — and a route left mapped to a
     handler nobody calls is how one comes back."""
     repair_id = landed_repair(conn)
@@ -324,7 +324,7 @@ def test_the_deletion_that_clones_never_runs_on_the_event_loop(conn, app, monkey
 
 
 def test_pages_delete_needs_the_token_and_a_non_empty_paths_list(conn, app, monkeypatch):
-    """The console's most consequential control (ADR 043 D2): its token IS the authorization, so
+    """The console's most consequential control: its token IS the authorization, so
     the tokenless call must never reach the queueing seam at all — and an empty `paths` is a 400
     rather than a row the worker would claim and find nothing to do with."""
     from stigmergy.server import review as server_review

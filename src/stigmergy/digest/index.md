@@ -69,7 +69,7 @@ change both or neither.
   `model_passes_incomplete` — an aggregate over every model pass's recorded `error`, so a
   `partial` run can never render as a clean one); `gather_corpus_deltas` returns `pages_filed_count`/`pages_filed_titles`/
   `entities_born_count` — the number of identities the window's FILINGS wrote, summed off each
-  report's `entities_born` (ADR 044: the librarian is the only writer of an entity page, so every
+  report's `entities_born` (the librarian is the only writer of an entity page, so every
   counted birth is a page that exists, and the copy says "born" because it is exact). A COUNT and
   never a list: the reports carry the names, and naming them here would publish identities past the
   destination channel's audiences, which is the one thing this package must never do.

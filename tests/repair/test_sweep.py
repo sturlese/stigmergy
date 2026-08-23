@@ -1,10 +1,10 @@
-"""The sweep WRITER — the pages a deletion leaves behind, written by a model (ADR 043 D1) — driven
+"""The sweep WRITER — the pages a deletion leaves behind, written by a model — driven
 by the offline double, keyless.
 
 The double is a structural stand-in: it drops a code-written callout whose subject is going and
 unlinks every other reference, and it is right about nothing a real writer is asked to judge.
 What this file proves is the ROAD around it — the set bound, the per-body bounds, the compose, the
-refusal with no deterministic fallback — and the one case that started ADR 043: a callout that only
+refusal with no deterministic fallback — and the one case that started the written sweep: a callout that only
 existed because of the removed page is gone afterwards, not left announcing an overlap with nothing.
 
 Nothing here is Postgres and nothing is git: `deletion.plan` and `sweep.write` are pure functions of
@@ -48,9 +48,9 @@ def _after(ops, path: str) -> str:
     return deletion.expected_bytes(ops)[path]
 
 
-# ── the case ADR 043 records: a callout that only existed because of the removed page ─────────
+# ── the case the written sweep records: a callout that only existed because of the removed page ─────────
 def test_a_callout_that_only_existed_because_of_the_removed_page_is_gone_afterwards(tmp_path):
-    """RED under the bracket scrubber ADR 039 B3 designed: `[[X]]` became `X`, and the surviving
+    """RED under the bracket scrubber the governed repair loop designed: `[[X]]` became `X`, and the surviving
     note kept `> [!NOTE] Overlaps with SpaceX IPO Performance — Sourced Review` announcing an
     overlap with a page that no longer existed (staging, commit b93e7ce). A sweep is WRITTEN now:
     the callout goes whole, and the sentence that cited the page survives it, unlinked."""
@@ -72,7 +72,7 @@ def test_a_callout_that_only_existed_because_of_the_removed_page_is_gone_afterwa
 
 
 def test_the_writer_is_handed_the_body_and_code_keeps_the_frontmatter(tmp_path):
-    """The division ADR 043 D1 draws, observed on the bytes: the head of the planned page is
+    """The division the written sweep draws, observed on the bytes: the head of the planned page is
     code's scrub of the page as it stands, and only the body changed."""
     root = str(tmp_path)
     _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
@@ -126,7 +126,7 @@ def test_a_view_is_scrubbed_by_code_and_never_handed_to_the_writer(tmp_path, mon
     It is right for a second reason too. A view is REGENERATED wholesale by the view sweep, so a
     body a model wrote into one is bytes the next regeneration overwrites — and there is no prose
     to reconcile in a generated rollup. So the machine zones stay code's, unlinked exactly as
-    ADR 039 B3 did it, and the writer is asked only about pages a person wrote."""
+    the governed repair loop did it, and the writer is asked only about pages a person wrote."""
     root = str(tmp_path)
     _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
     _write(root, "views/doomed-entity.md",
@@ -303,7 +303,7 @@ def test_reconciling_the_lines_that_referred_to_the_removed_page_is_not_cutting_
     ("# Cites It\n\nRead [it](wiki/notes/Doomed.md).\n", deletion.REFERENCE_SURVIVES_CODE),
 ], ids=["empty", "frontmatter", "title", "growth", "wikilink-survives", "md-link-survives"])
 def test_a_body_outside_its_bounds_is_refused_by_name(tmp_path, body, phrase):
-    """Each bound is a thing a steward would have checked by eye before ADR 043 moved the reading
+    """Each bound is a thing a steward would have checked by eye before the written sweep moved the reading
     after the push — so each is a sentence the writer is told on its one retry."""
     root, ops = _corpus(tmp_path)
 
@@ -366,7 +366,7 @@ def test_the_frame_states_what_the_skill_cannot_change():
 
 
 def test_unified_diffs_are_the_reading_the_act_road_hands_back(tmp_path):
-    """ADR 043 D5: nobody read the written prose before it landed, so the diff IS the reading —
+    """the written sweep: nobody read the written prose before it landed, so the diff IS the reading —
     one per rewritten page, against the page as it stood."""
     root = str(tmp_path)
     _write(root, "wiki/notes/Doomed.md", _page("Doomed"))

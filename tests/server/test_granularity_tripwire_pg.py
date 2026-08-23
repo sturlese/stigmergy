@@ -91,7 +91,7 @@ class _GranularityFixture:
         with open(self.identities_path, "w", encoding="utf-8") as f:
             f.write(json.dumps({STEWARD: ["brain-admins"]}))
 
-        # `describe_entity` resolves STRICTLY through the registry (ADR 022 D5) — without this,
+        # `describe_entity` resolves STRICTLY through the registry — without this,
         # every id below would be "unknown entity" regardless of anchoring, which would make the
         # timeline half of this tripwire pass for the wrong reason: a check that cannot go red for
         # the reason it claims is not a check.

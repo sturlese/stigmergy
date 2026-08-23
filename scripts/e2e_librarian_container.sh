@@ -45,7 +45,7 @@ unset STIGMERGY_LIBRARIAN_BACKEND STIGMERGY_REPO STIGMERGY_LIBRARIAN_WORKTREE_RO
 # is how this script's first CI run failed: the bare redirection into a missing directory.
 #
 # **One line per Dockerfile `COPY deploy/...`, and that correspondence is now a test**
-# (`tests/test_deployment_config.py`): ADR 029 added the channels COPY and not the placeholder,
+# (`tests/test_deployment_config.py`): the channels COPY was added and the placeholder was not,
 # which is invisible to `make test` (it never builds the image) and fails CI's container e2e at
 # the COPY — the identical failure this comment already described, repeated because the rule
 # lived only in prose.

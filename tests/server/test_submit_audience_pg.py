@@ -1,6 +1,6 @@
 """The door decides a capture's audience, and its authorization is `acl.visible()` itself.
 
-ADR 045 D2. `audience` is the one access decision a CALLER makes: the groups this material is
+the audience-from-the-door change. `audience` is the one access decision a CALLER makes: the groups this material is
 for, omitted to file open. The door resolves it, checks it against the caller's own groups, and
 stores the answer on `capture_queue.acl` — a server-owned column no client input reaches.
 
@@ -104,7 +104,7 @@ def test_omitting_audience_files_open_and_stores_NULL(indexed):
     """The specificity half, and the case that runs on almost every capture anybody makes.
 
     NULL rather than `{}`: "this caller named no audience" is open, and `{}` means nobody. The
-    two spellings meeting in one column is the defect ADR 045 D9 ends."""
+    two spellings meeting in one column is the defect the audience-from-the-door change ends."""
     ack = _service(indexed, ANA).submit("raw", "An ordinary note about Initech.")
     assert ack["acl"] is None
     assert _row_acl(indexed, ack["id"]) is None
@@ -197,7 +197,7 @@ def test_a_scoped_identity_sees_only_its_own_rows(indexed):
 
 
 def test_a_principal_holding_NO_group_may_still_file_open(indexed):
-    """**The sharpest missing twin.** The ADR says "a caller with no groups may file open and
+    """**The sharpest missing twin.** The rule is "a caller with no groups may file open and
     nothing else", and every other test of that sentence used an identity that holds one. The
     half that matters for a newcomer — who holds nothing on their first day — is that they can
     still capture. A door that refused them would make the brain unusable for exactly the people

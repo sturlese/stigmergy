@@ -6,7 +6,7 @@ and what it costs — and `worker.Worker` asks this module rather than growing a
 module exists to prevent: the view sweep and the repair pass each grew one, and the second was
 written by reading the first.
 
-**Everything runs on the IDLE branch, and only there** (ADR 044 D6). A queued capture is somebody
+**Everything runs on the IDLE branch, and only there**. A queued capture is somebody
 waiting; a maintenance pass is not, so no pass may start while the queue has work and every pass
 that runs is handed a `should_stop` it consults between units. What that buys is the property the
 crons could never have: maintenance cannot delay a filing, because it does not run while there is

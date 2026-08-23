@@ -99,7 +99,7 @@ def test_committed_registry_of_a_missing_file_is_empty(tmp_path):
 
 
 def test_a_project_entity_round_trips_from_birth_to_the_registry(repo):
-    """The seventh entity type reaches the registry as itself (ADR 037 D3).
+    """The seventh entity type reaches the registry as itself.
 
     `project` is the first value added after `ENTITY_TYPES` shipped closed, and it crosses three
     spellings of the vocabulary on the way to being resolvable: `birth.prepare` validates it
@@ -290,7 +290,8 @@ def test_the_real_repo_has_no_duplicate_match_keys():
 # ── the lifecycle, page side: `approved_by` names who introduced an identity ─────────────────────
 def test_approved_by_is_read_off_the_page_and_absent_reads_as_nobody(repo):
     """OLD BEHAVIOUR: `approved_by: ""` present-and-empty meant a PROPOSAL waiting on a steward,
-    and a page's extra spellings could sit on `proposed_aliases` until one confirmed them. ADR 044:
+    and a page's extra spellings could sit on `proposed_aliases` until one confirmed them. the
+    capture-is-the-approval change:
     the capture is the approval, so there is no waiting state and no second alias list — the field
     is read as one fact, "who introduced this identity", and a page written before it existed names
     nobody in particular.

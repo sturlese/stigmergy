@@ -160,7 +160,7 @@ def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> str:
 
 def check_garden_model(settings, *, environ: dict | None = None) -> None:
     """The gardener's own model key, checked before the pass runs — because the night shift moved
-    INTO this process and brought a second model with it (ADR 044 D6).
+    INTO this process and brought a second model with it.
 
     This is not the librarian's check repeated for tidiness. It closes a trap the move created:
     `gardener.settings.DEFAULT_GARDENER_MODEL` is a BARE model id, which `kernel.llm` resolves
@@ -326,7 +326,7 @@ def swept_clause(result: dict, settings) -> str:
 # It lives HERE, in the worker, rather than in a cron: this process already holds the GitHub App
 # credential the commit needs, and a scheduled Actions run that pushed would put that credential in
 # a runner's environment. The same argument moved the repair pass here, and then the rest of the
-# night shift after it (ADR 044) — there is no scheduled job outside this deployment any more.
+# night shift after it — there is no scheduled job outside this deployment any more.
 
 
 # The two refusals below both fail CLOSED before a single view is touched, and both exist because
@@ -390,7 +390,7 @@ def run_view_sweep(conn, deps: processing.Deps, *, should_stop=None) -> views_re
 
 
 def run_repairs(conn, deps: processing.Deps, *, should_stop=None):
-    """One repair pass: the latest gardener findings, derived into repairs and applied (ADR 044).
+    """One repair pass: the latest gardener findings, derived into repairs and applied.
 
     Returns `repair.run.RepairRunResult`, or `None` when the pass had nothing to run against —
     which is the ordinary state, not a fault: a deployment whose gardener has not completed a run
@@ -455,7 +455,7 @@ def run_garden(conn, deps: processing.Deps) -> dict:
     strips it before exec, so the write path cannot reach the read path's credential — so nothing
     in this process could repair a `pages_index` that has drifted from the corpus. Nor does this
     pass LINT the index: `index.check` reads `pages_index`, and a scheduled write-path read of the
-    served index would widen an invariant (ADR 033 D1) for a log line, when the admin console's
+    served index would widen an invariant for a log line, when the admin console's
     Index page already lints the live index, in-process and on demand, for the operator who is
     actually looking.
 
@@ -768,8 +768,8 @@ class Worker:
                     #
                     # EXCEPT on the tick that follows work. A capture, a repair or a removal has
                     # just changed the corpus, and `views/` is derived from it — waiting out a
-                    # whole interval would leave a view describing a page that is no longer there
-                    # (ADR 044 D3). "Something just changed the corpus" is the moment the rollups
+                    # whole interval would leave a view describing a page that is no longer there.
+                    # "Something just changed the corpus" is the moment the rollups
                     # are most likely to be wrong and the cheapest time to fix them.
                     #
                     # The repair pass runs FIRST for exactly that reason: it is one of the things

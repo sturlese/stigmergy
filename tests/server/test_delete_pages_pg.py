@@ -1,4 +1,4 @@
-"""`brain_delete` — the door a person removes pages at, which since ADR 044 D3 QUEUES and writes
+"""`brain_delete` — the door a person removes pages at, which since the capture-is-the-approval change QUEUES and writes
 nothing. There is ONE writer for the corpus and it is the worker; this process holds neither the
 checkout nor the credential, so what lands here is a durable `delete` row with the person's name on
 it and what they get back is a queue acknowledgement.
@@ -82,7 +82,7 @@ def test_an_unrestricted_callers_removal_is_queued_with_their_name_and_their_pat
 
 def test_the_acknowledgement_promises_a_queue_and_not_a_commit(env, conn):
     """OLD BEHAVIOUR: this door cloned, swept, gated, committed and pushed inside the MCP call, and
-    handed back a commit sha and the diffs. ADR 044 D3 moved the act to the one writer, so the
+    handed back a commit sha and the diffs. the capture-is-the-approval change moved the act to the one writer, so the
     response can no longer claim any of that — what it may promise is a queued row, and where the
     reading of the written prose will appear when the worker has done it."""
     ack = _delete(env, conn, [DOOMED])
@@ -97,7 +97,7 @@ def test_the_acknowledgement_promises_a_queue_and_not_a_commit(env, conn):
 @pytest.mark.parametrize("path", [DOOMED, "wiki/notes/No Such Page At All.md"],
                          ids=["a-page-that-exists", "a-page-that-does-not"])
 def test_a_scoped_caller_meets_one_anonymous_sentence_and_queues_nothing(env, conn, path):
-    """ADR 044 D3 asks the one question this process can answer without a tree: is this identity
+    """The capture-is-the-approval change asks the one question this process can answer without a tree: is this identity
     unrestricted? A removal touches the pages it names AND every page that refers to them, a set
     nothing knows until the tree is read — so "may this caller see the whole corpus" is the only
     honest question at the door.

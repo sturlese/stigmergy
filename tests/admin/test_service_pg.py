@@ -478,7 +478,7 @@ def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_
 # ── entities: read ────────────────────────────────────────────────────────────────────────────
 # ── registering an entity: the console commissions a capture, the librarian writes the page ──
 def test_entity_create_commissions_a_capture_the_librarian_writes_the_page_from(conn, admin_settings):
-    """ADR 042. OLD BEHAVIOUR: the console's Register minted the template with the name filled in,
+    """The birth-written change. OLD BEHAVIOUR: the console's Register minted the template with the name filled in,
     pushed it and wrote the ledger row — an entity page with nothing said about the entity. Now it
     QUEUES a capture: the steward's account is the material, the registration rides the hints,
     the row is attributed to the steward the page will be born confirmed by, and an admin action
@@ -649,14 +649,14 @@ def test_a_malformed_agent_budget_leaves_the_console_serving_its_own_boot_call(
         librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S)
 
 
-# ── repairs: what the worker did, read-only (ADR 044) ─────────────────────────────────────────
+# ── repairs: what the worker did, read-only ─────────────────────────────────────────
 # Nothing on this page decides anything any more. What it is FOR is the reading nobody gave a
 # repair before it landed: every applied row carries the diff that reached `main`, and every failed
 # one carries the sentence that refused it. So what these pin is this package's own half — the
 # sanitizing, the per-kind op shapes, and the counts a chart may draw a part-to-whole from.
 #
 # The console's ONE surviving mutation is `pages.delete`, and it is the console's most consequential
-# button. Since ADR 044 D3 it QUEUES: this process writes nothing to the corpus and holds no git
+# button. Since the capture-is-the-approval change it QUEUES: this process writes nothing to the corpus and holds no git
 # credential, and the worker performs the removal (`tests/librarian/test_delete_processing_pg.py`
 # proves that half against a real remote). So what is asserted here is the row this door lands, the
 # `admin_actions` bookkeeping and the error mapping.
@@ -780,7 +780,7 @@ def test_an_additive_op_keeps_exactly_the_fields_it_had(conn, service):
 def test_a_deletion_reaches_the_console_with_the_prose_that_landed(conn, service):
     """The third kind's shape. A DELETE op is a path and nothing else — which page stopped existing
     is the whole of it — and a SCRUB op carries its `planned_after` through, because those bytes are
-    a MODEL's prose (ADR 043) and this page is the only reading they get.
+    a MODEL's prose and this page is the only reading they get.
 
     Red before that: the console showed two path lists, so model-written bodies were invisible —
     `entity-body`'s own mistake, which that kind's renderer exists to avoid."""
@@ -801,7 +801,7 @@ def test_a_deletion_reaches_the_console_with_the_prose_that_landed(conn, service
 # ── the console's one surviving mutation: a person's own deletion ─────────────────────────────
 def test_pages_delete_queues_through_the_shared_seam_and_records_the_console_as_the_door(
         conn, deletion_service):
-    """The console's deletion door (ADR 043 D2, ADR 044 D3). It calls
+    """The console's deletion door. It calls
     `server.review.queue_deletion` — the SAME seam MCP's `brain_delete` calls — and hands in NO
     authorization: its token is the authorization, and this is the one door where that is the whole
     of it. Asserted against the REAL queue rather than a replaced sequence: the row is what the

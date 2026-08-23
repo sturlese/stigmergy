@@ -113,7 +113,7 @@ PRIVATE_CHANNEL_REFUSAL = ("🧠 doesn't work here — a private channel's mater
 def not_in_this_channels_groups(channel_name: str) -> str:
     """The 🧠 refusal when the reactor does not hold the groups this channel files at.
 
-    A capture from a scoped channel is filed at that channel's groups (ADR 045 D2), and the door's
+    A capture from a scoped channel is filed at that channel's groups, and the door's
     rule is that you may file only what you could read afterwards — so somebody who cannot read
     the channel's material cannot capture it either. It names the CHANNEL, which they are already
     in and can see, and never the groups: which groups exist is not this message's to disclose.

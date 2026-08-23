@@ -133,7 +133,7 @@ def test_corpus_health_prefers_the_latest_run_when_an_older_ok_run_also_exists(c
 def test_corpus_health_a_partial_run_from_a_NON_sweep_pass_is_not_rendered_clean(conn):
     """Red before the fix: the flag read `stats.sweep.error` alone, so a run committed 'partial'
     because the EMPTY-BODY or the DUPLICATE-IDENTITY pass failed rendered in the weekly digest as
-    a clean run — the exact silent-clean-bill failure ADR 024's amendment says this surface exists
+    a clean run — the exact silent-clean-bill failure the gardener and the digest's amendment says this surface exists
     to end, closed in the terminal report and left open one layer up."""
     support.seed_gardener_run(conn, finished_days_ago=1, status="partial", findings=[
         {"check": "stale-view", "severity": "warn"}],
@@ -301,7 +301,7 @@ def test_the_broadcast_acl_seam_omits_an_unindexed_and_a_mislabelled_path(conn, 
 # ── entities born — counted off the filings that introduced them ────────────────────────────────
 def test_entities_born_counts_the_identities_the_windows_filings_introduced(conn):
     """OLD BEHAVIOUR: the count read `review_decisions` for approved identity proposals. Nothing
-    approves an identity any more (ADR 044) — a capture introduces it — so the count comes off the
+    approves an identity any more — a capture introduces it — so the count comes off the
     filed reports, where the commits themselves are recorded."""
     support.seed_entity_births(conn, count=2, finished_days_ago=1)
     support.seed_entity_births(conn, count=1, finished_days_ago=2)

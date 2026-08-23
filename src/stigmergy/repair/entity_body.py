@@ -39,8 +39,8 @@ OP_KIND = schema.KIND_ENTITY_BODY
 # The entity zone, spelled here rather than imported. `stigmergy.entities.generator` owns the same
 # string (`ENTITIES_RELDIR`), and importing that package would give the repair loop a path into the
 # governed birth door for one constant — the duplication is DECLARED, not discovered, the same
-# posture `remote.GITLEAKS_BIN_ENV` takes one module over. Entity birth stays identity-only
-# (ADR 016); this reaches the same folder to write CONTENT and nothing else.
+# posture `remote.GITLEAKS_BIN_ENV` takes one module over. Entity birth stays identity-only;
+# this reaches the same folder to write CONTENT and nothing else.
 ENTITY_ZONE_PREFIX = "wiki/entities/"
 
 # What `deletion.page_refusal` — the ONE confinement predicate this package has — says on this

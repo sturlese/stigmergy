@@ -1,4 +1,4 @@
-"""ADR 044 D3: ONE writer for the corpus, and it is the worker. A `delete` row is a person's own
+"""The capture-is-the-approval change: ONE writer for the corpus, and it is the worker. A `delete` row is a person's own
 removal, authorized at the door and PERFORMED here — planned, swept by a model, judged by the nine
 gates, committed and pushed through the same lease-fenced seam every filing uses.
 
@@ -11,17 +11,17 @@ What this module proves, in the order the flow meets it:
 - the benign twin first — a queued removal is claimed and performed: the page is gone on the bare
   remote, every page that referred to it is rewritten, it took ONE commit, and the row lands
   `filed` carrying the paths that went and the per-page diffs of what a model wrote in the
-  submitter's name (ADR 043 D5 — nobody read that prose before it landed, so the row IS the
+  submitter's name (the written sweep — nobody read that prose before it landed, so the row IS the
   reading);
 - the commit answers "who authorized this" with two different names: the AUTHOR is the librarian
-  App, the `Approved-by:` trailer is the PERSON, and that distinction is the whole of ADR 043 D2 in
+  App, the `Approved-by:` trailer is the PERSON, and that distinction is the whole of the written sweep in
   the queued shape;
 - a page that is not there, and a page the lane may not touch, land `rejected` with
   `reason_code == "unremovable"` and NOTHING pushed — a refusal the person who asked can act on,
   never a `failed` row that reads like an outage;
 - a reason carrying a credential is refused before any tree is read at all: `why` becomes a commit
   message, where no gate looks;
-- a sweep the writer cannot finish lands nothing — no deterministic fallback (ADR 043 D1), and no
+- a sweep the writer cannot finish lands nothing — no deterministic fallback, and no
   half-swept corpus.
 """
 import pytest
@@ -114,7 +114,7 @@ def test_a_queued_removal_is_claimed_and_performed_as_one_commit(rig, clean_queu
 
 def test_the_row_lands_filed_carrying_what_went_and_the_diffs_of_what_was_written(rig,
                                                                                   clean_queue):
-    """ADR 043 D5 in the queued shape: nobody reads the sweep's prose before it lands, so the
+    """the written sweep in the queued shape: nobody reads the sweep's prose before it lands, so the
     reading happens afterwards — and it happens on the ROW, which is the only place the person who
     asked will look. Both halves are needed: a reader who saw only the diffs would not know what
     went, and one who saw only the paths would not know what a model wrote in their name."""
@@ -139,7 +139,7 @@ def test_the_row_lands_filed_carrying_what_went_and_the_diffs_of_what_was_writte
 
 
 def test_the_commit_is_authored_by_the_app_and_approved_by_the_person(rig, clean_queue):
-    """ADR 043 D2, and the reason there are TWO names on one commit. The author is the librarian
+    """the written sweep, and the reason there are TWO names on one commit. The author is the librarian
     App, because the App's credential is what pushed; the `Approved-by:` trailer is the human,
     because a removal is the one write in this system a person decided. `git log` answers "who
     authorized this" with the trailer, and answering it with the author would name a bot."""
@@ -241,7 +241,7 @@ def test_a_reason_carrying_a_secret_is_rejected_before_any_tree_is_read(rig, cle
 
 
 def test_a_sweep_the_writer_cannot_finish_lands_nothing_at_all(rig, clean_queue, monkeypatch):
-    """No deterministic fallback (ADR 043 D1). `CLEAN_LLM=fake-flawed` hands every body back still
+    """No deterministic fallback. `CLEAN_LLM=fake-flawed` hands every body back still
     naming the doomed page, twice, and the road ends in a refusal that names the page it could not
     reconcile — the deletion does not happen, and neither does a half-swept corpus."""
     env, deps, corpus = rig

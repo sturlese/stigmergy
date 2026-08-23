@@ -1,6 +1,6 @@
 """The `delete` kind's CODE half, as a pure function of a worktree: which pages go, which pages
 refer to them, each referring page's frontmatter scrubbed, and every bound the written half has to
-satisfy (ADR 043 D1). The bodies are the writer's — `test_sweep.py` — and arrive here only as
+satisfy. The bodies are the writer's — `test_sweep.py` — and arrive here only as
 bytes `validate` judges.
 
 No Postgres, no git, no model. The property this file exists to hold is the one the frozen
@@ -177,7 +177,7 @@ def test_a_supersession_pointer_at_a_surviving_page_is_left_alone(tmp_path):
 
 # ── the body half is the writer's: code counts a reference and rewrites nothing ──────────────
 def test_a_body_that_refers_to_the_deleted_page_puts_the_page_in_the_plan_verbatim(tmp_path):
-    """Before ADR 043 this is where `[[Doomed]]` became `Doomed`. Code no longer touches a body: it
+    """Before the written sweep this is where `[[Doomed]]` became `Doomed`. Code no longer touches a body: it
     notices the reference, hands the page to the writer with its body exactly as it was, and holds
     the writer's answer to `validate`'s bounds (`test_sweep.py`)."""
     root = str(tmp_path)
@@ -303,7 +303,7 @@ def test_the_plan_is_ordered_and_reproducible(tmp_path):
 
 # ── what may never be deleted ─────────────────────────────────────────────────────────────────
 def test_an_entity_page_is_refused_by_name(tmp_path):
-    """An identity is retired through governance, not deletion (ADR 016). Structural, not a
+    """An identity is retired through governance, not deletion. Structural, not a
     convention: the entity zone is not in the deletable set at all."""
     root = str(tmp_path)
     _write(root, "wiki/entities/Acme Corp.md", _page("Acme Corp", page_type="entity"))
@@ -450,7 +450,7 @@ def test_the_same_page_twice_in_one_plan_is_refused(tmp_path):
 
 
 def test_a_planned_page_whose_frontmatter_is_not_codes_own_scrub_is_refused(tmp_path):
-    """ADR 043 D1's second bound: the writer owns the body and nothing else. A stored plan whose
+    """the written sweep's second bound: the writer owns the body and nothing else. A stored plan whose
     frontmatter differs from code's scrub of the page as it stands — a line added, an entry kept —
     is refused by name at both ends."""
     root, ops = _corpus(tmp_path)
@@ -481,9 +481,9 @@ def test_a_scrub_carrying_no_planned_bytes_is_refused(tmp_path):
 
 def test_the_apply_refuses_a_plan_the_corpus_has_moved_under(tmp_path):
     """The latecomer: the stored plan is still WELL-FORMED — every path exists, every op is known —
-    and a page the plan never rewrote now refers to the going page. ADR 039 B4 caught this by
+    and a page the plan never rewrote now refers to the going page. the governed repair loop caught this by
     recomputing the whole plan; a written plan cannot be recomputed, so the apply walks the corpus
-    for exactly this (ADR 043 D3)."""
+    for exactly this."""
     root, ops = _corpus(tmp_path)
     _write(root, "wiki/notes/A Latecomer.md", _page("A Latecomer", related=["[[Doomed]]"]))
 

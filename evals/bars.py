@@ -24,7 +24,8 @@ BAR_FILING_ANCHOR = 1.00         # the resolved registry id(s), or company-wide
 BAR_FILING_EDITS = 1.00          # the additive edits code performed from the agent's declaration
 BAR_FILING_DECISIONS = 1.00      # a meeting's decision pages and their independent anchors
 # `proposals` is BORN UNCALIBRATED, and `None` is the honest value rather than an omission: it is
-# a facet ADR 041 created (the identity a filing proposes for a name the registry does not know),
+# a facet the file-first write path created (the identity a filing proposes for a name the
+# registry does not know),
 # no recorded run has ever scored it, and a bar invented to be met is the one thing a bar may
 # never be. `aggregate` reads `None` as REPORT, DO NOT JUDGE. The first real run under the
 # re-frozen briefs is its baseline candidate — see evals/README.md's re-freeze rule.

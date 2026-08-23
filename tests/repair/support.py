@@ -342,7 +342,7 @@ def write_source(env, title: str, *, content_hash: str, extracted_at: str = "202
 
 def deletion_plan(repo: str, targets, *, skill_text: str = FIXTURE_SKILL) -> list[dict]:
     """A WRITTEN sweep for `targets`: `deletion.plan`'s code half, then `sweep.write` through the
-    offline double (ADR 043 D1). Every surface that stores or applies a deletion goes through
+    offline double. Every surface that stores or applies a deletion goes through
     this, so no fixture can seed a plan whose bodies were never written — which is exactly the
     plan `deletion.validate` refuses."""
     return asyncio.run(sweep.write(repo, deletion.plan(repo, list(targets)),
@@ -465,7 +465,8 @@ def page_text(repo: str, path: str) -> str:
 
 # ── what a refusal published to a PERSON may say ──────────────────────────────────────────────
 # The rule every refusal this package composes is held to, shared by the suites that publish one
-# (`tests/repair/test_apply_pg.py`, `tests/server/test_delete_pages_pg.py`). Under ADR 044 it binds
+# (`tests/repair/test_apply_pg.py`, `tests/server/test_delete_pages_pg.py`). Under the
+# capture-is-the-approval change it binds
 # more than it used to: a refusal is no longer only wire copy on the deletion road — it is STORED
 # in `repairs.error` and rendered on the console for every repair the worker could not land. It
 # moved here when `tests/entities/` lost its decision half: the property outlived the package that

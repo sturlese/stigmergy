@@ -22,7 +22,7 @@ def _write(tmp_path, data) -> str:
 
 
 def test_brain_admins_membership_resolves_to_unrestricted(tmp_path):
-    """The one unrestricted spelling (ADR 045 D7): a GROUP, not a sigil, because the identity
+    """The one unrestricted spelling: a GROUP, not a sigil, because the identity
     provider that replaces this file has groups and has no sigils."""
     path = _write(tmp_path, {"steward": ["brain-admins"]})
     assert resolve_audiences(path, "steward") is None
@@ -42,7 +42,7 @@ def test_scoped_list_resolves_to_tuple(tmp_path):
 def test_no_groups_at_all_reads_open_pages_and_nothing_else(tmp_path):
     """A PRINCIPAL with no groups is not the `acl: []` of a PAGE (which means nobody): it is an
     authenticated reader who holds nothing, so `visible()` shows it every page carrying no label
-    and no other. ADR 045 D9 keeps the two facts apart, and this is the one that is about a
+    and no other. the audience-from-the-door change keeps the two facts apart, and this is the one that is about a
     person."""
     path = _write(tmp_path, {"newcomer": []})
     assert resolve_audiences(path, "newcomer") == ()
@@ -83,7 +83,7 @@ def test_the_line_the_bare_label_refusal_names_actually_resolves(tmp_path):
 # ── `all` is a reserved word, because open is the ABSENCE of a label ───────────────────────────
 def test_the_reserved_group_all_is_refused(tmp_path):
     """A page labelled `[all]` would be restricted to whoever holds a group called `all` — the
-    opposite of what anybody writing it means. ADR 045 D7."""
+    opposite of what anybody writing it means. the audience-from-the-door change."""
     path = _write(tmp_path, {"ana": ["all"]})
     with pytest.raises(IdentityError, match="reserved group 'all'"):
         resolve_audiences(path, "ana")
@@ -123,7 +123,8 @@ def test_the_reservation_is_casefolded(tmp_path):
 
 # ── the group-name grammar: narrow, because these names reach page frontmatter ────────────────
 def test_a_group_name_carrying_a_newline_is_refused(tmp_path):
-    """A group name is stamped into YAML frontmatter as an access label and, since ADR 045 D2, can
+    """A group name is stamped into YAML frontmatter as an access label and, since the
+    audience-from-the-door change, can
     arrive from a model through `brain_submit(audience=…)`. A newline there is a page-contract
     injection, and no legitimate group name needs one."""
     path = _write(tmp_path, {"ana": ["fin\nance"]})
@@ -205,7 +206,7 @@ def test_a_comment_key_whose_value_is_a_group_list_is_refused(tmp_path):
 
 def test_a_malformed_NEIGHBOUR_refuses_the_lookup_too(tmp_path):
     """An access-scoping file the server cannot make sense of must never answer for the entry that
-    happened to parse. Before ADR 045 each reader validated only the value it wanted."""
+    happened to parse. Before the audience-from-the-door change each reader validated only the value it wanted."""
     path = _write(tmp_path, {"ana": ["finance"], "bob": {"nested": True}})
     with pytest.raises(IdentityError, match="malformed group list"):
         resolve_audiences(path, "ana")

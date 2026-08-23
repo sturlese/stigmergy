@@ -150,7 +150,7 @@ export function reportPanel(row) {
       el("div", { class: "material" }, report.agent_rationale)));
   }
   // A removal's diffs, and the reason they are HERE rather than in the dialog that asked for it:
-  // nobody reads that prose before it lands (ADR 043 D5), and since ADR 044 D3 the removal is
+  // nobody reads that prose before it lands, and the removal is
   // performed by the worker minutes later, so the capture is where the reading happens. Rendered
   // as the bytes they are — `.pre` keeps the newlines and scrolls in its own box.
   const rewritten = Object.entries(report.rewritten || {});

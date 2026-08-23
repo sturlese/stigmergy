@@ -15,7 +15,8 @@ look at anything it was not handed. Framed correctly — and #75 says so in its 
 defect is the BUDGET, not the agent: exploration is the feature. So the budget scales with the
 batch, and the default batch shrinks so that one lapse costs fewer findings.
 
-The second half is what ADR 044 turned from an inbox length into a blast radius. Nobody reads a
+The second half is what the capture-is-the-approval change turned from an inbox length into a blast
+radius. Nobody reads a
 repair before it lands, so `max_repairs_per_run` bounds COMMITS, and `max_merges_per_run` — a
 second, tighter number — bounds the one kind that retires an identity. Both are proven on what
 reaches the remote, and both have to SAY what they deferred: a pass that quietly did less than it
@@ -233,7 +234,8 @@ def _seed_distinct_pairs(conn, repo_env, count: int) -> int:
 def test_the_pass_ceiling_bounds_the_commits_a_night_may_push(conn, repo_env, monkeypatch):
     """A smaller batch means more batches, and `max_repairs_per_run` is the other half of the
     bound — the one that keeps a 400-finding night from becoming 400 model calls and 400 commits.
-    Asserted AT the new default batch, and on what reached the REMOTE: under ADR 044 this number is
+    Asserted AT the new default batch, and on what reached the REMOTE: under the
+    capture-is-the-approval change this number is
     a blast radius rather than an inbox length."""
     double = _OnePerFinding()
     monkeypatch.setattr(repair_run, "build_proposer", lambda *_a, **_k: double)

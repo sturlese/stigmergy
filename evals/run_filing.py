@@ -16,7 +16,7 @@ per facet, each facet with its own denominator:
   - proposals  for a name the registry does not know: the identity the filing INTRODUCED
   - decisions  for a meeting: one decision page per decision, each with its OWN anchor
 
-Every capture is ONE scored phase (ADR 041). Nothing parks, nothing is asked, nothing is re-filed:
+Every capture is ONE scored phase. Nothing parks, nothing is asked, nothing is re-filed:
 a name the registry does not know is proposed as an entity in the same commit as the page, and a
 steward confirms it afterwards from the inbox — which the instrument never reaches.
 
@@ -73,7 +73,7 @@ FACETS = QUALITY_FACETS + COST_FACETS
 # that quietly loses one is a score that ROSE because a capture stopped being counted. Adding a
 # capture fails `_check_set` first, on purpose — update this in the same commit.
 #
-# MOVED for ADR 041, which retired the park. Four numbers changed and each one is a fact about the
+# MOVED when the park was retired. Four numbers changed and each one is a fact about the
 # redesign rather than an edit to a yardstick: `status` fell 16 -> 14 because the two ask-back
 # captures stopped being two phases each; `anchor` fell 11 -> 10 because F02 no longer asserts an
 # id it would have to invent (the id of a PROPOSED entity is slugified from the name the agent
@@ -242,7 +242,7 @@ def aggregate(phases: list, *, backend: str, model: str, wall_s: float,
     """Per-facet hits and denominators over every scored phase, plus the cost axes.
 
     `phases` is `[{id, phase, expect, observed, facets}, ...]` — one entry per scored moment, and
-    since ADR 041 that is exactly one per capture. `kinds` rides into the report and the history
+    since the park was retired that is exactly one per capture. `kinds` rides into the report and the history
     row: a per-facet score is only comparable against one over the same set.
     """
     facets: dict = {}
@@ -473,7 +473,7 @@ RETIRED_ENTRY_KEYS = ("reply", "after_reply")
 
 
 def _expect_blocks(entry: dict) -> list:
-    """Every scored moment one entry declares — exactly one since ADR 041 retired the park."""
+    """Every scored moment one entry declares — exactly one since the park was retired."""
     return [entry["expect"]]
 
 
@@ -522,7 +522,7 @@ def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) ->
               if any(key in entry for key in RETIRED_ENTRY_KEYS)]
     if parked:
         sys.exit(f"these expectations carry {list(RETIRED_ENTRY_KEYS)}, which nothing scores any "
-                 f"more: a capture never waits on a person (ADR 041), so there is no reply to send "
+                 f"more: a capture never waits on a person, so there is no reply to send "
                  f"and no second phase to score. The block would be read by nobody and the capture "
                  f"would quietly be measured on its `expect` half alone: {parked}")
 
@@ -694,7 +694,7 @@ def _drive(conn, deps, counting, env, capture: dict, entry: dict, *, materials: 
            schema, worker, support, split_frontmatter) -> list:
     """One golden capture, submitted and drained through the real path. Returns its scored phase.
 
-    ONE phase, always — a capture never waits on a person (ADR 041), so there is no reply to send
+    ONE phase, always — a capture never waits on a person, so there is no reply to send
     and nothing to re-file. The list return is kept because `aggregate` reads a flat list of phases
     and a caller that has to remember whether this returns one or many is how a phase gets dropped.
 

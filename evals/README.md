@@ -88,7 +88,7 @@ deterministic gates and the knowledge repo's own contract linter. Nothing is stu
 a second implementation — it is the write path.
 
 **One capture, one phase.** Two captures used to be scored twice — a park and a re-file after a
-stored reply — and ADR 041 removed the park with the states it waited in. A name the registry does
+stored reply — and the park went, with the states it waited in. A name the registry does
 not know is now PROPOSED: the librarian creates the entity page itself with `approved_by:` empty and
 anchors the capture to it in the same commit, and a steward confirms it afterwards from an inbox
 this instrument never reaches.
@@ -167,7 +167,8 @@ exists for.
 ### The bars
 
 Each quality facet carries a bar in [`bars.py`](bars.py)'s `FILING_BARS`, fixed from a recorded
-baseline — except `proposals`, which is a facet ADR 041 created and no run has ever scored, so its
+baseline — except `proposals`, which is a facet the file-first write path created and no run has
+ever scored, so its
 bar is `None`: REPORT, DO NOT JUDGE. **A bar is the baseline's own score, with a fractional value
 floored a point** (8/9 =
 0.888… must satisfy its own bar, and a two-decimal 0.89 would refuse the very run that set it). The
@@ -253,7 +254,7 @@ A frozen brief re-frozen is a new measurement, not a regression — nothing is r
 is back-filled, so read the first row under new bytes as a fresh baseline candidate. The re-freezes
 so far, newest first:
 
-- **`e118c8a` (2026-08-21, ADR 042)** — both briefs: the librarian looks before it proposes,
+- **`e118c8a` (2026-08-21)** — both briefs: the librarian looks before it proposes,
   a steward's registration arrives as a capture the brief names, and `entity_updates` appends what
   a filing established to a registered entity's page. The linter and the template did not change,
   so the re-freeze moves the three provenance shas together and the two brief copies.
@@ -261,7 +262,7 @@ so far, newest first:
   segment minus `.md`), not by `Path().stem`, which amputated a dotted title such as
   `[[Acme Inc. Invoices]]` and vetoed a live page as a dead link. The briefs did not change, so
   the re-freeze moves the three provenance shas together and no other byte.
-- **`7feee01` (2026-08-21, ADR 041)** — all four frozen files in one commit, which is what makes
+- **`7feee01` (2026-08-21)** — all four frozen files in one commit, which is what makes
   this the cleanest re-freeze the fixture has had: the librarian brief and the meeting-distiller
   brief stop telling the agent to park a capture on the person who wrote it and tell it to PROPOSE
   the identity instead, the contract linter learns the `approved_by:` / `proposed_aliases:`
@@ -274,7 +275,7 @@ so far, newest first:
   gained the three entities that judgment needs (`Cofers`, `Cofers Legal`, `Meridian Nexus`) plus
   four captures. The MEETING-DISTILLER brief was re-frozen in the same commit for a different
   reason, and it is the one worth reading: it had fallen 106 lines behind the knowledge repo's own
-  (ADR 038 gave the distiller corpus context), so `stigmergy_sha` no longer described the whole
+  (the distiller was given corpus context), so `stigmergy_sha` no longer described the whole
   tree and the meeting half of this instrument had been measuring a brief production does not run.
   One sha describes the tree again.
 - **`03aab87`** — the original freeze.

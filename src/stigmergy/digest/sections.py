@@ -117,7 +117,7 @@ def _pages_filed(conn, *, since, until, audiences: set[str]) -> dict:
 
 # An entity is born when a capture introduces it, so the count comes off the filings themselves —
 # each filed report names the identities its own capture created (`librarian.report`,
-# `entities_born`). There is no approval to count any more (ADR 044 D1), and no second table that
+# `entities_born`). There is no approval to count any more, and no second table that
 # could disagree with the commits.
 _ENTITIES_BORN_SQL = (
     "SELECT coalesce(sum(jsonb_array_length(report -> 'entities_born')), 0) "

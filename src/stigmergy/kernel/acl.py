@@ -8,17 +8,17 @@ One question lives here, and it is not "who is asking" — that one is
 
 `view_acl` lived here too — a view's own label, the INTERSECTION of its members'. It never
 widened access, correctly, and it COLLAPSED: one leadership-only note anchored to a popular entity
-made that entity's view vanish for everyone else. ADR 045 D5 replaced it with an open view whose
+made that entity's view vanish for everyone else. It was replaced with an open view whose
 members are filtered with `flows_into`, so there is no second label to compute.
 
 Where a label comes from is not this module's business either, and used to be: `resolve_acl` and
 its four matchers mapped a path to a label list from an ordered config file, of which two matchers
 (`unit`, `entity_kind`) had no input anywhere in the system and one (`path_contains`) no user.
-[ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D2 replaced the whole of it with
-a decision made at the door and carried on the capture's own queue row, so there is no resolution
+The whole of it was replaced by a decision made at the door and carried on the capture's own
+queue row, so there is no resolution
 step left to own.
 
-**One dialect, everywhere** (ADR 045 D9): `None` is open, `[]` is nobody. The librarian's old
+**One dialect, everywhere**: `None` is open, `[]` is nobody. The librarian's old
 adapter translated a resolved `[]` back to `None` — "empty means open" — which made the one
 spelling `ops/acl.json` used to restrict mean its opposite once stamped. Nothing here collapses
 one into the other, and `page.stamp_server_fields` writes `acl: []` rather than omitting the line.
@@ -48,8 +48,8 @@ def flows_into(content_acl: list[str] | None, page_acl: list[str] | None) -> boo
     feeds. Its default posture is fail-closed: called with `page_acl=None` — an open page, the
     widest audience there is — it admits open content only.
 
-    This was `visible_to_view`, and shipped for the view backlink feed alone (ADR 021 D4). The
-    question it answers was never view-shaped: ADR 045 D3 asks it of every model input, because
+    This was `visible_to_view`, and shipped for the view backlink feed alone. The
+    question it answers was never view-shaped: it is asked of every model input, because
     the page linking upward to something its readers cannot see was written by an agent that had
     searched the corpus unrestricted.
     """

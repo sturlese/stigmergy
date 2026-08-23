@@ -55,7 +55,7 @@ def test_the_committed_deploy_file_is_the_empty_default(name):
 
 
 # Which subdirectories `deploy/` is allowed to contain: NONE, today. It held `workflows/` — the
-# cron templates an operator copied into their own knowledge repo — until ADR 044 moved every
+# cron templates an operator copied into their own knowledge repo — until the capture-is-the-approval change moved every
 # unattended pass inside the deployment and left nothing to schedule anywhere else.
 #
 # The set is kept (rather than deleted with its last member) because it is the guard that makes the
@@ -106,7 +106,7 @@ _ROSTER = {"someone@example.com": ["everyone", "finance"]}
 _REGISTRY = {"entities": {"acme-corp": {"name": "Acme Corp"}}}
 # Real-looking because the point of these tests is that real data does not survive the script:
 # a channel map names real channel ids against real group names, and the script's preflight now
-# parses it with the grammar the server reads it with (ADR 045 D7), so a fixture in any other
+# parses it with the grammar the server reads it with, so a fixture in any other
 # shape would be refused before it could be baked.
 _CHANNELS = {"C0123456789": ["finance"]}
 
@@ -228,7 +228,7 @@ def test_the_scripts_restored_defaults_are_the_ones_this_file_asserts(tmp_path):
 
 
 # ── the preflight: a file the server would refuse to read never becomes an image ───────────────
-# Since ADR 045 D7 there is one value shape for a principal's groups, and a leftover `"*"`
+# Since the audience-from-the-door change there is one value shape for a principal's groups, and a leftover `"*"`
 # invalidates the WHOLE file rather than one entry — so an image shipped ahead of the roster
 # rewrite 401s every request. This is the check that stops that, and it has three outcomes.
 

@@ -267,7 +267,7 @@ def diff_entries(worktree: str) -> list[DiffEntry]:
 
 
 # How much of a diff is worth keeping as TEXT. A repair's diff is stored so a person can read
-# afterwards what nobody read before it landed (ADR 044) — and a diff nobody can scroll is not a
+# afterwards what nobody read before it landed — and a diff nobody can scroll is not a
 # reading either, while a multi-megabyte one in a JSON column is a page that never loads. Clipped
 # with a line saying so, never silently truncated: a diff that stops mid-hunk and says nothing
 # reads as the whole change.

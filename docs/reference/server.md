@@ -2,10 +2,8 @@
 
 The single API over the brain: one MCP server that enforces the page contract
 **and** access control server-side, over TWO transports — stdio (local clients) and
-streamable HTTP with per-user auth (remote, multi-user). Design record:
-[ADR 007](../decisions/007-answer-layer.md),
-[ADR 013](../decisions/013-http-transport-and-token-auth.md) (HTTP transport + token auth +
-staging deploy); the index it reads is [ADR 012](../decisions/012-hybrid-index.md).
+streamable HTTP with per-user auth (remote, multi-user). The index it reads is
+[hybrid-index.md](./hybrid-index.md).
 Code map: [`src/stigmergy/server/index.md`](../../src/stigmergy/server/index.md).
 
 `service.py` holds the transport-agnostic core and `mcp_server.py` the tool closures both
@@ -16,15 +14,14 @@ tokens are what stands in for it today.
 
 **The server also writes.** `brain_submit` and `brain_submissions` mount the durable
 capture queue (`stigmergy.capture`, narrative: [capture.md](./capture.md), decided in
-[ADR 014](../decisions/014-capture-queue-and-attribution.md)) on the same service seam as the read
+[capture.md](./capture.md)) on the same service seam as the read
 tools. Submitting still never touches git and still files no page — a capture is queued and
 attributed here, and the librarian is what turns it into a page. **Nothing on this server asks a
 person for a verdict**: the capture is the approval, so an identity a capture introduces is born
-confirmed by whoever captured it and there is no lane to review
-([ADR 044](../decisions/044-the-capture-is-the-approval.md)).
+confirmed by whoever captured it and there is no lane to review.
 
 **Nothing in this process writes to the knowledge repo at all.** It never clones it, never commits
-to it and never pushes: the librarian worker is the one writer there is (ADR 044 D3). What was the
+to it and never pushes: the librarian worker is the one writer there is. What was the
 last exception — `brain_delete`, which used to clone, sweep, gate and push inside the call — is now
 a QUEUEING door: it authorizes, writes a `delete` row, and the worker performs it. The one place
 this process touches the App credential at all is `webhook.py`, and it READS with it: an incremental
@@ -39,7 +36,7 @@ scoped caller gets one fixed sentence whether or not the paths exist, so the doo
 oracle either. Everything after that is the worker's, and what comes back to the person is the
 capture: `brain_submissions` carries the outcome and the per-page diff, ACL-scoped and fenced —
 nobody reads that prose before it lands, so that is the reading
-([ADR 043](../decisions/043-a-sweep-is-written.md) D5, in ADR 044's shape).
+(the diff IS the reading, and it happens after the push).
 
 ## Module map
 
@@ -48,7 +45,7 @@ nobody reads that prose before it lands, so that is the reading
 | `settings.py` | explicit runtime config (`from_args`); no env reads at import |
 | `identity.py` | the one identity → audiences resolver over `ops/identities.json` (stdio, startup) **and** the per-request half: bearer token → sha256 → the token store → email, fail-closed on every step |
 | `acl.py` | the one visibility rule (`visible`) every read path filters through |
-| `review.py` | the two sequences this process runs on somebody's behalf, and nothing else — neither of them writes to the knowledge repo, because nothing here does. **A REMOVAL** (`queue_deletion`): the reason is normalized and bounded, the pages are validated at `capture.schema`'s own seam, and a `delete` row is queued under the caller's name; the worker performs it ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3, and [ADR 043](../decisions/043-a-sweep-is-written.md) for what performing it means). **A REGISTRATION** ([ADR 042](../decisions/042-an-entity-is-born-written.md)): registering an entity queues a `raw` capture whose material is what the person knows about it and whose hints carry the registration (`capture.schema.registration_hints`), and the LIBRARIAN writes the page and births the identity confirmed by them. Both take a required, undefaulted `source` naming their door, so a new door that forgets to name itself fails loudly instead of being attributed to an existing one. **Neither carries authorization** (ADR 030 D2's rule, which outlived the doors it was written for): each surface decides who may before it calls in — the MCP tool by requiring an unrestricted identity, the console by sitting behind its operator token — which is why the caller set of each is closed and pinned rather than open. It also re-exports `ensure_repair_schema` — the repairs ledger's DDL — which is the whole of what this module still reaches into `stigmergy.repair` for |
+| `review.py` | the two sequences this process runs on somebody's behalf, and nothing else — neither of them writes to the knowledge repo, because nothing here does. **A REMOVAL** (`queue_deletion`): the reason is normalized and bounded, the pages are validated at `capture.schema`'s own seam, and a `delete` row is queued under the caller's name; the worker performs it ([repair.md](./repair.md) for what performing it means). **A REGISTRATION**: registering an entity queues a `raw` capture whose material is what the person knows about it and whose hints carry the registration (`capture.schema.registration_hints`), and the LIBRARIAN writes the page and births the identity confirmed by them. Both take a required, undefaulted `source` naming their door, so a new door that forgets to name itself fails loudly instead of being attributed to an existing one. **Neither carries authorization**: each surface decides who may before it calls in — the MCP tool by requiring an unrestricted identity, the console by sitting behind its operator token — which is why the caller set of each is closed and pinned rather than open. It also re-exports `ensure_repair_schema` — the repairs ledger's DDL — which is the whole of what this module still reaches into `stigmergy.repair` for |
 | `service.py` | `BrainService` — the transport-agnostic core; `build_service`/`open_scoped_resources` wire it fail-closed. Also the rate-limit + audit wrapper (`_call`/`call_async`) both transports share; `list_entities`/`describe_entity` (the entity-navigation door) and entity-first resolution INSIDE `_search` itself, so every client gets it. `require_embedder` is the keyless seam: a server started without an embedding key still starts and still serves `read_page`/the capture tools, and the tools that cannot work say which capability is missing (`CapabilityUnavailableError`) instead of failing opaquely. `_search` also hands the resolved entity id DOWN as `entity_hint` — the rank-time boost is TOLD, never re-inferred from query tokens |
 | `ratelimit.py` | `RateLimiter`, a per-identity token bucket, injectable clock. **THREE live buckets**: `overall` (30/min, spent by every wrapped call) and two stricter ones on top of it, `ask` (10/min) and `brain_delete` (3/min). The delete bucket is the tightest not because the call is expensive here — it queues a row and returns — but because of what each row COSTS downstream: a worker pass, a model call over every page that referred to the removed ones, and a commit. A fourth constructor knob, `propose_per_min`, is accepted and stored but nothing spends it — `_extra` registers the two names above. It survives as the shape for the next expensive tool, not as a live limit |
 | `audit.py` | `audit_log` DDL + `AuditWriter` — one row per tool call, both transports; a write failure is logged loudly and never fails the serving call. `result` (nullable JSONB) is a per-tool outcome SUMMARY (`{"hits": n}` for `search_brain`, `{refused, suppressed, verdict, first_verdict, citations, retried, usage}` for `ask` via
@@ -71,7 +68,8 @@ by `tests/test_architecture.py`:
   Contents API reads an incremental upsert makes — no clone, no checkout) and
   `librarian.errors.LibrarianConfigError`.
 
-The list was two entries until ADR 044 D3. `review.py` held the second, for `librarian.gates`: it
+The list was two entries until the review lane went. `review.py` held the second, for
+`librarian.gates`: it
 scanned a deletion's free-text reason for secrets before that sentence became a commit message. It
 is not needed here any more, because the sentence no longer becomes a commit message HERE — the
 worker scans it with every other capture's material, on the way to the commit it writes.
@@ -93,10 +91,10 @@ identity, rate limits or transports — those are resolved here and passed down.
 
 | Tool | What it does |
 |---|---|
-| `search_brain(query, filters?, max_results?, include_superseded?)` | contract-ranked hits: superseded pages demoted, entity/period/freshness boosted. Each hit carries `factors`, `score`, `arms`, snippet and contract flags; the response carries the index `built_at` and embedding model. `filters` scopes by frontmatter column — the seven `search.FILTER_COLUMNS` (`zone`, `type`, `status`, `entity`, `owner`, `tier`, `as_of`); an unknown name is a clean error. **The tool's own docstring names `search.FILTER_COLUMNS` as the source of that list**, so it cannot advertise a filter the index does not carry ([hybrid-index.md](./hybrid-index.md#queryable-filters-vs-stored-columns)). Superseded pages are demoted (kept) unless `include_superseded=false`. `max_results` is clamped to `[1, 80]` (2× `rank.CANDIDATE_POOL`) — a negative, zero or oversized value never slices the ranked set open, and it counts **documents**, not rows: a split document's parts collapse to one top-k slot. When `filters` names no explicit `entity`, the query is resolved against the registry and, on a match, the resolved id is told to the ranker — one blended search in which that entity's material scores higher. It is deliberately not SCOPED to it: scoping made a company-wide page unreachable through every query naming a registered company (ADR 022 D4, amended) |
+| `search_brain(query, filters?, max_results?, include_superseded?)` | contract-ranked hits: superseded pages demoted, entity/period/freshness boosted. Each hit carries `factors`, `score`, `arms`, snippet and contract flags; the response carries the index `built_at` and embedding model. `filters` scopes by frontmatter column — the seven `search.FILTER_COLUMNS` (`zone`, `type`, `status`, `entity`, `owner`, `tier`, `as_of`); an unknown name is a clean error. **The tool's own docstring names `search.FILTER_COLUMNS` as the source of that list**, so it cannot advertise a filter the index does not carry ([hybrid-index.md](./hybrid-index.md#queryable-filters-vs-stored-columns)). Superseded pages are demoted (kept) unless `include_superseded=false`. `max_results` is clamped to `[1, 80]` (2× `rank.CANDIDATE_POOL`) — a negative, zero or oversized value never slices the ranked set open, and it counts **documents**, not rows: a split document's parts collapse to one top-k slot. When `filters` names no explicit `entity`, the query is resolved against the registry and, on a match, the resolved id is told to the ranker — one blended search in which that entity's material scores higher. It is deliberately not SCOPED to it: scoping made a company-wide page unreachable through every query naming a registered company |
 | `read_page(path)` | one page, trust signals first (title, entity, as_of, superseded banner), body fenced as `UNTRUSTED-DATA`. An unknown **or** out-of-scope path returns the same `unknown page` response — existence never leaks. It also returns `type`, `status`, `supersedes`, and the navigation graph — `links`/`backlinks`, each `{path, title}`, existence-scoped, capped at 20 with the truncation stated in `links_note`/`backlinks_note` |
 | `list_entities()` | the ACL-scoped entity vocabulary: every id you may see, enriched from the registry (`name`/`aliases`/`type`) where a registry record exists; an anchored-but-unregistered id serves as its bare id alone. `count` states how many |
-| `describe_entity(entity)` | everything anchored to one entity, layered: registry metadata + its own page, a view reference (or `null`), and a dated timeline of every other anchored page. `entity` resolves through **two** paths, not one (the ADR 022 D5 amendment): a registered id/name/alias through the same registry loader `list_entities` and entity-first search use, **or** exact verbatim membership of the caller's own scoped-id set — so an anchored-but-unregistered id, which `list_entities` already serves honestly as a bare id, resolves here too. The second path is never normalized: a scoped id is an index fact, not free text a person typed, so fuzzing the comparison could only manufacture a false match. Both consult `scoped_entities()`, the ONE existence rule — computed unconditionally BEFORE resolution, which is what closes a timing oracle (a never-registered input skipping the DB read a registered-but-out-of-scope one pays for, so the latency itself says which case applies). Unknown and out-of-scope entities return the byte-identical `{"error": "unknown entity: <input>"}` |
+| `describe_entity(entity)` | everything anchored to one entity, layered: registry metadata + its own page, a view reference (or `null`), and a dated timeline of every other anchored page. `entity` resolves through **two** paths, not one: a registered id/name/alias through the same registry loader `list_entities` and entity-first search use, **or** exact verbatim membership of the caller's own scoped-id set — so an anchored-but-unregistered id, which `list_entities` already serves honestly as a bare id, resolves here too. The second path is never normalized: a scoped id is an index fact, not free text a person typed, so fuzzing the comparison could only manufacture a false match. Both consult `scoped_entities()`, the ONE existence rule — computed unconditionally BEFORE resolution, which is what closes a timing oracle (a never-registered input skipping the DB read a registered-but-out-of-scope one pays for, so the latency itself says which case applies). Unknown and out-of-scope entities return the byte-identical `{"error": "unknown entity: <input>"}` |
 
 Output is structured JSON. All four enforce the client's ACL scope: out-of-scope pages are
 absent from search, unreadable, and their discovery hints do not resolve. ACL
@@ -104,15 +102,15 @@ filtering runs in Python, so `search_brain` rank/fetches a generous candidate
 pool **before** filtering, then truncates to the requested count — an out-of-scope row must never
 steal a slot from a visible one; `read_page`'s links/backlinks and `describe_entity`'s timeline
 follow the identical filter-then-cap order. Full mechanism: [navigation.md](./navigation.md),
-decided in [ADR 022](../decisions/022-entity-navigation.md).
+described in [navigation.md](./navigation.md).
 
 ## The capture tools (the write path)
 
 | Tool | What it does |
 |---|---|
-| `brain_submit(kind, material, hints?, audience?)` | queue a capture — `kind` is `raw`, `page`, `meeting` (the transcript, with `title` and `meeting_date` in `hints`, optionally `attendees`) or `document` (the document's text, with `title` in `hints` and optionally `source_url`), capped at 256 KB of material for `raw`/`page` and 1 MB for `meeting`/`document` — archived to the evidence plane and attributed by the SERVER. Returns an ack with the submission id; it promises **queued and attributed**, never "saved to the brain" — nothing is in the brain until the librarian files it. Beside the ack it returns `entities`: the registered entities this material already names, `{id, name}` each, so the submitter sees at once which identities the brain recognises. `hints` may also carry a registration — `register_name`, `register_type`, `register_aliases`, `register_source` — which pins the entity this capture introduces instead of leaving the librarian to infer it. Every door may send them: they carry no authority, because there is none left to carry ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). `audience` is the ONE access decision a caller makes ([ADR 045](../decisions/045-audience-from-the-door.md) D2): the groups this material is for, as a list of group names, omitted to file OPEN. It is a REQUEST — the door resolves it, checks it with `acl.visible()` against the caller's OWN groups (you may file only what you could read afterwards) and stores the answer on `capture_queue.acl`, which the worker stamps on every page the capture writes, the verbatim `sources/` page included. A caller naming a group they do not hold is refused with one sentence and nothing is queued. |
+| `brain_submit(kind, material, hints?, audience?)` | queue a capture — `kind` is `raw`, `page`, `meeting` (the transcript, with `title` and `meeting_date` in `hints`, optionally `attendees`) or `document` (the document's text, with `title` in `hints` and optionally `source_url`), capped at 256 KB of material for `raw`/`page` and 1 MB for `meeting`/`document` — archived to the evidence plane and attributed by the SERVER. Returns an ack with the submission id; it promises **queued and attributed**, never "saved to the brain" — nothing is in the brain until the librarian files it. Beside the ack it returns `entities`: the registered entities this material already names, `{id, name}` each, so the submitter sees at once which identities the brain recognises. `hints` may also carry a registration — `register_name`, `register_type`, `register_aliases`, `register_source` — which pins the entity this capture introduces instead of leaving the librarian to infer it. Every door may send them: they carry no authority, because there is none left to carry. `audience` is the ONE access decision a caller makes: the groups this material is for, as a list of group names, omitted to file OPEN. It is a REQUEST — the door resolves it, checks it with `acl.visible()` against the caller's OWN groups (you may file only what you could read afterwards) and stores the answer on `capture_queue.acl`, which the worker stamps on every page the capture writes, the verbatim `sources/` page included. A caller naming a group they do not hold is refused with one sentence and nothing is queued. |
 | `brain_submissions(limit?, status?)` | the caller's own submissions with state, timestamps, `result_ref` and the librarian's `report`; an UNRESTRICTED identity sees the whole queue with `mine` marking its own rows. Echoed capture text is fenced as `UNTRUSTED-DATA` |
-| `brain_delete(paths, why)` | QUEUE a removal — an UNRESTRICTED identity only. That is the one fact this process can settle, and it is the right one: a removal touches the pages named AND every page that refers to them, a set nothing knows before the corpus is read, so only a caller who can see everything may ask for it. A scoped caller gets one fixed sentence whether the paths exist or not, so this is no existence oracle about a referrer either (ADR 044 D3). What lands here is a `delete` row with the caller's name on it; the WORKER then drops the frontmatter entries that named a removed page, has a model write those pages' bodies so a sentence that cited one still reads, runs the nine gates and pushes ONE App-authored commit with the caller in an `Approved-by:` trailer. The per-page DIFF is stored on the capture and read back through `brain_submissions`, ACL-scoped and fenced. Refused at the door, with nothing queued: an entity page, a path outside the corpus, more than ten pages, an empty reason, an over-long one. Refused by the worker, as a `rejected` capture: a page that is not there, a plan over its byte ceiling, a body the sweep writer could not reconcile, a gate's veto, a dead link the sweep would have left behind — each carrying `reason_code: unremovable` and the lane's own sentence. A reason that matches a likely secret or a personal-data pattern is refused there too, but as `secret`/`pii`, by the same scan every capture's material passes: the reason becomes a commit message, and that is the one place no gate looks |
+| `brain_delete(paths, why)` | QUEUE a removal — an UNRESTRICTED identity only. That is the one fact this process can settle, and it is the right one: a removal touches the pages named AND every page that refers to them, a set nothing knows before the corpus is read, so only a caller who can see everything may ask for it. A scoped caller gets one fixed sentence whether the paths exist or not, so this is no existence oracle about a referrer either. What lands here is a `delete` row with the caller's name on it; the WORKER then drops the frontmatter entries that named a removed page, has a model write those pages' bodies so a sentence that cited one still reads, runs the nine gates and pushes ONE App-authored commit with the caller in an `Approved-by:` trailer. The per-page DIFF is stored on the capture and read back through `brain_submissions`, ACL-scoped and fenced. Refused at the door, with nothing queued: an entity page, a path outside the corpus, more than ten pages, an empty reason, an over-long one. Refused by the worker, as a `rejected` capture: a page that is not there, a plan over its byte ceiling, a body the sweep writer could not reconcile, a gate's veto, a dead link the sweep would have left behind — each carrying `reason_code: unremovable` and the lane's own sentence. A reason that matches a likely secret or a personal-data pattern is refused there too, but as `secret`/`pii`, by the same scan every capture's material passes: the reason becomes a commit message, and that is the one place no gate looks |
 
 **Nothing in this lane waits on the caller, and nothing waits on anybody else.** There is no reply
 tool and no state that asks for one: a capture reaches `filed`, `rejected` or `failed`. When the
@@ -139,12 +137,10 @@ blob created. Fields NOT on that signature are still structurally safe (nothing 
 client input into a server-computed column) but are dropped rather than refused — a residual
 [capture.md](./capture.md) records rather than papers over. `kind` is the queue's own
 `capture_schema.KINDS`, all four of them: every door speaks one vocabulary, and the per-kind hint
-requirements are validated at the enqueue seam every caller crosses rather than here
-([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
+requirements are validated at the enqueue seam every caller crosses rather than here.
 `brain_submit`'s audit row records the material's size and hash, never its text. Full mechanism, the
 queue's state machine and the evidence key scheme: [capture.md](./capture.md), decided in
-[ADR 014](../decisions/014-capture-queue-and-attribution.md) and
-[ADR 044](../decisions/044-the-capture-is-the-approval.md).
+[capture.md](./capture.md).
 
 ## The `ask` tool — the answering loop
 
@@ -260,7 +256,7 @@ need an explicit value in production, where no `--repo` is passed at all. The DS
 
 **There is no third access file.** `ops/identities.json` is the whole of who-may-what on this
 server: it scopes every read, and its unrestricted entries are exactly the callers `brain_delete`
-accepts ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). No role map is baked into a
+accepts. No role map is baked into a
 process, so no process can fail closed on one an operator forgot to re-bake.
 
 **Which registry the server serves — and why `--entity-registry` is only the fallback.**
@@ -346,7 +342,7 @@ streamable HTTP that stdio does — the four read tools (`search_brain`/`read_pa
 (`brain_submit`/`brain_submissions`) and `brain_delete` — gated by per-user
 bearer-token auth instead of a fixed `--identity` flag: many testers share one
 running process, each scoped to their own audiences. Full narrative + the design tradeoffs:
-[ADR 013](../decisions/013-http-transport-and-token-auth.md).
+
 
 **One shared app, `stateless_http=True` (mandatory, not a style choice).** `build_mcp(service)`
 is called exactly once (stdio's own test contract); every identity is served through the SAME
@@ -362,7 +358,7 @@ your own valid token, but the session creator's `mcp-session-id`) and an unbound
 mode gives every HTTP request a fresh, request-scoped dispatch task instead — no
 `mcp-session-id` is ever handed out, so there is no session identity to borrow. stdio never calls
 `streamable_http_app()` at all and is unaffected either way. Full mechanism: `transport_http.py`'s
-module docstring and [ADR 013](../decisions/013-http-transport-and-token-auth.md) §4.
+module docstring.
 
 **Auth, fail-closed at every step**:
 `Authorization: Bearer <token>` → SHA-256 hex → the token store (`$STIGMERGY_TOKEN_STORE` inline
@@ -387,7 +383,7 @@ It prints the plaintext token ONCE (send it to the tester over a trusted channel
 bearer credential) and the sha256 line to add to the token store. The plaintext is never
 written to disk, a log, or a repo by this command.
 
-**Host-header allowlisting** (ADR 013 amendment): the MCP SDK auto-enables
+**Host-header allowlisting**: the MCP SDK auto-enables
 DNS-rebinding protection scoped to `127.0.0.1`/`localhost`/`::1` only, which 421s a real client
 at the real deployed hostname before auth ever runs. `build_http_app` builds an explicit
 `TransportSecuritySettings` that keeps that protection ON and adds the real host(s) from
@@ -399,7 +395,7 @@ header` symptom.
 `ask` alone — a shared, process-wide `RateLimiter` (token bucket, injectable clock) so the
 budget is honest across every request from that identity, not per connection. Refused calls get
 a clear `{"error": "rate limited: ..."}` — never a bare protocol error. Deliberately **not**
-applied to stdio (see ADR 013 §5): stdio's local-operator trust model doesn't need it, and the
+applied to stdio: stdio's local-operator trust model doesn't need it, and the
 existing `test_rebuild_while_serving.py` hammer test assumes unlimited local throughput.
 
 **Argument-size bounds** (`service.py::MAX_ARG_CHARS`): every user-controlled
@@ -487,8 +483,7 @@ middleware — inert 404s unless `$STIGMERGY_ADMIN_TOKEN_HASH` is set, and docum
 ## Identities file
 
 A versioned JSON map checked into the knowledge repo at `ops/identities.json`, **keyed by
-email**, mapping each principal to a **list of groups** and to nothing else
-([ADR 045](../decisions/045-audience-from-the-door.md) D7):
+email**, mapping each principal to a **list of groups** and to nothing else:
 
 ```json
 {
@@ -501,8 +496,7 @@ email**, mapping each principal to a **list of groups** and to nothing else
 ```
 
 Membership of **`brain-admins`** IS the unrestricted scope — the resolver returns `None` for it,
-which is the value `acl.visible()` has always read as "sees everything" — and since
-[ADR 044](../decisions/044-the-capture-is-the-approval.md) D3 it is also the whole of
+which is the value `acl.visible()` has always read as "sees everything". It is also the whole of
 `brain_delete`'s authorization: a removal touches pages the caller did not name, so only an
 identity with no audience restriction may ask for one — and `brain_submit` refuses the `delete`
 kind by name, so that check cannot be side-stepped by submitting one. It is a group rather than a
@@ -511,7 +505,7 @@ sigil because the identity provider that will replace this file has groups and h
 Any other list is the client's scope: it reads unlabeled pages plus pages sharing at least one
 group. **An empty list is a principal who holds no group** — authenticated, reading every open
 page and no other. That is a fact about a PERSON and is not the `acl: []` of a PAGE, which means
-nobody; keeping the two apart is what ADR 045 D9 buys.
+nobody; keeping the two apart is what the one-dialect rule buys.
 
 **Open is the absence of a label, so `all` is a reserved word** and is refused as a group name: a
 page labelled `[all]` would be restricted to whoever holds a group by that name rather than open
@@ -551,7 +545,7 @@ discovery hints):
 | malformed value | untrusted | ❌ hidden | ❌ hidden (logged loudly) |
 
 A malformed stored acl is hidden even from unrestricted clients and logged — a value we cannot
-trust must never resolve to "open" at the point access is decided (fail-closed, ADR 012 §4).
+trust must never resolve to "open" at the point access is decided (fail-closed).
 
 ## Rebuild workflow (staleness)
 

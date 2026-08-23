@@ -32,7 +32,7 @@ ENTITY_PAGE = "wiki/entities/ferrovial-nexus.md"
 NOTE_PAGE = "wiki/notes/ferrovial-nexus-kickoff.md"
 # `cofers` needs an anchored page of its own, and the reason is the existence rule rather than
 # convenience: `describe_entity` resolves through `scoped_entities()`, so an entity that only the
-# REGISTRY knows is indistinguishable from one that does not exist (ADR 022). Without this page the
+# REGISTRY knows is indistinguishable from one that does not exist. Without this page the
 # two file-fallback twins below would be asserting against that rule instead of against which
 # registry copy the server read.
 COFERS_NOTE_PAGE = "wiki/notes/cofers-billing.md"

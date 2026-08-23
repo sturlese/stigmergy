@@ -46,7 +46,7 @@ def test_adversarial_cat7_flagged_fields_never_reach_the_trusted_client_hints_bu
 
 
 def test_adversarial_cat7_no_code_path_from_declared_frontmatter_to_a_server_owned_column():
-    """The structural half of the guarantee (ADR 014 §4): `Submission` carries no `submitted_by`
+    """The structural half of the guarantee: `Submission` carries no `submitted_by`
     field at all — `queue.submit` takes attribution as an ARGUMENT the service supplies. There is
     nothing on this dataclass a careless future caller could mistakenly read as attribution."""
     submission = schema.prepare_submission("page", FORGED_PAGE)

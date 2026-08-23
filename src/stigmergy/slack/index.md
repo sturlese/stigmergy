@@ -67,8 +67,7 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 - Letting `identity.UsersInfoCache` or the "Show it here" token store grow unbounded — both need a
   size cap with oldest-first eviction, not just a TTL.
 - Deciding anything about an identity HERE. There is nothing to decide: a capture introduces the
-  entity it is about, born confirmed by whoever captured
-  ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
+  entity it is about, born confirmed by whoever captured.
 
 ## Data & contracts
 
@@ -103,7 +102,7 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 - **Nothing is ever asked of a submitter, before or after.** A threaded message is ordinary
   conversation to this bot; the one thing a submitter hears back is the poller's report of what the
   librarian did — a filed card names the entities their capture introduced and says the identity is
-  confirmed by them ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
+  confirmed by them.
 - `store.py` is the only module that may import `stigmergy.capture`, and only `.schema`.
 
 ## Tests

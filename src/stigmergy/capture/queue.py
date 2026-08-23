@@ -187,7 +187,7 @@ def submit(conn, evidence, *, kind: str, material: str, hints: dict | None,
 
     `submitted_by` is the caller's RESOLVED identity, supplied by the service layer; this function
     has no way to learn an identity from the input. `acl` is the same shape of fact one layer up:
-    the DOOR's resolved audience decision (ADR 045 D2), already checked against the submitter's own
+    the DOOR's resolved audience decision, already checked against the submitter's own
     groups by whoever called — `None` is open, and no caller-supplied value reaches here unchecked
     because `schema.reject_server_owned_arguments` refuses `acl` as an argument at every door.
     `extra_blob_refs` (operator CLIs only) append AFTER the material's own blob, so `blob_refs[0]`
@@ -211,7 +211,7 @@ def submit(conn, evidence, *, kind: str, material: str, hints: dict | None,
         "bytes": submission.size,
         "flagged_hints": submission.hints["flagged"],
         # `is None`, never truthiness: `[]` is a VALUE meaning nobody, and collapsing it to
-        # NULL here would mean open — the two-dialect defect ADR 045 D9 ends, at the lowest
+        # NULL here would mean open — the two-dialect defect the one-dialect rule ends, at the lowest
         # layer of all. No door produces `[]` today; the rule is the point.
         "acl": None if acl is None else list(acl),
     }

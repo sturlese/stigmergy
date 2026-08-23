@@ -17,8 +17,7 @@ it owns is `admin_actions`.
 **Captures are READ-ONLY here.** Nothing drains a queue row: the two write buttons on that page
 (Reclaim, Purge) act on the queue as a WHOLE, and a capture reaches its terminal state through the
 librarian or the expiry sweep. Nothing on this console decides an identity either: a capture
-introduces the entity it is about, confirmed by whoever captured
-([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
+introduces the entity it is about, confirmed by whoever captured.
 
 **It is not a read surface over the corpus** — no search, no `ask`, no page bodies.
 `test_admin_never_imports_the_read_path_or_the_mcp_adapter` bans `stigmergy.index.search`,
@@ -73,16 +72,16 @@ cannot need a token to render).
 | GET | `/admin/api/entities/registry` | `entities_registry()` — the served registry, sorted by name, with `by_type` and freshness | yes |
 | POST | `/admin/api/entities/resolve` | `entities_resolve()` — `names` must be a JSON list of strings (≤ `MAX_RESOLVE_NAMES`); one verdict per non-blank name. Writes no `admin_actions` row | yes |
 | POST | `/admin/api/entities/create` | `entity_create()` — `name`/`entity_type`/`about` required, `entity_id`/`aliases` optional; commissions the entity by queueing a capture and answers the queued row (`id`, `status`, `entity_id`, `name`, `message`). Off the event loop, for the archive write. The page is the librarian's to write, and the identity is born confirmed by the actor | yes |
-| GET | `/admin/api/repairs` | `repairs_list()` — the newest `REPAIR_RECENT_LIMIT` repairs whatever their outcome, each carrying the diff it pushed, the whole table's `counts` by status, and the repair pass's `job_runs` history. Read-only: a repair is applied by the pass, and this page is the reading afterwards ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)) | yes |
+| GET | `/admin/api/repairs` | `repairs_list()` — the newest `REPAIR_RECENT_LIMIT` repairs whatever their outcome, each carrying the diff it pushed, the whole table's `counts` by status, and the repair pass's `job_runs` history. Read-only: a repair is applied by the pass, and this page is the reading afterwards | yes |
 | GET | `/admin/api/repairs/{id:int}` | `repair_show()` | yes |
-| POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, QUEUED through `server.review.queue_deletion`, the same seam MCP's `brain_delete` runs, and performed by the librarian worker (ADR 044 D3). It passes no per-path guard: the operator token is the authorization, which makes this the console's most consequential button. What comes back is a queue acknowledgement, and the per-page diffs are read afterwards on the capture | yes |
+| POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, QUEUED through `server.review.queue_deletion`, the same seam MCP's `brain_delete` runs, and performed by the librarian worker. It passes no per-path guard: the operator token is the authorization, which makes this the console's most consequential button. What comes back is a queue acknowledgement, and the per-page diffs are read afterwards on the capture | yes |
 | GET | `/admin/api/activity` | `activity()` | yes |
 | GET | `/admin/api/worker` | `worker_status()` | yes |
 | GET | `/admin/api/jobs` | `jobs_state()` — the night shift, read-only | yes |
 
 **There is no free path segment left in this table.** The four `crons/{workflow_file}/…` routes
-were the only place a path was read as data, and they went with the crons themselves (ADR 044: the
-passes run on the worker's idle branch, so there is nothing to dispatch). The two id routes are
+were the only place a path was read as data, and they went with the crons themselves — the
+passes run on the worker's idle branch, so there is nothing to dispatch. The two id routes are
 `{id:int}`, which cannot swallow `reclaim` or `purge`, and no route under `entities/` takes a
 converter — the three there are literal segments — so no declaration order here is load-bearing. Adding a catch-all under an existing prefix brings the
 ordering hazard back with it.
@@ -112,9 +111,8 @@ ordering hazard back with it.
   M + N folds, not N × M.
 - `server.review.commission_registration` — `entity_create`'s whole seam, and it touches no git and
   writes no ledger row: it queues a capture carrying the registration and the LIBRARIAN writes the
-  page, births the identity confirmed by the actor and records the approval after its own push
-  ([ADR 042](../../../docs/decisions/042-an-entity-is-born-written.md),
-  [ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md) D1). What stays here is the
+  page, births the identity confirmed by the actor and records the approval after its own push.
+What stays here is the
   pre-flight `entity_create` owns: the required `about`, the slug-of-the-name check on `entity_id`,
   and the refusal of a name the SERVED registry already resolves (the entity exists — capture about
   it instead). It needs the evidence store the queue archives into, passed as
@@ -233,7 +231,7 @@ the transport's parser — importing it would close a cycle through the composit
 `{"error": "<sentence>"}` at 400 (`AdminBadRequest`), 401 (generic, never a reason), 404
 (`AdminNotFound`, and the inert console's blanket answer), 409 (`AdminRefused`), 421 (foreign
 `Host`), 500 (class name only). No 502: this package reaches no other service — the GitHub Actions
-gateway went with the crons (ADR 044), and nothing replaced it. Every response carries
+gateway went with the crons, and nothing replaced it. Every response carries
 `content-security-policy` (`default-src 'none'`; fetch directives `'self'`, `img-src` also `data:`;
 `base-uri`/`form-action`/`frame-ancestors` `'none'`), `x-content-type-options: nosniff`,
 `referrer-policy: no-referrer` and `strict-transport-security: max-age=31536000;
@@ -323,8 +321,8 @@ token so a view that resolves after the next navigation started has its cleanup 
   capture's own worktree when the librarian files the registration. When the snapshot is fresh the
   two agree; when it is stale the gate wins, and the console shows the gate's own sentence as the
   capture's refusal on the row it navigated to.
-- **The console's authorization IS its token** ([ADR 029](../../../docs/decisions/029-admin-console.md)
-  D3: one dedicated credential, revoked by one secret change), and `actor` is free text behind it —
+- **The console's authorization IS its token** (one dedicated credential, revoked by one secret
+  change), and `actor` is free text behind it —
   attribution, never checked. That is why `pages_delete` reaches the shared
   sequence with no authorization argument: authorization is per-surface, decided before the call,
   and the caller sets are pinned both ways in `tests/test_architecture.py`. A second surface added
@@ -339,9 +337,8 @@ token so a view that resolves after the next navigation started has its cleanup 
   the unified diff of every page the sweep rewrote and the console shows them in a fieldless
   `confirmForm` UNRENDERED; an applied repair's diff is stored in `repairs` and read the same way
   on the Repairs page. What landed in the repo is those bytes, nobody read the model's prose before
-  it landed, and `git revert` in the knowledge repo is the undo
-  ([ADR 043](../../../docs/decisions/043-a-sweep-is-written.md) D5, generalised to every repair by
-  [ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
+  it landed, and `git revert` in the knowledge repo is the undo — the diff IS the reading, for
+  every repair.
 
 ## Common tasks
 

@@ -2,7 +2,7 @@
 
 OLD BEHAVIOUR: `AgentRun.cost_usd` was captured from the SDK's ResultMessage and died with the
 run object — no report key, no log line — so a week of staged filings could not answer "what did
-filing this cost?" without the provider's own dashboard (ADR 031, D2). These are pure unit tests
+filing this cost?" without the provider's own dashboard (the suppression-gated retry, D2). These are pure unit tests
 over the three seams the number now travels: the per-pass bank (`AgentPasses.cost_usd`), the
 Result stamp (`_stamp_cost`), and the exception road a `failed` report takes
 (`at_agent_attempt(n, cost_usd=…)` → `worker._agent_cost_usd` → `report.failed_system`).
@@ -80,7 +80,7 @@ def test_one_pass_banks_the_spend_before_the_outcome_is_judged(tmp_path):
     fault raised below it cannot skip the figure. (The raising half — the majority fault shape —
     is the twin test below.)"""
     class BrokeAgent:
-        # The declared port member (ADR 033). `False` is the exploring shape, which is what this
+        # The declared port member. `False` is the exploring shape, which is what this
         # test means; `_one_pass` REFUSES an agent that declares nothing rather than defaulting it.
         structured_ordinary = False
         wants_gathered = False

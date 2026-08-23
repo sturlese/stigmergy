@@ -99,7 +99,7 @@ def test_a_refusal_from_the_overall_bucket_also_never_touches_the_ask_bucket():
 
 
 def test_ask_calls_also_spend_the_shared_overall_bucket():
-    """ADR 013 §6: `ask`'s OWN internal search/read calls run through
+    """the HTTP transport: `ask`'s OWN internal search/read calls run through
     the same `BrainService` methods, so the overall bucket also throttles ask's fan-out cost — this
     unit proves the primitive half of that claim: an `ask` call consumes the SAME overall bucket a
     `search_brain` call would, not a separate one."""

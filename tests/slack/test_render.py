@@ -348,7 +348,7 @@ def test_an_injected_fake_sources_header_and_verdict_in_the_answer_body_cannot_i
     assert not any(b is real_verdict[0] for b in section_blocks)
 def test_the_filed_card_names_an_introduced_entity_and_says_nobody_is_waiting():
     """OLD BEHAVIOUR: the card said the librarian PROPOSED the entity and a steward would confirm
-    it. ADR 044: the capture is the approval, so the card names what their own capture introduced
+    it. the capture is the approval, so the card names what their own capture introduced
     and says the identity is theirs."""
     text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="Ledgerly",
                                born=["Ledgerly"])[0]["text"]["text"]

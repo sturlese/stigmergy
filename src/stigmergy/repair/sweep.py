@@ -1,11 +1,11 @@
-"""The sweep WRITER: the pages a deletion leaves behind, written by a model (ADR 043 D1).
+"""The sweep WRITER: the pages a deletion leaves behind, written by a model.
 
 `deletion.plan` decides which pages go and which pages refer to them, and scrubs each referring
 page's frontmatter — structure, a lookup, code's. What it cannot do is make the BODY of a referring
 page read as if the removed page had never been there: a sentence that cited it, a callout that
 announced an overlap with it, a markdown link at it. A bracket scanner unlinked `[[X]]` to `X` and
 left every such sentence standing, syntactically correct and saying something that had stopped
-being true (the case ADR 043 records). So the bodies are written, in ONE model call over the whole
+being true. So the bodies are written, in ONE model call over the whole
 referring set — a question about how a set of pages refers to something must see the set — and
 code proves the bounds a reader would otherwise have to check by eye:
 
@@ -54,7 +54,7 @@ SWEEP_LIMITS = UsageLimits(request_limit=3, tool_calls_limit=0)
 
 # How much a reconciled body may GROW. A sweep removes references and rewrites the sentences that
 # carried them; a body that came back longer by more than a sentence or two is a body the model
-# wrote INTO, which is the consolidation kind's job (ADR 043, "no fifth kind") and not this one's.
+# wrote INTO, which is the consolidation kind's job and not this one's.
 MAX_BODY_GROWTH_BYTES = 512
 
 # And how much of a page may DISAPPEAR without having referred to anything. The growth bound is

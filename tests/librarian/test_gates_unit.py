@@ -2054,7 +2054,7 @@ class TestSecretsAcrossALineBreak:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# gate_body_rewrite's ONE caller-declared exception: `ctx.body_rewrite_allowed` (ADR 039)
+# gate_body_rewrite's ONE caller-declared exception: `ctx.body_rewrite_allowed`
 #
 # The additive proof cannot judge an entity-body repair — that diff REPLACES prose, which is the
 # whole point of it — so for a path the caller NAMED, the gate swaps that proof for three dedicated
@@ -2188,7 +2188,7 @@ def test_the_permission_is_empty_unless_a_caller_declares_it(tmp_path):
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# The `delete` kind's two told facts: `ctx.expected_bytes` and `ctx.deletions_allowed` (ADR 039)
+# The `delete` kind's two told facts: `ctx.expected_bytes` and `ctx.deletions_allowed`
 #
 # A sweep is not additive and it is not a permitted body rewrite either: it REMOVES lines from
 # pages nobody drafted, in order to stop them pointing at a page that is going. So it buys its
@@ -2319,7 +2319,7 @@ def test_the_deletion_permission_is_empty_unless_a_caller_declares_it(tmp_path):
     assert ctx.deletions_allowed == frozenset()
 
 
-# ── the `entity-alias` kind's told fact: `ctx.derived_files` (ADR 039's third amendment) ────────
+# ── the `entity-alias` kind's told fact: `ctx.derived_files` ────────
 #
 # A merge regenerates `ops/entity-registry.json`, and that file is NOT a page. `gate_zone` refuses
 # any in-lane write whose name is not a `.md`, and that refusal is right: the fast lane writes
@@ -2456,7 +2456,8 @@ def test_an_entity_page_nobody_declared_is_refused_unrepairably(tmp_path):
 ])
 def test_a_created_entity_page_must_name_exactly_the_submitter(tmp_path, approved_by_line, why):
     """OLD BEHAVIOUR: `approved_by: ""` was the ONE spelling a created page was allowed — an
-    identity waiting on a steward — and any name on arrival was `approved-on-arrival`. ADR 044:
+    identity waiting on a steward — and any name on arrival was `approved-on-arrival`. the
+    capture-is-the-approval change:
     the capture is the approval, so the page must name EXACTLY the person whose capture introduced
     it. Empty is now the refusal it used to be the only pass for: an identity nobody stands behind.
     """
@@ -2490,7 +2491,7 @@ def test_an_entity_page_edit_is_admitted_only_with_a_proof_code_produced(tmp_pat
 
 
 def test_a_steward_approved_repair_may_edit_an_entity_page_through_its_own_permission(tmp_path):
-    """The benign twin for the repair loop (ADR 039): an approved `entity-body` repair tells the
+    """The benign twin for the repair loop: an approved `entity-body` repair tells the
     apply which ONE page may have its body replaced (`body_rewrite_allowed`), and a merge or a
     deletion sweep plans every byte it writes (`expected_bytes`). Both are set by code the steward's
     approval drives, never from an outcome, so the identity gate admits them — and only them: the

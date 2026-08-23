@@ -2,7 +2,7 @@
 //
 // There are no levers on this page, and their absence is the design rather than a gap. These
 // passes used to be GitHub Actions crons the console dispatched through a PAT; they now run on
-// the librarian worker's idle branch (ADR 044), so there is nothing to dispatch and no schedule
+// the librarian worker's idle branch, so there is nothing to dispatch and no schedule
 // to disable from a browser. Everything below is a database read.
 
 import { api } from "../api.js";

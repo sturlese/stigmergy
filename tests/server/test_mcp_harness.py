@@ -49,7 +49,7 @@ def test_brain_delete_answers_over_the_protocol_and_never_with_a_class_name(inde
     The fix ran the whole sequence in a worker thread.
 
     That sequence is no longer here at all: the tool authorizes and QUEUES, and the librarian
-    worker does the writing (ADR 044 D3), so nothing on this path can await, clone or push and the
+    worker does the writing, so nothing on this path can await, clone or push and the
     worker-thread hop went with the work. What survives is the property the fix was actually
     defending, which no unit test can reach: driving the REAL server over the REAL transport, a
     caller gets a caller-facing sentence rather than a class name. A tool that reaches an

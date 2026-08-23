@@ -212,7 +212,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     # exactly at this line, and this parse pays for itself only on entities being rewritten anyway.
     # The staleness signal above CAN use the snapshot, because being one pass late about a
     # backlink is not the same fault as publishing a page that never had it.
-    # `view_acl=None` — a view is OPEN and carries no label of its own (ADR 045 D5), so the
+    # `view_acl=None` — a view is OPEN and carries no label of its own, so the
     # non-member feed is gated at the widest audience there is: open backlinks only. It is the
     # argument's own fail-closed default, passed explicitly because "the view has no audience" is
     # a decision here rather than an omission.

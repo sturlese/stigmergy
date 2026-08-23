@@ -22,7 +22,7 @@ from tests.librarian import support
 
 def test_startup_checks_returns_the_resolved_repo_and_registry(rig):
     """The registry is the ONE repo-sourced input left. The ACL config that used to be resolved
-    beside it went with the path resolver (ADR 045 D2): a capture's audience is the door's
+    beside it went with the path resolver: a capture's audience is the door's
     decision, carried on its own queue row, so no repo file decides a label."""
     env, deps = rig
     resolved = worker.startup_checks(deps.settings)
@@ -216,7 +216,7 @@ class _RaisingOnAttempt:
 
     def __init__(self, inner, fail_on: int, exc):
         self.inner = inner
-        # The declared port member, copied from what this wraps (ADR 033). Plain attribute
+        # The declared port member, copied from what this wraps. Plain attribute
         # access with NO default: `processing._one_pass` refuses an agent that carries no
         # `structured_ordinary` rather than defaulting it, so a wrapper that swallowed the
         # declaration would silently change which shape of the ordinary flow runs behind it.
@@ -444,8 +444,8 @@ def test_a_broken_descriptor_does_not_turn_a_shutdown_into_a_crash():
 # impossible to miss ───────────────────────────────────────────────────────────────────────────
 # The tests listed below drove a HALLUCINATED FIGURE through the fast lane and asserted that
 # ingest-time figure verification vetoed it, that one corrective retry recovered it, or that the
-# resulting report carried the right verdict. That verification is gone
-# ([ADR 026](../../docs/decisions/026-the-purge.md) D2): it died with the trust layer,
+# resulting report carried the right verdict. That verification is gone:
+# it died with the trust layer,
 # deliberately, and the accepted consequence is stated there — **an invented figure CAN now sit
 # on a page.** The reader's protection is the verbatim source one click away, the gardener, and
 # `answer.verify_answer` at query time.

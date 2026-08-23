@@ -27,7 +27,7 @@ the other two cannot see what it sees:
 Then `gitcmd.commit(gated_entries=...)` closes the last window: the diff the gates approved is the
 diff that lands, bytes included.
 
-**Nobody reads a repair before it lands** (ADR 044), which is what the stored `diff` is for: the
+**Nobody reads a repair before it lands**, which is what the stored `diff` is for: the
 reading happens afterwards, on the console, from the bytes that actually landed. So every sentence
 raised from here is written to be READ — it is the whole of what anyone will know about a repair
 that did not happen — and none of them names this host's filesystem.
@@ -80,7 +80,7 @@ CLONE_FAILED_MESSAGE = (
 @dataclass(frozen=True)
 class PreparedClone:
     """A throwaway clone of the knowledge repo, configured to commit as the App — what `cloned`
-    yields and what an apply performs in. The act road (ADR 043 D2) holds one of these BEFORE it
+    yields and what an apply performs in. The act road holds one of these BEFORE it
     has a repair at all: it plans and writes the sweep against this very tree, then applies in it,
     so there is no derive-to-apply gap to prove anything across."""
 
@@ -160,7 +160,7 @@ def apply_via_clone(repo_url: str, branch: str, credential, *, repair: dict, act
                     on_output=None, prepared: PreparedClone | None = None) -> dict:
     """`apply_in_tree` in a throwaway CLONE — the road for a caller holding no checkout.
 
-    One caller: the deletion a person performs at a door (ADR 043 D2), which runs inside whichever
+    One caller: the deletion a person performs at a door, which runs inside whichever
     process they asked in. `prepared` is a clone that caller already holds, in which the ops were
     just computed; everything after the clone is the same sequence either way.
     """
@@ -250,7 +250,7 @@ def _apply_in_tree(clone: str, branch: str, credential, *, repair: dict, ops: li
 
     # Taken BEFORE the commit, off the tree the gates just judged: after `gitcmd.commit` the
     # working tree is clean and there is nothing left to diff. This is the reading nobody gave the
-    # change beforehand (ADR 044), so it is stored whole rather than summarised.
+    # change beforehand, so it is stored whole rather than summarised.
     diff = gitcmd.working_diff(clone)
     sha = gitcmd.commit(clone, message=commit_message(repair, actor=actor),
                         author_name=author[0], author_email=author[1],
@@ -511,7 +511,7 @@ def commit_message(repair: dict, *, actor: str = "") -> str:
     PERSON — a deletion somebody performed at a door — and it is half of how `git log` answers who
     authorized a change to the corpus. `Repair:` names the gardener check and the findings instead,
     for a repair the worker derived: nobody approved it, and a trailer naming a human would be the
-    commit log claiming a decision that never happened (ADR 044).
+    commit log claiming a decision that never happened.
 
     An actor is collapsed to one line: a door passes free text by design, and a newline in it would
     inject arbitrary commit-message lines — a second, forged trailer among them.
@@ -565,8 +565,8 @@ def apply_and_record(conn, tree: str, branch: str, credential, *, repair: dict,
     property of the code rather than of each caller remembering. Returns the result with the
     ledger row's `id` added; raises what `apply_in_tree` raises, after the row is written.
 
-    The row is written AFTER the attempt rather than before it, and that is the shape ADR 044
-    chose: there is no state to be in beforehand, so a crash between the two leaves no half-decided
+    The row is written AFTER the attempt rather than before it, and that is deliberate: there is
+    no state to be in beforehand, so a crash between the two leaves no half-decided
     row anywhere — it leaves a repair that did not happen, which the next pass simply derives
     again. The one residue is a crash between a successful push and this write: the commit is in
     the corpus and the ledger does not know, so the next pass re-derives it, finds the ops already
