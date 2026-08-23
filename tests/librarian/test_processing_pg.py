@@ -810,17 +810,19 @@ class _TwoPageAgent:
         return run
 
 
-def test_a_capture_that_creates_a_second_page_is_refused_rather_than_filing_it_unreported(
-        rig, clean_queue):
-    """`_file` takes `in_lane_new_pages()[0]` — the alphabetically first entry of `git diff --raw` —
-    for `page_path`, `result_ref`, the commit subject, the dedup pointer and the whole report. A
-    second page would be committed, stamped and pushed while appearing on no surface a human reads,
-    and the anchoring check of the day unioned wikilinks across ALL new pages needing only one to
-    resolve, so an unanchored second page rode in on the first's coat-tails.
+def test_a_capture_that_creates_a_page_it_never_declared_is_refused(rig, clean_queue):
+    """A capture writes as many pages as its material establishes — and every one of them is named
+    in its own account, because the DECLARATION is what the diff is checked against.
 
-    "One capture, one commit" was true of commits and 1:N in pages. Note the alphabetical detail is
-    what makes it worse than a shrug: `A Second Page.md` sorts BEFORE the declared page, so the
-    report would have named the page the agent never claimed to file.
+    OLD BEHAVIOUR: the rule was a count ("a capture files exactly one page"), which refused this
+    diff for the right reason by accident. The reason itself never was the count: a page nobody
+    declared is committed, stamped and pushed while appearing on no surface a human reads —
+    `page_path`, `result_ref`, the commit subject, the dedup pointer and the whole report name the
+    declared pages. The alphabetical detail is what makes it worse than a shrug: `A Second Page.md`
+    sorts BEFORE the declared page, so a report built from the diff's order would have named the
+    page the agent never claimed to file.
+
+    Its benign twin is next door: the same second page, DECLARED, is filed.
     """
     import dataclasses
     env, base_deps = rig
@@ -831,7 +833,7 @@ def test_a_capture_that_creates_a_second_page_is_refused_rather_than_filing_it_u
 
     assert result.status == schema.FAILED
     assert result.result_ref == ""
-    assert "files exactly one page" in result.report["summary"]
+    assert "never declared" in result.report["summary"]
     assert support.branch_sha(env.bare) == before          # neither page reached the remote
     assert _row(clean_queue, item["id"])["result_ref"] == ""
 

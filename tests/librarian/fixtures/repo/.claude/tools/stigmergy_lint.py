@@ -1003,11 +1003,16 @@ def scan(root):
         n = body_line_count(text)
         if n > SIZE_MAX:
             add("error", "size", p, f"body is {n} lines (max {SIZE_MAX}); split and cross-link")
-        elif n < SIZE_MIN and fm.get("type") != "entity":
+        elif n < SIZE_MIN and fm.get("type") not in ("entity", "source"):
             # M8a (spec §4.4, criterion 12): an entity page is a SPINE, not an essay — a
             # deliberately short stub should not warn. Not padded to satisfy the floor either
             # (the template stays unpadded): trading one warning (thin page) for another (an
             # empty section) would be worse than exempting the type outright.
+            #
+            # A `source` page is exempt for a stronger reason: its body is the captured material,
+            # VERBATIM, and its length is the submitter's rather than an author's. Every capture
+            # archives one now, so a short note would warn on every filing — and the only way to
+            # answer such a warning would be to pad evidence, which is falsifying it.
             add("warn", "size", p, f"body is {n} lines (min {SIZE_MIN}); thin page")
 
         for section in find_empty_sections(text):

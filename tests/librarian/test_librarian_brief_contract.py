@@ -297,8 +297,8 @@ RULE_TABLE = [
     # being derived from the rows the model is actually allowed to see.
     ("- **`link_names`** — every page name in this repo, which is the whole wikilink vocabulary. "
      "It is", "names = list(parsed.link_names)"),
-    # Exactly one page per ordinary capture, unchanged by the restructure.
-    ("One capture yields **one** page.", "multiple-pages"),
+    # As many pages as the material establishes, and the DECLARATION is what the diff answers to.
+    ("One capture yields **as many pages as its material establishes**", "undeclared-page"),
     # Edits are DECLARED and performed by code — the split the agent/gate split made and this flow kept.
     ("You never write to them. You declare the edit and the worker performs it.", "apply_declared"),
     # ...and an entity page is not editable, whatever it was anchored to.

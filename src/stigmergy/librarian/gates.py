@@ -107,6 +107,13 @@ class GateContext:
     # branch is exercised by `test_gates_unit.py`'s explicit contexts, which is where its red proof
     # lives now that no production flow reaches it.
     edits_allowed: bool = True
+    # The pages this capture DECLARED it would write, in the order the account declared them.
+    # `_cross_check_outcome` holds the diff to exactly this list — the generalisation of "a capture
+    # files exactly one page" to a capture that files as many as its material establishes. The
+    # ORDER is load-bearing: the first is the page every surface names (`result_ref`, the commit
+    # subject, the dedup pointer), and it is the agent's choice rather than an alphabetical
+    # accident.
+    declared_pages: tuple = ()
     # The ONE exception to `gate_body_rewrite`'s additive proof, and it is a set of PATHS rather
     # than a flag: the governed repair loop's `entity-body` kind replaces one entity page's prose
     # below its own H1, which no additive proof can admit. A path in here is judged by

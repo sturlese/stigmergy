@@ -144,19 +144,24 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     # per page — one capture, one audience, so a note and the verbatim source beside it cannot
     # come out labelled differently.
     acl = _capture_acl(item)
-    anchoring = getattr(ctx.outcome, "anchoring", None) or {}
-    kind = str(anchoring.get("kind", "")).lower() if isinstance(anchoring, dict) else ""
-    # `ctx.registry`, never `deps.registry`: the former is the registry this commit PUBLISHES,
-    # births included, and an entity born in this commit must stamp like any other.
-    entity, unresolved = gates.resolve_entity_ids(anchoring, ctx.registry)
-    if kind == "entity" and (unresolved or not entity):
-        entity = []
+    capture_anchoring = getattr(ctx.outcome, "anchoring", None) or {}
+    if not isinstance(capture_anchoring, dict):
+        capture_anchoring = {}
+    # Each declared page's OWN anchoring, falling back to the capture's. A capture writing several
+    # pages is writing about several things: one anchor for the set files the others against the
+    # wrong entity, silently, and `gate_anchoring` would have nothing to catch because the
+    # declaration it reads would be the same for all of them.
+    per_page = _declared_anchorings(ctx, capture_anchoring)
     # `acl` belongs in the literal, not in the loop below: it is one value for the whole capture,
     # and `gate_frontmatter` only enforces a server-owned field that is PRESENT in this dict. Set
     # inside the loop it would be enforced only if the loop reached it — correctness by accident,
     # in an access-control stamp.
     stamped = {"status": page_policy.FILED_STATUS, "as_of": deps.as_of(),
-               "submitted_by": item["submitted_by"], "entity": entity, "acl": acl}
+               "submitted_by": item["submitted_by"],
+               "entity": _stamped_entity(capture_anchoring, ctx.registry), "acl": acl}
+    # Per-page mode: an attachment to cite, or more than one page, or a page that anchored itself.
+    per_page_mode = bool(cite_stem) or len(ctx.declared_pages) > 1 or any(
+        anchoring is not capture_anchoring for anchoring in per_page.values())
     for path in ctx.in_lane_new_pages():
         if path in ctx.provenance_pages:
             continue    # stamped by `_stamp_attached_sources`, under the provenance group
@@ -168,6 +173,8 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
                 drafted = f.read()
         except (OSError, UnicodeDecodeError):
             continue
+        anchoring = per_page.get(path, capture_anchoring)
+        entity = _stamped_entity(anchoring, ctx.registry)
         text = page_policy.stamp_server_fields(
             drafted,
             submitted_by=item["submitted_by"],
@@ -179,12 +186,46 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
             text, cited = page_policy.add_source_citation(text, cite_stem)
         with page_policy.open_for_rewrite(full) as f:
             f.write(text)
-        if cite_stem:
+        if per_page_mode:
             ctx.page_declared[path] = {
-                "page_type": str(getattr(ctx.outcome, "page_type", "") or ""),
-                "anchoring": anchoring if isinstance(anchoring, dict) else {}}
-            ctx.stamped_by_path[path] = {**stamped, "sources": list(cited)}
+                "page_type": _declared_page_type(ctx, path),
+                "anchoring": anchoring}
+            ctx.stamped_by_path[path] = {**stamped, "entity": entity, "sources": list(cited)}
     return stamped
+
+
+def _stamped_entity(anchoring: dict, registry) -> list:
+    """The `entity:` one anchoring outcome earns. `ctx.registry`, never `deps.registry`: the former
+    is the registry this commit PUBLISHES, births included, and an entity born in this commit must
+    stamp like any other. An `entity`-kind outcome that does not resolve stamps `[]`, so a partial
+    list cannot survive a gate reordering."""
+    kind = str(anchoring.get("kind", "")).lower()
+    entity, unresolved = gates.resolve_entity_ids(anchoring, registry)
+    if kind == "entity" and (unresolved or not entity):
+        return []
+    return entity
+
+
+def _declared_anchorings(ctx: gates.GateContext, capture_anchoring: dict) -> dict:
+    """`{path: the anchoring that page declared}` — the capture's own where a page declared none.
+    Keyed by the paths in `ctx.declared_pages`, which is the same list, in the same order, the
+    account's `pages` were written from."""
+    pages = tuple(getattr(ctx.outcome, "pages", ()) or ())
+    if len(pages) != len(ctx.declared_pages):
+        return {}
+    return {path: (page.anchoring or capture_anchoring)
+            for path, page in zip(ctx.declared_pages, pages, strict=True)}
+
+
+def _declared_page_type(ctx: gates.GateContext, path: str) -> str:
+    """The `page_type` the account declared for one page — its own where it declared one, the
+    capture's otherwise. Read for `gate_zone`'s folder/type agreement check."""
+    pages = tuple(getattr(ctx.outcome, "pages", ()) or ())
+    if len(pages) == len(ctx.declared_pages) and path in ctx.declared_pages:
+        page = pages[ctx.declared_pages.index(path)]
+        if page.page_type:
+            return str(page.page_type)
+    return str(getattr(ctx.outcome, "page_type", "") or "")
 
 
 # A newline in a "title" forges a commit trailer: `x\n\nSubmitted-by: ceo@acme.com`.
@@ -591,18 +632,17 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         deps.agent, "structured_ordinary",
         "the worker cannot tell whether to gather a context for it and whether it writes its own "
         "page")
-    # `None` for every capture whose door did not assert a source attachment.
+    # Never `None`: every capture archives its material verbatim, and this says where.
     attachment = _source_attachment(item)
     # Server-composed. Left implicit, the brief's genre rules make a whole document read as
     # `type: source` and the agent parks a capture whose source half code already took.
-    flow_note = "" if attachment is None else (
-        f"SYSTEM NOTE (from the pipeline, not from the submitter): this capture arrived through "
-        f"the {attachment.source_kind} door as a whole document. The system itself attaches the "
-        f"VERBATIM material as a `sources/` page set in this same commit — the source half is "
-        f"already handled; it is not yours to write, and it is not a reason to park. Your whole "
-        f"job is the SYNTHESIS: file exactly one note/decision/concept page distilling what this "
-        f"document establishes, anchored through the registry as always; the system will make "
-        f"your page cite the attached source.")
+    flow_note = (
+        "SYSTEM NOTE (from the pipeline, not from the submitter): the system itself archives "
+        "this capture's VERBATIM material as a `sources/` page set in this same commit — the "
+        "source half is already handled; it is not yours to write, and it is not a reason to "
+        "park. Your whole job is the SYNTHESIS: file the note/decision/concept page — or pages, "
+        "one per thing this material establishes — anchored through the registry as always; the "
+        "system will make each of your pages cite the archived source.")
     # Built HERE, never inside a backend: both must share one context builder and one fence
     # discipline. Re-run on the corrective pass, because `_reset_for_retry` resets the tree.
     gathered = ""
@@ -641,10 +681,10 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
             # RETURNED, not raised: `OutcomeShapeError` reaches the retry with `outcome = None`,
             # which would lose a recorded steering attempt.
             return None, page_findings, outcome
-        written_page = _write_ordinary_page(worktree, outcome, created=deps.as_of())
-        if isinstance(written_page, list):
-            return None, written_page, outcome
-        # The plan's own `path` is NOT carried forward: `_file` reads `page_path` off the DIFF.
+        written_pages = _write_declared_pages(worktree, outcome, created=deps.as_of())
+        if isinstance(written_pages, list):
+            return None, written_pages, outcome
+        # The plan's own paths are NOT carried forward: `_file` reads `page_path` off the DIFF.
 
     # The identities the account introduces, created BEFORE the diff the gates judge is taken, so
     # the entity pages and the regenerated registry land in the same diff as the note — and the
@@ -660,19 +700,19 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
 
     # With the attachment ON, the lane widens by exactly the attachment's own folder; with
     # births, by exactly the identity zone and the registry file.
-    write_prefixes = gates.ALLOWED_WRITE_PREFIXES
-    creatable_types = frozenset(page_policy.FAST_LANE_TYPES)
-    extra_folder_types = {}
-    if attachment is not None:
-        write_prefixes += (attachment.prefix,)
-        creatable_types |= {"source"}
-        extra_folder_types[attachment.prefix.rstrip("/")] = "source"
+    write_prefixes = gates.ALLOWED_WRITE_PREFIXES + (attachment.prefix,)
+    creatable_types = frozenset(page_policy.FAST_LANE_TYPES) | {"source"}
+    extra_folder_types = {attachment.prefix.rstrip("/"): "source"}
     ctx = gates.GateContext(
         worktree=worktree,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
         material=material, outcome=outcome, registry=births.registry,
         acl=_capture_acl(item),
+        # What the account said it would write: code's own plan on the structured path, the
+        # agent's own declaration on the exploring one. Either way the diff answers to it.
+        declared_pages=(tuple(written_pages["paths"]) if structured
+                        else tuple(outcome.page_paths)),
         # The linter materialized from this item's base commit — NOT `settings.linter_path`.
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=write_prefixes, creatable_types=creatable_types,
@@ -691,20 +731,15 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
 
     # After `apply_declared` (its edits validated against the agent's own pages only) and before
     # `_stamp` (the whole set stamped and judged as one diff).
-    written_sources = None
-    if attachment is not None:
-        written_sources = _write_attached_sources(worktree, attachment, outcome, material)
-        if isinstance(written_sources, list):
-            return None, written_sources, outcome
-        ctx.provenance_pages = frozenset(written_sources["paths"])
+    written_sources = _write_attached_sources(worktree, attachment, outcome, material)
+    if isinstance(written_sources, list):
+        return None, written_sources, outcome
+    ctx.provenance_pages = frozenset(written_sources["paths"])
     ctx.entries = gitcmd.diff_entries(worktree)
     ctx.added = gitcmd.added_lines(worktree)
 
-    if attachment is not None:
-        _stamp_attached_sources(ctx, deps, item, written_sources["ids_by_path"])
-        ctx.stamped = _stamp(ctx, deps, item, cite_stem=written_sources["stems"][0])
-    else:
-        ctx.stamped = _stamp(ctx, deps, item)
+    _stamp_attached_sources(ctx, deps, item, written_sources["ids_by_path"])
+    ctx.stamped = _stamp(ctx, deps, item, cite_stem=written_sources["stems"][0])
 
     # Stamping changed the pages the gates are about to judge.
     ctx.entries = gitcmd.diff_entries(worktree)
@@ -712,7 +747,7 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     findings = gates.run_gates(ctx) + edit_findings + _cross_check_outcome(ctx)
     if not gates.vetoes(findings):
         return (_file(conn, item, deps, ctx, outcome, findings, worktree, edited=edited,
-                      source_pages=tuple(written_sources["paths"]) if written_sources else (),
+                      source_pages=tuple(written_sources["paths"]),
                       births=births),
                 [], outcome)
     return None, findings, outcome
@@ -758,17 +793,26 @@ def _declare_births(ctx: gates.GateContext, births: identity.Births) -> None:
 
 def _require_page_content(outcome) -> list:
     """The REQUIRED half of the outcome envelope for a `structured_ordinary` backend. Returns
-    findings rather than raising; `[]` means code can write a page from it."""
-    page = getattr(outcome, "page", None)
-    if page is None or not (page.body or "").strip():
+    findings rather than raising; `[]` means code can write every declared page from it."""
+    pages = tuple(getattr(outcome, "pages", ()) or ())
+    if not pages:
         return [gates.Finding(
             agent_module._OUTCOME_GATE, "missing-field",
-            "declares a filing but carries no `page.body`: on this backend the worker writes the "
-            "page from your account, so the page's own text has to be in it — there is no file you "
-            "wrote for the worker to find instead",
-            brief='return the page\'s whole text in `page`: {"title": …, "page_type": …, "body": '
-                  '"…the page below its H1…"}. The worker writes the file, the frontmatter and the '
-                  'H1 itself; you never name a path.')]
+            "declares a filing but carries no `pages`: on this backend the worker writes every "
+            "page from your account, so each page's own text has to be in it — there is no file "
+            "you wrote for the worker to find instead",
+            brief='return every page\'s whole text in `pages`: [{"title": …, "page_type": …, '
+                  '"body": "…the page below its H1…"}, …]. The worker writes the files, the '
+                  'frontmatter and each H1 itself; you never name a path.')]
+    empty = [str(page.title or "(untitled)") for page in pages if not (page.body or "").strip()]
+    if empty:
+        return [gates.Finding(
+            agent_module._OUTCOME_GATE, "missing-field",
+            f"declares {len(pages)} pages and left {len(empty)} of them with no body "
+            f"({', '.join(empty)}): a page the worker would write empty is a page nobody can read",
+            brief="every entry in `pages` carries its own `body` — the page's whole text below "
+                  "its H1. Drop the ones you have nothing to say about rather than declaring "
+                  "them empty.")]
     return []
 
 
@@ -798,13 +842,37 @@ def _build_ordinary_page(title: str, page_type: str, body: str, links, created: 
     return "---\n" + "\n".join(front) + "\n---\n\n" + f"# {title}\n\n{body_text}\n"
 
 
-def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | list":
-    """Write the one page this capture files, or hand back one veto finding having written nothing.
-    Four refusals, cheapest first: uncreatable type, unnameable title, existing page, path outside
-    the checkout. The folder is DERIVED, never declared, so lane confinement is construction; the
-    last check RESOLVES the path, since one inside the lane by spelling can be outside by resolution.
+def _write_declared_pages(worktree: str, outcome, *, created: str) -> "dict | list":
+    """Write EVERY page this capture declared, or hand back veto findings having written nothing.
+
+    All-or-nothing on purpose: a capture that writes three of its four pages and then refuses the
+    fourth leaves a half-filed set in a worktree the retry resets anyway, and a corrective brief
+    naming "the fourth" against a tree that already holds three is a brief about a state that no
+    longer exists. Every page is checked first, then all of them are written.
     """
-    declared_type = str(outcome.page_type or "")
+    plans, findings = [], []
+    for page in outcome.pages:
+        planned = _plan_one_page(worktree, outcome, page, taken=[p["path"] for p in plans])
+        (findings if isinstance(planned, list) else plans).extend(
+            planned if isinstance(planned, list) else [planned])
+    if findings:
+        return findings
+    for plan, page in zip(plans, outcome.pages, strict=True):
+        _write_new(worktree, plan["path"],
+                   _build_ordinary_page(plan["stem"], plan["page_type"], page.body,
+                                        page.links or outcome.links_created, created))
+    return {"paths": [p["path"] for p in plans], "stems": [p["stem"] for p in plans]}
+
+
+def _plan_one_page(worktree: str, outcome, page, *, taken: list) -> "dict | list":
+    """Where ONE declared page would go, or one veto finding. Four refusals, cheapest first:
+    uncreatable type, unnameable title, existing page, path outside the checkout. The folder is
+    DERIVED, never declared, so lane confinement is construction; the last check RESOLVES the path,
+    since one inside the lane by spelling can be outside by resolution. `taken` carries the paths
+    this same capture has already planned, so two declared pages cannot collide with each other —
+    a collision the tracked-paths check cannot see, because neither page is written yet.
+    """
+    declared_type = str(page.page_type or outcome.page_type or "")
     policy = page_policy.classify_page_type(declared_type)
     if not policy.creatable:
         # Routed to the STEWARD, not `failed`. `locator` is EMPTY because nothing was written yet,
@@ -815,8 +883,9 @@ def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | lis
             f"cannot create: {policy.reason}",
             locator="", values=(policy.page_type,))]
 
-    # `outcome.title`, never `outcome.page.title`, or filename and commit subject could disagree.
-    stem = _ordinary_stem(outcome.title)
+    # The PAGE's own title, falling back to the capture's: with N pages the top-level title names
+    # the capture, and only the first page can borrow it.
+    stem = _ordinary_stem(page.title or outcome.title)
     unnameable = page_policy.unnameable_reason(stem)
     if unnameable:
         return [gates.Finding(
@@ -825,6 +894,12 @@ def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | lis
             locator=stem)]
 
     path = f"{policy.folder}/{stem}.md"
+    if page_policy.path_key(path) in page_policy.path_keys(taken):
+        return [gates.Finding(
+            agent_module._OUTCOME_GATE, "duplicate-declared-page",
+            f"declares two pages that would both be written to {path}: two conclusions with one "
+            f"title are one page, or two pages whose titles have to say what tells them apart",
+            locator=path)]
     if page_policy.path_key(path) in page_policy.path_keys(gitcmd.tracked_paths(worktree)):
         # `path_key`, not `==`: the filesystem folds case and Unicode, so a re-spelled title
         # names an EXISTING page.
@@ -846,10 +921,7 @@ def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | lis
             f"path is a symlink out of it; nothing was written",
             locator=path, repairable=False)]
 
-    _write_new(worktree, path,
-               _build_ordinary_page(stem, policy.page_type, outcome.page.body,
-                                    outcome.links_created, created))
-    return {"path": path, "stem": stem}
+    return {"path": path, "stem": stem, "page_type": policy.page_type}
 
 
 # The refused diff, preserved. The asymmetry IS the safety property: REMOVED lines are kept
@@ -918,27 +990,44 @@ def preserve_refused_diff(worktree: str, item: dict, findings, *, root: str) -> 
 
 
 def _cross_check_outcome(ctx: gates.GateContext) -> list:
-    """The agent's account must AGREE with the diff — the diff decides. `page_path` must be empty
-    or a page the diff created, and the outcome must have created EXACTLY one page in
-    the lane: `_file` takes `in_lane_new_pages()[0]` for `page_path`, `result_ref`, the commit
-    subject and the dedup pointer, so a second page lands on no surface a human reads and can ride
-    past `gate_anchoring`. `ctx.provenance_pages` is excluded, or attached captures are all vetoed.
+    """The agent's account must AGREE with the diff — the diff decides.
+
+    A capture writes as many pages as its material establishes, so the bound is not a COUNT: it is
+    that the diff carries **exactly what was declared**, no more and no less. A page in the diff
+    that no declaration names would be committed and reported nowhere; a declaration the diff does
+    not carry means the account describes a filing that did not happen. Both are refused here,
+    which is the same veto "a capture files exactly one page" used to be — generalised from a
+    fixed list of one to the open list the account declares.
+
+    `ctx.provenance_pages` and this run's entity births are excluded: neither is a page the account
+    declares, and both are proven elsewhere (the attachment's own writer, `gate_identity`).
     """
-    new_pages = [p for p in ctx.in_lane_new_pages()
-                 if p not in ctx.provenance_pages and p not in ctx.born_entity_pages]
+    new_pages = {p for p in ctx.in_lane_new_pages()
+                 if p not in ctx.provenance_pages and p not in ctx.born_entity_pages}
+    declared = set(ctx.declared_pages)
     out = []
     if not new_pages:
         out.append(gates.Finding(
             "outcome", "no-page-created",
             "reported filing a capture but created no page in the fast lane's folders: an "
-            "additive edit to an existing page is not a filing"))
-    if len(new_pages) > 1:
+            "edit to an existing page is not a filing"))
+        return out
+    undeclared = sorted(new_pages - declared)
+    if undeclared:
         out.append(gates.Finding(
-            "outcome", "multiple-pages",
-            f"created {len(new_pages)} pages in one capture; a capture files exactly one page, and "
-            f"every surface that reports it (result_ref, the commit subject, the dedup pointer) "
-            f"names one — the others would be committed and reported nowhere",
-            locator=", ".join(sorted(new_pages))))
+            "outcome", "undeclared-page",
+            f"created {len(undeclared)} page(s) the account never declared: every page a capture "
+            f"writes is named in its own account, because that declaration is what the diff is "
+            f"checked against — a page nobody declared is a page reported on no surface a human "
+            f"reads",
+            locator=", ".join(undeclared)))
+    unwritten = sorted(declared - new_pages)
+    if unwritten:
+        out.append(gates.Finding(
+            "outcome", "declared-page-missing",
+            f"declared {len(unwritten)} page(s) the diff does not carry: the account describes a "
+            f"filing that did not happen",
+            locator=", ".join(unwritten)))
     claimed = getattr(ctx.outcome, "page_path", "")
     if claimed and claimed not in new_pages:
         out.append(gates.Finding(
@@ -985,8 +1074,11 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
     excluded when picking `page_path` because `sources/` sorts before `wiki/`; the identity pages
     this run created are excluded for the same reason — the note is the page this capture filed.
     """
-    page_path = [p for p in ctx.in_lane_new_pages()
-                 if p not in ctx.provenance_pages and p not in ctx.born_entity_pages][0]
+    # The FIRST DECLARED page, never the first alphabetically: with a capture writing several, the
+    # one every surface names is the one the account put first, which is a decision rather than an
+    # accident of sorting. `_cross_check_outcome` has already proven the declaration and the diff
+    # are the same set, so this path is in both.
+    page_path = ctx.declared_pages[0]
     born = births.entities if births is not None else []
     added_aliases = births.aliases if births is not None else []
     message = _commit_message(item, outcome, page_path, n_sources=len(source_pages),
@@ -999,7 +1091,7 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
         schema.FILED, f"{page_path}@{sha}",
         # `ctx.registry`, the registry this commit PUBLISHED: a newborn entity's name renders
         # from it, where `deps.registry` (the base commit's) would print the bare id.
-        report.filed(page_path=page_path, commit=sha,
+        report.filed(page_path=page_path, commit=sha, pages_filed=list(ctx.declared_pages),
                      anchoring=outcome.anchoring or {}, registry=ctx.registry,
                      links=list(outcome.links_created),
                      overlaps=[dict(o) for o in outcome.overlaps],
@@ -1103,12 +1195,19 @@ def failure_result(item: dict, stage: str, reason: str, *, agent_attempts: int =
 PROCESSING_ERRORS = (AgentError, GitError, WorktreeError, LeaseLostError, CaptureError)
 
 
-# The fast lane's source ATTACHMENT: a parameter, never a third flow. The door rule: material with
-# independent documentary existence files a `sources/` page beside the synthesis; a conversational
-# capture leaves none. With the parameter OFF the fast lane builds the ctx it always would.
+# The source ARCHIVE: every capture files its material verbatim, always. This is the invariant the
+# whole pipe rests on — a page in `wiki/` is a synthesis, and a synthesis nobody can walk back to
+# what actually arrived is a claim with no evidence behind it. It used to be a parameter, ON for a
+# document and for the Slack gesture and OFF for everything else, which left a plain `raw` capture
+# filing a page that cited nothing.
+#
+# Which FOLDER is the only thing the door and the kind still decide, and `sources/` is never
+# rewritten: this is the one absolute in the whole write path.
 
 SLACK_SOURCE_PREFIX = "sources/slack/"
 DOCUMENT_SOURCE_PREFIX = "sources/documents/"
+MEETING_SOURCE_PREFIX = "sources/meetings/"
+NOTE_SOURCE_PREFIX = "sources/notes/"
 
 
 @dataclass(frozen=True)
@@ -1124,23 +1223,36 @@ class SourceAttachment:
     suffix: str          # titles read "<title> — <suffix>", stems "<slug>-<suffix>"
 
 
-def _source_attachment(item: dict) -> "SourceAttachment | None":
-    """The parameter's ON/OFF switch, decided per item from the row's own `kind` or from a fact
-    a DOOR asserted server-side; `None` for every ordinary capture. Two ON positions: a
-    `document` (the kind says the material has documentary existence of its own; `source_url` is
-    the submitter's claim of where, attributed like the material) and the Slack door
-    (the `source_client` hint, which only that transport may assert).
+def _source_attachment(item: dict) -> SourceAttachment:
+    """WHERE this capture's verbatim material is archived, and under what provenance. Never
+    `None`: every capture archives, and the only question is the folder.
+
+    The DOOR decides first — the Slack transport is the one caller that may assert
+    `source_client`, and `capture.schema.reject_source_provenance_hints` refuses that hint at the
+    client seam, which is what makes keying anything on it sound. Then the kind, which is the
+    submitter's own word for the shape of what they sent: a document has documentary existence of
+    its own, a transcript is a record of an event, and everything else is a note.
     """
     client = (item.get("hints") or {}).get("client") or {}
-    if item.get("kind") == schema.DOCUMENT:
+    if client.get("source_client") == schema.SLACK_DOOR:
+        return SourceAttachment(prefix=SLACK_SOURCE_PREFIX, source_kind="slack",
+                                tags=("source", "slack-thread"),
+                                url=str(client.get("source_permalink") or ""), suffix="thread")
+    kind = item.get("kind")
+    if kind == schema.DOCUMENT:
         return SourceAttachment(prefix=DOCUMENT_SOURCE_PREFIX, source_kind="upload",
                                 tags=("source", "document"),
                                 url=str(client.get("source_url") or ""), suffix="document")
-    if client.get("source_client") != schema.SLACK_DOOR:
-        return None
-    return SourceAttachment(prefix=SLACK_SOURCE_PREFIX, source_kind="slack",
-                            tags=("source", "slack-thread"),
-                            url=str(client.get("source_permalink") or ""), suffix="thread")
+    if kind == schema.MEETING:
+        return SourceAttachment(prefix=MEETING_SOURCE_PREFIX, source_kind="meeting",
+                                tags=("source", "meeting"),
+                                url=str(client.get("source_url") or ""), suffix="transcript")
+    # `upload` rather than a new enum value: `source_kind` is the KNOWLEDGE REPO's contract
+    # vocabulary, and "the client sent us this text" is what a `raw` capture and a `document` both
+    # are. The folder is what says they arrived differently.
+    return SourceAttachment(prefix=NOTE_SOURCE_PREFIX, source_kind="upload",
+                            tags=("source", "capture"),
+                            url="", suffix="capture")
 
 
 def _write_attached_sources(worktree: str, attachment: SourceAttachment, outcome,

@@ -466,8 +466,8 @@ corrective retry it lands `failed`, naming the type and why the fast lane cannot
 `gate_zone` derives the type from the FOLDER the page actually landed in (`_type_for_path`) and
 checks it against the run's own `ctx.creatable_types` over the real diff, so the agent's judgment is
 an *input* to the decision and never the decision. It asks the CONTEXT rather than the global
-`page.ensure_creatable` because the creatable set is per-flow: the meeting flow and the fast lane's
-source attachment each widen it for the duration of one item, never for the process.
+`page.ensure_creatable` because the creatable set is per-item: the meeting flow and the source
+archive each widen it for the duration of one item, never for the process.
 
 **One row per WRITER.** Each non-creatable row has exactly one stamper: `entity` the identity
 writer (`librarian.identity` — an existing entity page is later EDITED by a repair, never created
@@ -780,49 +780,53 @@ the one write in this system a human decided. It writes no `repairs` row: the ca
 report ARE the record, which is why `brain_submissions` and the console's Captures page are where a
 removal is read back.
 
-## The source attachment: a parameter, never a third flow
+## The source archive: every capture, always
 
-Material with independent documentary existence — a Slack thread, the text of a document —
-files a verbatim `sources/` page beside the synthesis; conversational material leaves none. The
-SHAPE of that is a **parameter on the fast lane**, not a flow of its own: the flows are the three
-above — ordinary, meeting, removal — and this is a switch on the first of them.
+**Every capture files its material verbatim to `sources/`, in the same commit as the pages it
+establishes.** That is the invariant the whole write path rests on: a page in `wiki/` is a
+synthesis, and a synthesis nobody can walk back to what actually arrived is a claim with no
+evidence behind it. It used to be a parameter — ON for a document and for the Slack gesture, OFF
+for everything else — which left a plain `raw` capture filing a page that cited nothing.
 
-`processing._source_attachment` is the on/off switch, decided per item; it returns `None` — the OFF
-position, where every `GateContext` the fast lane builds is byte-identical to the unattached one —
-for every ordinary capture. **There are two ON positions**, one keyed on the row's own `kind` and
-one on a fact the Slack transport asserted server-side:
+`processing._source_attachment` no longer answers *whether*; it answers **where**, and it never
+returns `None`. The door decides first, the kind second:
 
-| ON when | Folder | `source_kind` | tags | `url:` |
+| Chosen by | Folder | `source_kind` | tags | `url:` |
 |---|---|---|---|---|
-| the `source_client` hint is Slack's (`SLACK_SOURCE_PREFIX`) | `sources/slack/` | `slack` | `source`, `slack-thread` | the thread permalink |
-| the ROW'S OWN `kind` is `document` (`DOCUMENT_SOURCE_PREFIX`) | `sources/documents/` | `upload` | `source`, `document` | the `source_url` hint, `""` when the submitter sent none |
+| the `source_client` hint is Slack's | `sources/slack/` | `slack` | `source`, `slack-thread` | the thread permalink |
+| the row's `kind` is `document` | `sources/documents/` | `upload` | `source`, `document` | the `source_url` hint, `""` when the submitter sent none |
+| the row's `kind` is `meeting` | `sources/meetings/` | `meeting` | `source`, `meeting` | the `source_url` hint, `""` when none |
+| anything else | `sources/notes/` | `upload` | `source`, `capture` | none |
 
-Keying the Slack position on a hint is sound because
+Keying the Slack row on a hint is sound because
 `capture.schema.reject_source_provenance_hints` refuses `source_client`/`source_permalink` at the
-client seam for every door but Slack's own. The document position keys on the row's own `kind`
-instead, and its `url:` is the submitter's claim rather than a fact the platform checked: a client
-holds the text and says where it came from, which has the standing the material itself has.
+client seam for every door but Slack's own. A document's `url:` is the submitter's claim rather
+than a fact the platform checked: a client holds the text and says where it came from, which has
+the standing the material itself has. `source_kind` stays the knowledge repo's own contract
+vocabulary — "the client sent us this text" is what a `raw` capture and a `document` both are, and
+the folder is what says they arrived differently.
 
-When it is ON, the pieces are the meeting flow's: `_build_source_parts` writes the verbatim part(s),
-`page.stamp_source_fields` stamps the provenance group (`content_hash`, `extracted_at`, `tier: 1`,
-and the part's own `id:`) instead of the fast-lane group, and `GateContext.provenance_pages` TELLS
-`gate_frontmatter` which pages legitimately carry it. The lane widens by exactly the attachment's
-own folder for that one item (`write_prefixes`, `creatable_types`, `extra_folder_types` on the ctx —
-never on the module constant). The synthesis cites the source through `sources:`
+The pieces: `_build_source_parts` writes the verbatim part(s), `page.stamp_source_fields` stamps
+the provenance group (`content_hash`, `extracted_at`, `tier: 1`, and the part's own `id:`) instead
+of the fast-lane group, and `GateContext.provenance_pages` TELLS `gate_frontmatter` which pages
+legitimately carry it. The lane widens by exactly the archive's own folder for that one item
+(`write_prefixes`, `creatable_types`, `extra_folder_types` on the ctx — never on the module
+constant). Every page the capture writes cites the archive through `sources:`
 (`page.add_source_citation`, applied by `_stamp`), and `report.filed` names the parts in
 `source_pages`.
 
-**With the attachment ON the agent is TOLD so**, in a server-composed system note beside the
+**The agent is TOLD the archive is handled**, in a server-composed system note beside the
 corrective brief: without it the brief's genre rules make a whole document read as `type: source` —
-a type the fast lane may not create — and the capture is refused over a source half code had already
-written. The note says the source half is handled and the agent's whole job is the synthesis. It is
-instruction-side and never derived from the material's shape.
+a type the fast lane may not create — and the capture is refused over a source half code had
+already written. The note says the source half is done and the agent's whole job is the synthesis.
+It is instruction-side and never derived from the material's shape.
 
-**`_cross_check_outcome`'s "exactly one page" means one AGENT page.** The attachment's code-written
-parts are excluded from that count — they are named on a surface a human reads and cited from the
-synthesis, so counting them would veto every attached capture by construction. A computed source
-path that already exists is refused (`outcome/existing-page-collision`) rather than suffixed: the
-likely cause is that this thread or document was captured before.
+**The archive is excluded from the cross-check's declaration.** `_cross_check_outcome` holds the
+diff to the pages the ACCOUNT declared; the archive is code's own write, named on a surface a human
+reads and cited from every page beside it, so counting it would veto every capture by construction.
+A computed source path that already exists is refused
+(`outcome/existing-page-collision`) rather than suffixed: the likely cause is that this thread or
+document was captured before.
 
 ## Writing an identity: what a filing does to the registry
 

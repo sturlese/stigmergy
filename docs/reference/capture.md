@@ -70,9 +70,10 @@ to carry.
 
 What the worker does with them differs. A `meeting` runs the second flow and files a page SET
 (source + meeting + one decision page per decision — [meeting-distiller.md](./meeting-distiller.md));
-a `document` runs the ordinary flow with the source attachment on, so a synthesis page lands beside
-the verbatim `sources/documents/` part(s), and `source_url` lands as `url:` on them
-([librarian.md → The source attachment](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow)).
+every capture archives its material verbatim, and the kind chooses the folder it lands in — a
+`document`'s parts go to `sources/documents/` with `source_url` as their `url:`, a plain capture's
+to `sources/notes/`
+([librarian.md → The source archive](./librarian.md#the-source-archive-every-capture-always)).
 
 ### Nothing is ever asked of a submitter
 

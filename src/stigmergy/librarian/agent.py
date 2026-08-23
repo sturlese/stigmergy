@@ -128,6 +128,12 @@ MAX_LIST_LEN = 200                  # links created, overlaps flagged, findings
 # bounded by the thing it names, so over the bound it is a defect and is refused, correctably.
 MAX_IDENTIFIER_LEN = 400
 
+# How many pages ONE capture may declare. Not a style limit: with the meeting flow gone, a single
+# transcript legitimately writes a source plus a conclusion per decision, and unbounded that lets
+# one capture commit fifty pages nobody asked for. The declaration is what the diff is checked
+# against, so this is where the ceiling has to be.
+MAX_PAGES_PER_CAPTURE = 12
+
 # A PROSE field is a sentence written for a human: TRUNCATED, never refused, since routing prose
 # through the identifier bound refuses a whole capture over the 401st character of a summary.
 MAX_PROSE_LEN = 2000
@@ -139,12 +145,19 @@ MAX_PAGE_BODY_LEN = 20000
 
 @dataclass(frozen=True)
 class OutcomePage:
-    """The page's own CONTENT, when the agent carries it home instead of writing it. There is no
+    """ONE page's own CONTENT, when the agent carries it home instead of writing it. There is no
     path here and never will be: the folder is DERIVED from `page_type`, so an outcome cannot name
-    a folder at all, let alone one outside the lane."""
+    a folder at all, let alone one outside the lane.
+
+    `anchoring` and `links` are PER PAGE because a capture writes N of them: a transcript's three
+    conclusions are about three different things, and one anchor for the set would file two of
+    them against the wrong entity. Empty `anchoring` means "the capture's own", which is what a
+    single-page filing declares at the top level."""
     title: str = ""
     page_type: str = ""
     body: str = ""
+    anchoring: dict = field(default_factory=dict)
+    links: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -153,9 +166,15 @@ class Outcome:
     `processing` cross-checks it against the diff and must not edit it into agreement. `edits` is
     a declaration, never an action, so the agent cannot touch an existing page at all.
 
-    A backend that writes the page itself declares `page_path` and `page=None`; a structured one
-    carries the content in `page`. `title`/`page_type` stay SINGLE fields, filled from `page` when
-    the top level is silent, so downstream readers see one declaration site.
+    A backend that writes the pages itself declares `page_paths` and `pages=()`; a structured one
+    carries every page's content in `pages`. `title`/`page_type` stay SINGLE fields, filled from
+    the FIRST page when the top level is silent, so downstream readers see one declaration site.
+
+    **`pages` is the declaration the diff is cross-checked against**, and that is the whole reason
+    it is a list. One capture writes as many pages as its material establishes — a transcript
+    yields a source and N conclusions — and what stops that being unbounded is not a hardcoded
+    count but the agreement: code writes exactly what was declared, and `_cross_check_outcome`
+    refuses a diff that carries anything else.
     """
     decision: str
     title: str = ""
@@ -170,7 +189,16 @@ class Outcome:
     new_entities: tuple = ()      # tuple of {name, entity_type, role, aliases, summary, facts, connections}
     new_aliases: tuple = ()       # tuple of {entity, alias}
     entity_updates: tuple = ()    # tuple of {entity, facts, connections} — the spine accretes
-    page: "OutcomePage | None" = None
+    pages: tuple = ()             # tuple of OutcomePage — what this capture declares it writes
+    page_paths: tuple = ()        # the paths an EXPLORING backend wrote, its own declaration
+
+    @property
+    def page(self) -> "OutcomePage | None":
+        """The first declared page, for the readers that legitimately want one — the commit
+        subject, the dedup pointer, `result_ref`. A capture's pages are ORDERED by the account
+        that declared them, so "the first" is a decision the agent made and not an accident of
+        iteration."""
+        return self.pages[0] if self.pages else None
 
 
 # ── a shape problem is CORRECTABLE; a structural one is not ───────────────────────────────────
@@ -476,16 +504,35 @@ def parse_outcome(raw) -> Outcome:
     new_aliases = _parse_new_aliases(raw, shape=shape)
     entity_updates = _parse_entity_updates(raw, shape=shape)
 
-    # Absent (`page=None`) is the write-it-itself shape; whether it is REQUIRED is the caller's
-    # question, since only the caller knows which backend ran.
-    page, page_raw = None, {}
-    if raw.get("page") is not None:
-        page_raw = _mapping(raw.get("page"), field_name="page", shape=shape)
-        page = OutcomePage(
-            title=_identifier(page_raw.get("title"), field_name="page.title", shape=shape),
-            page_type=_identifier(page_raw.get("page_type"), field_name="page.page_type",
+    # An empty `pages` is the write-it-itself shape; whether content is REQUIRED is the caller's
+    # question, since only the caller knows which backend ran. `page` (singular) is the same
+    # declaration for a capture that writes one page, and is folded into the list here so
+    # everything downstream reads ONE field.
+    pages, page_raw = [], {}
+    raw_pages = raw.get("pages")
+    if raw_pages is None and raw.get("page") is not None:
+        raw_pages = [raw.get("page")]
+    for entry in _list(raw_pages, field_name="pages", shape=shape):
+        item = _mapping(entry, field_name="a pages entry", shape=shape)
+        if not page_raw:
+            page_raw = item          # the FIRST page fills a silent top level, below
+        pages.append(OutcomePage(
+            title=_identifier(item.get("title"), field_name="page.title", shape=shape),
+            page_type=_identifier(item.get("page_type"), field_name="page.page_type",
                                   shape=shape).strip().lower(),
-            body=_page_body(page_raw.get("body"), field_name="page.body", shape=shape))
+            body=_page_body(item.get("body"), field_name="page.body", shape=shape),
+            anchoring=(_parse_anchoring(item, field_name="page.anchoring", shape=shape)
+                       if item.get("anchoring") is not None else {}),
+            links=tuple(_identifier(link, field_name="a page links entry", shape=shape)
+                        for link in _list(item.get("links"), field_name="page.links",
+                                          shape=shape))))
+    if len(pages) > MAX_PAGES_PER_CAPTURE:
+        shape.add("too-many",
+                  f"declares {len(pages)} pages for one capture, over the "
+                  f"{MAX_PAGES_PER_CAPTURE}-page ceiling: file what this material establishes and "
+                  f"leave the rest to the captures that carry it")
+        pages = []
+    page = pages[0] if pages else None
 
     # Coerced HERE, not inline in the `Outcome(...)` call: that call happens after
     # `raise_if_any`, so a problem recorded inside it would never raise. For `title`/`page_type`
@@ -493,6 +540,13 @@ def parse_outcome(raw) -> Outcome:
     title = (_identifier(raw.get("title"), field_name="title", shape=shape)
              or (page.title if page else ""))
     page_path = _identifier(raw.get("page_path"), field_name="page_path", shape=shape)
+    # The EXPLORING shape's own declaration: the paths the agent wrote itself. `page_path` is the
+    # one-page spelling of the same thing and folds in here, so the cross-check reads one field
+    # whichever shape ran.
+    page_paths = tuple(_identifier(p, field_name="a page_paths entry", shape=shape)
+                       for p in _list(raw.get("page_paths"), field_name="page_paths", shape=shape))
+    if not page_paths and page_path:
+        page_paths = (page_path,)
     page_type = (_identifier(raw.get("page_type"), field_name="page_type",
                              shape=shape).strip().lower()
                  or (page.page_type if page else ""))
@@ -527,7 +581,8 @@ def parse_outcome(raw) -> Outcome:
         new_entities=new_entities,
         new_aliases=new_aliases,
         entity_updates=entity_updates,
-        page=page,
+        pages=tuple(pages),
+        page_paths=page_paths,
     )
 
 

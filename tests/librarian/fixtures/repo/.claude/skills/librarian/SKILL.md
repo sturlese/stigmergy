@@ -353,9 +353,23 @@ server-owned field. The parts that bite most often:
 
 ## The bar for creating a page, and overlap versus duplicate
 
-One capture yields **one** page. Create it when the material carries something worth meeting
-again in six months. A capture that is a passing thought or a to-do still files — the person
-asked for it to be kept — but it files as the short page it is, not padded into a long one.
+One capture yields **as many pages as its material establishes** — one for a note, one per
+conclusion for a transcript that settled three things — and **every one of them is declared**.
+The declaration is what the worker checks the diff against: a page you write and do not declare
+is refused, and so is a page you declare and do not write. Declaring is not a formality; it is
+the agreement that lets code write exactly what you decided and nothing else.
+
+One page is the ordinary answer, and splitting is a judgment, not a habit: two pages are right
+when the material settles two things a reader would look for separately, and wrong when they are
+one thing said twice. Each page carries its own `anchoring`, because pages that are about
+different things are anchored to different things.
+
+Create a page when the material carries something worth meeting again in six months. A capture
+that is a passing thought or a to-do still files — the person asked for it to be kept — but it
+files as the short page it is, not padded into a long one.
+
+**You never write the `sources/` page.** The worker archives every capture's material verbatim in
+the same commit and makes your pages cite it. That half is done; yours is the synthesis.
 
 The `candidates` you were handed are where overlap is judged, and there are three answers:
 

@@ -195,9 +195,6 @@ reads a false sentence above as a description of today:
   `meeting` and `view` have not yet been merged away.
 - **There are still two filing flows** — the ordinary one and a separate meeting flow that files
   a page set. §4's one pipe replaces both.
-- **The verbatim archive is still conditional**, not the invariant §4 states: a `document`, a
-  meeting transcript and the Slack gesture get a `sources/` page, and a plain `raw` capture does
-  not — so its page cites nothing.
 - **A capture still cannot rewrite a page body**; it can only append through a closed vocabulary
   of declared edits. §4's rewrite rule is the change that opens it.
 - **Views are still materialised pages** under `views/`, kept fresh by a convergence sweep.

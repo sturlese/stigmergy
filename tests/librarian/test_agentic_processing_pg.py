@@ -226,7 +226,9 @@ def test_an_iterating_run_files_the_page_the_MODEL_wrote_and_the_row_says_what_i
     assert result.status == schema.FILED, result.report.get("summary")
     _, sha = result.result_ref.rsplit("@", 1)
     committed = support.changed_paths(env.repo, sha)
-    assert committed == [PAGE_PATH], committed
+    # The page the MODEL wrote, plus the verbatim archive code writes beside every capture.
+    assert [p for p in committed if not p.startswith("sources/")] == [PAGE_PATH], committed
+    assert [p for p in committed if p.startswith("sources/notes/")], committed
     assert agent_module.OUTCOME_FILENAME not in support.all_ever_committed_paths(env.bare), (
         "the agent's own account reached a commit — the channel was not drained before the diff")
     filed_page = support.read_filed_page(env.repo, sha, PAGE_PATH)
@@ -357,7 +359,8 @@ def test_an_account_the_boundary_refuses_by_SHAPE_buys_a_corrective_pass_that_is
     assert script.prompts[1] != script.prompts[0], "the second pass got the same prompt as the first"
     assert result.report["cost_usd"] > 0, "two paid passes were banked as free"
     _, sha = result.result_ref.rsplit("@", 1)
-    assert support.changed_paths(env.repo, sha) == [PAGE_PATH]
+    assert [p for p in support.changed_paths(env.repo, sha)
+            if not p.startswith("sources/")] == [PAGE_PATH]
 
 
 def test_a_model_that_stays_shape_refused_lands_terminal_after_exactly_two_passes(
@@ -430,7 +433,7 @@ def test_a_run_that_writes_TWO_pages_is_refused_by_the_cross_check(
     assert result.status == schema.FAILED, (
         f"two pages were filed under one capture: {result.report.get('summary')}")
     assert result.report["stage"] == "outcome", result.report
-    assert "created 2 pages in one capture" in result.report["summary"], result.report["summary"]
+    assert "never declared" in result.report["summary"], result.report["summary"]
     # ...and it cost the corrective retry, which is the honest outcome rather than a defect: the
     # finding names a repair the agent could perform (write one page), so the second pass is spent
     # asking for it. A model that writes two pages twice is refused, not looped over.

@@ -125,7 +125,8 @@ def _resolution_note(anchoring: dict, registry=None) -> str:
 def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps: list,
           findings: list, pages_edited: list = (), agent_rationale: str = "", registry=None,
           source_pages: list = (), entities_born: list = (), aliases_added: list = (),
-          entities_updated: list = (), entities_withheld: list = ()) -> dict:
+          entities_updated: list = (), entities_withheld: list = (),
+          pages_filed: list = ()) -> dict:
     """The ordinary success: page, commit and anchor, plus the not-searchable-yet clause in the same
     sentence. `pages_edited` is what code actually wrote from the agent's declared edits, while
     `overlaps_flagged` is the agent's JUDGMENT about which pages overlap — a different field.
@@ -152,6 +153,12 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
                    f"This overlaps existing material at {others}; both pages now cross-link and "
                    f"carry an overlap note — nothing was deleted or rewritten on either side. "
                    f"{SEARCHABILITY_NOTE}")
+    filed_paths = [_clean(path, 200) for path in _as_list(pages_filed)]
+    if len(filed_paths) > 1:
+        # A capture writes as many pages as its material establishes, and a report naming only the
+        # first would hide the rest from the one person who could tell they are wrong.
+        summary += (f" This capture established {len(filed_paths)} pages: "
+                    f"{_listed(filed_paths)}.")
     source_paths = [_clean(path, 200) for path in _as_list(source_pages)]
     if source_paths:
         summary += (f" The captured material itself is filed verbatim at "
@@ -171,6 +178,7 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
         findings=list(_as_list(findings)),
         entities_born=born, aliases_added=added_aliases,
         entities_updated=updated, entities_withheld=withheld,
+        pages_filed=filed_paths or [_clean(page_path, 200)],
         **({"source_pages": source_paths} if source_paths else {}))
 
 

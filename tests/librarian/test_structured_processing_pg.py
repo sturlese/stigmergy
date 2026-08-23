@@ -124,8 +124,8 @@ def _account(*, title: str = "Acme Corp Renewal Window", page_type: str = "note"
                  else OrdinaryAnchoring(kind="entity", entities=[anchor] if anchor else []))
     return FilingAccount(
         decision="file",
-        page=OrdinaryPage(title=title, page_type=page_type,
-                          body=_body() if body is None else body),
+        pages=[OrdinaryPage(title=title, page_type=page_type,
+                            body=_body() if body is None else body)],
         anchoring=anchoring,
         links_created=list(links),
         edits=list(edits),
@@ -227,6 +227,17 @@ def _file(conn, deps, material: str = MATERIAL, **kwargs):
     return worker.process_next(conn, deps)
 
 
+def _authored(changed: list[str]) -> list[str]:
+    """The paths this capture's ACCOUNT is responsible for — everything but the verbatim archive.
+
+    Every capture now files its material to `sources/` as well, always, and that invariant has one
+    owner (`test_every_capture_archives_its_material_verbatim_and_the_page_cites_it`). Filtering it
+    out here keeps each test below about the thing it was written for; asserting it in thirty
+    places would make thirty tests fail for one change and none of them say why.
+    """
+    return [path for path in changed if not path.startswith("sources/")]
+
+
 def _committed(env, result) -> tuple[str, list[str]]:
     """`(sha, paths)` for the commit this filing attributed to itself.
 
@@ -240,6 +251,84 @@ def _committed(env, result) -> tuple[str, list[str]]:
     out = gitcmd.run("diff-tree", "--no-commit-id", "-r", "-z", "--name-only", sha,
                      cwd=env.repo).stdout
     return sha, sorted(path for path in out.split("\0") if path.strip())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# One capture, as many pages as its material establishes
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def test_a_capture_declaring_several_pages_files_all_of_them_each_anchored_on_its_own(
+        tmp_path, clean_queue, require_gitleaks):
+    """**The benign twin of the undeclared-page veto**, and the property that replaced "a capture
+    files exactly one page".
+
+    One capture writes as many pages as its material establishes — a transcript yields a
+    conclusion per decision — and each one is ABOUT something of its own: the anchor travels per
+    page, not per capture. What bounds it is not a count but the agreement: code writes exactly
+    what the account declared, and `_cross_check_outcome` refuses a diff carrying anything else.
+
+    Asserted where it is irreversible: both pages read back out of the object database at the sha
+    this filing attributed to itself, each carrying its own `entity:`, and both named in the report
+    — because a page reported nowhere is the failure the old count-based rule was really about.
+    """
+    account = FilingAccount(
+        decision="file",
+        pages=[
+            OrdinaryPage(title="Acme Corp Renewal Window", page_type="note", body=_body()),
+            OrdinaryPage(title="Renewal Pricing Decision", page_type="decision", body=_body(),
+                         anchoring=OrdinaryAnchoring(kind="company",
+                                                     reason="a pricing rule that applies across "
+                                                            "the whole company, not to one client"),
+                         links=[]),
+        ],
+        anchoring=OrdinaryAnchoring(kind="entity", entities=[REGISTERED]),
+        links_created=[REGISTERED],
+        summary="filed the renewal note and the pricing decision it established")
+    env, deps, _ = _rig(tmp_path, lambda: _model(account))
+
+    _, result = _file(clean_queue, deps)
+
+    assert result.status == schema.FILED, result.report.get("summary")
+    sha, changed = _committed(env, result)
+    assert _authored(changed) == ["wiki/decisions/Renewal Pricing Decision.md",
+                                  "wiki/notes/Acme Corp Renewal Window.md"], changed
+
+    # Each page carries ITS OWN anchor: the note the entity it is about, the decision the checked
+    # company-wide declaration. One anchor for the set would have filed the second against Acme.
+    note = support.read_filed_page(env.repo, sha, "wiki/notes/Acme Corp Renewal Window.md")
+    decision = support.read_filed_page(env.repo, sha, "wiki/decisions/Renewal Pricing Decision.md")
+    assert f'entity: ["{REGISTERED_ID}"]' in note
+    assert "entity: []" in decision
+
+    # The FIRST declared page is the one every surface names — the account's own order, never the
+    # diff's alphabetical one, which would have named the decision.
+    assert result.result_ref.startswith("wiki/notes/Acme Corp Renewal Window.md@")
+    assert result.report["page_path"] == "wiki/notes/Acme Corp Renewal Window.md"
+    assert sorted(result.report["pages_filed"]) == sorted(_authored(changed))
+    assert "2 pages" in result.report["summary"]
+
+
+def test_two_declared_pages_that_would_take_the_same_path_are_refused_before_anything_is_written(
+        tmp_path, clean_queue, require_gitleaks):
+    """Two conclusions with one title are one page. Refused at PLAN time, with nothing written:
+    the second write would otherwise land on the first, and the diff would carry one page where
+    the account declared two — a mismatch the cross-check would report as a page that vanished
+    rather than as the collision it is.
+    """
+    account = FilingAccount(
+        decision="file",
+        pages=[OrdinaryPage(title="Same Title", page_type="note", body=_body()),
+               OrdinaryPage(title="Same Title", page_type="note", body=_body())],
+        anchoring=OrdinaryAnchoring(kind="entity", entities=[REGISTERED]),
+        links_created=[REGISTERED],
+        summary="two pages, one title")
+    env, deps, _ = _rig(tmp_path, lambda: _model(account))
+    before = support.branch_sha(env.bare)
+
+    _, result = _file(clean_queue, deps)
+
+    assert result.status in (schema.FAILED, schema.REJECTED), result.report.get("summary")
+    assert support.branch_sha(env.bare) == before
+    assert "Same Title" in result.report["summary"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -267,9 +356,9 @@ def test_a_structured_capture_files_one_page_written_by_code_and_the_run_costs_m
 
     assert result.status == schema.FILED, result.report.get("summary")
     sha, changed = _committed(env, result)
-    assert changed == ["wiki/notes/Acme Corp Renewal Window.md"], changed
+    assert _authored(changed) == ["wiki/notes/Acme Corp Renewal Window.md"], changed
 
-    page = support.read_filed_page(env.repo, sha, changed[0])
+    page = support.read_filed_page(env.repo, sha, _authored(changed)[0])
     assert "type: note" in page
     assert 'title: "Acme Corp Renewal Window"' in page
     assert f'related: ["[[{REGISTERED}]]"]' in page
@@ -299,7 +388,8 @@ def test_the_agent_writes_no_file_at_all_and_the_committed_diff_says_so(tmp_path
     assert result.status == schema.FILED
     _, changed = _committed(env, result)
     assert not [p for p in changed if p.endswith(".librarian-outcome.json")]
-    assert all(p.startswith("wiki/") for p in changed), changed
+    # Every path is CODE's: the page it wrote from the account, and the verbatim archive beside it.
+    assert all(p.startswith(("wiki/", "sources/")) for p in changed), changed
 
 
 def test_a_mid_run_fault_lands_a_failed_row_that_still_says_what_the_attempt_cost(
@@ -491,7 +581,7 @@ def test_an_ordinary_folder_that_is_a_real_directory_still_files(tmp_path, clean
 
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == ["wiki/notes/Acme Corp Renewal Window.md"]
+    assert _authored(changed) == ["wiki/notes/Acme Corp Renewal Window.md"]
 
 
 def test_a_newline_inside_a_title_is_refused_and_never_flattened_into_a_filename(
@@ -744,7 +834,7 @@ def test_a_legitimate_title_with_awkward_characters_still_files(tmp_path, clean_
 
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == [f"wiki/notes/{title}.md"], (
+    assert _authored(changed) == [f"wiki/notes/{title}.md"], (
         f"the title was not the filename: {changed}")
 
 
@@ -762,8 +852,10 @@ def test_the_filename_is_the_title_and_is_never_slugified(tmp_path, clean_queue,
     _, result = _file(clean_queue, deps)
 
     _, changed = _committed(env, result)
-    assert changed == ["wiki/notes/Acme Corp Renewal Window.md"]
-    assert "acme-corp" not in changed[0]
+    assert _authored(changed) == ["wiki/notes/Acme Corp Renewal Window.md"]
+    # The archive beside it IS slugified, deliberately: a `sources/` stem is a machine handle, and
+    # the rule under test is about the page a person opens.
+    assert "acme-corp" not in _authored(changed)[0]
 
 
 @pytest.mark.parametrize("page_type, folder", sorted(page_policy.FOLDER_BY_TYPE.items()))
@@ -779,7 +871,7 @@ def test_every_creatable_type_lands_in_the_folder_the_one_placement_table_names(
 
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == [f"{folder}/Acme Corp Renewal Window.md"]
+    assert _authored(changed) == [f"{folder}/Acme Corp Renewal Window.md"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -820,7 +912,7 @@ def test_a_structured_capture_naming_an_unknown_entity_introduces_it_and_files(
 
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == ["ops/entity-registry.json", "wiki/entities/Halcyon Grid.md",
+    assert _authored(changed) == ["ops/entity-registry.json", "wiki/entities/Halcyon Grid.md",
                        "wiki/notes/Acme Corp Renewal Window.md"]
     assert result.report["entities_born"] == [
         {"id": "halcyon-grid", "name": "Halcyon Grid", "type": "organization",
@@ -904,7 +996,7 @@ def test_a_collision_on_the_first_pass_is_cleared_by_a_different_title_on_the_se
     assert factory.calls == 2, "the collision did not spend the corrective retry"
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == ["wiki/notes/Acme Corp Renewal Window.md"]
+    assert _authored(changed) == ["wiki/notes/Acme Corp Renewal Window.md"]
     assert support.read_filed_page(env.repo, "HEAD",
                                    "wiki/notes/Existing Note.md") == before_text
 
@@ -1141,11 +1233,15 @@ def test_the_flow_note_reaches_the_structured_prompt(tmp_path, clean_queue, requ
         f"the structured pass was not told the attachment's half of the work: {seen!r}")
 
 
-def test_an_ordinary_structured_capture_is_told_no_flow_note_at_all(tmp_path, clean_queue,
-                                                                     require_gitleaks):
-    """The parameter's OFF position, which is the benign twin of the note above: a capture with no
-    attachment must be byte-identical to what it was, and a flow note on it would be a fact about
-    a flow this item is not riding."""
+def test_every_capture_is_told_the_archive_is_already_handled(tmp_path, clean_queue,
+                                                             require_gitleaks):
+    """The flow note is an INVARIANT now, not a parameter.
+
+    OLD BEHAVIOUR: the note was attached for a document and for the Slack gesture and withheld from
+    everything else, because only those two archived their material. Every capture archives now, so
+    a capture told nothing would be a capture whose brief's genre rules make it read the whole
+    material as a `sources/` page and park a job code has already done.
+    """
     seen = []
 
     class _Recording:
@@ -1168,10 +1264,10 @@ def test_an_ordinary_structured_capture_is_told_no_flow_note_at_all(tmp_path, cl
     _, result = _file(clean_queue, deps)
 
     assert result.status == schema.FILED
-    assert seen == [""]
+    assert len(seen) == 1 and "archives this capture's VERBATIM material" in seen[0]
     _, changed = _committed(env, result)
-    assert not any(p.startswith("sources/") for p in changed)
-    assert "source_pages" not in result.report
+    assert [p for p in changed if p.startswith("sources/")], changed
+    assert result.report["source_pages"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -1392,7 +1488,7 @@ def test_a_long_accented_title_that_still_fits_the_byte_ceiling_files(tmp_path, 
 
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == [f"wiki/notes/{title}.md"]
+    assert _authored(changed) == [f"wiki/notes/{title}.md"]
 
 
 def test_a_title_at_exactly_the_byte_ceiling_files_all_the_way_through(tmp_path, clean_queue,
@@ -1422,7 +1518,7 @@ def test_a_title_at_exactly_the_byte_ceiling_files_all_the_way_through(tmp_path,
 
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == [f"wiki/notes/{title}.md"]
+    assert _authored(changed) == [f"wiki/notes/{title}.md"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -1483,8 +1579,8 @@ def test_a_declared_edit_is_performed_by_code_and_lands_in_the_same_commit(
 
     assert result.status == schema.FILED, result.report.get("summary")
     sha, changed = _committed(env, result)
-    assert set(changed) == {"wiki/notes/Acme Corp Renewal Window.md",
-                            "wiki/notes/Existing Note.md"}
+    assert set(_authored(changed)) == {"wiki/notes/Acme Corp Renewal Window.md",
+                                       "wiki/notes/Existing Note.md"}
     edited = support.read_filed_page(env.repo, sha, "wiki/notes/Existing Note.md")
     assert "[[Acme Corp Renewal Window]]" in edited
     # ...additively: the page's own frontmatter and body survive
@@ -1535,7 +1631,7 @@ def test_a_structured_backend_that_returns_no_page_body_is_told_so_and_repairs_i
     assert agent.calls == 2, "the missing page body did not spend the corrective retry"
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == ["wiki/notes/Acme Corp Renewal Window.md"]
+    assert _authored(changed) == ["wiki/notes/Acme Corp Renewal Window.md"]
 
 
 def test_an_account_with_no_page_body_at_all_fails_honestly_when_the_retry_cannot_fix_it(
@@ -1589,7 +1685,7 @@ def test_the_declaration_is_what_selects_the_shape_and_not_the_backends_class(
     assert not isinstance(stand_in, PydanticFilingAgent)
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
-    assert changed == ["wiki/notes/A Declared Shape.md"]
+    assert _authored(changed) == ["wiki/notes/A Declared Shape.md"]
 
 
 def test_the_worker_records_the_structured_backend_on_the_row_it_filed(tmp_path, clean_queue,

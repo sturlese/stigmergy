@@ -66,8 +66,8 @@ def _filing(**over) -> dict:
     """The keyword arguments of a COMPLETE ordinary filing account, so each case below overrides
     exactly the one field it is about and nothing else drifts."""
     base = dict(decision="file",
-                page=OrdinaryPage(title="Acme Corp Renewal Window", page_type="note",
-                                  body=_page_body()),
+                pages=[OrdinaryPage(title="Acme Corp Renewal Window", page_type="note",
+                                    body=_page_body())],
                 anchoring=OrdinaryAnchoring(kind="entity", entities=["Acme Corp"]),
                 summary="filed the renewal note")
     base.update(over)
@@ -142,9 +142,10 @@ def test_the_schemas_decision_vocabulary_is_the_boundarys_own():
 
 # ── LEG 2: what each DECISION obliges — the conditional half a field-by-field schema cannot say ─
 @pytest.mark.parametrize("field, over", [
-    ("page.title", {"page": OrdinaryPage(title="  ", page_type="note", body=_page_body())}),
-    ("page.page_type", {"page": OrdinaryPage(title="T", page_type="", body=_page_body())}),
-    ("page.body", {"page": OrdinaryPage(title="T", page_type="note", body="   ")}),
+    ("pages[1].title", {"pages": [OrdinaryPage(title="  ", page_type="note", body=_page_body())]}),
+    ("pages[1].page_type", {"pages": [OrdinaryPage(title="T", page_type="", body=_page_body())]}),
+    ("pages[1].body", {"pages": [OrdinaryPage(title="T", page_type="note", body="   ")]}),
+    ("pages", {"pages": []}),
 ])
 def test_a_filing_that_omits_a_half_it_obliges_is_refused_with_the_field_named(field, over):
     """Each conditional refusal, one case per field, asserted for WHAT IT NAMES.
@@ -169,7 +170,8 @@ def test_a_filing_is_told_to_name_a_TYPE_and_never_a_folder():
     is no field in this account that can name a location, and the refusal for a missing type says
     so rather than leaving the agent to infer it from the schema's shape."""
     with pytest.raises(ValidationError) as exc_info:
-        FilingAccount(**_filing(page=OrdinaryPage(title="T", page_type="", body=_page_body())))
+        FilingAccount(**_filing(pages=[OrdinaryPage(title="T", page_type="",
+                                                    body=_page_body())]))
 
     message = _message(exc_info)
     assert "never a folder or a path" in message
@@ -219,7 +221,7 @@ def test_a_complete_filing_account_validates():
     account = FilingAccount(**_filing())
 
     assert account.decision == "file"
-    assert account.page.body == _page_body()
+    assert account.pages[0].body == _page_body()
 
 
 def test_a_complete_meeting_account_validates():
@@ -235,7 +237,7 @@ def test_a_complete_account_parses_through_the_BOUNDARY_unchanged():
     assert outcome.decision == "file"
     assert outcome.title == "Acme Corp Renewal Window"      # mirrored up from `page`
     assert outcome.page_type == "note"
-    assert outcome.page.body == _page_body()
+    assert outcome.pages[0].body == _page_body()
 
 
 # ── LEG 4: through the FRAMEWORK — the two roads an incomplete account can now take ────────────

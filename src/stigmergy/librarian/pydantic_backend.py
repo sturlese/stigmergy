@@ -289,11 +289,18 @@ class OrdinaryAnchoring(StructuredInbound):
 
 
 class OrdinaryPage(StructuredInbound):
-    """The page itself — the title it is filed under, its type, and its whole body. No path: the
-    worker derives the folder from the type and the filename from the title."""
+    """ONE page — the title it is filed under, its type, its whole body, what it is ABOUT and the
+    entities it links. No path: the worker derives the folder from the type and the filename from
+    the title.
+
+    `anchoring` is per page because a capture writes as many pages as its material establishes,
+    and a transcript's three conclusions are about three different things. Left empty, a page
+    inherits the capture's own anchoring — which is what a single-page filing declares."""
     title: str = ""
     page_type: str = ""
     body: str = ""
+    anchoring: "OrdinaryAnchoring | None" = None
+    links: list[str] = Field(default_factory=list)
 
 
 class OrdinaryOverlap(StructuredInbound):
@@ -314,7 +321,7 @@ class FilingAccount(StructuredInbound):
     see the section comment above for the paid run that established why.
     """
     decision: Literal[*agent_module.DECISIONS]
-    page: OrdinaryPage = Field(default_factory=OrdinaryPage)
+    pages: list[OrdinaryPage] = Field(default_factory=list)
     anchoring: OrdinaryAnchoring = Field(default_factory=OrdinaryAnchoring)
     links_created: list[str] = Field(default_factory=list)
     overlaps: list[OrdinaryOverlap] = Field(default_factory=list)
@@ -329,21 +336,30 @@ class FilingAccount(StructuredInbound):
     def _complete_for_its_decision(self):
         """What a filing obliges — the conditional half a field-by-field schema cannot say. The
         page's own fields stay optional on the schema so the refusal can NAME the missing one."""
-        if not (self.page.title or "").strip():
+        if not self.pages:
             raise ValueError(_needed(
-                "page.title",
-                "It is the page's name, its filename and the commit subject a human reads in "
-                "`git log`, and there is nothing else to derive it from."))
-        if not (self.page.page_type or "").strip():
-            raise ValueError(_needed(
-                "page.page_type",
-                "Name the TYPE (note, decision or concept) — never a folder or a path; the "
-                "worker puts the page where a page of that type goes."))
-        if not (self.page.body or "").strip():
-            raise ValueError(_needed(
-                "page.body",
-                "The worker writes the page from this account, so the page's own text has to "
-                "be in it: return the whole page below its H1, with no frontmatter block."))
+                "pages",
+                "A filing writes at least one page. Return every page this material establishes "
+                "— one for a note, one per conclusion for a transcript — each with its own "
+                "title, type and body."))
+        for n, page in enumerate(self.pages, 1):
+            where = f"pages[{n}]" if len(self.pages) > 1 else "pages[1]"
+            if not (page.title or "").strip():
+                raise ValueError(_needed(
+                    f"{where}.title",
+                    "It is the page's name, its filename and — for the first page — the commit "
+                    "subject a human reads in `git log`, and there is nothing else to derive it "
+                    "from."))
+            if not (page.page_type or "").strip():
+                raise ValueError(_needed(
+                    f"{where}.page_type",
+                    "Name the TYPE (note, decision or concept) — never a folder or a path; the "
+                    "worker puts the page where a page of that type goes."))
+            if not (page.body or "").strip():
+                raise ValueError(_needed(
+                    f"{where}.body",
+                    "The worker writes the page from this account, so the page's own text has to "
+                    "be in it: return the whole page below its H1, with no frontmatter block."))
         _complete_proposals(self.new_entities)
         return self
 

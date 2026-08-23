@@ -270,7 +270,7 @@ def test_the_structured_requirement_names_the_field_and_carries_a_repair_brief()
 
     assert len(findings) == 1
     assert (findings[0].gate, findings[0].code) == ("outcome", "missing-field")
-    assert "`page.body`" in findings[0].message
+    assert "`pages`" in findings[0].message
     assert findings[0].brief and "page_type" in findings[0].brief
     assert "you never name a path" in findings[0].brief, (
         "the repair brief must not invite the agent to declare a path — there is no field for one")

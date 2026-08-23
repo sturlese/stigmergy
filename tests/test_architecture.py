@@ -3267,6 +3267,11 @@ _GATE_CONTEXT_DATA_KEYWORDS = frozenset({
     # run refuse more, never less: `None`, the default and the value every flow that carries no
     # capture passes, is an OPEN capture, which flows into any page and changes nothing.
     "acl",
+    # `declared_pages` is EVIDENCE, and the same distinction applies: it suspends nothing. It is
+    # the list `_cross_check_outcome` holds the diff TO, so a wrong value makes a run refuse —
+    # a page in the diff that is not in it, or an entry in it the diff does not carry. Empty, the
+    # default, refuses every filing rather than admitting one.
+    "declared_pages",
 })
 
 
