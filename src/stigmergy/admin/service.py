@@ -11,17 +11,15 @@ HTML-escaping is the client's non-negotiable half. Errors: `AdminBadRequest` / `
 class name only.
 """
 import logging
-import os
 from collections import Counter
 
 from stigmergy import text as textutil
+from stigmergy.admin import measurements
 from stigmergy.admin import schema as admin_schema
 from stigmergy.admin.settings import AdminSettings
 from stigmergy.capture import latency, queue, retention
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
-from stigmergy.digest import run as digest_run
-from stigmergy.digest.settings import DIGEST_CHANNEL_ID_ENV, SLACK_BOT_TOKEN_ENV, DigestSettings
 from stigmergy.entities.errors import EntityError
 from stigmergy.entities.generator import ENTITY_TYPES, canonical_id_for
 from stigmergy.gardener import store as gardener_store
@@ -34,17 +32,9 @@ from stigmergy.kernel import registry as kernel_registry
 from stigmergy.kernel.normalize import normalize
 from stigmergy.librarian import config as librarian_config
 from stigmergy.repair import store as repair_store
-from stigmergy.repair.schema import (
-    ALIAS_OP_NAMES,
-    DELETE_OP_NAMES,
-    KIND_ENTITY_BODY,
-    SCRUB_OP_NAME,
-)
-from stigmergy.repair.schema import JOB_NAME as REPAIR_JOB
+from stigmergy.repair.schema import DELETE_OP_NAMES, SCRUB_OP_NAME
 from stigmergy.repair.schema import KINDS as REPAIR_KINDS
-from stigmergy.server import pilot_report
 from stigmergy.server import review as server_review
-from stigmergy.server.errors import StartupError
 from stigmergy.server.webhook import JOB_NAME as WEBHOOK_JOB
 
 log = logging.getLogger(__name__)
@@ -56,15 +46,15 @@ PURGE_JOB, PURGE_DRY_RUN_JOB = retention.JOB_NAME, retention.DRY_RUN_JOB_NAME
 # making a promise, so a test runs this one rather than trusting the string.
 INDEX_REBUILD_COMMAND = "stigmergy-index --repo $STIGMERGY_REPO"
 
-# The door name this console records on every capture and repair it queues or decides.
+# The door name this console records on every capture and removal it queues.
 ADMIN_DOOR = "admin"
 
 # The metrics window: a console chart's x-axis. Clamped, never trusted from the query string.
 DEFAULT_METRICS_DAYS, MAX_METRICS_DAYS = 30, 365
 # How many capture->filed samples a histogram gets; the percentiles come from the same window.
 LATENCY_SAMPLE_LIMIT = 200
-# A request-scoped page of the repair ledger, never the whole table (`repair.store` says the bound
-# is the caller's): the table only grows, and every applied row carries a whole diff.
+# A request-scoped page of the removal ledger, never the whole table (`repair.store` says the
+# bound is the caller's): the table only grows, and every row carries a whole diff.
 REPAIR_RECENT_LIMIT = 50
 # `entities/resolve` is called as somebody types; one call checks the whole form, never a
 # registry-sized list of names.
@@ -168,8 +158,8 @@ def _iso(value) -> str | None:
 
 class AdminService:
     """One instance per process, sharing the process-wide autocommit connection. Concurrency
-    invariant: no cursor is ever held across an `await` — the two async digest methods await
-    inside `digest.run`, between statements, never mid-cursor."""
+    invariant: no cursor is ever held across an `await` — every method here is synchronous, and
+    the routes that need the event loop free hand the whole call to a worker thread."""
 
     def __init__(self, conn, *, server_settings, admin_settings: AdminSettings, evidence=None):
         self._conn = conn
@@ -183,7 +173,6 @@ class AdminService:
     def meta(self) -> dict:
         return {
             "actor_default": self._admin.actor,
-            "digest": self._digest_pieces(),
             "jobs": [dict(job) for job in NIGHT_SHIFT],
             "worker": {"visibility_timeout_s": worker_visibility_timeout_s(),
                        "max_attempts": WORKER_MAX_ATTEMPTS},
@@ -348,8 +337,8 @@ class AdminService:
     def metrics(self, *, days: int = DEFAULT_METRICS_DAYS) -> dict:
         """Aggregates only, over a clamped window. Captures by arrival day and current status
         (`queue.outcomes_by_day`), capture->filed samples (the same list the percentiles are
-        cut from), `ask` outcomes per day (`pilot_report.answer_shape_by_day` — the report's own
-        classifier, grouped in SQL), calls per day/tool/identity from `audit_log`, each job's run
+        cut from), `ask` outcomes per day (`measurements.answer_shape_by_day` — the Activity
+        table's own classifier, grouped in SQL), calls per day/tool/identity from `audit_log`, each job's run
         history, the ledger's newest rows and the repair table's status counts. Every read is
         bounded by the window or by a ceiling. Nothing here names a page, a question or a
         payload."""
@@ -358,13 +347,12 @@ class AdminService:
             "days": window,
             "captures_by_day": self._captures_by_day(window),
             "filed_latency_ms": queue.filed_latencies_ms(self._conn, limit=LATENCY_SAMPLE_LIMIT),
-            "asks_by_day": pilot_report.answer_shape_by_day(self._conn, days=window),
+            "asks_by_day": measurements.answer_shape_by_day(self._conn, days=window),
             "calls_by_day": self._calls_by_day(window),
             "calls_by_tool": self._calls_by_tool(window),
             "calls_by_identity": self._calls_by_identity(window),
             "job_history": {job: self._job_runs((job,), limit=60) for job in (
-                GARDENER_JOB, REPAIR_JOB, PURGE_JOB, PURGE_DRY_RUN_JOB, WEBHOOK_JOB,
-                digest_run.JOB_NAME, digest_run.JOB_NAME_DRY_RUN)},
+                GARDENER_JOB, PURGE_JOB, PURGE_DRY_RUN_JOB, WEBHOOK_JOB)},
             "repairs": self._repair_counts(),
         }
 
@@ -443,7 +431,6 @@ class AdminService:
             "ingest_errors": self._ingest_errors(limit=5),
             "night_shift": {"latest_runs": latest, "index_built_at": self._built_at()},
             "gardener": {"run": self._run_row(gardener), "severity_counts": severity_counts},
-            "digest": {"last_window_until": self._digest_watermark()},
             "admin_actions": admin_schema.recent_actions(self._conn, limit=5),
         }
 
@@ -496,50 +483,6 @@ class AdminService:
                     if run is not None else [])
         return {"run": self._run_row(run), "findings": findings,
                 "history": self._job_runs((GARDENER_JOB,), limit=10)}
-
-    # ── digest ────────────────────────────────────────────────────────────────────────────────
-    def digest_state(self) -> dict:
-        return {"pieces": self._digest_pieces(),
-                "last_window_until": self._digest_watermark(),
-                "history": self._job_runs((digest_run.JOB_NAME, digest_run.JOB_NAME_DRY_RUN),
-                                          limit=10)}
-
-    async def digest_preview(self) -> dict:
-        result = await digest_run.run_digest(
-            self._conn, settings=self._digest_settings(), channels_path=self._admin.channels_path,
-            gateway=None, dry_run=True, since_override=None)
-        return {"body": result.body, "since": _iso(result.since), "until": _iso(result.until)}
-
-    async def digest_post(self, *, actor: str) -> dict:
-        pieces = self._digest_pieces()
-        for key, sentence in (
-                ("digest_channel_id", f"${DIGEST_CHANNEL_ID_ENV} is not set — the digest has no "
-                                      f"channel to post to"),
-                ("bot_token", f"${SLACK_BOT_TOKEN_ENV} is not set — the digest cannot post "
-                              f"without the bot token")):
-            if not pieces[key]:
-                raise AdminRefused(sentence)
-        # The Slack SDK is loaded only at the moment a real post is about to happen.
-        from stigmergy.slack.bolt_gateway import build_gateway
-
-        gateway = build_gateway(os.environ[SLACK_BOT_TOKEN_ENV])
-        settings = self._digest_settings()
-
-        async def _post(_by: str):
-            return await digest_run.run_digest(
-                self._conn, settings=settings, channels_path=self._admin.channels_path,
-                gateway=gateway, dry_run=False, since_override=None)
-
-        result = await self._mutate_async("digest.post", actor, {}, _post)
-        response = {"posted": result.posted, "run_id": result.run_id,
-                    "since": _iso(result.since), "until": _iso(result.until)}
-        if result.posted and result.run_id is None:
-            # The digest CLI's own warning, the console edition: the post landed but the watermark
-            # write failed, so the next run may re-post this window as a duplicate.
-            response["warning"] = ("posted, but the watermark could not be recorded — the next "
-                                   "run may re-post this window as a duplicate; check job_runs "
-                                   "for a 'digest' row before running again")
-        return response
 
     # ── index ─────────────────────────────────────────────────────────────────────────────────
     def index_state(self) -> dict:
@@ -629,15 +572,17 @@ class AdminService:
         except (EntityError, CaptureError) as ex:
             raise AdminRefused(str(ex)) from ex
 
-    # ── the repair ledger: what the worker did, read-only ──────────────────────────
+    # ── the removal ledger: what left the corpus, read-only ────────────────────────
     def repairs_list(self) -> dict:
-        """The last repairs, whatever their outcome, plus the whole table's counts and the worker's
-        own pass history.
+        """The last rows of the removal ledger, plus the whole table's counts.
 
-        Read-only, and that is the decision rather than a gap: nothing on this page decides anything
-        any more. What it is FOR is the reading nobody gave a repair before it landed — every
-        applied row carries the diff that actually landed, and every failed one carries the sentence
-        that refused it.
+        Read-only, and that is the decision rather than a gap: nothing on this page decides
+        anything. What it is FOR is the reading nobody gave a removal before it landed — every row
+        carries the diff that actually landed, and it outlives the capture that asked for it, which
+        the retention purge takes away.
+
+        Rows the elective repair loop wrote before it was removed are still here and still render:
+        their `kind` is one of `schema.RETIRED_KINDS` and the frontend labels it as retired.
 
         `counts` is the whole table and `recent` is a bounded page of it: a part-to-whole drawn from
         a page silently understates history the moment the page fills.
@@ -645,8 +590,7 @@ class AdminService:
         return {"recent": [self._repair(row) for row in
                            repair_store.recent(self._conn, limit=REPAIR_RECENT_LIMIT)],
                 "recent_limit": REPAIR_RECENT_LIMIT,
-                "counts": repair_store.counts_by_status(self._conn),
-                "history": self._job_runs((REPAIR_JOB,), limit=10)}
+                "counts": repair_store.counts_by_status(self._conn)}
 
     def repair_show(self, repair_id: int) -> dict:
         row = repair_store.repair(self._conn, repair_id)
@@ -678,7 +622,7 @@ class AdminService:
 
     def activity(self) -> dict:
         return {
-            "report": pilot_report.build_report(self._conn),
+            "report": measurements.build_report(self._conn),
             "by_identity_tool": self._audit_aggregate(),
             "ask_questions": self._ask_questions(),
             "rate_limited": self._rate_limited(),
@@ -730,45 +674,6 @@ class AdminService:
             raise
         admin_schema.record_action(self._conn, actor=by, action=action, args=args, outcome="ok")
         return result
-
-    async def _mutate_async(self, action: str, actor: str, args: dict, fn):
-        """`_mutate` for an awaitable mutation, to the letter — actor fallback, an `admin_actions`
-        row on both outcomes, `CaptureError` renamed to `AdminRefused` so a domain refusal reaches
-        the operator as the routes' 409 with the library's own sentence, and everything else
-        re-raised unrenamed. The bookkeeping write itself may fail without failing the work.
-
-        The two are kept as twins rather than merged: no cursor may be held across an `await`
-        (this class's own concurrency invariant), and a shared body would have to be async, pulling
-        every sync caller into an event loop it does not have."""
-        by = (actor or "").strip() or self._admin.actor
-        try:
-            result = await fn(by)
-        except CaptureError as ex:
-            admin_schema.record_action(self._conn, actor=by, action=action, args=args,
-                                       outcome="error", error_class=ex.__class__.__name__)
-            raise AdminRefused(str(ex)) from ex
-        except Exception as ex:
-            admin_schema.record_action(self._conn, actor=by, action=action, args=args,
-                                       outcome="error", error_class=ex.__class__.__name__)
-            raise
-        admin_schema.record_action(self._conn, actor=by, action=action, args=args, outcome="ok")
-        return result
-
-    def _digest_settings(self) -> DigestSettings:
-        try:
-            return DigestSettings.from_args(None)
-        except StartupError as ex:
-            raise AdminRefused(str(ex)) from ex
-
-    def _digest_pieces(self) -> dict:
-        path = self._admin.channels_path
-        return {"digest_channel_id": bool(os.environ.get(DIGEST_CHANNEL_ID_ENV)),
-                "bot_token": bool(os.environ.get(SLACK_BOT_TOKEN_ENV)),
-                "channels_path": bool(path), "channels_file_exists": bool(path) and
-                os.path.exists(path)}
-
-    def _digest_watermark(self) -> str | None:
-        return digest_run.last_window_until(self._conn)
 
     def _truth_jobs(self, workflow: dict) -> tuple[str, ...]:
         job = workflow["truth"].split(":", 1)[1]
@@ -875,39 +780,32 @@ Cleaned like everything else, and `_clean` keeps newlines — a diff flattened t
 
     @staticmethod
     def _op(op: dict) -> dict:
-        """One op, cleaned — and shaped by its own KIND rather than by one fixed field list.
+        """One op, cleaned — and shaped by its own NAME rather than by one fixed field list.
 
-        The additive kinds carry a link and a note; `entity-body` carries the drafted prose and,
-        sometimes, a role. A single four-field reshape dropped the draft entirely, which for that
-        kind removes the only thing there is to judge — and it would do it silently, since a
-        missing key renders as an empty cell. Every value goes through `_clean`, which strips
-        control characters and KEEPS newlines: a body flattened to one line is a body nobody can
-        read as the page it would become.
+        A removal's two ops are the shapes this version writes: a `delete-page` names only the page,
+        and a `scrub-page` carries the planned bytes through for one reason — those bytes are a
+        MODEL's prose, and the ledger's stored `diff` is what somebody reads afterwards. Hiding
+        them would drop the only thing worth reading, and silently, since a missing key renders as
+        an empty cell. `_clean` strips control characters and KEEPS newlines: a body flattened to
+        one line is a body nobody can read as the page it would become.
 
-        `entity-alias` is the shape that reaches the console with LESS than it was stored with:
-        `planned_after` is a whole page per op, and what a reader judges there is which identity
-        absorbs which, not four regenerated files.
+        The two names are matched as a GROUP, imported from `repair.schema` rather than rebuilt
+        here: matching one name at a time is how a third op of the kind reaches this console
+        wearing another shape. `tests/test_architecture.py` pins that tuple.
 
-        A `delete` SCRUB carries its planned bytes through for one reason: those
-        bytes are a MODEL's prose, and the ledger's stored `diff` is what somebody reads afterwards.
-        Hiding them here would be `entity-body`'s mistake made twice: the only thing worth reading,
-        dropped silently, since a missing key renders as an empty cell.
-
-        Both are matched as GROUPS, imported from `repair.schema` rather than rebuilt from the
-        individual names here: matching one name at a time is how one op of a kind gets a link
-        column nobody asked for, and a fifth op added to either kind must not reach this console
-        still wearing the additive shape. `tests/test_architecture.py` pins these two tuples
-        against the CLI preview's own tables for that reason."""
-        kind = _clean(op.get("op"))
-        common = {"op": kind, "path": _clean(op.get("path"))}
-        if kind == KIND_ENTITY_BODY:
-            return {**common, "body_markdown": _clean(op.get("body_markdown")),
-                    "role": _clean(op.get("role"))}
-        if kind == SCRUB_OP_NAME:
+        Anything else is an op of a RETIRED kind (`schema.RETIRED_KINDS`), sitting in rows the
+        elective repair loop wrote. It is rendered by carrying every string field it has through
+        `_clean`, rather than by keeping three op-shape tables for kinds nothing can write: an old
+        row still reads whole, and no shape has to be maintained for a writer that is gone.
+        """
+        name = _clean(op.get("op"))
+        common = {"op": name, "path": _clean(op.get("path"))}
+        if name == SCRUB_OP_NAME:
             return {**common, "planned_after": _clean(op.get("planned_after"))}
-        if kind in DELETE_OP_NAMES or kind in ALIAS_OP_NAMES:
+        if name in DELETE_OP_NAMES:
             return common
-        return {**common, "link": _clean(op.get("link")), "note": _clean(op.get("note"))}
+        return {**common, **{key: _clean(value) for key, value in op.items()
+                             if key not in ("op", "path") and isinstance(value, str)}}
 
     def _traced_fields(self, row: dict) -> dict:
         """Sanitize every untrusted string a queue row carries, structure untouched.

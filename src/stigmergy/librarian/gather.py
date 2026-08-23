@@ -21,9 +21,8 @@ from stigmergy.librarian import page as page_policy
 
 log = logging.getLogger(__name__)
 
-# The zone a CANDIDATE may come from. `wiki/` only: `views/` is regenerated and is never a
-# wikilink target, and `sources/` is verbatim evidence — linkable, but not a knowledge
-# destination worth spending the excerpt budget on.
+# The zone a CANDIDATE may come from. `wiki/` only: `sources/` is verbatim evidence — linkable,
+# but not a knowledge destination worth spending the excerpt budget on.
 CANDIDATE_ZONE = "wiki/"
 
 # The link neighbourhood's ceiling — a hop is fanout-shaped. Not a `Settings` field: it bounds
@@ -128,7 +127,7 @@ class Corpus:
     # never the decision. On a case- and normalization-insensitive filesystem the NFD respelling
     # of a page names that page, so a raw `in by_path` would refuse a page the model may
     # legitimately read; but the fold is coarser than any collision rule this system enforces (the
-    # knowledge repo's linter compares `stem.lower()`, without NFC, and skips `views/`), so on a
+    # knowledge repo's linter compares `stem.lower()`, without NFC), so on a
     # case-SENSITIVE filesystem a restricted `straße.md` beside an open `strasse.md` folds to the
     # same key. `may_read` therefore confirms with `os.path.samefile` and refuses a key that more
     # than one visible row claims: the same helper that is fail-CLOSED on the write path (a
@@ -151,7 +150,7 @@ def may_read(worktree: str, parsed: "Corpus", resolved_rel: str) -> bool:
     tool's gate, beside `confined_page`, which answers containment and says nothing about
     audience.
 
-    Shared by both model-facing read tools — the filing toolbox and the repair proposer — because
+    Shared by every model-facing read tool the filing toolbox holds, because
     two implementations of one confinement rule is exactly how the second one misses a change the
     first one got.
 
@@ -199,9 +198,9 @@ def load_corpus(worktree: str, *, acl: list[str] | None = None) -> Corpus:
     than widening it.
 
     `link_names` is the wikilink vocabulary derived from the SAME filtered rows, so a restricted
-    page's name is not offered as something to link to. It is a subset of what `edits.page_names`
-    resolves, which keeps `list_page_names`' promise that a name offered here cannot be refused
-    later — `edits.validate` still answers the different question, "would this link be dead".
+    page's name is not offered as something to link to. Every name in it resolves to a page in
+    this checkout, which keeps `list_page_names`' promise: a name offered here cannot be refused
+    later as a dead link.
     """
     rows = [row for row in _confined(worktree, corpus.load_pages(worktree))
             if flows_into(row.acl, acl)]
@@ -286,8 +285,8 @@ def gather(worktree: str, registry, material: str, *, top_k: int,
                              skip=entity_paths | {c.path for c in candidates})
 
     # Derived from the SAME filtered rows the candidates came from, so a restricted page's name is
-    # never offered as something to link to. A subset of what `edits.validate` resolves, which is
-    # what keeps the old promise: a name offered here cannot be refused later.
+    # never offered as something to link to. Every one of them resolves to a page in this
+    # checkout, which is what keeps the old promise: a name offered here is never a dead link.
     names = list(parsed.link_names)
     log.info("gathered for one capture: %d of %d entities (%d a near miss), %d candidate(s) of "
              "%d page(s), %d neighbour(s)",

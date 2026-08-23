@@ -232,8 +232,6 @@ function jobsCard(overview, metrics) {
   }
   rows.push({ cells: ["Index rebuild", pill(overview.night_shift.index_built_at ? "built" : "no index", overview.night_shift.index_built_at ? "git" : "fail"),
     overview.night_shift.index_built_at ? relTime(overview.night_shift.index_built_at) : "—", el("span", { class: "muted" }, "truth: the index's built_at")] });
-  const digest = (metrics.job_history.digest || [])[0];
-  rows.push({ cells: ["Weekly digest", digest ? wordPill(digest.status) : pill("never posted", "neutral"), digest ? relTime(digest.finished_at) : "—", el("span", { class: "muted" }, overview.digest.last_window_until ? `window ends ${fmtWhen(overview.digest.last_window_until)}` : "command-only")] });
   return card({ title: "Unattended work", sub: "the last known truth for each job", actions: [link("jobs", el("span", { class: "btn small ghost" }, "Jobs"))] },
     table(["job", "last run", "when", ""], rows, { dense: true, empty: "no job has run yet — the night shift runs inside the librarian worker" }));
 }

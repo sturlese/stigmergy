@@ -1,18 +1,17 @@
-"""The one thing a person still writes to the knowledge repo from the serving process: a page
-removal, decided and applied in the same call.
+"""The two decisions a person makes at a door and this process only QUEUES: removing pages, and
+commissioning an entity nobody has captured about yet.
 
-Everything else that used to live here is gone with the waiting: an identity a capture
-introduces is born confirmed by whoever captured it, and a repair is derived and applied by the
-worker without anybody being asked. What is left is the deletion — a judgment only a person can
-make, made at the command they gave it — plus `commission_registration`, which queues a capture
-and touches no git at all.
+Everything that used to be decided here is gone with the waiting: an identity a capture introduces
+is born confirmed by whoever captured it, and there is no repair to approve — the elective repair
+loop was removed. What is left is a removal — a judgment only a person can make — and a
+registration, and neither touches git in this process.
 
-The deletion goes through the SAME `repair.apply` door the worker's repairs go through, and lands
-in the same ledger under the same three outcomes. What differs is one field: `actor` names the
-person, which puts their name in the commit's `Approved-by:` trailer where a worker-derived repair
-carries a `Repair:` line instead.
+Both are `capture.queue.submit` calls. The worker performs the removal
+(`librarian.processing.process_delete_item`): it holds the checkout and the credential, and this
+process holds neither. What the person's name buys is the commit's `Approved-by:` trailer and the
+row in the removal ledger (`repair.schema`).
 
-`delete_and_record` takes NO authorization argument: authorization is per-surface, so each door
+Neither function takes an authorization argument: authorization is per-surface, so each door
 decides who may before it calls in — the MCP tool by requiring an unrestricted identity, the
 console by sitting behind its operator token.
 """
@@ -27,8 +26,8 @@ from stigmergy.text import one_line
 
 log = logging.getLogger(__name__)
 
-# The repair ledger's DDL, re-exported for the startup pass in `service.build_service`: this module
-# is where the table is written, so this is where a caller asks for it.
+# The removal ledger's DDL, re-exported for the startup pass in `service.build_service`: this
+# module is the door a removal is asked at, so this is where a caller asks for its table.
 ensure_repair_schema = repair_schema.ensure_repair_schema
 
 

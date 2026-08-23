@@ -14,16 +14,6 @@ INT_SETTINGS = [
     (settings.CONCENTRATION_WINDOW_ENV, settings.DEFAULT_CONCENTRATION_WINDOW,
      "concentration_window"),
     (settings.COMPANY_WINDOW_ENV, settings.DEFAULT_COMPANY_WINDOW, "company_window"),
-    # the sweep's own sample size — validated by the SAME `int_setting` every other count-shaped
-    # threshold above already uses, so it rides the identical parametrized suite below rather than
-    # needing its own copy of every case.
-    (settings.SWEEP_SAMPLE_ENV, settings.DEFAULT_SWEEP_SAMPLE, "sweep_sample"),
-    # The empty-body pass's two bounds (#78). They ride the same parametrized suite for the same
-    # reason the sample size does — one validator, one set of cases — and being LISTED here is
-    # what makes `_clean_env` clear them too: a leftover `STIGMERGY_GARDENER_EMPTY_BODY_CEILING`
-    # in an operator's shell would otherwise decide what the default assertions below see.
-    (settings.EMPTY_BODY_BATCH_ENV, settings.DEFAULT_EMPTY_BODY_BATCH, "empty_body_batch"),
-    (settings.EMPTY_BODY_CEILING_ENV, settings.DEFAULT_EMPTY_BODY_CEILING, "empty_body_ceiling"),
 ]
 
 SHARE_SETTINGS = [
@@ -32,8 +22,7 @@ SHARE_SETTINGS = [
     (settings.COMPANY_SHARE_ENV, settings.DEFAULT_COMPANY_SHARE, "company_share"),
 ]
 
-ALL_ENV_NAMES = [env for env, _default, _field in INT_SETTINGS + SHARE_SETTINGS] + [
-    settings.MODEL_ENV]
+ALL_ENV_NAMES = [env for env, _default, _field in INT_SETTINGS + SHARE_SETTINGS]
 
 
 @pytest.fixture(autouse=True)
@@ -51,10 +40,6 @@ def test_all_defaults_with_nothing_set():
     assert s.concentration_share == settings.DEFAULT_CONCENTRATION_SHARE == 0.6
     assert s.company_window == settings.DEFAULT_COMPANY_WINDOW == 20
     assert s.company_share == settings.DEFAULT_COMPANY_SHARE == 0.3
-    assert s.model == settings.DEFAULT_GARDENER_MODEL == "gpt-5.6-luna"
-    assert s.sweep_sample == settings.DEFAULT_SWEEP_SAMPLE == 10
-    assert s.empty_body_batch == settings.DEFAULT_EMPTY_BODY_BATCH == 8
-    assert s.empty_body_ceiling == settings.DEFAULT_EMPTY_BODY_CEILING == 150
 
 
 def test_from_args_accepts_no_argument_at_all():
@@ -116,48 +101,6 @@ def test_share_setting_accepts_the_upper_bound_exactly(monkeypatch):
     monkeypatch.setenv(settings.CONCENTRATION_SHARE_ENV, "1")
     s = settings.GardenerSettings.from_args()
     assert s.concentration_share == 1.0
-
-
-@pytest.mark.parametrize("env_name", [settings.EMPTY_BODY_BATCH_ENV,
-                                     settings.EMPTY_BODY_CEILING_ENV])
-def test_a_zero_empty_body_bound_is_refused_by_name_with_its_own_reason(monkeypatch, env_name):
-    """`0` is the value that would DISABLE a whole model pass while every run still reported
-    success — the exact "nothing wrong because nothing looked" failure `model-empty-entity-body`
-    exists to end. So the refusal happens at settings time, names the variable, and gives this
-    pass's own sentence rather than the day/window one every other count shares: an operator who
-    set it to zero deliberately has to be told what it would have cost."""
-    monkeypatch.setenv(env_name, "0")
-
-    with pytest.raises(StartupError) as caught:
-        settings.GardenerSettings.from_args()
-
-    message = str(caught.value)
-    assert f"${env_name}" in message
-    assert "no entity page is ever judged for an empty body" in message
-    assert "the run would say nothing was wrong" in message
-
-
-# ── the sweep's own model: a plain string with no format to validate, so it takes neither the
-# int settings' bounds nor the share settings' range ────────────────────────────────────────────
-def test_model_reads_env(monkeypatch):
-    monkeypatch.setenv(settings.MODEL_ENV, "anthropic:claude-haiku-4-5")
-    s = settings.GardenerSettings.from_args()
-    assert s.model == "anthropic:claude-haiku-4-5"
-
-
-def test_model_falls_back_to_the_cheap_class_default_when_unset(monkeypatch):
-    monkeypatch.delenv(settings.MODEL_ENV, raising=False)
-    s = settings.GardenerSettings.from_args()
-    assert s.model == settings.DEFAULT_GARDENER_MODEL
-
-
-def test_model_falls_back_to_the_default_on_an_empty_string_too(monkeypatch):
-    """`os.environ.get(...) or DEFAULT` (not a bare `.get(..., DEFAULT)`) — an explicitly EMPTY
-    env value must not win over the default, the same "empty is not a real override" posture
-    `_int_setting`/`_share_setting` already apply for `raw is None or raw == ''`."""
-    monkeypatch.setenv(settings.MODEL_ENV, "")
-    s = settings.GardenerSettings.from_args()
-    assert s.model == settings.DEFAULT_GARDENER_MODEL
 
 
 def test_settings_is_frozen():

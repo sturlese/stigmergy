@@ -82,7 +82,7 @@ list-level buttons) · Entities (the registry browser — every registered entit
 who introduced it — and **Register an entity**, which commissions a capture: you say what it is,
 the console takes you to that capture, and the entity's page appears here when the librarian files
 it, born confirmed by you; the name is checked live against the registry as you type) ·
-Repairs (the ledger of what the worker already applied, each with the diff that landed, and
+Repairs (the ledger of what has LEFT the corpus, each row with the diff that landed, and
 **Remove pages**) · Gardener ·
 Index (the substrate check runs in-process) · Worker · Jobs (the night shift, read-only — there is
 nothing to dispatch) · Digest (Preview is byte-identical to the post) · Activity.
@@ -96,10 +96,11 @@ Three things worth proving here specifically:
   the worker holds no embedding key. Prove the reporting rather than a button: note each pass's
   last run and its stats, then check them against `job_runs` over the staging DSN. A pass whose
   last run is days old on a healthy worker is the finding.
-- **Repairs is READ-ONLY, and reading it is the point**: the worker derived, applied and
-  recorded each row without anybody approving it, so the diff on the card is prose nobody read
-  before it landed. Read one. An empty ledger is an empty ledger — it proves the route serves,
-  never that a repair applies; the gardener drill below is what makes one appear.
+- **Repairs is READ-ONLY, and reading it is the point**: the worker performed each removal and
+  recorded it, so the diff on the card is prose nobody read before it landed. Read one. An empty
+  ledger is an empty ledger — it proves the route serves, never that a removal lands; the deletion
+  drill below is what makes a row appear. Rows labelled *(retired)* are the elective repair loop's,
+  kept because a deployed database still holds them.
 - **Remove pages decides and writes in the same act**: there is no second click, so the evidence
   is the commit it names PLUS the diffs it hands back — read them. Delete a page something else
   refers to in PROSE, not only in `related:`, or the sweep writer never runs and the step proves
@@ -167,26 +168,18 @@ The index builder (`stigmergy-index --check`) and the queue's own reads (`stigme
 them yourself, with the environment mapped as above (the knowledge-repo commands run from that
 checkout with `--repo .`).
 
-View regeneration is NOT on this list any more: there is no command, and the worker's own sweep
-is the only road — it converges `views/` on its interval and on the first idle tick after it
-changes the corpus. To watch one happen, read `job_runs` for `views-sweep`.
-
 Entity registration is NOT on this list any more: it is a capture like every other write, from the
 console's **Register an entity** or from `brain_submit`, and the worker writes the page.
-
-Neither is a repair: the worker derives and applies them on its own interval, and the Repairs page
-is where you read what it did.
 
 ### The night-shift drill
 
 The passes that used to be crons somebody could dispatch now schedule themselves, so proving they
 work means proving the CHAIN, not clicking anything. Run the gardener by hand once to seed it —
 `.venv/bin/stigmergy-gardener --repo $STIGMERGY_REPO` against the staging DSN — and then leave the
-worker alone for one `STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S` (default an hour).
+worker alone overnight.
 
-Evidence, in order: a `gardener` row in `job_runs` with findings; then a `repair` row after it;
-then rows in `repairs` with status `applied` and a `diff`, each with a commit in the knowledge repo
-carrying `Repair: <check> #<finding>`; then those same repairs on the console's Repairs page.
+Evidence, in order: a `gardener` row in `job_runs` with findings; then those findings on the
+console's Gardener page, grouped by severity, with nothing acting on them.
 
 Two things this drill is specifically looking for, because neither can fail in the test suite:
 

@@ -1,6 +1,6 @@
 """Corpus loading: a knowledge-repo checkout -> index-ready page rows. Pure code, no DB.
 
-Walks the three included zones (`wiki/`, `sources/`, `views/`; `ops/`, `meta/` and `datasets/`
+Walks the two included zones (`wiki/` and `sources/`; `ops/`, `meta/` and `datasets/`
 are deliberately absent), parses each page's frontmatter into the queryable columns of
 `pages_index`, resolves the wikilink graph into per-page inlink counts, and computes the
 `content_hash` the embedding cache is keyed by.
@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 # The content zones, and the ONLY list that governs: a directory absent here is not indexed,
 # which is why `ops/` (the registry, identities, templates) never reaches retrieval. An
 # include-list needs no exclude-list.
-ZONES = ("wiki", "sources", "views")
+ZONES = ("wiki", "sources")
 
 # Wikilink shape shared with the knowledge repo's linter (hand-mirrored, not imported: the
 # linter lives with the content, this parser with the index — packages talk through files, never
@@ -59,7 +59,6 @@ class PageRow:
     mentions: str = ""
     entity_meta: str = ""        # `type: entity` pages' own `role`/`aliases`, tsv-only
     inlinks: int = 0
-    generated_at: str = ""       # a view's own `generated_at` frontmatter (ISO-8601)
     content_hash: str = ""       # sha256 of the embedded text — the embedding-cache key
     # Outbound wikilink targets — two-stage like `inlinks`: `page_row` alone yields raw STEMS;
     # `load_pages` (whole corpus) and the incremental webhook (one query against existing paths)
@@ -272,7 +271,6 @@ def page_row(rel_path: str, zone: str, text: str) -> PageRow:
         tags=" ".join(str(t) for t in tags if t) if isinstance(tags, list) else "",
         mentions=_mentions_text(fm),
         entity_meta=_entity_meta_text(fm, page_type),
-        generated_at=str(fm.get("generated_at", "") or ""),
         content_hash=content_hash(f"{fm.get('title', '') or stem}\n{body}"),
         links=link_targets(text),
     )
@@ -282,14 +280,10 @@ def by_stem_index(paths: list[str]) -> dict[str, list[str]]:
     """`stem -> [matching paths]` — the wikilink-resolution index both `load_pages` (in-memory
     walk) and the webhook (`store.existing_paths` snapshot) key off: one algorithm, two snapshots.
 
-    `views/` paths are never link TARGETS: a view is derived — nobody authors or wikilinks it —
-    and its filename is the entity ID, which collides case-insensitively with the Title-Case
-    entity page's stem. Excluding the zone keeps `[[Entity]]` resolving to exactly the entity
-    page; the knowledge repo's linter states the same rule at its end."""
+Every indexed page is a link target: both zones hold pages somebody authored or the
+    worker filed from captured material, and each is named by a stem a wikilink can spell."""
     index: dict[str, list[str]] = {}
     for path in paths:
-        if path.split("/", 1)[0] == "views":
-            continue
         index.setdefault(Path(path).stem.lower(), []).append(path)
     return index
 

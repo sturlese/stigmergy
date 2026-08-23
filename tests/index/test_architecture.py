@@ -3,7 +3,7 @@
 `stigmergy.index` shares no code with the packages that produce what it indexes: it reads the
 repo and nothing else, so a change to how pages are written can never silently change what
 gets indexed. The rule worth pinning is **the index reaches for no writer** (`librarian`,
-`entities`, `views`, `capture`). `stigmergy.kernel` is deliberately outside that rule: a
+`entities`, `capture`). `stigmergy.kernel` is deliberately outside that rule: a
 dependency-free module at the bottom of the stack can be imported by everyone precisely because
 it imports no one.
 
@@ -17,7 +17,7 @@ import pytest
 
 SRC = pathlib.Path(__file__).resolve().parents[2] / "src" / "stigmergy"
 INDEX_SOURCES = sorted(p for p in (SRC / "index").rglob("*.py"))
-_WRITERS = ("stigmergy.librarian", "stigmergy.entities", "stigmergy.views", "stigmergy.capture")
+_WRITERS = ("stigmergy.librarian", "stigmergy.entities", "stigmergy.capture")
 
 
 def _module_level_imports(path: pathlib.Path) -> list[tuple[str, int]]:
@@ -49,7 +49,7 @@ def test_sources_found():
 @pytest.mark.parametrize("path", INDEX_SOURCES, ids=lambda p: str(p.relative_to(SRC)))
 def test_the_index_never_imports_a_writer(path):
     """The index is BUILT from the repo, never from a writer's in-memory state. A reach into
-    `librarian`/`entities`/`views`/`capture` would make the derived cache depend on the thing
+    `librarian`/`entities`/`capture` would make the derived cache depend on the thing
     it is derived from, which is how "the index is a cache; git is the record" stops being true."""
     offenders = [f"{path.relative_to(SRC)}:{line} -> {mod}"
                  for mod, line in _all_imports(path) if mod.startswith(_WRITERS)]

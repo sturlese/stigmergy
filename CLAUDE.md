@@ -3,7 +3,7 @@
 This repository holds the **code**: the durable capture queue and the doors that fill it, the
 librarian service that drains it, the hybrid index builder, the single MCP server (the only API)
 and the answering half behind its `ask`, the entity-birth rules the librarian writes through, the
-Slack transport, the meeting distiller, the view layer, the gardener, the weekly digest, the admin
+Slack transport, the view layer, the gardener, the admin
 console, `docker-compose` for the local test stack, and the evals.
 
 **This repo never stores pages.** Knowledge content lives in a separate git repository — the
@@ -44,7 +44,7 @@ Not style — these are enforced, and the enforcement is where to look when one 
 | Every reader of `pages_index` names an ACL predicate, or is a listed exception | same file |
 | No exception list keeps an entry that has stopped being used | same file, the pruning tests |
 | The UNTRUSTED-DATA fence is built in `stigmergy.text` only | same file |
-| The frozen contract linter and the frozen meeting brief match the knowledge repo's own | `tests/librarian/test_frozen_linter.py`, `test_meeting_brief_contract.py` |
+| The frozen contract linter and the frozen librarian brief match the knowledge repo's own | `tests/librarian/test_frozen_linter.py`, `test_librarian_brief_contract.py` |
 | The diff the nine gates approved is the diff that lands | `gitcmd.commit(gated_entries=…)` + `tests/librarian/test_gitcmd_unit.py` |
 | `server.acl.visible()` is the ONE place read access is decided, and the only implementation of it | `server/acl.py`, `tests/test_contract_parity.py` |
 | The librarian reaches `stigmergy.entities` from `librarian/identity.py` only, and only for the birth fold, the generator and its errors — the birth writer is the one seam between filing and identity | `tests/test_architecture.py`, a named exception with its own pruning test |

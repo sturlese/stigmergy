@@ -7,7 +7,6 @@ module in the package that imports `stigmergy.index.store` — every other modul
 plain argument.
 """
 import argparse
-import asyncio
 import sys
 
 from stigmergy.capture import schema as capture_schema
@@ -40,7 +39,7 @@ def _connect(args):
 def _repo(args) -> str:
     """WHERE only — deliberately NOT paired with `librarian_config.is_repo_checkout`, which is
     what a command that has to write to the checkout adds. The gardener never commits, so it does
-    not need a git checkout, only a readable copy of the registry and the views;
+    not need a git checkout, only a readable copy of the registry and the pages;
     `run._require_repo` states that weaker requirement, and states it for every caller of
     `run_gardener`, not just this one."""
     return librarian_config.repo_path(args.repo)
@@ -49,13 +48,13 @@ def _repo(args) -> str:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="stigmergy-gardener",
-        description="Deterministic corpus-health checks plus a bounded model sweep, run on "
-                    "demand: findings persisted, a severity-grouped report printed.")
+        description="Deterministic corpus-health checks, run on demand: findings persisted, a "
+                    "severity-grouped report printed.")
     ap.add_argument("--dsn", default=None,
                     help=f"Postgres DSN (default: ${store.DSN_ENV} or {store.DSN_DEFAULT})")
     ap.add_argument("--repo", default=None,
-                    help=f"your clone of the knowledge repo, for the entity registry and view "
-                         f"staleness (default: ${librarian_config.REPO_ENV} or "
+                    help=f"your clone of the knowledge repo, for the entity registry and the "
+                         f"corpus (default: ${librarian_config.REPO_ENV} or "
                          f"{librarian_config.REPO_DEFAULT})")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     return ap
@@ -64,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _run(conn, args) -> int:
     settings = GardenerSettings.from_args(args)   # may raise StartupError — a bad threshold env
     repo = _repo(args)
-    result = asyncio.run(run.run_gardener(conn, repo=repo, settings=settings))
+    result = run.run_gardener(conn, repo=repo, settings=settings)
 
     if args.json:
         print(report.render_json(result.findings))
@@ -72,43 +71,12 @@ def _run(conn, args) -> int:
         print(report.render_report(
             run_id=result.run_id, completed_at=result.completed_at,
             pages_checked=result.pages_checked, entities_checked=result.entities_checked,
-            findings=result.findings,
-            sweep_summary=report.sweep_summary_text(
-                result.sweep_changed_count, result.sweep_sampled_count,
-                result.empty_body_judged_count, result.duplicate_entity_judged_count,
-                sweep_failed=bool(result.sweep_error)),
-            sweep_failed=bool(result.sweep_error),
-            # EVERY pass reaches the report, and its ceiling with it: the second pass used to
-            # exist only in `job_runs.stats` and the log, so a run whose entity-body pass died on
-            # batch 3 of 5 printed a corpus line that read like a normal run.
-            empty_body_failed=bool(result.empty_body_error),
-            empty_body_deferred=result.empty_body_deferred_count,
-            duplicate_entity_failed=bool(result.duplicate_entity_error),
-            duplicate_entity_deferred=result.duplicate_entity_deferred_count), end="")
+            findings=result.findings), end="")
 
-    # The three model passes fail independently; every one of them leaves the already-committed
-    # report above intact.
-    failed = False
-    if result.sweep_error:
-        _err(f"the model sweep failed ({result.sweep_error}) — the {len(result.findings)} "
-            f"finding(s) above are complete and already saved; the sweep pass produced zero "
-            f"findings this run and will run again next time. See job_runs for this run's "
-            f"recorded outcome.")
-        failed = True
-    if result.empty_body_error:
-        _err(f"the entity-body sweep failed ({result.empty_body_error}) — the "
-            f"{len(result.findings)} finding(s) above are complete and already saved; the entity "
-            f"pages it had not judged yet were not judged this run, and it will run again next "
-            f"time. See job_runs for this run's recorded outcome.")
-        failed = True
-    if result.duplicate_entity_error:
-        _err(f"the identity sweep failed ({result.duplicate_entity_error}) — the "
-            f"{len(result.findings)} finding(s) above are complete and already saved; NO registered "
-            f"entity was compared against another this run (that pass is one call over the whole "
-            f"registry), and it will run again next time. See job_runs for this run's recorded "
-            f"outcome.")
-        failed = True
-    return EXIT_ERROR if failed else 0
+    # Findings are data, not errors: a run that completed exits 0 however much it found. A run
+    # that could NOT complete raised, and `main` below is what turns that into a non-zero exit —
+    # there is no partial outcome left to report here.
+    return 0
 
 
 def main(argv=None) -> int:

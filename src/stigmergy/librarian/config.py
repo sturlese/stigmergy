@@ -52,33 +52,6 @@ DEFAULT_GATHER_EXCERPT_LINES = 20
 
 DEFAULT_POLL_INTERVAL_S = 3.0
 
-# ── the periodic view sweep ───────────────────────────────────────────────────────────────────
-# The worker's one maintenance pass: it converges `views/` to the corpus from STATE, so a view is
-# never stale whatever door wrote the page. It runs on the idle branch (the queue is empty) but on
-# its OWN clock — an empty queue polls every few seconds, and the pass costs a corpus parse.
-VIEW_SWEEP_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S"
-DEFAULT_VIEW_SWEEP_INTERVAL_S = 900.0
-# `0` is a real setting, not a broken one: it turns the pass off, leaving the post-meeting hook as
-# the only road — which converges nothing else, so `views/` then goes stale and stays stale. The
-# switch to reach for while somebody investigates something, never a steady state.
-VIEW_SWEEP_OFF = 0.0
-
-# How many entities ONE pass may regenerate or remove. #69's lesson, applied to a second unattended
-# loop: N changed entities are N model calls, and until this existed nothing bounded them. The
-# surplus is not lost — the pass recomputes its population from state, so whatever it defers is
-# still divergent when the next one starts.
-VIEW_SWEEP_CEILING_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING"
-DEFAULT_VIEW_SWEEP_CEILING = 10
-
-# The worker's SECOND maintenance pass: it answers the gardener's findings by deriving
-# repairs and applying them. Same idle branch, same "on its own clock" reasoning, and a longer
-# default because what it answers arrives once a night — a pass costs model calls, and there is
-# nothing new to answer between two gardener runs. The pass has its own watermark on top of this
-# interval, so a shorter one does not mean re-answering the same findings; it means noticing a new
-# gardener run sooner.
-REPAIR_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S"
-DEFAULT_REPAIR_INTERVAL_S = 3600.0
-
 # The night shift's two daily passes, as "HH:MM" UTC. They replaced scheduled crons
 # calling an HTTP endpoint with a token: a pass that runs INSIDE the worker cannot fire while a
 # capture is being filed, and needs no credential that could be used for anything else.
@@ -92,10 +65,6 @@ DAILY_OFF = "off"
 # How long a terminal row keeps its payload. Shared with `stigmergy-capture purge`'s own default,
 # so the nightly pass and the hand-run command cannot disagree about what "the window" is.
 RETENTION_DAYS_ENV = "STIGMERGY_RETENTION_DAYS"
-# `0` turns the pass off, exactly as `VIEW_SWEEP_OFF` does — and it is the setting a deployment
-# uses to stop the corpus repairing itself while somebody investigates something.
-REPAIR_PASS_OFF = 0.0
-
 # The retry-collapse window (`dedup`'s level 1): identical content from the same submitter
 # inside this many seconds is a RETRY of one capture, not a second one.
 DEFAULT_DEDUP_WINDOW_S = 600
@@ -283,13 +252,6 @@ class Settings:
     max_attempts: int = queue.DEFAULT_MAX_ATTEMPTS
     dedup_window_s: int = DEFAULT_DEDUP_WINDOW_S
 
-    # the periodic view sweep (see the constants above)
-    view_sweep_interval_s: float = DEFAULT_VIEW_SWEEP_INTERVAL_S
-    view_sweep_ceiling: int = DEFAULT_VIEW_SWEEP_CEILING
-
-    # the periodic repair pass (see the constants above); its own ceilings live in
-    # `repair.settings`, which the pass reads from the environment when it runs
-    repair_interval_s: float = DEFAULT_REPAIR_INTERVAL_S
 
     # the night shift's daily passes — "HH:MM" UTC, or DAILY_OFF
     garden_at: str = schedule.DEFAULT_GARDEN_AT
@@ -344,12 +306,6 @@ class Settings:
             max_attempts=int(flag("max_attempts", cls.max_attempts)),
             dedup_window_s=int(os.environ.get("STIGMERGY_LIBRARIAN_DEDUP_WINDOW_S",
                                               cls.dedup_window_s)),
-            view_sweep_interval_s=float(os.environ.get(VIEW_SWEEP_INTERVAL_ENV,
-                                                       cls.view_sweep_interval_s)),
-            view_sweep_ceiling=int(os.environ.get(VIEW_SWEEP_CEILING_ENV,
-                                                  cls.view_sweep_ceiling)),
-            repair_interval_s=float(os.environ.get(REPAIR_INTERVAL_ENV,
-                                                   cls.repair_interval_s)),
             garden_at=os.environ.get(GARDEN_AT_ENV, cls.garden_at),
             retention_at=os.environ.get(RETENTION_AT_ENV, cls.retention_at),
             retention_days=int(os.environ.get(RETENTION_DAYS_ENV, cls.retention_days)),
@@ -379,53 +335,6 @@ class Settings:
                 f"max_attempts is {self.max_attempts}, so every delivery would already be "
                 f"exhausted and the queue would fail each item on its first claim; pass "
                 f"--max-attempts 1 or more (default {queue.DEFAULT_MAX_ATTEMPTS})")
-        # A NEGATIVE interval is the out-of-domain one, not zero: zero is the documented off
-        # switch, while a negative value would make every idle tick "due" and turn a corpus parse
-        # plus a fresh worktree into the poll loop.
-        if float(self.view_sweep_interval_s) < VIEW_SWEEP_OFF:
-            raise LibrarianConfigError(
-                f"view_sweep_interval_s is {self.view_sweep_interval_s}, which would run the "
-                f"periodic view sweep on every idle poll — a corpus parse and a fresh worktree "
-                f"every few seconds. Set ${VIEW_SWEEP_INTERVAL_ENV} to a positive number of "
-                f"seconds (default {DEFAULT_VIEW_SWEEP_INTERVAL_S}), or to "
-                f"{VIEW_SWEEP_OFF:g} to turn the sweep off")
-        # The damage the branch above describes is reachable from INSIDE its domain: the pass is
-        # due at most once per idle poll, so any interval below the poll interval means every idle
-        # tick, which is the "corpus parse and a fresh worktree every few seconds" already named
-        # there. `0.9` for `900` is the typo that gets there, and it is not a fault the value's
-        # sign can catch.
-        if VIEW_SWEEP_OFF < float(self.view_sweep_interval_s) < float(self.poll_interval_s):
-            raise LibrarianConfigError(
-                f"view_sweep_interval_s is {self.view_sweep_interval_s}, which is below the "
-                f"{self.poll_interval_s}s poll interval — the sweep is due at most once per idle "
-                f"poll, so anything under that runs it on EVERY one: a corpus parse and a fresh "
-                f"worktree every few seconds. Set ${VIEW_SWEEP_INTERVAL_ENV} to at least "
-                f"{self.poll_interval_s:g} (default {DEFAULT_VIEW_SWEEP_INTERVAL_S}), or to "
-                f"{VIEW_SWEEP_OFF:g} to turn the sweep off")
-        if int(self.view_sweep_ceiling) < 1:
-            raise LibrarianConfigError(
-                f"view_sweep_ceiling is {self.view_sweep_ceiling}, so every pass would defer "
-                f"every entity and no view would ever be regenerated — a silently useless loop. "
-                f"Set ${VIEW_SWEEP_CEILING_ENV} to 1 or more (default "
-                f"{DEFAULT_VIEW_SWEEP_CEILING}), or turn the sweep off with "
-                f"${VIEW_SWEEP_INTERVAL_ENV}={VIEW_SWEEP_OFF:g}")
-        # The repair pass's own domain, and BOTH halves of the sweep's argument apply to it
-        # unchanged — a negative interval makes every idle tick due, and one below the poll
-        # interval means every idle tick anyway. What it costs here is not a corpus parse but a
-        # gardener read per poll, and, on any tick where a new gardener run exists, model calls.
-        if float(self.repair_interval_s) < REPAIR_PASS_OFF:
-            raise LibrarianConfigError(
-                f"repair_interval_s is {self.repair_interval_s}, which would run the periodic "
-                f"repair pass on every idle poll. Set ${REPAIR_INTERVAL_ENV} to a positive number "
-                f"of seconds (default {DEFAULT_REPAIR_INTERVAL_S}), or to {REPAIR_PASS_OFF:g} to "
-                f"turn the pass off")
-        if REPAIR_PASS_OFF < float(self.repair_interval_s) < float(self.poll_interval_s):
-            raise LibrarianConfigError(
-                f"repair_interval_s is {self.repair_interval_s}, which is below the "
-                f"{self.poll_interval_s}s poll interval — the pass is due at most once per idle "
-                f"poll, so anything under that asks the gardener's tables on EVERY one. Set "
-                f"${REPAIR_INTERVAL_ENV} to at least {self.poll_interval_s:g} (default "
-                f"{DEFAULT_REPAIR_INTERVAL_S}), or to {REPAIR_PASS_OFF:g} to turn the pass off")
 
     # ── the three repo-sourced inputs: where they live IN A CHECKOUT ──────────────────────────
     # Locations, not reads — the fast lane opens none of them, reading all three at `base.sha`.

@@ -1,12 +1,13 @@
 """Runtime configuration for `stigmergy-gardener` — env-tunable settings, never CLI flags.
+Every setting here is a threshold a deterministic check measures against; the gardener asks no
+model, so it reads no model name and holds no model budget.
 `GardenerSettings.from_args` is the ONE place the environment is consulted; modules never read it
 at import time. `dsn`/`repo` are deliberately not here — connection/location arguments, not
 tunable behaviour.
 
 The threshold-literal ban is grep-asserted (`tests/test_architecture.py`): no threshold literal
 may appear outside this module, so a hardcoded comparison unreachable by any env override fails
-the suite. The digest channel is declared HERE and `digest.settings` imports the constant —
-one channel, one spelling.
+the suite.
 """
 import os
 from dataclasses import dataclass
@@ -31,92 +32,24 @@ COMPANY_SHARE_ENV = "STIGMERGY_GARDENER_COMPANY_SHARE"
 DEFAULT_COMPANY_SHARE = 0.3
 
 
-# ── the digest channel — `digest.settings` imports THIS name, never a second literal ──────────
-# Declared here, read nowhere in this package: the gardener posts nothing and holds no Slack
-# credential. It is the shared spelling `digest.settings` funnels every digest module through,
-# alongside `int_setting` below.
-DIGEST_CHANNEL_ID_ENV = "STIGMERGY_DIGEST_CHANNEL_ID"
-
-# ── the model sweep's own configuration ───────────────────────────────────────────────────────
-MODEL_ENV = "STIGMERGY_GARDENER_MODEL"
-# A cheap-class default of its own, so the sweep never silently rides the shared `CLEAN_MODEL`;
-# `$STIGMERGY_GARDENER_MODEL` is how an operator disagrees.
-DEFAULT_GARDENER_MODEL = "gpt-5.6-luna"
-
-SWEEP_SAMPLE_ENV = "STIGMERGY_GARDENER_SWEEP_SAMPLE"
-DEFAULT_SWEEP_SAMPLE = 10
-
-# How many CHANGED pages one editorial sweep may carry — the bound the pass's own population
-# never had (issue #101): "changed since the watermark" is unbounded, and on a first run or after
-# a cron outage it is the whole corpus, in one prompt, whose failure freezes the watermark that
-# would shrink it. The overflow is never lost — it joins the unchanged pool, where the rotating
-# sample reaches it — so this bounds how fast the changed stream is prioritized, not whether a
-# page is ever judged. Sized well above an ordinary night's filings.
-SWEEP_CHANGED_CEILING_ENV = "STIGMERGY_GARDENER_SWEEP_CHANGED_CEILING"
-DEFAULT_SWEEP_CHANGED_CEILING = 30
-
-# ── the empty-body pass's own two bounds ─────────────────────────────────────────────────────
-# Deliberately NOT a sample size: that pass covers its whole population (entity pages are a
-# bounded set), so these two bound the model SPEND over it rather than choosing which pages are
-# looked at. The batch is how many entity bodies ride one call; the ceiling is how many pages one
-# run may judge at all, and when it binds the run records what it deferred instead of truncating
-# in silence.
-EMPTY_BODY_BATCH_ENV = "STIGMERGY_GARDENER_EMPTY_BODY_BATCH"
-DEFAULT_EMPTY_BODY_BATCH = 8
-# The batch is the ONLY thing standing between the whole entity-page population and a single model
-# call, so it is the one count here with a ceiling of its own: a floor alone would let `=100000`
-# put every body in one prompt, which is the failure batching exists to prevent. The run ceiling
-# needs no such bound — raising it adds calls, never enlarges one. This figure is a blast-radius
-# bound, deliberately well above any batch worth setting, not a recommendation: it exists to make
-# the catastrophic value impossible, and an operator who wants 8 or 20 is choosing on other
-# grounds entirely.
-MAX_EMPTY_BODY_BATCH = 64
-
-EMPTY_BODY_CEILING_ENV = "STIGMERGY_GARDENER_EMPTY_BODY_CEILING"
-DEFAULT_EMPTY_BODY_CEILING = 150
-
-# ── the duplicate-identity pass's ONE bound ──────────────────────────────────────────────────
-# One bound rather than the pair above, and the absence of a batch size is the decision: that pass
-# asks whether TWO registry entries are one entity, and a pair whose halves fell in different
-# batches is invisible to every batch. So its population rides ONE prompt and the only thing to
-# bound is how large that population may be — `sweep.MAX_DUPLICATE_ENTITY_PROMPT_CHARS` bounds what
-# each entry contributes to it. Lower than the empty-body ceiling for the same arithmetic reason:
-# every entry is co-present in one call rather than spread over batches of eight.
-DUPLICATE_ENTITY_CEILING_ENV = "STIGMERGY_GARDENER_DUPLICATE_ENTITY_CEILING"
-DEFAULT_DUPLICATE_ENTITY_CEILING = 120
-
-# Hand-mirrored from `stigmergy.slack.settings.BOT_TOKEN_ENV`, not imported — importing it would
-# pull the whole `server.settings` surface in; if that value ever moves, move this with it.
-# Read nowhere in this package, for the reason `DIGEST_CHANNEL_ID_ENV` above states: it sits here
-# because `digest.settings` is the one funnel into this module and re-exports it.
-SLACK_BOT_TOKEN_ENV = "SLACK_BOT_TOKEN"
-
-
-# What a zero or negative value would do to THIS package's arithmetic. `digest.settings` shares the
-# validator and passes its own, because one sentence general enough for both would say nothing an
-# operator could act on.
+# What a zero or negative value would do to THIS package's arithmetic. Callers pass their own
+# `why`, because one sentence general enough for every count would say nothing an operator could
+# act on.
 _POSITIVE_COUNT_WHY = ("a zero or negative day/window count makes every page/filing instantly past "
                        "threshold.")
-
-# The empty-body pass's own sentence: its two counts are not thresholds a page is measured against
-# but bounds on how much of the population gets judged, and zero would silently disable a whole
-# model pass while every run still reported success.
-_EMPTY_BODY_COUNT_WHY = ("a zero or negative batch size or run ceiling means no entity page is "
-                         "ever judged for an empty body, and the run would say nothing was wrong.")
-
-# The duplicate-identity pass's own sentence. Its ceiling is not a threshold either, and zero
-# there is worse than a disabled pass: a run would report no duplicate identities for a registry
-# nothing compared.
-_DUPLICATE_ENTITY_COUNT_WHY = (
-    "a zero or negative run ceiling means no registered entity is ever compared against another, "
-    "and the run would say the registry holds no duplicate identity.")
 
 
 def int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY,
                 maximum: int | None = None) -> int:
     """A positive whole number from the environment, or `default`. `maximum`, when a setting has
     one, is refused at startup rather than absorbed: a count with a floor and no ceiling is only
-    half-validated, and the settings that need one say why at their call site."""
+    half-validated.
+
+    No setting in THIS module passes `maximum` any more — the one that did bounded a retired model
+    pass's batch. It stays because this validator has a second, declared copy in
+    `repair.settings._int_setting`, whose settings do use it, and `tests/repair/test_settings_parity.py`
+    drives the same rules through both: the rule lives here, so dropping the parameter here would
+    leave the twin enforcing something its stated original no longer knows about."""
     raw = os.environ.get(env_name)
     if raw is None or raw == "":
         return default
@@ -161,12 +94,6 @@ class GardenerSettings:
     concentration_share: float = DEFAULT_CONCENTRATION_SHARE
     company_window: int = DEFAULT_COMPANY_WINDOW
     company_share: float = DEFAULT_COMPANY_SHARE
-    model: str = DEFAULT_GARDENER_MODEL
-    sweep_sample: int = DEFAULT_SWEEP_SAMPLE
-    sweep_changed_ceiling: int = DEFAULT_SWEEP_CHANGED_CEILING
-    empty_body_batch: int = DEFAULT_EMPTY_BODY_BATCH
-    empty_body_ceiling: int = DEFAULT_EMPTY_BODY_CEILING
-    duplicate_entity_ceiling: int = DEFAULT_DUPLICATE_ENTITY_CEILING
 
     @classmethod
     def from_args(cls, args=None) -> "GardenerSettings":
@@ -180,16 +107,4 @@ class GardenerSettings:
                                                DEFAULT_CONCENTRATION_SHARE),
             company_window=int_setting(COMPANY_WINDOW_ENV, DEFAULT_COMPANY_WINDOW),
             company_share=_share_setting(COMPANY_SHARE_ENV, DEFAULT_COMPANY_SHARE),
-            model=os.environ.get(MODEL_ENV) or DEFAULT_GARDENER_MODEL,
-            sweep_sample=int_setting(SWEEP_SAMPLE_ENV, DEFAULT_SWEEP_SAMPLE),
-            sweep_changed_ceiling=int_setting(SWEEP_CHANGED_CEILING_ENV,
-                                              DEFAULT_SWEEP_CHANGED_CEILING),
-            empty_body_batch=int_setting(EMPTY_BODY_BATCH_ENV, DEFAULT_EMPTY_BODY_BATCH,
-                                         why=_EMPTY_BODY_COUNT_WHY,
-                                         maximum=MAX_EMPTY_BODY_BATCH),
-            empty_body_ceiling=int_setting(EMPTY_BODY_CEILING_ENV, DEFAULT_EMPTY_BODY_CEILING,
-                                           why=_EMPTY_BODY_COUNT_WHY),
-            duplicate_entity_ceiling=int_setting(DUPLICATE_ENTITY_CEILING_ENV,
-                                                 DEFAULT_DUPLICATE_ENTITY_CEILING,
-                                                 why=_DUPLICATE_ENTITY_COUNT_WHY),
         )

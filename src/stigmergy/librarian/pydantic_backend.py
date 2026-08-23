@@ -1,5 +1,4 @@
-"""BOTH flows on pydantic-ai: an ITERATING ordinary run with five tools, one structured meeting
-call.
+"""The filing agent on pydantic-ai: one ITERATING run with five tools.
 
 Deterministic code may SEED context and IMPLEMENT tools; it must not replace the judgment that
 decides when the context is not enough. The gatherer is therefore NOT here — `processing` gathers
@@ -18,7 +17,9 @@ import json
 import logging
 import os
 import threading
-from typing import Literal, get_origin
+import types
+import typing
+from typing import Literal, get_args, get_origin
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -34,9 +35,7 @@ log = logging.getLogger(__name__)
 
 BACKEND_NAME = "pydantic"
 
-# How many times the FRAMEWORK may re-ask the model. On the MEETING flow this is read twice on
-# purpose — retry budget AND request ceiling — and the two must agree, or the ceiling either
-# strangles a legitimate re-validation or bounds nothing.
+# How many times the FRAMEWORK may re-ask the model when its own output validation refuses.
 OUTPUT_RETRIES = 1
 
 # How much of an `UnexpectedModelBehavior` message reaches the corrective retry's Finding, as ONE
@@ -100,7 +99,7 @@ def prompt_cache_settings(model: str, prompt_cache: str) -> dict | None:
 # `FilingAccount` is NOT wired as an `output_type` today: the ordinary run's account comes home as a
 # file (see the `Agent(...)` construction in `run`, which passes none on purpose — a structured one
 # would ask for the account twice, in two shapes). Its validator therefore guards the structured
-# ordinary road only if one is ever enabled; `MeetingAccount` is the one that runs.
+# ordinary road only if one is ever enabled.
 
 
 def _needed(field: str, instead: str) -> str:
@@ -110,13 +109,33 @@ def _needed(field: str, instead: str) -> str:
     return f"`{field}` is required and came back empty. {instead}"
 
 
+# The two spellings a union arrives under — `X | None` and `typing.Optional[X]` — so unwrapping
+# one is not a different answer from unwrapping the other.
+_UNION_ORIGINS = (types.UnionType, typing.Union)
+
+
 def _wants_structure(annotation) -> bool:
-    """Is this field DECLARED as a structure — a list or a nested model? The shield that keeps
-    `StructuredInbound` away from content: a `str` field's prose is never decoded, however
-    JSON-shaped it looks, because its annotation says prose."""
-    if get_origin(annotation) in (list, dict):
-        return True
-    return isinstance(annotation, type) and issubclass(annotation, BaseModel)
+    """Is this field DECLARED as a structure — a list, a mapping or a nested model? The shield that
+    keeps `StructuredInbound` away from content: a `str` field's prose is never decoded, however
+    JSON-shaped it looks, because its annotation says prose.
+
+    **A UNION is unwrapped before the question is asked**, and that is not a refinement: an
+    OPTIONAL nested model (`OrdinaryAnchoring | None`) is neither a `list`/`dict` origin nor a
+    `type`, so a union-annotated field answered `False` and was the one nested structure this
+    shield did not cover — on `OrdinaryPage.anchoring`, which is the field a multi-page filing
+    depends on most. A provider that serializes it as its JSON string would have had the account
+    refused, its one output retry burned on a serialization quirk, and the per-page anchor lost.
+    """
+    members = (get_args(annotation)
+               if get_origin(annotation) in _UNION_ORIGINS else (annotation,))
+    for member in members:
+        if member is type(None):
+            continue
+        if get_origin(member) in (list, dict):
+            return True
+        if isinstance(member, type) and issubclass(member, BaseModel):
+            return True
+    return False
 
 
 class StructuredInbound(BaseModel):
@@ -125,7 +144,7 @@ class StructuredInbound(BaseModel):
     its JSON STRING. Measured directly (2026-08-19): GLM-5.2 through OpenRouter returned
     `triage='{}'` — the string — so validation failed, the framework's single output retry
     burned on a SERIALIZATION quirk, and the model's second attempt flattened the account into
-    empty lists that validated: the filing golden's meeting captures filed with decisions 0/2.
+    empty lists that validated: the filing golden's transcript captures filed with decisions 0/2.
 
     INBOUND ONLY, structured fields only, and never at correctness's expense: a bracketed
     string on a field whose annotation is a list or nested model is `json.loads`ed; anything
@@ -149,46 +168,6 @@ class StructuredInbound(BaseModel):
                 except ValueError:
                     pass
         return out
-
-
-# ── the one shape BOTH accounts declare ───────────────────────────────────────────────────────
-# An edit means the same thing on either flow — `agent._parse_edits` bounds it once,
-# `edits.apply_declared` performs it once and `gate_body_rewrite` judges it once — so the two
-# accounts name ONE model rather than each carrying its own idea of what an edit is. The name is
-# the ordinary account's, from the flow that had the field first.
-class OrdinaryEdit(StructuredInbound):
-    """One DECLARED edit to a page that already exists — performed by the worker, never by this
-    agent (`edits.py`)."""
-    path: str = ""
-    kind: str = ""
-    link: str = ""
-    note: str = ""
-
-
-class MeetingAnchoring(StructuredInbound):
-    """One decision's own anchor. `kind` is `entity` (with `entities`) or `company` (with a written
-    `reason`); the registry, not this schema, decides whether a name resolves."""
-    kind: str = ""
-    reason: str = ""
-    entities: list[str] = Field(default_factory=list)
-
-
-class MeetingDecision(StructuredInbound):
-    """One decision page's content — a title, a drafted body, and its OWN anchor."""
-    title: str = ""
-    body: str = ""
-    anchoring: MeetingAnchoring = Field(default_factory=MeetingAnchoring)
-
-
-class MeetingActionItem(StructuredInbound):
-    owner: str = ""
-    action: str = ""
-    done: bool = False
-
-
-class MeetingFinding(StructuredInbound):
-    """A steering attempt the agent noticed. Only `category` travels — never the payload."""
-    category: str = ""
 
 
 # These docstrings are the JSON-schema DESCRIPTIONS the model reads, not notes to a reader here.
@@ -229,53 +208,6 @@ class EntityUpdate(StructuredInbound):
     connections: list[str] = Field(default_factory=list)
 
 
-class MeetingAccount(StructuredInbound):
-    """The whole account of one meeting: `decision` is `file` (the one decision there is), and
-    the rest is the page set's CONTENT — never a page path, because code decides every path in
-    this flow.
-
-    **Given the SAME treatment as `FilingAccount`, on a flow where the defect had not fired yet.**
-    The mechanism is identical — a defaulted `decision` means the framework's output validation
-    accepts a half-empty account, its own retries never run, and `parse_meeting_outcome` refuses
-    downstream having spent the worker's one corrective pass. The meeting flow has real passing
-    runs (the terra trial, the golden's two meeting captures), so this is not a fix for an observed
-    failure; it is closing a known mechanism on two samples' worth of evidence, which this
-    repository's own rule about untested rules asks for. It costs a passing run nothing: a complete
-    account satisfies both, and an incomplete one is repaired one road earlier.
-    """
-    decision: Literal[*agent_module.DECISIONS]
-    meeting_title: str = ""
-    attendees: list[str] = Field(default_factory=list)
-    meeting_notes: str = ""
-    action_items: list[MeetingActionItem] = Field(default_factory=list)
-    decisions: list[MeetingDecision] = Field(default_factory=list)
-    edits: list[OrdinaryEdit] = Field(default_factory=list)
-    summary: str = ""
-    findings: list[MeetingFinding] = Field(default_factory=list)
-    new_entities: list[NewEntity] = Field(default_factory=list)
-    new_aliases: list[NewAlias] = Field(default_factory=list)
-    entity_updates: list[EntityUpdate] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _complete_for_its_decision(self):
-        """`FilingAccount._complete_for_its_decision`'s twin, mirroring
-        `agent.parse_meeting_outcome`'s required-field rules and no others."""
-        if not (self.meeting_title or "").strip():
-            raise ValueError(_needed(
-                "meeting_title",
-                "It names the meeting page the worker is about to write, and the drop's own "
-                "title hint is not a substitute for what the transcript turned out to be."))
-        for n, decided in enumerate(self.decisions, start=1):
-            if not (decided.title or "").strip():
-                raise ValueError(_needed(
-                    f"decisions[{n - 1}].title",
-                    "Every decision you describe becomes its own page, and the title is that "
-                    "page's name — decision number "
-                    f"{n} has none."))
-        _complete_proposals(self.new_entities)
-        return self
-
-
 # ── the ORDINARY account, as a schema instead of a file ───────────────────────────────────────
 # Same mirror discipline, minus fields this backend must not declare: `page_path` (a field the
 # model could fill is a path the model could steer) and top-level `title`/`page_type` (two
@@ -303,6 +235,18 @@ class OrdinaryPage(StructuredInbound):
     links: list[str] = Field(default_factory=list)
 
 
+class OrdinaryRewrite(StructuredInbound):
+    """One existing page this capture brings up to date: where it is, its whole new body, and WHY.
+
+    `why` is not decoration — it is what the page's own author is told when somebody else's capture
+    changes what they wrote. A rewrite with no reason is a silent overwrite, which is the one thing
+    this may never be: nothing proves the new text is right, so the whole trade rests on the change
+    being loud and having an owner."""
+    path: str = ""
+    body: str = ""
+    why: str = ""
+
+
 class OrdinaryOverlap(StructuredInbound):
     path: str = ""
     note: str = ""
@@ -325,7 +269,7 @@ class FilingAccount(StructuredInbound):
     anchoring: OrdinaryAnchoring = Field(default_factory=OrdinaryAnchoring)
     links_created: list[str] = Field(default_factory=list)
     overlaps: list[OrdinaryOverlap] = Field(default_factory=list)
-    edits: list[OrdinaryEdit] = Field(default_factory=list)
+    rewrites: list[OrdinaryRewrite] = Field(default_factory=list)
     summary: str = ""
     findings: list[OrdinaryFinding] = Field(default_factory=list)
     new_entities: list[NewEntity] = Field(default_factory=list)
@@ -360,6 +304,21 @@ class FilingAccount(StructuredInbound):
                     f"{where}.body",
                     "The worker writes the page from this account, so the page's own text has to "
                     "be in it: return the whole page below its H1, with no frontmatter block."))
+        for n, rewrite in enumerate(self.rewrites, 1):
+            if not (rewrite.path or "").strip():
+                raise ValueError(_needed(
+                    f"rewrites[{n}].path",
+                    "Name the page you are bringing up to date, as its repo-relative path."))
+            if not (rewrite.body or "").strip():
+                raise ValueError(_needed(
+                    f"rewrites[{n}].body",
+                    "The whole page below its H1, as it should now read. The worker replaces the "
+                    "body with exactly this and touches nothing else."))
+            if not (rewrite.why or "").strip():
+                raise ValueError(_needed(
+                    f"rewrites[{n}].why",
+                    "One sentence for the person who FILED that page: they are told what changed "
+                    "and why. A rewrite without it is a silent overwrite of somebody's work."))
         _complete_proposals(self.new_entities)
         return self
 
@@ -419,34 +378,14 @@ ORDINARY_AGENTIC_SYSTEM_PROMPT_HEADER = agent_module.build_filing_header(
 # reaches for a `Write` it does not have and reports having filed nothing.
 ORDINARY_AGENTIC_OUTCOME_CHANNEL = (
     f"\nWhen you are done, write your account to `{agent_module.OUTCOME_FILENAME}` at the repo "
-    f"root — with `write_page`, the same tool you wrote the page with — in the shape the skill "
-    f"documents, naming the path you wrote in `page_path`. Your final message is not read: the "
-    f"outcome file is the whole of what the worker receives from you.")
+    f"root — with `write_page`, the same tool you wrote the pages with — in the shape the skill "
+    f"documents. **Declare every page you wrote in `pages`, one entry each, carrying the `path` "
+    f"you wrote it to** (plus that page's own `title`, `page_type`, and its own `anchoring` when "
+    f"it is about something of its own). The worker checks the diff against exactly that list: a "
+    f"page you wrote and did not declare is refused, and so is one you declared and did not "
+    f"write. Your final message is not read: the outcome file is the whole of what the worker "
+    f"receives from you.")
 
-
-# This backend's MEETING environment paragraph; the rest comes from `agent.build_meeting_header`.
-MEETING_ENVIRONMENT = (
-    "Your environment:\n"
-    "\n"
-    "1. You have NO tools. You cannot read, search or write anything, and you do not write your "
-    "account to a file: you RETURN it, as the structured object this run's output schema "
-    "declares. That schema mirrors the shape the skill documents, field for field. Everything you "
-    "need is in the worker's own message below: the transcript, the entity registry (every entity "
-    "this brain already knows), the meeting metadata, and the source page's own path.\n")
-
-# The one place this run contradicts the brief, said out loud immediately before it: the brief
-# tells its reader it holds a `Write` tool, and injecting that under "you have NO tools" hands the
-# model a contradiction to resolve either way.
-OVERRIDE_NOTE = (
-    f"One override, and it is the only place this run departs from the skill below. The skill was "
-    f"written for a run that holds a `Write` tool and returns its account by writing "
-    f"`{agent_module.OUTCOME_FILENAME}` at the repo root. This run has NEITHER: no tool, no file. "
-    f"Where the skill describes that tool or that file, read it as describing the SHAPE of your "
-    f"account only — you return that same object as this run's structured output instead. Every "
-    f"other word of the skill applies to you unchanged.\n")
-
-MEETING_SYSTEM_PROMPT_HEADER = agent_module.build_meeting_header(
-    MEETING_ENVIRONMENT, override_note=OVERRIDE_NOTE)
 
 # The one line of the per-item prompt that differs between the two channels.
 OUTCOME_CHANNEL = (
@@ -505,9 +444,10 @@ def _readable(text: str) -> str:
 # this worktree" sends a model round the same refusal for every dotfile in turn. Neither echoes
 # the refused path — a refusal is prompt text, and a path the material chose is attacker-reachable.
 REFUSED_WRITE = (
-    "writes are confined to a NEW .md page in one of this repo's fast-lane knowledge folders; an "
-    "edit to a page that already exists is declared in the outcome's `edits` and performed by the "
-    "worker. Your own outcome file at the repo root is the one other write this tool allows.")
+    "writes are confined to a NEW .md page in one of this repo's fast-lane knowledge folders; a "
+    "page that already exists is brought up to date by declaring it in the outcome's `rewrites`, "
+    "which the worker performs. Your own outcome file at the repo root is the one other write "
+    "this tool allows.")
 
 REFUSED_READ = (
     "reads are confined to the knowledge pages of this checkout: a repo-relative path to an "
@@ -621,8 +561,8 @@ class FilingToolbox:
         from — so a page this run may not cite is not offered as something to link
         to, which is how the upward link stops being writable rather than being caught afterwards.
 
-        Still a subset of what `edits.validate` resolves, so the old promise holds: a name offered
-        here cannot be refused later as a dead link."""
+        Every name here resolves to a page in this checkout, so the old promise holds: a name
+        offered here cannot be refused later as a dead link."""
         ps = gather.prompt_scalar
         names = self.corpus().link_names
         return {"names": [ps(name) for name in names[:gather.MAX_LINK_NAMES]], "total": len(names)}
@@ -719,10 +659,9 @@ class PydanticFilingAgent:
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
             corrective: str = "", flow_note: str = "", gathered: str = "",
             acl: list[str] | None = None) -> AgentRun:
-        """The ordinary flow: file ONE capture, ITERATING over the checkout. Deliberately NOT
-        parallel to `run_meeting` — a meeting is handed everything it could need, while an
-        ordinary capture is one paragraph about a brain of unknown shape whose pages need not use
-        the material's words. `gathered` is the SEED, not the boundary."""
+        """File ONE capture, ITERATING over the checkout. A capture is one paragraph about a
+        brain of unknown shape whose pages need not use the material's words, so `gathered` is the
+        SEED its tools go further from, not the boundary."""
         import asyncio
         return asyncio.run(self._run(
             worktree=worktree, material=material, hints=hints, submitted_by=submitted_by,
@@ -815,8 +754,9 @@ class PydanticFilingAgent:
             Two writes are permitted and no others: ONE new `.md` page in this repo's fast-lane
             knowledge folders — the whole file, its frontmatter block included — and your outcome
             file at the repo root. A page that already exists is not writable however its name is
-            spelled (case and accents are folded before the comparison), because an edit to an
-            existing page is DECLARED in your account's `edits` and performed by the worker.
+            spelled (case and accents are folded before the comparison), because a page that
+            already exists is brought up to date by DECLARING it in your account's `rewrites`,
+            which the worker performs.
 
             A refused write returns a refusal and changes nothing; it is not an error to recover
             from by trying a different path out of the lane. `content` is written verbatim, so
@@ -933,109 +873,8 @@ class PydanticFilingAgent:
         run.turns = int(getattr(usage, "requests", 0) or 0)
         run.tool_calls = int(getattr(usage, "tool_calls", 0) or 0)
 
-    def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", gathered: str = "") -> AgentRun:
-        """One structured call: the brief as instructions, the item as the prompt, a typed account
-        back. Deliberately tool-less — everything it could fetch is already in the prompt, `gathered`
-        included, and code writes every page in the set."""
-        import asyncio
-        return asyncio.run(self._run_meeting(
-            worktree=worktree, material=material, meeting_meta=meeting_meta, registry=registry,
-            source_page_path=source_page_path, corrective=corrective,
-            gathered=gathered))
 
-    async def _run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
-                           corrective, gathered="") -> AgentRun:
-        import asyncio
-
-        # Imported HERE, never at module scope — see the module docstring.
-        from pydantic_ai import Agent
-        from pydantic_ai.exceptions import UnexpectedModelBehavior
-        from pydantic_ai.usage import RunUsage, UsageLimits
-
-        from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
-
-        # The framework reports ZERO tokens for any OpenAI model carrying reasoning details.
-        # Load-bearing, not defensive; idempotent.
-        ensure_usage_extraction_repaired()
-
-        # `turns`/`tool_calls` stay at the envelope's own zero: no loop and no tool here, so a `1`
-        # would be invented. The port documents zero as a legitimate answer.
-        run = AgentRun()
-        worktree_root = os.path.realpath(worktree)
-
-        # Out of the WORKTREE, this item's base commit; a missing brief raises before any spend.
-        instructions = agent_module.build_meeting_system_prompt(
-            agent_module.read_meeting_brief(worktree_root),
-            header=MEETING_SYSTEM_PROMPT_HEADER)
-        prompt = agent_module.build_meeting_prompt(
-            material=material, meeting_meta=meeting_meta, registry=registry,
-            source_page_path=source_page_path, corrective=corrective,
-            gathered_block=gathered, outcome_channel=OUTCOME_CHANNEL)
-
-        # Their OWN narrow try: the blanket handler below would report a configuration fault as
-        # "the meeting agent run failed". `read_meeting_brief`'s error stays outside both.
-        try:
-            model = self.model_factory() if self.model_factory else self.settings.model
-            distiller = Agent(model, output_type=MeetingAccount, instructions=instructions,
-                              retries=OUTPUT_RETRIES)
-        except Exception as ex:  # noqa: BLE001 — class name only, like every other wrap here
-            raise priced(run, AgentError(
-                f"could not resolve the configured model ({ex.__class__.__name__}); "
-                f"$STIGMERGY_LIBRARIAN_MODEL is {self.settings.model!r}")) from ex
-        # OURS, handed in rather than read off the result, so a fault carries a real
-        # `run_cost_usd` instead of a forced 0.0.
-        usage = RunUsage()
-        # From the SAME constant as the retry budget: one call plus re-validation is all this flow
-        # may spend, where `settings.max_turns` would license thirty.
-        limits = UsageLimits(request_limit=1 + OUTPUT_RETRIES)
-        try:
-            # A bound WE own; the lease derives from it, and a pass outliving the lease is a
-            # capture two workers file.
-            async with asyncio.timeout(self.settings.timeout_s):
-                result = await distiller.run(prompt, usage=usage, usage_limits=limits)
-        except TimeoutError as ex:
-            run.cost_usd = self._fault_cost(usage)
-            raise priced(run, AgentError(
-                f"the meeting agent exceeded its {self.settings.timeout_s}s budget")) from ex
-        except UnexpectedModelBehavior as ex:
-            # The framework exhausted its re-validations — a SHAPE problem, so it travels as an
-            # `OutcomeShapeError`; a bare `AgentError` would finish the item with no brief.
-            _log_fault("meeting", ex)
-            run.cost_usd = self._fault_cost(usage)
-            fault = _fault_line(ex)
-            raise priced(run, OutcomeShapeError([gates.Finding(
-                # The file channel's gate name: one vocabulary for one class of problem.
-                agent_module._OUTCOME_GATE, "framework-rejected",
-                f"the account did not satisfy this run's output schema after "
-                f"{OUTPUT_RETRIES} re-validation attempt(s) ({ex.__class__.__name__}: {fault}); "
-                f"return every field the schema declares, in the shape the skill documents")])) from ex
-        except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
-            _log_fault("meeting", ex)
-            run.cost_usd = self._fault_cost(usage)
-            raise priced(run, AgentError(
-                f"the meeting agent run failed ({ex.__class__.__name__})")) from ex
-
-        run.cost_usd = self._cost(usage)
-        run.stop_reason = str(getattr(result.response, "finish_reason", "") or "")
-        # The SAME boundary the file channel goes through: a typed provider response is not a
-        # trusted one. OUTSIDE the try above, so `OutcomeShapeError` keeps its findings.
-        raw = result.output.model_dump()
-        # The SAME ceiling on a channel with no file to stat: a structured output is bounded by
-        # the schema's SHAPE alone, so every string field is unbounded.
-        size = len(json.dumps(raw, ensure_ascii=False, default=str).encode("utf-8"))
-        if size > agent_module.MAX_OUTCOME_BYTES:
-            raise priced(run, AgentError(
-                f"the meeting agent's account is {size} bytes, over the "
-                f"{agent_module.MAX_OUTCOME_BYTES}-byte ceiling"))
-        try:
-            run.outcome = agent_module.parse_meeting_outcome(raw)
-        except AgentError as ex:
-            priced(run, ex)
-            raise
-        return run
-
-    def _fault_cost(self, usage, *, flow: str = "meeting") -> float:
+    def _fault_cost(self, usage, *, flow: str = "filing") -> float:
         """`_cost` on a road where it must never raise: a `LibrarianConfigError` escaping an
         `except` block would replace the fault being reported."""
         try:
@@ -1045,9 +884,9 @@ class PydanticFilingAgent:
                         "fault below is reported with a spend of $0.00", self.settings.model)
             return 0.0
 
-    def _cost(self, usage, *, flow: str = "meeting") -> float:
+    def _cost(self, usage, *, flow: str = "filing") -> float:
         """This attempt's dollars, computed from tokens because no provider here prices itself.
-        ONE arithmetic for both flows; `flow` names the pass in the log line and nothing else."""
+`flow` names the pass in the log line and nothing else."""
         counts = {name: getattr(usage, name, 0) or 0
                   for name in ("input_tokens", "cache_read_tokens", "cache_write_tokens",
                                "output_tokens")}

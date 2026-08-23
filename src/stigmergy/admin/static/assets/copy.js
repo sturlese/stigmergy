@@ -62,29 +62,34 @@ export function status(word) {
 // Which statuses a chart stacks, in the order that keeps red and green apart (CVD).
 export const OUTCOME_ORDER = ["filed", "resolved", "queued", "claimed", "rejected", "failed"];
 
-// ── repairs: the ledger's outcomes, and its kinds ────────────────────────────────────────────
-// The order a repair chart stacks its outcomes in, and it is not the server's: `applied` is green
-// and `failed` is red, so `skipped` (grey) sits between them — the same CVD rule `OUTCOME_ORDER`
-// keeps above. An outcome missing from this list is appended by the view, never dropped.
+// ── the ledger: its outcomes, and its kinds ──────────────────────────────────────────────────
+// The order the ledger's chart stacks its outcomes in, and it is not the server's: `applied` is
+// green and `failed` is red, so `skipped` (grey) sits between them — the same CVD rule
+// `OUTCOME_ORDER` keeps above. An outcome missing from this list is appended by the view, never
+// dropped. Only `applied` is still written; the other two belong to rows the elective repair loop
+// left behind, and they stay because those rows are still readable.
 export const REPAIR_OUTCOME_ORDER = ["applied", "skipped", "failed"];
 
+// `delete` is the one kind anything writes. The other three are RETIRED (`repair.schema`), and
+// they are here rather than dropped because a deployed database still holds their rows: a kind
+// with no entry would render as a bare word with no explanation of what it once did.
 export const REPAIR_KIND = {
-  edits: { label: "Additive edits",
-    explain: "a link added to a page's related list, and for overlap or contradiction a "
-      + "one-sentence callout — nothing is rewritten or deleted" },
-  "entity-body": { label: "Drafted entity body",
-    explain: "replaces the page's body below its title with prose the model wrote — bytes that "
-      + "landed in the corpus before any person read them" },
   delete: { label: "Page removal",
-    explain: "pages stop existing, and every page that linked to them is rewritten so the "
+    explain: "pages stopped existing, and every page that linked to them was rewritten so the "
       + "link is gone — undoing it means a revert in the knowledge repo" },
-  "entity-alias": { label: "Entity merge",
-    explain: "two registry entries were one entity: the survivor absorbs the other's "
-      + "spellings, the absorbed page is marked superseded, anchored pages move" },
+  edits: { label: "Additive edits (retired)",
+    explain: "the elective repair loop added a link to a page's related list, and for overlap or "
+      + "contradiction a one-sentence callout. That loop has been removed" },
+  "entity-body": { label: "Drafted entity body (retired)",
+    explain: "the elective repair loop replaced an entity page's body below its title with prose "
+      + "a model wrote. That loop has been removed; a capture brings a page up to date now" },
+  "entity-alias": { label: "Entity merge (retired)",
+    explain: "the elective repair loop merged two registry entries it judged one entity. That "
+      + "loop has been removed" },
 };
 
 export function repairKind(word) {
-  return REPAIR_KIND[word] || { label: word || "edits", explain: "" };
+  return REPAIR_KIND[word] || { label: word || "unknown", explain: "" };
 }
 
 // ── the registry check: the birth gate's own verdict on a name ──────────────────────────────
@@ -115,7 +120,6 @@ export function verdict(word) {
 export const CHECK = {
   "orphan-page": "a page nothing links to and that links to nothing",
   "aging-seed": "a page still marked seed long after it was filed",
-  "stale-view": "an entity view older than filings anchored to it",
   "anchor-concentration": "too many recent filings anchored to one entity",
   "dead-vocabulary": "a registered entity no page cites",
   "company-wide-fraction": "too large a share of recent pages declare company-wide scope",
@@ -123,12 +127,6 @@ export const CHECK = {
   "date-bearing-body-link": "prose links a dated source page instead of the decision",
   "entity-placeholder-body": "an entity page whose body is still the template",
   "anchored-to-superseded-entity": "a page anchored to an entity that was merged away",
-  "model-contradiction": "two pages state incompatible facts (model sweep)",
-  "model-anchor-fit": "a page anchored to an entity it is not really about (model sweep)",
-  "model-unlinked-mention": "a page names an entity without linking it (model sweep)",
-  "model-superseded-canon": "a superseded page still reads as the canonical one (model sweep)",
-  "model-empty-entity-body": "an entity page whose body says nothing about it (model judged)",
-  "model-duplicate-entity": "two registered entities that may be one (model judged)",
 };
 
 export function check(slug) {
@@ -151,8 +149,8 @@ export function severity(word) {
 // describes them and shows when each last ran rather than offering levers.
 export const JOB = {
   gardener: {
-    purpose: "runs the deterministic corpus-health checks and the model passes; findings persist, "
-      + "and the worker's repair pass answers them on its next run",
+    purpose: "runs the corpus-health checks; findings persist and are read by a person — nothing "
+      + "acts on them",
     truth: "the latest gardener job row",
   },
   "retention-purge": {
@@ -167,12 +165,9 @@ export const JOB = {
 
 export const JOB_NAME = {
   gardener: "Gardener run",
-  repair: "Repair pass",
   "capture-purge": "Retention purge",
   "capture-purge-dry-run": "Retention purge (dry run)",
   "webhook-index-upsert": "Incremental index upsert",
-  digest: "Weekly digest",
-  "digest-dry-run": "Digest preview",
   "capture-reclaim": "Lease reclaim",
 };
 
@@ -218,14 +213,15 @@ export const PAGE = {
     ],
   },
   repairs: {
-    title: "Repairs", purpose: "what the repair pass changed in the corpus, and the diff it pushed",
+    title: "Repairs", purpose: "what has left the corpus, and the diff that took it",
     read: [
-      "A repair is derived from a gardener finding, validated, gated and applied in ONE pass — "
-      + "nothing waits on a person, so this page is a ledger of what happened, not a queue.",
-      "An applied row landed a commit. Open it and read the diff: nobody read those bytes before "
-      + "they were pushed, and a revert in the knowledge repo is the only undo.",
-      "A failed row is a repair a gate or its own validator refused — nothing was written, and it "
-      + "is not retried. A skipped row never became a repair at all, and says why.",
+      "A removal is a person's decision: you name the pages, the worker removes them and rewrites "
+      + "every page that referred to them. This page is the ledger of what happened, not a queue.",
+      "Open a row and read the diff: nobody read those bytes before they were pushed, and a "
+      + "revert in the knowledge repo is the only undo. The capture that asked carries the same "
+      + "reading, and is purged with the retention window — this row is not.",
+      "Rows marked retired were written by the elective repair loop, which derived repairs from "
+      + "gardener findings and applied them unattended. It has been removed; its rows stay.",
     ],
   },
   gardener: {
@@ -235,7 +231,7 @@ export const PAGE = {
       + "findings. It never edits the knowledge repo: it fixes nothing, publishes nothing, blocks "
       + "nothing.",
       "A partial run means the deterministic findings are complete and a model pass failed.",
-      "Findings feed the Repairs proposer the next morning.",
+      "Nothing acts on a finding: it is a list for a person to read.",
     ],
   },
   index: {
@@ -267,14 +263,6 @@ export const PAGE = {
       + "index's built_at.",
       "The index rebuild is the one pass the worker cannot run: the deployed worker has no "
       + "embedding key by design, so it is a command a person runs. The page names it.",
-    ],
-  },
-  digest: {
-    title: "Digest", purpose: "the week's activity in one Slack post",
-    read: [
-      "Command-only: no schedule exists; these buttons are the command.",
-      "Each post starts where the last one ended, so nothing is covered twice and nothing is "
-      + "skipped. Preview is byte-identical to what Post would send.",
     ],
   },
   activity: {

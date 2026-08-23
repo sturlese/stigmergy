@@ -33,8 +33,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from stigmergy.kernel import normalize
 from stigmergy.kernel import registry as registry_module
-from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import gates, gitcmd
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian import processing as processing_module
@@ -67,151 +67,165 @@ def test_the_write_lane_never_includes_ops_or_entities_however_many_workers_run(
     assert not any(prefix.startswith("wiki/entities/")
                   for prefix in gates.ALLOWED_WRITE_PREFIXES)
     assert not any(prefix.startswith("meta/") for prefix in gates.ALLOWED_WRITE_PREFIXES)
-    # The fast lane's prohibition on `views/` is untouched by the meeting flow — that flow is a
-    # distinct writer, not a widened librarian. `views/` is a machine zone too (a governed
-    # writer's own commits, App-bot-authored, exactly like `ops/`/`wiki/entities/` above) and must
-    # be absent-by-construction from BOTH write lanes this package builds: the ordinary fast lane
-    # and the meeting flow, which widens `ALLOWED_WRITE_PREFIXES` to its own three folders and
-    # could in principle have widened it to four.
-    assert not any(prefix.startswith("views/") for prefix in gates.ALLOWED_WRITE_PREFIXES)
-    assert not any(prefix.startswith("views/") for prefix in processing_module.MEETING_WRITE_PREFIXES)
+    # The lane widens per ITEM — by the archive's own `sources/` folder, by the identity zone when
+    # a capture introduces one — and never for the process, so this is the whole of it.
     # positive control: the fast lane's own folders ARE in the lane, so the assertions above are
     # proving an absence, not a broken/empty constant.
     assert gates.ALLOWED_WRITE_PREFIXES, "ALLOWED_WRITE_PREFIXES is empty — this test proves nothing"
-    assert processing_module.MEETING_WRITE_PREFIXES, "MEETING_WRITE_PREFIXES is empty — this test proves nothing"
 
 
-# ── the meeting lane is EXACTLY the meeting builder's own range (code <-> code) ──────────────────
-# The agent has no page-writing tool at all (`agent.confine_outcome_write` — its one allowed write
-# is its own outcome file), so the meeting flow's three folders are not an instruction to the agent
-# but CODE's own placement contract: where `_write_meeting_pages` may create a page, judged by
-# `gate_zone`/`in_lane_new_pages` through `GateContext.write_prefixes`. Pinning that against the
-# distiller brief would mean asking the brief to name folders the agent has no use for; the honest
-# second side is the builder itself, which is what these two tests use. They live in a unit file
-# and not in `test_meeting_processing_pg.py` because they need NO Postgres and no queue: one
-# `git init` for `gitcmd.tracked_paths` is the builder's whole environment, so putting them in a
-# `_pg` file would have made a database the price of running a check that never touches one (and
-# would have skipped them, silently, on any machine without one).
-_ORDINARY_LANE_LEAKS = tuple(p for p in gates.ALLOWED_WRITE_PREFIXES
-                             if p not in processing_module.MEETING_WRITE_PREFIXES)
+# ── a capture may bring an existing page UP TO DATE, and what that may never do ────────────────
+# The pattern's central claim is that a model keeps the wiki CURRENT. A system that can only append
+# produces pages that grow callouts and a corpus that grows superseding pages, rather than pages
+# that get better — so a capture may now declare a rewrite of an existing `wiki/` page.
+#
+# What protects the page is NOT a proof. There is no separate approval to compare bytes against,
+# and comparing them to what the agent just wrote proves nothing — that is the trade, stated rather
+# than defended: the rewrite is covered by the other gates, the audience check, and attribution +
+# diff + `git revert`. By nothing structural. What this gate still owns is the pair of things a
+# rewrite must never be able to DO.
+def _page(tmp_path, path: str, *, front: str, body: str) -> None:
+    full = tmp_path / path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(f"---\n{front}\n---\n\n{body}\n", encoding="utf-8")
 
 
-def _meeting_builder_paths(tmp_path, name: str, *, decision_titles: tuple, material: str) -> list:
-    """Every path the REAL `_write_meeting_pages` creates on disk for one outcome, read back off
-    the filesystem rather than from the plan it returns — the plan reports stems, while `gate_zone`
-    judges paths, and the paths are what this contract is about.
-
-    A real `git init` (no commits, nothing tracked) is the builder's only environment need:
-    `gitcmd.tracked_paths` is how it detects a collision with a page that already exists, and an
-    empty checkout is the "no collision" case every one of these outcomes is meant to take.
-    """
-    repo = str(tmp_path / name)
-    os.makedirs(repo)
-    gitcmd.run("init", "--quiet", "-b", "main", repo)
-    meeting_meta = {"title": "acme-corp q3 renewal", "meeting_date": "2026-07-29"}
-    # The real exported outcome type, not a stand-in: `MeetingOutcome` is what
-    # `agent.parse_meeting_outcome` hands `_one_meeting_pass`, so a field this builder starts
-    # reading tomorrow cannot silently be absent here.
-    outcome = agent_module.MeetingOutcome(
-        decision="file", meeting_title="Acme Q3 renewal", attendees=("Alice", "Bob"),
-        meeting_notes="Renewal scope agreed.",
-        action_items=({"owner": "Alice", "action": "send the quote", "done": False},),
-        decisions=tuple({"title": title, "body": f"{title} — agreed in the meeting.",
-                         "anchoring": {"kind": "company", "reason": "no single entity owns it"}}
-                        for title in decision_titles))
-    plan = processing_module._write_meeting_pages(
-        repo, outcome, meeting_meta, material,
-        source_stem=processing_module._source_stem(meeting_meta),
-        created=meeting_meta["meeting_date"])
-    assert not isinstance(plan, list), (
-        f"the builder refused to write instead of writing (findings: {plan}) — this helper's "
-        f"checkout is empty, so there is nothing for a computed path to collide with")
-    created = []
-    for root, dirs, files in os.walk(repo):
-        dirs[:] = [d for d in dirs if d != ".git"]
-        created += [os.path.relpath(os.path.join(root, f), repo).replace(os.sep, "/")
-                    for f in files]
-    return sorted(created)
+_REWRITE_FRONT = ('type: note\ntitle: "Renewal Terms"\nstatus: filed\n'
+                  'submitted_by: ana@acme.com\nentity: ["acme-corp"]\nacl: []\n'
+                  'created: 2026-07-01\nupdated: 2026-07-01\ntags: [note]\n'
+                  'related: []\nsources: []')
 
 
-def _lane_complaints(paths: list, prefixes: tuple) -> list:
-    """The check itself, with the lane as a PARAMETER so the sabotage twin below can run the exact
-    same code against a widened lane. Both directions:
-
-    (i) every path the builder computes is inside the lane (a builder that starts writing outside
-        the folders `gate_zone` widens to would be refused at the gate, or worse, filed if the
-        lane were widened to match by reflex);
-    (ii) every prefix in the lane is REACHED by the builder — the anti-tautology half: a prefix no
-        meeting page can ever occupy is a silent widening of what `gate_zone` permits, bought for
-        nothing.
-    """
-    out = [f"{p!r} is written by the meeting builder but is outside the lane {prefixes}"
-           for p in paths if not p.startswith(prefixes)]
-    out += [f"{prefix!r} is in the lane but no path the meeting builder can compute starts with it"
-            for prefix in prefixes if not any(p.startswith(prefix) for p in paths)]
-    return out
-
-
-def _max_body_lines() -> int:
-    """`_build_source_parts`' own split threshold, read from where IT reads it — a test that
-    hardcoded 150 would stop exercising the split the day the constant moved."""
-    from stigmergy.kernel import page as ingest_page
-    return ingest_page.MAX_BODY_LINES
+def _rewrite_ctx(tmp_path, *, before: str, after: str, **over):
+    """One declared rewrite, staged as the diff `gate_body_rewrite` reads: the base version in git,
+    the new one on disk. Real git, because the gate reads the base out of the object database
+    rather than parsing a rendered diff — a claim that only means something against a real one."""
+    path = "wiki/notes/Renewal Terms.md"
+    gitcmd.run("init", "--quiet", "--initial-branch=main", str(tmp_path), cwd=str(tmp_path))
+    _page(tmp_path, path, front=_REWRITE_FRONT, body=before)
+    gitcmd.run("add", "--all", cwd=str(tmp_path))
+    gitcmd.run("-c", "user.name=t", "-c", "user.email=t@t.test", "commit", "--quiet",
+               "-m", "seed", cwd=str(tmp_path), env={**os.environ, **_COMMIT_ENV})
+    (tmp_path / path).write_text(after, encoding="utf-8")
+    base = dict(entries=[gitcmd.DiffEntry("M", path, new_mode="100644")],
+                rewrites_allowed=frozenset({path}))
+    base.update(over)
+    return path, _ctx(tmp_path, **base)
 
 
-def _all_builder_paths(tmp_path) -> list:
-    """The builder's whole reachable range, over the outcome shapes that change WHICH paths it
-    computes: no decisions at all, several decisions including two that slugify to the same stem
-    (`_decision_stems`' `-2` road), and a transcript long enough to split into cross-linked parts
-    (`_build_source_parts`) so the multi-source-page case is covered too."""
-    long_material = "\n".join(f"transcript line {i}" for i in range(_max_body_lines() * 3))
-    paths = _meeting_builder_paths(tmp_path, "no-decisions", decision_titles=(),
-                                   material="Alice and Bob talked, nothing was decided.\n")
-    paths += _meeting_builder_paths(
-        tmp_path, "several-decisions",
-        decision_titles=("Adopt a pricing floor", "Adopt a pricing floor", "Renew for 12 months"),
-        material="Alice and Bob agreed the renewal terms.\n")
-    paths += _meeting_builder_paths(tmp_path, "split-source",
-                                    decision_titles=("Adopt a pricing floor",),
-                                    material=long_material)
-    return sorted(set(paths))
+def test_a_declared_rewrite_replaces_a_body_and_is_not_refused(tmp_path):
+    """**The benign twin, and the whole point of the change.** OLD BEHAVIOUR: an existing page
+    could only GAIN an appended callout, so a capture that superseded what a page said left the
+    page saying both things and the reader to work out which."""
+    path, ctx = _rewrite_ctx(
+        tmp_path,
+        before="# Renewal Terms\n\nThe renewal window is 30 days.",
+        after=f"---\n{_REWRITE_FRONT.replace('updated: 2026-07-01', 'updated: 2026-08-23')}\n"
+              f"---\n\n# Renewal Terms\n\nThe renewal window is 45 days as of August.\n")
+
+    assert [f.code for f in gates.gate_body_rewrite(ctx)] == []
 
 
-def test_the_meeting_lane_is_exactly_the_range_of_paths_the_meeting_builder_can_write(tmp_path):
-    """`processing.MEETING_WRITE_PREFIXES` (what `gate_zone` widens the lane to for a meeting
-    capture) must be PRECISELY `_write_meeting_pages`' own range: nothing the builder writes falls
-    outside it, and nothing in it is unreachable from the builder.
+def test_a_rewrite_that_changes_the_pages_H1_is_refused(tmp_path):
+    """A page whose title moved is a DIFFERENT page wearing the old one's filename and every
+    inbound link that resolved to it. Bringing a page up to date and replacing it with another are
+    not the same act, and only one of them is what a capture may do."""
+    path, ctx = _rewrite_ctx(
+        tmp_path,
+        before="# Renewal Terms\n\nThe renewal window is 30 days.",
+        after=f"---\n{_REWRITE_FRONT}\n---\n\n# Cancellation Terms\n\nSomething else.\n")
 
-    The second half is the load-bearing one, and it is why this is a real check rather than a
-    restatement of the constant: it is what makes a fourth folder — added to the lane by a future
-    edit, for a page this flow never files — fail here instead of quietly widening what the zone
-    gate permits. Its sabotage twin below proves that failure is real.
-    """
-    paths = _all_builder_paths(tmp_path)
-    assert paths, "the builder wrote nothing — this test would prove nothing"
-    assert len([p for p in paths if p.startswith(processing_module.MEETING_SOURCE_PREFIX)]) > 1, (
-        "the long-transcript case did not split into parts, so the multi-source-page road this "
-        "test believes it covers was never exercised")
-
-    assert _lane_complaints(paths, processing_module.MEETING_WRITE_PREFIXES) == []
+    assert [f.code for f in gates.gate_body_rewrite(ctx)] == ["rewrite-changed-the-page"]
 
 
-@pytest.mark.parametrize("leaked", _ORDINARY_LANE_LEAKS)
-def test_sabotage_proof_one_ordinary_fast_lane_folder_leaking_into_the_meeting_lane_still_fails(
-        tmp_path, leaked):
-    """**The anti-tautology property the check above owes.** A version of it that checked lane
-    membership against `MEETING_WRITE_PREFIXES`' own value could never fail against the very
-    widening it exists to catch, no matter how many ordinary fast-lane folders leaked in.
+@pytest.mark.parametrize("moved, label", [
+    ('acl: []', 'acl: ["leadership"]'),
+    ('entity: ["acme-corp"]', 'entity: ["globex"]'),
+    ('submitted_by: ana@acme.com', 'submitted_by: attacker@evil.test'),
+], ids=["the audience", "the anchor", "the submitter"])
+def test_a_rewrite_that_moves_frontmatter_beyond_updated_is_refused(tmp_path, moved, label):
+    """**The sharpest of the two bounds.** A rewrite that could move `acl:` would let a capture
+    change who may read somebody else's page, which is the one thing no amount of visibility-after
+    could make acceptable. `entity:` and `submitted_by:` are refused for the same reason: they are
+    the page's, not the reviser's."""
+    path, ctx = _rewrite_ctx(
+        tmp_path,
+        before="# Renewal Terms\n\nThe renewal window is 30 days.",
+        after=f"---\n{_REWRITE_FRONT.replace(moved, label)}\n---\n\n"
+              f"# Renewal Terms\n\nNew text.\n")
 
-    Here the second side is the BUILDER, not the constant, so the property is structural rather
-    than maintained by hand — and this twin proves it for every ordinary fast-lane folder that is
-    not already a meeting folder, one parametrized case each: no meeting page can ever be written
-    under `wiki/notes/` & co, so widening the lane to one of them is caught."""
-    paths = _all_builder_paths(tmp_path)
-    complaints = _lane_complaints(paths, (*processing_module.MEETING_WRITE_PREFIXES, leaked))
-    assert any(leaked in c for c in complaints), (
-        f"widening the meeting lane to {leaked!r} — a folder no meeting page can occupy — was not "
-        f"caught: {complaints}")
+    assert [f.code for f in gates.gate_body_rewrite(ctx)] == ["rewrite-frontmatter"]
+
+
+def test_a_page_no_rewrite_declared_is_judged_exactly_as_it_was(tmp_path):
+    """The specificity half: the permission is per PATH and caller-declared, so a modified page
+    nobody declared still meets the additive proof. A rewrite permission that leaked to every page
+    would be the whole gate switched off by one flow's declaration."""
+    path, ctx = _rewrite_ctx(
+        tmp_path,
+        before="# Renewal Terms\n\nThe renewal window is 30 days.",
+        after=f"---\n{_REWRITE_FRONT}\n---\n\n# Renewal Terms\n\nReplaced without asking.\n",
+        rewrites_allowed=frozenset())
+
+    assert [f.code for f in gates.gate_body_rewrite(ctx)] == ["body-rewrite"]
+
+
+# ── the one absolute: `sources/` is written once, by the archive, and never rewritten ──────────
+# `docs/DESIGN.md` calls this the one absolute, and until `gate_zone` grew a branch for it, it was
+# an ABSENCE rather than a rule: nothing wrote there, so nothing had to be refused. The lane now
+# carries a `sources/` folder on EVERY capture — which is exactly when an absolute needs a gate,
+# because an absolute standing on "no caller does this today" is a promise, not a property.
+#
+# These are the SENSITIVITY half. The repair layer cannot reach this branch at all (`edits.validate`
+# refuses a `sources/` target with `outside-lane` first, and the delete/alias roads always declare
+# their exemption), so a hand-built `GateContext` is the only thing that can ask the question — and
+# it is the right instrument: each exemption is a fact the caller tells, so withholding exactly one
+# is the experiment.
+_ARCHIVE = "sources/notes/a-capture.md"
+
+
+@pytest.mark.parametrize("status, told", [
+    ("A", {}),                                            # an addition nobody declared as archive
+    ("A", {"provenance_pages": frozenset({"sources/notes/other.md"})}),   # declared, another path
+    ("D", {}),                                            # a deletion nobody authorized
+    ("D", {"deletions_allowed": frozenset({"wiki/notes/X.md"})}),         # authorized elsewhere
+    ("M", {}),                                            # a rewrite of captured material
+    ("M", {"expected_bytes": {"wiki/notes/X.md": "text"}}),               # computed elsewhere
+], ids=["added-undeclared", "added-other-path", "deleted-unauthorized", "deleted-other-path",
+        "modified-unproven", "modified-other-path"])
+def test_a_sources_entry_this_run_did_not_declare_is_refused(tmp_path, status, told):
+    """Every way of touching the archive without the caller having declared THAT path."""
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry(status, _ARCHIVE, new_mode="100644")], **told)
+
+    codes = [f.code for f in gates.gate_zone(ctx)]
+
+    assert codes == ["provenance-write"], codes
+
+
+@pytest.mark.parametrize("status, told", [
+    ("A", {"provenance_pages": frozenset({_ARCHIVE})}),
+    ("D", {"deletions_allowed": frozenset({_ARCHIVE})}),
+    ("M", {"expected_bytes": {_ARCHIVE: "the bytes the caller computed"}}),
+], ids=["the-runs-own-archive", "a-persons-removal", "a-byte-proven-scrub"])
+def test_the_three_legal_ways_to_touch_the_archive_are_not_refused(tmp_path, status, told):
+    """**The benign twins, and they are why the gate is three questions and not one.** A capture
+    may only ADD its own archive — that is the absolute. The other two are a PERSON's removal
+    performed by the repair worker: the doomed source page itself, and a surviving one whose links
+    to it are scrubbed, whose whole new content the caller computed and this run proves byte for
+    byte. A gate that refused those would refuse `brain_delete` on anything ever captured."""
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry(status, _ARCHIVE, new_mode="100644")], **told)
+
+    assert [f.code for f in gates.gate_zone(ctx)] == []
+
+
+def test_the_archive_gate_reads_the_zone_and_not_the_write_lane(tmp_path):
+    """The refusal does not depend on the lane: a run whose `write_prefixes` happen to include the
+    archive's folder — which every capture's do now — gets the same answer. Told-not-inferred cuts
+    both ways, and a widened lane is not a declaration about a path."""
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("M", _ARCHIVE, new_mode="100644")],
+               write_prefixes=(*gates.ALLOWED_WRITE_PREFIXES, "sources/notes/"))
+
+    assert [f.code for f in gates.gate_zone(ctx)] == ["provenance-write"]
 
 
 # ── gate_binary_page: the fix for the chain one stray byte could set off ────────────────────────
@@ -310,34 +324,40 @@ def test_a_created_page_declaring_no_type_at_all_is_refused(tmp_path):
 
 def test_a_created_page_whose_declared_type_disagrees_with_its_folder_is_refused(tmp_path):
     """`type-folder-mismatch`: the diff decides, not the label, exactly as the gate's own
-    docstring claims — a page filed under `notes/` while the outcome calls it a `decision`."""
+    docstring claims — a page filed under `notes/` while the outcome calls it a `concept`."""
     ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/A New Page.md",
                                           new_mode="100644")],
-              outcome=SimpleNamespace(page_type="decision"))
+              outcome=SimpleNamespace(page_type="concept"))
     assert [f.code for f in gates.gate_zone(ctx)] == ["type-folder-mismatch"]
 
 
-# ── gate_zone / `meeting-edit-refused`: the check itself, and the PRECEDENCE it has ─────────────
+# ── gate_zone / `modification-refused`: the check itself, and the PRECEDENCE it has ─────────────
 #
-# The finding: a status-`M` entry from a caller that grants no edit mechanism (`ctx.edits_allowed`
-# `False` — only `processing._one_meeting_pass` ever sets it). Its END-TO-END proof lives in
-# `test_meeting_processing_pg.py` (the refusal, its terminality, its sabotage twin, atomicity);
-# these are the unit-level checks, which fail fast and need no Postgres.
+# The finding: a status-`M` entry from a caller that grants no edit mechanism
+# (`ctx.modifications_allowed=False`).
+#
+# **NO PRODUCTION CALLER PASSES `False` TODAY, and this file is where the branch's red proof lives**
+# — `gates.py` and `librarian/index.md` both say so, and both say why the field stays: whether a
+# flow grants an edit mechanism is a CALLER's to declare, not a fact about which flows happen to
+# exist this month. OLD BEHAVIOUR: `processing._one_meeting_pass` was that caller, and the
+# end-to-end proof (the refusal, its terminality, its sabotage twin, atomicity) lived in
+# `test_meeting_processing_pg.py`. That flow and that file are gone, so what is below is the whole
+# of the branch's coverage — explicit contexts, no Postgres, failing fast.
 #
 # **Its POSITION in `gate_zone`'s per-entry chain is a contract, and nothing pinned it.** The stated
 # principle is CATCH-ALL, THEREFORE LAST: the finding means "the only thing wrong with this entry is
 # that it is a modification", so every more specific diagnosis the gate can make gets first say.
 # Sitting immediately after `deletion` — where it started — it shadowed four of them for a
-# status-`M` entry, and, composed with `_refuse_meeting`'s `f.repairable` filter, that shadowing
+# status-`M` entry, and, composed with the refusal router's `f.repairable` filter, that shadowing
 # made the `write-outside-lane` steering category unreachable for a MODIFIED out-of-lane path,
-# because `meeting-edit-refused` is `repairable=False` while `outside-lane` is not. The order below
+# because `modification-refused` is `repairable=False` while `outside-lane` is not. The order below
 # is therefore behaviour worth pinning, not a formatting preference.
-_ZONE_M_LANE = ("wiki/decisions/",)      # one prefix, so "outside the lane" is unambiguous
-_ZONE_M_PAGE = "wiki/decisions/an-earlier-decision.md"
+_ZONE_M_LANE = ("wiki/concepts/",)       # one prefix, so "outside the lane" is unambiguous
+_ZONE_M_PAGE = "wiki/concepts/an-earlier-concept.md"
 
 # `(label, entry, the code gate_zone must report)`. Every case is a MODIFICATION (except the first,
 # which cannot be — see the test's docstring), run against a context that grants no edit mechanism,
-# so each one is an entry `meeting-edit-refused` would claim from an earlier position.
+# so each one is an entry `modification-refused` would claim from an earlier position.
 _MORE_SPECIFIC_THAN_AN_EDIT = [
     ("an unfileable git status", gitcmd.DiffEntry("T", _ZONE_M_PAGE, new_mode="120000"),
      "unsupported-change"),
@@ -352,18 +372,18 @@ _MORE_SPECIFIC_THAN_AN_EDIT = [
     # `* -diff` in such a file makes every later diff in the folder binary. A tracked dotfile that
     # already exists can therefore be MODIFIED, which is exactly this row.
     ("a dotfile that already exists in the lane",
-     gitcmd.DiffEntry("M", "wiki/decisions/.gitattributes", new_mode="100644"), "not-a-page"),
-    ("a non-`.md` path", gitcmd.DiffEntry("M", "wiki/decisions/notes.txt",
+     gitcmd.DiffEntry("M", "wiki/concepts/.gitattributes", new_mode="100644"), "not-a-page"),
+    ("a non-`.md` path", gitcmd.DiffEntry("M", "wiki/concepts/notes.txt",
                                           new_mode="100644"), "not-a-page"),
     ("a filename that cannot be spelled",
-     gitcmd.DiffEntry("M", "wiki/decisions/Bad\x01Name.md", new_mode="100644"),
+     gitcmd.DiffEntry("M", "wiki/concepts/Bad\x01Name.md", new_mode="100644"),
      "unnameable-page"),
     # Two COMPOUND entries — several defects at once — which are the only shapes that can pin the
     # order AMONG the specific checks rather than merely their order against the catch-all.
     ("out of the lane AND a dotfile",
      gitcmd.DiffEntry("M", "wiki/notes/.gitattributes", new_mode="100644"), "outside-lane"),
     ("a dotfile AND an executable bit",
-     gitcmd.DiffEntry("M", "wiki/decisions/.gitattributes", new_mode="100755"),
+     gitcmd.DiffEntry("M", "wiki/concepts/.gitattributes", new_mode="100755"),
      "not-a-regular-file"),
 ]
 
@@ -374,19 +394,19 @@ _MORE_SPECIFIC_THAN_AN_EDIT = [
 def test_a_more_specific_zone_defect_outranks_the_edit_refusal_for_a_modified_entry(
         tmp_path, label, entry, expected):
     """**The enumeration of `gate_zone`'s per-entry order**: for each more specific shape a
-    modification can have, the reported code is THAT one and never `meeting-edit-refused` — the
+    modification can have, the reported code is THAT one and never `modification-refused` — the
     extra fact ("it also wrote outside the lane", "it is also a symlink") is what the operator
     needs, and the catch-all would have hidden it.
 
     Asserted twice per case, against a context that grants no edit mechanism AND one that does: the
     code must be the same either way. That is the precise statement of non-shadowing — the presence
     of the edit refusal changes nothing for an entry that has a more specific defect — and it is
-    what fails under an ordering that puts the catch-all first, where the `edits_allowed=False`
-    column reports `meeting-edit-refused` for every row below the first.
+    what fails under an ordering that puts the catch-all first, where the `modifications_allowed=False`
+    column reports `modification-refused` for every row below the first.
 
     **What this test cannot catch, stated plainly rather than implied away:**
 
-    * **A check added to the loop AFTER `meeting-edit-refused` in the future would be shadowed and
+    * **A check added to the loop AFTER `modification-refused` in the future would be shadowed and
       this enumeration would not see it**, because its shape is not in the list above and nothing
       here derives the list from the loop. This test pins the order among the checks that EXIST; the
       thing that keeps the property true for a new one is the rule written in `gate_zone`'s own
@@ -402,29 +422,29 @@ def test_a_more_specific_zone_defect_outranks_the_edit_refusal_for_a_modified_en
       (the two compound rows). A reordering of two specific checks that no single entry can trip at
       once is invisible here, and harmlessly so.
     """
-    strict = _ctx(tmp_path, [entry], write_prefixes=_ZONE_M_LANE, edits_allowed=False)
+    strict = _ctx(tmp_path, [entry], write_prefixes=_ZONE_M_LANE, modifications_allowed=False)
     permissive = _ctx(tmp_path, [entry], write_prefixes=_ZONE_M_LANE)
 
     # Non-vacuity, per case: this entry really is inside the catch-all's OWN domain (its condition
-    # is exactly `status == "M" and not ctx.edits_allowed`), so a specific code below means it was
+    # is exactly `status == "M" and not ctx.modifications_allowed`), so a specific code below means it was
     # OUTRANKED — not that it was out of the catch-all's reach. The one exception is the `T` anchor
     # row, whose status the catch-all cannot match at all.
     if entry.status == "M":
-        assert not strict.edits_allowed, "the strict context stopped withholding the edit mechanism"
+        assert not strict.modifications_allowed, "the strict context stopped withholding the edit mechanism"
 
     assert [f.code for f in gates.gate_zone(strict)] == [expected], (
-        f"{label}: expected {expected!r}. If this says 'meeting-edit-refused', the catch-all has "
+        f"{label}: expected {expected!r}. If this says 'modification-refused', the catch-all has "
         f"moved back above a more specific check and is hiding it — the exact defect that made the "
         f"write-outside-lane steering category unreachable for a modified path")
     assert [f.code for f in gates.gate_zone(permissive)] == [expected], (
         f"{label}: a caller that GRANTS an edit mechanism must get the same {expected!r} finding — "
-        f"the specific checks are not conditional on `edits_allowed` and must not become so")
+        f"the specific checks are not conditional on `modifications_allowed` and must not become so")
 
 
 def test_a_plain_in_lane_modification_is_the_edit_refusal_and_is_terminal(tmp_path):
     """The catch-all's own case, and the unit-level pin for the finding: an in-lane, regular-mode,
     properly named page that already exists and was MODIFIED — nothing else wrong with it at all —
-    is refused as `meeting-edit-refused`, `repairable=False`.
+    is refused as `modification-refused`, `repairable=False`.
 
     `repairable` is asserted here and not only through the end-to-end pair because it is what buys
     the terminal refusal: `processing.unrepairable()` reads exactly this flag, and a finding that
@@ -435,11 +455,11 @@ def test_a_plain_in_lane_modification_is_the_edit_refusal_and_is_terminal(tmp_pa
     """
     ctx = _ctx(tmp_path, [gitcmd.DiffEntry("M", _ZONE_M_PAGE, old_mode="100644",
                                           new_mode="100644")],
-              write_prefixes=_ZONE_M_LANE, edits_allowed=False)
+              write_prefixes=_ZONE_M_LANE, modifications_allowed=False)
 
     findings = gates.gate_zone(ctx)
 
-    assert [f.code for f in findings] == ["meeting-edit-refused"]
+    assert [f.code for f in findings] == ["modification-refused"]
     assert findings[0].locator == _ZONE_M_PAGE
     assert findings[0].repairable is False, (
         "the edit refusal became repairable: the corrective retry would then be spent on an agent "
@@ -449,9 +469,9 @@ def test_a_plain_in_lane_modification_is_the_edit_refusal_and_is_terminal(tmp_pa
 
 def test_the_same_plain_modification_is_no_finding_at_all_when_the_caller_grants_edits(tmp_path):
     """The specificity half, and the anti-tautology guard for the enumeration above: the SAME entry
-    that the test above refuses trips nothing in `gate_zone` when `edits_allowed` keeps its `True`
+    that the test above refuses trips nothing in `gate_zone` when `modifications_allowed` keeps its `True`
     default (every ordinary fast-lane caller). Without this, every parametrized row above would
-    still pass if `edits_allowed` were never read at all — the difference between the two contexts
+    still pass if `modifications_allowed` were never read at all — the difference between the two contexts
     would be nothing, and the enumeration would be pinning an order among checks with no catch-all
     to outrank. `gate_body_rewrite`, a later gate, is what judges whether that edit was additive;
     this gate is done with it."""
@@ -463,12 +483,15 @@ def test_the_same_plain_modification_is_no_finding_at_all_when_the_caller_grants
 
 def _edit_refusal_message(tmp_path, path: str) -> str:
     ctx = _ctx(tmp_path, [gitcmd.DiffEntry("M", path, old_mode="100644", new_mode="100644")],
-              write_prefixes=(path.rsplit("/", 1)[0] + "/",), edits_allowed=False)
+              write_prefixes=(path.rsplit("/", 1)[0] + "/",), modifications_allowed=False)
     findings = gates.gate_zone(ctx)
-    assert [f.code for f in findings] == ["meeting-edit-refused"], (
+    assert [f.code for f in findings] == ["modification-refused"], (
         f"the fixture stopped producing the edit refusal for {path!r} ({[f.code for f in findings]})"
         f" — the message assertions below would be about a different finding")
     return findings[0].message
+
+
+
 
 
 def test_the_edit_refusals_message_names_the_cause_space_and_the_preserved_evidence(tmp_path):
@@ -477,7 +500,7 @@ def test_the_edit_refusals_message_names_the_cause_space_and_the_preserved_evide
     carry, and one it must not:
 
     * the CAUSE-SPACE: a worker defect or worktree interference, and explicitly NOT the submitted
-      material. This is the same failure `_refuse_meeting`'s `f.repairable` filter closes one layer
+      material. This is the same failure `_route_refusal`'s `f.repairable` filter closes one layer
       up (an unrepairable zone finding routing through `rejected_steering` and naming the
       submitter's capture as the cause); a message that drifts back toward blaming the submitter
       would reintroduce it in the one place an operator actually reads.
@@ -497,52 +520,111 @@ def test_the_edit_refusals_message_names_the_cause_space_and_the_preserved_evide
             f"the preserved-evidence clause is a behaviour change, not an edit to prose")
 
 
-def _worst_reachable_meeting_paths() -> list:
-    """The LONGEST path each of the meeting flow's three page builders can compute, from the real
-    builders rather than a guessed literal — `slugify`'s length cap lives in
-    `stigmergy.kernel.normalize` and a hardcoded worst case here would stop being the worst case the
-    day it moved."""
-    title = "a decision about the acme-corp renewal negotiation and the pilot scope for next year " * 3
-    return [
-        # `-2`: `_decision_stems`' own same-slug suffix, the longest form it produces.
-        processing_module.MEETING_DECISION_PREFIX
-        + processing_module._decision_stems([title, title])[1] + ".md",
-        processing_module.MEETING_MEETING_PREFIX
-        + processing_module._meeting_stem("2026-07-29", title) + ".md",
-        # `-p12`: `_build_source_parts`' part suffix on a long, split transcript.
-        processing_module.MEETING_SOURCE_PREFIX
-        + processing_module._source_stem({"title": title}) + "-p12.md",
-    ]
+def _archive_worst_path() -> str:
+    """The longest path THIS flow's own page builders can compute, from the real builders rather
+    than a guessed literal.
+
+    `processing._write_attached_sources` is the one builder whose output length is BOUNDED: the
+    stem is `slugify(title)` — capped in `stigmergy.kernel.normalize`, so a hardcoded worst case
+    here would stop being the worst the day that cap moved — plus the longest of the four kind
+    suffixes, plus `_source_part_stem`'s `-p<n>` on a split archive, under the longest `sources/`
+    prefix. Every capture writes one of these, whatever its kind.
+    """
+    title = "a decision about the acme-corp renewal negotiation and the pilot scope for next year"
+    stem = f"{normalize.slugify(title * 4)}-transcript"
+    return f"{processing_module.MEETING_SOURCE_PREFIX}{stem}-p12.md"
+
+
+def _worst_case_path_the_edit_refusal_can_fire_on() -> str:
+    """That same LENGTH, in the lane where this refusal can still fire.
+
+    OLD BEHAVIOUR: the archive path above was handed to the gate as it stood. `gate_zone` now
+    carries the `sources/**` absolute — `_provenance_write_allowed` admits only this run's own
+    archive (`A`), a person's removal (`D`) or a byte-proven scrub (`M`), so a bare modification
+    under `sources/` is answered `provenance-write` and never reaches the edit catch-all at the
+    bottom of the loop. An archive path therefore cannot produce this message at all any more.
+
+    What survives is the measurement: the archive builder is still the one path builder in this
+    flow whose output length is BOUNDED, so it stays the yardstick for "how long a path this flow
+    can really produce", and the prefix moves to the widest folder a capture writes into. A
+    hardcoded literal here would stop being the worst case the day `slugify`'s cap moved.
+    """
+    prefix = max(gates.ALLOWED_WRITE_PREFIXES, key=len)
+    stem = "x" * (len(_archive_worst_path()) - len(prefix) - len(".md"))
+    return f"{prefix}{stem}.md"
+
+
+def _longest_path_that_keeps_the_clause(tmp_path) -> int:
+    """The bound itself, MEASURED against the real message and the real report builder rather than
+    asserted as a literal — the number this test exists to watch, and the number a shortened or
+    lengthened refusal sentence moves. A bisection, not a scan: every probe runs the real gate."""
+    lo, hi = 0, 260
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        path = "wiki/notes/" + ("x" * mid) + ".md"
+        summary = report_module.failed_system(attempts=1, stage="zone",
+                                              reason=_edit_refusal_message(tmp_path, path),
+                                              agent_attempts=1)["summary"]
+        if "not the material" in summary:
+            lo = mid
+        else:
+            hi = mid - 1
+    return len("wiki/notes/" + ("x" * lo) + ".md")
 
 
 def test_the_refusals_anti_blame_clause_survives_the_reports_200_character_reason_clamp(tmp_path):
     """The message travels through `report.failed_system`, which clamps `reason` to 200 characters
-    (word-safe, `text.clamp`). The message is ~147 characters of fixed text plus the PATH, so how
-    much of it an operator actually reads depends on how long the page's name is — and the paths
-    this flow computes are long (a slug capped at 60 characters, under a prefix, with a part or
-    same-slug suffix).
+    (word-safe, `text.clamp`). The message is ~159 characters of fixed text plus the PATH, so how
+    much of it an operator actually reads depends on how long the page's name is.
 
-    So this pins the half that must never be lost: for the longest path each of the flow's three
-    builders can produce, the clamped summary an operator reads still says the fault is not the
-    submitted material. **The evidence clause is deliberately NOT asserted here, because it does not
-    survive** — it is the tail of the sentence and is truncated for any path over ~67 characters,
-    which is most real ones (the fixture in `test_meeting_processing_pg.py` uses a short path, where
-    both clauses survive, and asserts both there). Nothing in this test lengthens or shortens the
-    message: it records where the bound currently is, and fails if a future edit to that sentence
-    pushes the anti-blame clause past it — at which point an operator's report would start reading
-    like the submitter's fault again.
+    Two halves, and the second is the one that keeps working as names grow:
+
+    * **the bound**, measured against the real builder. Every capture archives its material to a
+      `sources/` page, and that path is the longest one this flow's own builders COMPUTE — bounded
+      because `slugify` caps the stem. At that LENGTH, in the lane this refusal can fire in, the
+      clamped summary an operator reads still says the fault is not the submitted material.
+    * **the ORDER**, which is what `gates.py`'s own comment claims ("The anti-blame clause comes
+      FIRST, before the explanation"): the clause sits ahead of the explanation in the sentence, so
+      the clamp eats the explanation first and the blame line last. That is a property of the
+      sentence, not of any one path, and it is what makes the degradation graceful.
+
+    **What this test does NOT claim, and the honest reason.** The finding fires on a status-`M`
+    entry, whose path is an EXISTING page's — and a page stem may be up to
+    `page.MAX_PAGE_STEM_BYTES` (200), so a path can be longer than the whole clamp. For those the
+    clause is truncated and NO wording could save it; the ceiling is reported to the developer
+    rather than pinned here as though it were intended. It is not reachable today either way: no
+    caller passes `modifications_allowed=False` (see this section's header).
+
+    OLD BEHAVIOUR: this pinned the longest path each of the meeting flow's THREE builders could
+    produce (`_decision_stems`' `-2`, `_meeting_stem`'s date prefix, `_source_stem`'s `-p12`), and
+    asserted the evidence clause was NOT expected to survive beside it. Those builders are gone
+    with the flow; the archive builder is the one that outlived them.
+
+    OLD BEHAVIOUR, the second time: the archive path was measured directly. `gate_zone`'s
+    `sources/**` absolute now answers a modified archive page with `provenance-write` before this
+    catch-all is reached, so the yardstick contributes its LENGTH and the lane contributes the
+    prefix — see `_worst_case_path_the_edit_refusal_can_fire_on`.
     """
-    for path in _worst_reachable_meeting_paths():
-        message = _edit_refusal_message(tmp_path, path)
-        summary = report_module.failed_system(attempts=1, stage="zone", reason=message,
-                                             agent_attempts=1)["summary"]
-        assert "not the material" in summary, (
-            f"the anti-blame clause was truncated out of the operator-facing report for a path "
-            f"this flow can really produce ({len(path)} chars: {path!r}). The refusal message is "
-            f"now too long for `report.failed_system`'s 200-character `reason` clamp — shorten the "
-            f"message's FIXED text (the path cannot be shortened), or move the clause earlier in "
-            f"the sentence; do not widen the clamp, which every other refusal shares.\n"
-            f"summary tail: {summary[-120:]!r}")
+    path = _worst_case_path_the_edit_refusal_can_fire_on()
+    bound = _longest_path_that_keeps_the_clause(tmp_path)
+    summary = report_module.failed_system(attempts=1, stage="zone",
+                                          reason=_edit_refusal_message(tmp_path, path),
+                                          agent_attempts=1)["summary"]
+
+    assert "not the material" in summary, (
+        f"the anti-blame clause was truncated out of the operator-facing report for a path as long "
+        f"as the longest this flow's own builder computes ({len(path)} chars: {path!r}). The "
+        f"refusal message "
+        f"is now too long for `report.failed_system`'s 200-character `reason` clamp — it survives "
+        f"only up to {bound} characters of path. Shorten the message's FIXED text (the path cannot "
+        f"be shortened), or move the clause earlier in the sentence; do not widen the clamp, which "
+        f"every other refusal shares.\nsummary tail: {summary[-120:]!r}")
+
+    message = _edit_refusal_message(tmp_path, _ZONE_M_PAGE)
+    assert message.index("not the material") < message.index("grants no edit mechanism"), (
+        "the anti-blame clause no longer comes FIRST: the clamp now eats it before the "
+        "explanation, so the longer a page's name is the more the report reads like the "
+        "submitter's fault")
 
 
 # ── gate_anchoring: the enforcement behind "nothing is filed ownerless" ─────────────────────────
@@ -742,8 +824,6 @@ def test_corrective_brief_prefers_the_brief_and_falls_back_to_the_message():
     assert "write the page again" not in text
 
 
-
-
 def test_a_created_page_with_no_anchoring_outcome_at_all_is_undeclared(tmp_path):
     page = tmp_path / "wiki" / "notes" / "New.md"
     page.parent.mkdir(parents=True, exist_ok=True)
@@ -848,11 +928,16 @@ def test_resolve_entity_ids_raises_rather_than_silently_returns_empty_when_regis
         gates.resolve_entity_ids({"kind": "entity", "entities": ["Acme Corp"]}, None)
 
 
-# ── gate_body_rewrite / _related_growth_ok: attacking the superset proof directly ───────────────
-# A removed `related:` line is admitted ONLY when the page's link set proves out as a strict
-# superset of what the line used to declare. Each of these is a real git diff over a page committed
-# once and then modified, never a fabricated diff object — a faked git proves nothing about the
-# property being claimed, and the property under test is what `git diff` actually renders.
+# ── gate_body_rewrite: a modification nobody declared, in every shape ───────────────────────────
+# OLD BEHAVIOUR: a removed `related:` line was ADMITTED when the page's link set proved out as a
+# strict superset of what the line used to declare — the one frontmatter change an additive edit
+# was allowed to make, and each case below was an attack on that proof. The declaration that
+# produced the shape is gone, so nothing may produce it: a modified page is refused unless its
+# caller named it. These stay because the inputs are still exactly the inputs, and because the
+# refusal must hold for every one of them rather than for the four the proof happened to catch.
+# Each is a real git diff over a page committed once and then modified, never a fabricated diff
+# object — a faked git proves nothing about the property being claimed, and the property under
+# test is what `git diff` actually renders.
 def _committed_page(tmp_path, text: str) -> tuple[str, "os.PathLike"]:
     repo = str(tmp_path)
     gitcmd.run("init", "--quiet", "-b", "main", repo)
@@ -862,7 +947,6 @@ def _committed_page(tmp_path, text: str) -> tuple[str, "os.PathLike"]:
     gitcmd.run("add", "-A", cwd=repo)
     gitcmd.run("commit", "--quiet", "--no-verify", "-m", "seed", cwd=repo, env=_COMMIT_ENV)
     return repo, page
-
 
 
 # ── the page-name byte ceiling: ONE bound, ONE string, both callers ────────────────────────────
@@ -1054,9 +1138,12 @@ def test_every_attack_on_the_superset_proof_is_vetoed_as_body_rewrite(tmp_path, 
     assert [f.code for f in findings] == ["body-rewrite"], label
 
 
-def test_a_real_superset_growth_is_the_benign_twin_and_passes_clean(tmp_path):
-    """The specificity half: the one shape the proof exists to admit must actually pass, or the
-    reciprocal `related:` link `edits.py` writes on every overlap/backlink could never land."""
+def test_growing_related_is_refused_too_now_that_nothing_produces_that_shape(tmp_path):
+    """**OLD BEHAVIOUR: this was the benign twin and it passed clean.** Growing the `related:`
+    list was the one frontmatter change the additive proof admitted, because a filing account could
+    declare it and code performed it. That declaration retired; nothing produces the shape, so
+    admitting it would leave a hole a future writer could walk through without anybody deciding it
+    should. The benign twin moved one test down: a caller that NAMED the path."""
     repo, page = _committed_page(
         tmp_path,
         '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]"]\ntags: [note]\n---\n\n'
@@ -1065,25 +1152,34 @@ def test_a_real_superset_growth_is_the_benign_twin_and_passes_clean(tmp_path):
         repo, page,
         '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]", "[[B]]"]\ntags: [note]\n---\n\n'
         '# Existing\n\nA paragraph a human wrote.\n')
+    assert [f.code for f in findings] == ["body-rewrite"]
+
+
+def test_a_declared_rewrite_is_the_benign_twin_and_passes_clean(tmp_path):
+    """The specificity half: the one road a capture still has to a page that exists must actually
+    pass, or nothing could ever bring a page up to date. The caller NAMES the path in
+    `rewrites_allowed`, and the gate judges it by its two structural bounds — the H1 survives, and
+    the frontmatter does not move beyond `updated:`."""
+    repo, page = _committed_page(
+        tmp_path,
+        '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]"]\ntags: [note]\n---\n\n'
+        '# Existing\n\nA paragraph a human wrote.\n')
+    findings = _body_rewrite_findings(
+        repo, page,
+        '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]"]\ntags: [note]\n---\n\n'
+        '# Existing\n\nA paragraph a later capture brought up to date.\n',
+        rewrites_allowed=frozenset({"wiki/notes/Existing.md"}))
     assert findings == []
 
 
-# ── gate_body_rewrite rule 3, off `related:`: NO other frontmatter field may change at all,
-# `entity:` included — the mechanism that makes gardener's old re-anchor wording a
-# lie. `checks.py`'s `check_company_page_names_entity` and `sweep.py`'s
-# `MODEL_SUGGESTED_ACTIONS[CHECK_MODEL_ANCHOR_FIT]` used to tell the operator "a re-anchor is a
-# correction, filed the same way as any other (the \U0001f9e0 gesture in Slack, or an MCP
-# capture)" — but every capture (the \U0001f9e0 gesture included) reaches an EXISTING page only
-# through `edits.apply_declared`, which this gate judges, and rule 3 admits exactly ONE
-# frontmatter change: `related:` growth (the benign twin just above,
-# `test_a_real_superset_growth_is_the_benign_twin_and_passes_clean`). `entity:` gets no carve-out:
-# every frontmatter line but the one `related:` block survives byte for byte.
-#
-# ONE caller-declared exception exists now, and it never reaches this rule — a path in
-# `ctx.body_rewrite_allowed` leaves this road entirely for `_permitted_rewrite_findings`, where
-# `entity:` is refused just as flatly (the mutation twins at the end of this file). No capture flow
-# declares such a path, so for every diff the librarian's own worker produces the sentence above is
-# exactly as true as it was. ─────────────────────────────────────────────────────────────────
+# ── a re-anchor is not something a capture can do to a page that already exists ────────────────
+# The mechanism that makes gardener's old re-anchor wording a lie. `checks.py`'s
+# `check_company_page_names_entity` used to tell the operator "a re-anchor is a correction, filed
+# the same way as any other (the \U0001f9e0 gesture in Slack, or an MCP capture)" — but no capture
+# reaches an EXISTING page except through a DECLARED rewrite, which this gate judges, and a
+# declared rewrite may not move `entity:` either (`_declared_rewrite_findings` admits `updated:`
+# and nothing else). A capture that declared nothing about the page is refused before the question
+# is even asked. ─────────────────────────────────────────────────────────────────────────────
 def test_an_entity_only_change_to_an_existing_page_is_vetoed_as_body_rewrite_not_repairable(
         tmp_path):
     """A capture that changes nothing but `entity: []` -> `entity: ["acme-corp"]` on an
@@ -1102,7 +1198,7 @@ def test_an_entity_only_change_to_an_existing_page_is_vetoed_as_body_rewrite_not
         '# Existing\n\nA paragraph a human wrote.\n')
 
     assert [f.code for f in findings] == ["body-rewrite"]
-    assert "rewrote existing frontmatter" in findings[0].message
+    assert "without declaring it" in findings[0].message
     assert findings[0].repairable is False
     assert gates.unrepairable(findings) == findings
 
@@ -1369,7 +1465,7 @@ def test_gate_frontmatter_refuses_a_top_level_merge_key_line_even_with_no_collis
 
 
 # The real corpus survey behind the whitelist: every distinct top-level frontmatter key found
-# across `wiki/`, `sources/`, `views/` and all 16 `ops/templates/*.md` in the knowledge repo, as of
+# across `wiki/`, `sources/` and all 16 `ops/templates/*.md` in the knowledge repo, as of
 # the survey — the blast-radius check the whitelist owes, measured rather than assumed. `owner`,
 # `id` and `content_hash` are left out here on purpose: they are legitimate SPELLINGS (they pass
 # the whitelist) but are separately forbidden fast-lane content by `FORBIDDEN_PAGE_KEYS`, which is
@@ -1424,8 +1520,8 @@ def _provenance_page(tmp_path, front_extra: str):
         'submitted_by: steward@example.com\nverification: verified\n' + front_extra +
         '---\n\nbody\n', encoding="utf-8")
     # `write_prefixes` must include `sources/meetings/` — the DEFAULT `GateContext.write_prefixes`
-    # is the ordinary six-folder lane, which never contains it, and `gate_frontmatter` only reads
-    # `ctx.in_lane_new_pages()`.
+    # is the ordinary authored lane (`gates.ALLOWED_WRITE_PREFIXES`), which never contains it, and
+    # `gate_frontmatter` only reads `ctx.in_lane_new_pages()`.
     return _ctx(tmp_path, [gitcmd.DiffEntry("A", _PROVENANCE_PATH, new_mode="100644")],
                write_prefixes=("sources/meetings/",),
                provenance_pages=frozenset({_PROVENANCE_PATH}),
@@ -1479,15 +1575,26 @@ def test_gate_frontmatter_refuses_a_duplicate_extracted_at_declaration(tmp_path)
 
 
 def test_gate_frontmatter_forbids_tier_and_extracted_at_outside_the_provenance_page(tmp_path):
-    """Neither field used to be forbidden OR stripped on a `decision`/`meeting` page — the meeting
-    flow is the only one in this system that writes either at all, and a page outside that flow's
-    one provenance page (`ctx.provenance_pages`) declaring them must be refused, not silently
-    accepted."""
-    page = tmp_path / "wiki" / "decisions" / "New.md"
+    """`page.stamp_source_fields` is the ONE writer of either field, and it writes them onto the
+    `sources/` archive every capture lays down — the run's own provenance page, declared on the
+    context (`ctx.provenance_pages`). A `wiki/**` page declaring them is claiming a provenance
+    this system never gave it, so it must be REFUSED rather than silently accepted or quietly
+    stripped.
+
+    OLD BEHAVIOUR: the page under test was a `decision` in `wiki/decisions/`, and the rule was
+    described as the meeting flow's. Both are gone; the fields, the stamp and the rule are not —
+    what moved is only which folder an ordinary authored page lives in.
+
+    The diff entry and the file on disk name the SAME path deliberately: `gate_frontmatter` reads
+    `ctx.in_lane_new_pages()` and then opens that path in the worktree, so a fixture whose entry
+    and file disagree exercises neither the in-lane filter nor the parse — it just finds nothing
+    and passes with an empty finding list.
+    """
+    page = tmp_path / "wiki" / "notes" / "New.md"
     page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text('---\ntype: decision\ntitle: "New"\ntier: 1\nextracted_at: "x"\n---\n\nbody\n',
+    page.write_text('---\ntype: note\ntitle: "New"\ntier: 1\nextracted_at: "x"\n---\n\nbody\n',
                     encoding="utf-8")
-    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/decisions/New.md", new_mode="100644")],
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
               stamped={})
     findings = gates.gate_frontmatter(ctx)
     messages = " ".join(f.message for f in findings if f.code == "forbidden-field")
@@ -1501,7 +1608,6 @@ def test_gate_frontmatter_does_not_flag_a_duplicate_on_a_non_server_owned_key():
     dupes = page_policy.duplicate_top_level_keys("tags: [a]\ntags: [b]\n")
     assert dupes == {"tags"}
     assert dupes & set(page_policy.SERVER_OWNED_KEYS) == set()
-
 
 
 def _modified_page_ctx(tmp_path, front_extra: str):
@@ -1519,10 +1625,6 @@ def test_gate_frontmatter_refuses_an_owner_on_a_modified_page(tmp_path):
     ctx = _modified_page_ctx(tmp_path, "owner: attacker@evil.example\n")
     findings = gates.gate_frontmatter(ctx)
     assert [f.code for f in findings] == ["forbidden-field"]
-
-
-
-
 
 
 # ── unscanned-diff: gate_secrets / gate_pii's own refusal when nothing can be read ───────────────
@@ -1684,7 +1786,7 @@ def test_the_ordinary_vetoes_stay_repairable_and_a_note_is_never_counted(tmp_pat
         gates.Finding("zone", "outside-lane", "wrote outside the lane", locator="ops/acl.json"),
         gates.Finding("frontmatter", "forbidden-field", "declares owner", locator="p.md"),
         gates.Finding("outcome", "no-page-created", "created no page"),
-        gates.Finding("edits", "missing-target", "an edit to a page that does not exist"),
+        gates.Finding("contract", "dead-links", "a link resolves to no page", locator="p.md"),
     ]
     assert gates.unrepairable(repairable) == []
 
@@ -1882,9 +1984,8 @@ def test_dropping_the_related_line_entirely_still_vetoes(tmp_path):
 # The reproduction: an indented line placed immediately after a flow-style `related:` list, pure
 # ASCII. `gate_frontmatter`'s `unparseable` post-condition never sees this at all — it scopes
 # itself to NEW pages (`ctx.in_lane_new_pages()`) and this is a MODIFICATION — so without rule 0
-# nothing here parses the new frontmatter as YAML at all: the byte-for-byte comparison and
-# `_related_growth_ok`'s superset proof both operate line-by-line and neither one objects to an
-# indented stray line.
+# nothing here parses the new frontmatter as YAML at all: every other comparison in this gate
+# operates line-by-line, and none of them objects to an indented stray line.
 _SINGLE_LINK_BEFORE = ('---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]"]\ntags: [note]\n'
                       '---\n\n# Existing\n\nA paragraph a human wrote.\n')
 # The fixture has to grow `related:` as well as inject the stray line, and that is not cosmetic.
@@ -1907,11 +2008,10 @@ _BYPASS_AFTER = ('---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]", "[[B]]"
                 'tags: [note]\n---\n\n# Existing\n\nA paragraph a human wrote.\n')
 
 
-
 def test_the_unparseable_frontmatter_refusal_is_unrepairable_with_no_brief(tmp_path):
     """The other half of the fix: `repairable` used to be `True` unconditionally for this finding,
-    which is wrong on the fast lane, where a modified page in the diff can ONLY come from
-    `edits.apply_declared` (never the agent directly) — so handing back a "propose again" brief
+    which is wrong on the fast lane, where a modified page in the diff can ONLY come from CODE
+    (never the agent directly) — so handing back a "propose again" brief
     burned the one corrective retry on a page the agent cannot write and pointed it at a tool it
     does not hold. It is `repairable=False` with no brief at all."""
     repo, page = _committed_page(tmp_path, _SINGLE_LINK_BEFORE)
@@ -1923,64 +2023,20 @@ def test_the_unparseable_frontmatter_refusal_is_unrepairable_with_no_brief(tmp_p
     assert finding.brief == ""
 
 
-def test_the_related_growth_proof_would_have_missed_this_bypass_on_its_own(tmp_path):
-    """The bypass measured against the pre-rule-0 reasoning, proven with the REAL
-    `_related_growth_ok` — not a hand-rolled re-implementation of its inequality, which is exactly
-    what lets a test like this pass without the property it claims being true (see the note on
-    `_BYPASS_AFTER` above). `_related_growth_ok` reads `related:` line-by-line, not through a real
-    parser, so it sees the flow block growing from `["[[A]]"]` to `["[[A]]", "[[B]]"]` — the
-    indented stray line riding along is invisible to it entirely — and returns True: this is the
-    mechanical proof that the YAML pre-condition is the thing catching the input, not a check that
-    already existed."""
-    assert gates._related_growth_ok(_SINGLE_LINK_BEFORE, _BYPASS_AFTER) is True, (
-        "the real _related_growth_ok does not itself notice anything wrong with this input — "
-        "confirming the YAML pre-condition is the check that closes this, not a duplicate of one "
-        "that already existed")
+def test_a_declared_rewrite_that_moves_no_frontmatter_line_is_the_benign_twin(tmp_path):
+    """The positive half of the declared rewrite's byte-for-byte frontmatter check: a page whose
+    frontmatter does not change AT ALL — only its body — must pass clean when its caller named it.
 
-
-def test_benign_twin_a_modification_that_only_grows_related_and_callouts_still_passes(
-        tmp_path):
-    """The benign twin: a gate that gets loud near an ordinary, correct edit is worse than one that
-    stays silent. Growing `related:` and appending a callout — the only shape an additive edit is
-    allowed to take — must still pass clean with valid frontmatter on both sides."""
-    repo, page = _committed_page(tmp_path, _FLOW_BEFORE)
-    after = (
-        '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]", "[[B]]"]\ntags: [note]\n---\n\n'
-        '# Existing\n\nA paragraph a human wrote.\n\n'
-        '> [!NOTE] Overlaps with [[Some Other Page]]\n> a genuine overlap note\n')
-    findings = _body_rewrite_findings(repo, page, after)
-    assert findings == []
-
-
-
-
-
-
-
-
-
-
-def test_a_page_whose_server_owned_lines_never_change_is_the_benign_twin(tmp_path):
-    """The positive half of rule 3's byte-for-byte frontmatter check: a page whose
-    status/owner/verification lines do not change AT ALL — an ordinary fast-lane page carries none
-    of them — must be free to grow its `related:` list untouched."""
+    OLD BEHAVIOUR: this asserted the same thing about a page GROWING its `related:` list under no
+    permission at all, which was the additive proof's one admitted frontmatter change. That proof
+    is gone with the declaration that produced it."""
     repo, page = _committed_page(tmp_path, _FLOW_BEFORE)  # carries neither status nor owner
     findings = _body_rewrite_findings(
         repo, page,
         '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]", "[[B]]"]\ntags: [note]\n---\n\n'
-        '# Existing\n\nA paragraph a human wrote.\n')
+        '# Existing\n\nA later capture brought this up to date.\n',
+        rewrites_allowed=frozenset({"wiki/notes/Existing.md"}))
     assert findings == []
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ── the secrets gate sees through a line break ────────────────────────────────────────────────
@@ -2054,148 +2110,13 @@ class TestSecretsAcrossALineBreak:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# gate_body_rewrite's ONE caller-declared exception: `ctx.body_rewrite_allowed`
-#
-# The additive proof cannot judge an entity-body repair — that diff REPLACES prose, which is the
-# whole point of it — so for a path the caller NAMED, the gate swaps that proof for three dedicated
-# ones instead of weakening it. Everything below is about the two halves being genuinely separate:
-# a named path is judged by the new rules, and a path nobody named is judged exactly as before.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-_ENTITY_BEFORE = ('---\ntype: entity\ntitle: "Meridian Partners"\nstatus: developing\n'
-                  'role: ""\nupdated: 2026-01-01\nentity: ["meridian-partners"]\ntags: [entity]\n'
-                  '---\n\n# Meridian Partners\n\n<One clear paragraph: what this entity is.>\n')
-_ENTITY_AFTER = ('---\ntype: entity\ntitle: "Meridian Partners"\nstatus: developing\n'
-                 'role: ""\nupdated: 2026-08-17\nentity: ["meridian-partners"]\ntags: [entity]\n'
-                 '---\n\n# Meridian Partners\n\n## What / Who\n\nA freight broker.\n')
-_ENTITY_LANE = ("wiki/entities/",)
-
-
-def _entity_page(tmp_path, text: str = _ENTITY_BEFORE):
-    repo = str(tmp_path)
-    gitcmd.run("init", "--quiet", "-b", "main", repo)
-    page = tmp_path / "wiki" / "entities" / "Meridian Partners.md"
-    page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text(text, encoding="utf-8")
-    gitcmd.run("add", "-A", cwd=repo)
-    gitcmd.run("commit", "--quiet", "--no-verify", "-m", "seed", cwd=repo, env=_COMMIT_ENV)
-    return repo, page
-
-
-_ENTITY_PATH = "wiki/entities/Meridian Partners.md"
-
-
-def _permitted(**over):
-    base = {"write_prefixes": _ENTITY_LANE, "body_rewrite_allowed": frozenset({_ENTITY_PATH})}
-    base.update(over)
-    return base
-
-
-def test_a_permitted_entity_body_rewrite_passes_the_gate(tmp_path):
-    """The BENIGN TWIN, and it is the load-bearing half: without it the whole kind is inert, and a
-    gate that vetoed every drafted body would look exactly as healthy as one that works."""
-    repo, page = _entity_page(tmp_path)
-    assert _body_rewrite_findings(repo, page, _ENTITY_AFTER, **_permitted()) == []
-
-
-def test_the_role_line_is_the_second_permitted_line_and_only_the_second(tmp_path):
-    repo, page = _entity_page(tmp_path)
-    with_role = _ENTITY_AFTER.replace('role: ""', 'role: "A freight broker."')
-
-    assert _body_rewrite_findings(repo, page, with_role, **_permitted()) == []
-
-
-def test_the_identical_rewrite_is_vetoed_when_no_caller_permitted_that_path(tmp_path):
-    """The other half of the same property, and the one a mistake would silence: permission is
-    per-PATH and told by the caller, so the same bytes with an empty `body_rewrite_allowed` must be
-    refused exactly as they were before this field existed."""
-    repo, page = _entity_page(tmp_path)
-
-    findings = _body_rewrite_findings(repo, page, _ENTITY_AFTER, write_prefixes=_ENTITY_LANE)
-
-    assert [f.code for f in findings] == ["body-rewrite"]
-    assert findings[0].repairable is False
-
-
-def test_a_permitted_path_does_not_permit_its_neighbours(tmp_path):
-    """The set is the unit, not the folder: an apply names ONE page, and a second entity page in
-    the same diff is a page nobody approved."""
-    repo, page = _entity_page(tmp_path)
-    neighbour = tmp_path / "wiki" / "entities" / "Somebody Else.md"
-    neighbour.write_text(_ENTITY_BEFORE.replace("Meridian Partners", "Somebody Else"),
-                         encoding="utf-8")
-    gitcmd.run("add", "-A", cwd=repo)
-    gitcmd.run("commit", "--quiet", "--no-verify", "-m", "second page", cwd=repo, env=_COMMIT_ENV)
-    neighbour.write_text(_ENTITY_AFTER.replace("Meridian Partners", "Somebody Else"),
-                         encoding="utf-8")
-
-    findings = _body_rewrite_findings(repo, page, _ENTITY_AFTER, **_permitted())
-
-    assert [(f.code, f.locator) for f in findings] == [
-        ("body-rewrite", "wiki/entities/Somebody Else.md")]
-
-
-# ── the MUTATION TWIN: a frontmatter tamper riding inside a permitted rewrite ──────────────────
-@pytest.mark.parametrize("tamper, label", [
-    ('status: developing', 'status: mature'),
-    ('entity: ["meridian-partners"]', 'entity: ["somebody-elses-entity"]'),
-    ('title: "Meridian Partners"', 'title: "Meridian Partners Ltd"'),
-], ids=["status", "entity", "title"])
-def test_a_frontmatter_change_riding_inside_a_permitted_rewrite_is_vetoed(tmp_path, tamper, label):
-    """A hand-built diff, not a weakened comparison: the exception grants a BODY rewrite, and the
-    failure mode it must not have is granting a frontmatter one along with it. `status:` is the
-    sharpest of the three — it is the maturity axis a reader trusts, and nothing about drafting a
-    body is a reason to move it."""
-    repo, page = _entity_page(tmp_path)
-
-    findings = _body_rewrite_findings(repo, page, _ENTITY_AFTER.replace(tamper, label),
-                                      **_permitted())
-
-    assert [f.code for f in findings] == ["rewrite-frontmatter"]
-    assert findings[0].repairable is False
-    assert _ENTITY_PATH in findings[0].message
-
-
-def test_a_permitted_path_that_is_not_an_entity_page_is_vetoed(tmp_path):
-    """The zone is a folder and the type is a declaration. A caller that named a path is trusted
-    about WHICH page it approved, never about what that page is."""
-    repo, page = _entity_page(tmp_path, _ENTITY_BEFORE.replace("type: entity", "type: note"))
-
-    findings = _body_rewrite_findings(repo, page,
-                                      _ENTITY_AFTER.replace("type: entity", "type: note"),
-                                      **_permitted())
-
-    assert [f.code for f in findings] == ["rewrite-not-an-entity"]
-
-
-def test_a_permitted_path_outside_this_runs_write_lane_is_vetoed(tmp_path):
-    """Two caller-scoped facts that must agree. `write_prefixes` says which lane this apply owns
-    and `body_rewrite_allowed` which page it may rewrite; when they disagree the gate believes
-    neither — a permission is only as good as the lane it sits in."""
-    repo, page = _entity_page(tmp_path)
-
-    findings = _body_rewrite_findings(repo, page, _ENTITY_AFTER,
-                                      **_permitted(write_prefixes=("wiki/notes/",)))
-
-    assert "rewrite-outside-lane" in [f.code for f in findings]
-
-
-def test_the_permission_is_empty_unless_a_caller_declares_it(tmp_path):
-    """TOLD, never inferred — the same posture `write_prefixes` and `creatable_types` take. A
-    default that granted anything would make every flow that never heard of this field a flow
-    that permits a rewrite."""
-    ctx = _ctx(tmp_path, [])
-    assert ctx.body_rewrite_allowed == frozenset()
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
 # The `delete` kind's two told facts: `ctx.expected_bytes` and `ctx.deletions_allowed`
 #
-# A sweep is not additive and it is not a permitted body rewrite either: it REMOVES lines from
-# pages nobody drafted, in order to stop them pointing at a page that is going. So it buys its
-# judgement somewhere else entirely — the caller hands the gate the exact bytes it computed, and
-# the gate proves the page on disk IS those bytes. That is a STRONGER statement than the additive
-# proof, not a weaker one: additive says "nothing disappeared", byte-equality says "this is
-# precisely the file that was approved, to the byte".
+# A sweep REMOVES lines from pages nobody drafted, in order to stop them pointing at a page that is
+# going, and no structural bound can admit that. So it buys its judgement somewhere else entirely —
+# the caller hands the gate the exact bytes it computed, and the gate proves the page on disk IS
+# those bytes. That is the strongest statement in this file: not "the H1 survived" and not "nothing
+# disappeared", but "this is precisely the file that was planned, to the byte".
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 _NOTE_BEFORE = ('---\ntype: note\ntitle: "Cites It"\nrelated: ["[[Doomed]]", "[[Keeper]]"]\n'
                 'tags: [note]\n---\n\n# Cites It\n\nWe agreed with [[Doomed]] last quarter.\n')
@@ -2245,8 +2166,8 @@ def test_a_scrub_one_byte_off_the_plan_is_vetoed(tmp_path):
 
 def test_the_same_scrub_is_vetoed_as_a_body_rewrite_when_no_caller_planned_it(tmp_path):
     """The other half of the same property, and the one a mistake would silence: a page nobody
-    named is judged by the additive proof exactly as it was before this field existed — and a
-    scrub removes lines, so the additive proof refuses it."""
+    named is refused exactly as it was before this field existed — the permission is per-PATH, and
+    the same bytes without it buy nothing."""
     repo, page = _scrubbed_page(tmp_path)
 
     findings = _body_rewrite_findings(repo, page, _NOTE_SCRUBBED)
@@ -2255,8 +2176,8 @@ def test_the_same_scrub_is_vetoed_as_a_body_rewrite_when_no_caller_planned_it(tm
 
 
 def test_a_planned_page_does_not_permit_its_neighbours(tmp_path):
-    """The dict is keyed by PATH for the reason `body_rewrite_allowed` is a set of them: a sweep
-    plans each page it rewrites, and a page it did not plan is a page nobody approved."""
+    """The dict is keyed by PATH for the reason every told permission in this file is: a sweep
+    plans each page it rewrites, and a page it did not plan is a page nobody asked for."""
     repo, page = _scrubbed_page(tmp_path)
     neighbour = tmp_path / "wiki" / "notes" / "Other.md"
     neighbour.write_text(_NOTE_BEFORE.replace("Cites It", "Other"), encoding="utf-8")
@@ -2490,27 +2411,26 @@ def test_an_entity_page_edit_is_admitted_only_with_a_proof_code_produced(tmp_pat
     assert gates.gate_identity(planned) == []
 
 
-def test_a_steward_approved_repair_may_edit_an_entity_page_through_its_own_permission(tmp_path):
-    """The benign twin for the repair loop: an approved `entity-body` repair tells the
-    apply which ONE page may have its body replaced (`body_rewrite_allowed`), and a merge or a
-    deletion sweep plans every byte it writes (`expected_bytes`). Both are set by code the steward's
-    approval drives, never from an outcome, so the identity gate admits them — and only them: the
-    permission names a path, so a second entity page in the same diff is still refused."""
+def test_a_planned_entity_page_is_admitted_and_only_the_planned_one(tmp_path):
+    """The benign twin, and the half a mistake would silence: `expected_bytes` names the entity
+    pages this run computed in full — a spelling the birth writer appended, or a link a removal's
+    sweep scrubbed — so the identity gate admits them, and only them. The permission is keyed by
+    PATH, so a second entity page in the same diff is still refused."""
     _write_entity_page(tmp_path, _BORN)
     other = "wiki/entities/Other.md"
     _write_entity_page(tmp_path, _BORN, path=other)
     entries = [gitcmd.DiffEntry("M", _ENTITY_PAGE, new_mode="100644"),
                gitcmd.DiffEntry("M", other, new_mode="100644")]
-    body = _ctx(tmp_path, entries, body_rewrite_allowed=frozenset({_ENTITY_PAGE}))
-    assert [(f.code, f.locator) for f in gates.gate_identity(body)] == [("unplanned-entity-edit", other)]
-    planned = _ctx(tmp_path, entries, body_rewrite_allowed=frozenset({_ENTITY_PAGE}),
-                   expected_bytes={other: _BORN})
-    assert gates.gate_identity(planned) == []
+    one = _ctx(tmp_path, entries, expected_bytes={_ENTITY_PAGE: _BORN})
+    assert [(f.code, f.locator) for f in gates.gate_identity(one)] == [
+        ("unplanned-entity-edit", other)]
+    both = _ctx(tmp_path, entries, expected_bytes={_ENTITY_PAGE: _BORN, other: _BORN})
+    assert gates.gate_identity(both) == []
 
 
 def test_the_identity_gate_ignores_every_page_outside_the_zone(tmp_path):
     ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644"),
-                          gitcmd.DiffEntry("M", "wiki/decisions/Old.md", new_mode="100644")])
+                          gitcmd.DiffEntry("M", "wiki/concepts/Old.md", new_mode="100644")])
     assert gates.gate_identity(ctx) == []
 
 

@@ -26,7 +26,7 @@ CORPUS = ROOT / "evals" / "corpus"
 # resolved. Named here so it cannot silently grow a sibling.
 KNOWN_UNRESOLVED = {"foxglove-health"}
 
-CORPUS_PAGES = 38
+CORPUS_PAGES = 37
 
 
 @pytest.fixture(scope="module")
@@ -88,14 +88,14 @@ def test_every_filtered_questions_expected_pages_really_carry_that_entity(
         pages, retrieval_questions):
     """The failure this catches is silent and total: a filter naming an entity its own expected
     page does not carry removes that page from BOTH arms, so the question scores 0 forever while
-    reading as a retrieval regression. Checks all ten filtered questions, not a sample."""
+    reading as a retrieval regression. Checks all nine filtered questions, not a sample."""
     by_key = {}
     for p in pages:
         by_key[p.page_id] = p
         by_key.setdefault(Path(p.path).stem, p)
 
     filtered = [q for q in retrieval_questions if q["filters"]]
-    assert len(filtered) == 10
+    assert len(filtered) == 9
 
     for q in filtered:
         entity = q["filters"]["entity"]

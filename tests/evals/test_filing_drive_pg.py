@@ -51,6 +51,11 @@ PLAIN_MATERIAL = """The two depots connected last month have run clean since, an
 schedules migrated without an incident worth recording.
 """
 
+TRANSCRIPT_MATERIAL = """[00:00] Dana: two things to settle about the depot sequence.
+[00:12] Priya: the second wave goes depot by depot, two weeks apart, and any depot can halt it.
+[00:31] Dana: agreed, and Alonso tells them.
+"""
+
 _FIXTURE_REGISTRY = load_registry(str(FIXTURE_REPO / "ops" / "entity-registry.json"))
 
 
@@ -185,6 +190,65 @@ def test_a_capture_that_proposes_nothing_yields_one_phase_and_an_empty_proposals
     assert [p["phase"] for p in phases] == ["only"]
     assert phases[0]["facets"] == dict.fromkeys(entry["expect"], True)
     assert phases[0]["observed"]["proposals"] == []
+
+
+def test_a_transcript_rides_the_same_loop_and_is_observed_through_the_same_keys(rig, tmp_path):
+    """**The branch `_observe` used to fork on, driven for real.**
+
+    A `kind="meeting"` capture reached its own flow and reported through a `filed_meeting` block —
+    a `meeting_page`, a `decisions` list, its own `source_pages`. The flow is gone and the block
+    with it: `_drive` still routes a transcript through `support.submit_meeting` (its hints differ,
+    and nothing else does), and what comes back is an ordinary `report.filed`.
+
+    Nothing else in this suite drives that road with a real queue and a real commit. The keyless
+    half (`test_filing_observation_contract`) builds the report from `librarian.report`'s own
+    builder, which proves `_observe` reads what the builder writes but not that the WORKER produces
+    that shape for this kind — and "the meeting kind still reports like everything else" is exactly
+    the claim the one pipe makes and the one an instrument would be last to notice breaking.
+
+    What is asserted is the observation contract, not judgment: the double has no NLP and files one
+    page for any material. So: the pages it established are `wiki/` pages, its material is archived
+    under `sources/meetings/` where a raw capture archives under `sources/notes/`, and the archive
+    is NOT among the pages — which is what keeps a correct filing from scoring a granularity miss
+    on the `pages` facet.
+    """
+    materials = _material(tmp_path, "transcript.md", TRANSCRIPT_MATERIAL)
+    capture = {**_capture("transcript.md", kind=schema.MEETING),
+               "hints": {"title": "Rollout sync", "meeting_date": "2026-07-22",
+                         "attendees": "Dana, Priya, Alonso"}}
+    entry = {"id": "T01", "expect": {"status": schema.FILED, "type": "note",
+                                     "folder": "wiki/notes",
+                                     "anchor": ANCHORED_BY_DEFAULT}}
+
+    phases = _drive(rig, materials, capture, entry)
+
+    observed = phases[0]["observed"]
+    assert phases[0]["facets"] == dict.fromkeys(entry["expect"], True)
+    assert observed["source_pages"] and all(p.startswith("sources/meetings/")
+                                            for p in observed["source_pages"])
+    filed_paths = [page["path"] for page in observed["pages"]]
+    assert filed_paths and all(p.startswith("wiki/") for p in filed_paths)
+    assert not set(filed_paths) & set(observed["source_pages"])
+    # Each page's anchor is read from that page's OWN committed frontmatter, which is the property
+    # the `pages` facet exists for and the one a single-anchor observation could not express.
+    assert observed["pages"][0]["anchor"] == ANCHORED_BY_DEFAULT
+
+
+def test_a_raw_capture_archives_somewhere_else_which_is_all_its_kind_buys(rig, tmp_path):
+    """The benign twin of the folder assertion above, and the one that keeps it from passing for a
+    reason that has nothing to do with `kind`: a raw capture archives under `sources/notes/`.
+
+    Without this, an implementation that archived EVERY capture under `sources/meetings/` would
+    satisfy the test above and the instrument would agree the kinds are distinguished without
+    having looked at the other one.
+    """
+    materials = _material(tmp_path, "plain.md", PLAIN_MATERIAL)
+    entry = {"id": "T01", "expect": {"status": schema.FILED}}
+
+    phases = _drive(rig, materials, _capture("plain.md"), entry)
+
+    archived = phases[0]["observed"]["source_pages"]
+    assert archived and all(p.startswith("sources/notes/") for p in archived), archived
 
 
 # **DELETED with the ask-back loop:**

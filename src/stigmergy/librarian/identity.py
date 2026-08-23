@@ -131,7 +131,7 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
     again next week as a second entity. Structure is code's, prose is the model's, and the proof
     is the human's: the report shows the submitter the sentence that was born open.
 
-    All-or-nothing like `edits.apply_declared`: the findings are collected over every declaration
+    All-or-nothing: the findings are collected over every declaration
     so the single corrective brief names all of them, and the worktree is left untouched when any
     one is refused (the caller's retry resets the tree anyway; this keeps a half-written set out of
     the diff the final refusal preserves).

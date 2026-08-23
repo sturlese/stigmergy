@@ -87,7 +87,7 @@ def test_a_channel_is_NEVER_unrestricted_even_listed_as_brain_admins(tmp_path):
     label and nothing more.
 
     The obvious next refactor is to unify the two readers, and this is the regression that would
-    cause: a channel meaning "sees the whole corpus" makes the digest (`digest.sections`) and
+    cause: a channel meaning "sees the whole corpus" makes every channel-scoped read and
     every public-channel answer broadcast every restricted page into Slack."""
     from stigmergy.server.identity import resolve_audiences
 

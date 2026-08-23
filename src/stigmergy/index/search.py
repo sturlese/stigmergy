@@ -87,9 +87,9 @@ def vec_ranking(conn, query_embedding: list[float], filters: dict | None = None,
 def fetch_pages(conn, paths: list[str]) -> dict[str, dict]:
     if not paths:
         return {}
-    # `links`/`generated_at` are fetched here so the serving surfaces (`read_page`,
-    # `describe_entity`) share this ONE fetch; `rank.rank` ignores the extra keys — they change
-    # what is SERVED, not what SCORES.
+    # `links` is fetched here so the serving surfaces (`read_page`, `describe_entity`) share
+    # this ONE fetch; `rank.rank` ignores the extra keys — they change what is SERVED, not what
+    # SCORES.
     cols = PAGE_COLUMNS
     with conn.cursor() as cur:
         cur.execute(f"SELECT {', '.join(cols)} FROM pages_index WHERE path = ANY(%s)", (paths,))

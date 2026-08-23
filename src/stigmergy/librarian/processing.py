@@ -1,13 +1,12 @@
 """Processing ONE capture: the filing path, from queue row to commit — or to a refusal.
 
 Cheapest-first: material -> retry collapse -> already-filed -> secrets/PII over the MATERIAL ->
-worktree -> agent -> declared edits -> stamp -> gates -> [one corrective retry] -> commit -> push.
+worktree -> agent -> declared rewrites -> stamp -> gates -> [one corrective retry] -> commit -> push.
 The scan runs over the MATERIAL because a capture containing a secret bounces WHOLE. Terminal
 states split by CAUSE, not by gate: content `rejected`, system `failed`. A name nothing resolves
 to does not stop the page: the agent declares the entity in its account, and
 `identity.write_births` writes it in the same commit, confirmed by whoever captured.
 """
-import asyncio
 import dataclasses
 import datetime
 import hashlib
@@ -28,7 +27,6 @@ from stigmergy.librarian import (
     base_inputs,
     config,
     dedup,
-    edits,
     filing_port,
     gates,
     gather,
@@ -46,7 +44,6 @@ from stigmergy.librarian.errors import (
     StaleBaseError,
     WorktreeError,
 )
-from stigmergy.views import regenerate as views_regenerate
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +128,19 @@ def _capture_acl(item: dict) -> list[str] | None:
     return list(acl) if acl is not None else None
 
 
+def _content_date(item: dict, deps: Deps) -> str:
+    """The date this capture's pages are ABOUT, which is not the date they were filed.
+
+    A transcript from June submitted in August establishes what it establishes in June, and
+    `as_of` is what the digest, view staleness and the answer layer's recency all reason from —
+    so stamping today would make a two-month-old decision read as this week's. The submitter is
+    the only one who knows, which is why `meeting_date` is required at the door for the one kind
+    whose material always has an event behind it. Absent, the filing date is the honest answer.
+    """
+    asserted = ((item.get("hints") or {}).get("client") or {}).get("meeting_date")
+    return str(asserted).strip() if str(asserted or "").strip() else deps.as_of()
+
+
 def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "") -> dict:
     """Rewrite every NEW page's server-owned frontmatter, and return the values written. Must run
     BEFORE the gates: the returned dict is what `gate_frontmatter` re-reads the page against. If
@@ -156,7 +166,8 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     # and `gate_frontmatter` only enforces a server-owned field that is PRESENT in this dict. Set
     # inside the loop it would be enforced only if the loop reached it — correctness by accident,
     # in an access-control stamp.
-    stamped = {"status": page_policy.FILED_STATUS, "as_of": deps.as_of(),
+    as_of = _content_date(item, deps)
+    stamped = {"status": page_policy.FILED_STATUS, "as_of": as_of,
                "submitted_by": item["submitted_by"],
                "entity": _stamped_entity(capture_anchoring, ctx.registry), "acl": acl}
     # Per-page mode: an attachment to cite, or more than one page, or a page that anchored itself.
@@ -179,7 +190,7 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
             drafted,
             submitted_by=item["submitted_by"],
             acl=acl,
-            as_of=deps.as_of(),
+            as_of=as_of,
             entity=entity)
         cited = []
         if cite_stem:
@@ -206,25 +217,36 @@ def _stamped_entity(anchoring: dict, registry) -> list:
     return entity
 
 
-def _declared_anchorings(ctx: gates.GateContext, capture_anchoring: dict) -> dict:
-    """`{path: the anchoring that page declared}` — the capture's own where a page declared none.
-    Keyed by the paths in `ctx.declared_pages`, which is the same list, in the same order, the
-    account's `pages` were written from."""
+def _declared_by_path(ctx: gates.GateContext) -> dict:
+    """`{path: the OutcomePage that declared it}`.
+
+    Correspondence is by PATH wherever the account carries one, and by POSITION only where code
+    itself wrote the plan from `pages` in that order. That distinction is the whole point: a
+    backend that writes its own pages names each path in its own entry, so nothing has to assume
+    the two agree — an assumed correspondence between two model-supplied lists is how a page ends
+    up stamped with another page's anchor while every gate agrees with it.
+    """
     pages = tuple(getattr(ctx.outcome, "pages", ()) or ())
-    if len(pages) != len(ctx.declared_pages):
-        return {}
+    by_path = {page.path: page for page in pages if page.path}
+    if by_path:
+        return {path: by_path[path] for path in ctx.declared_pages if path in by_path}
+    if len(pages) == len(ctx.declared_pages):
+        return dict(zip(ctx.declared_pages, pages, strict=True))
+    return {}
+
+
+def _declared_anchorings(ctx: gates.GateContext, capture_anchoring: dict) -> dict:
+    """`{path: the anchoring that page declared}` — the capture's own where a page declared none."""
     return {path: (page.anchoring or capture_anchoring)
-            for path, page in zip(ctx.declared_pages, pages, strict=True)}
+            for path, page in _declared_by_path(ctx).items()}
 
 
 def _declared_page_type(ctx: gates.GateContext, path: str) -> str:
     """The `page_type` the account declared for one page — its own where it declared one, the
     capture's otherwise. Read for `gate_zone`'s folder/type agreement check."""
-    pages = tuple(getattr(ctx.outcome, "pages", ()) or ())
-    if len(pages) == len(ctx.declared_pages) and path in ctx.declared_pages:
-        page = pages[ctx.declared_pages.index(path)]
-        if page.page_type:
-            return str(page.page_type)
+    page = _declared_by_path(ctx).get(path)
+    if page is not None and page.page_type:
+        return str(page.page_type)
     return str(getattr(ctx.outcome, "page_type", "") or "")
 
 
@@ -323,12 +345,8 @@ _STALE_BASE_TAIL_ORDINARY = (
     "moved past hours ago. The likely cause is the GitHub App installation (revoked, or a token "
     "that has expired since this container started) or the network. The capture is left in the "
     "queue")
-_STALE_BASE_TAIL_MEETING = (
-    "against a commit the remote may have moved past. The capture is left in the queue")
-
-
 def _resolve_filing_base(item: dict, deps: Deps, *, log_noun: str, stale_tail: str) -> tuple:
-    """This item's base commit and the `deps` re-read at it, for either flow's preamble."""
+    """This item's base commit and the `deps` re-read at it."""
     settings = deps.settings
     base = gitcmd.base_ref(deps.repo, settings.branch)
     # Deployed only: a non-remote base is a FAULT, not a fallback. Raising rather than returning
@@ -445,18 +463,21 @@ def process_delete_item(conn, item: dict, deps: Deps) -> Result:
                 reason=f"the pages moved under this removal "
                        f"({', '.join(sorted({f.code for f in findings}))}) — nothing was deleted"))
         return _commit_delete(conn, item, deps, worktree, ops, diffs, edited, material,
-                              linter_path=linter_path, model_calls=len(spend))
+                              linter_path=linter_path, model_calls=len(spend),
+                              model_id=repair_settings.model)
 
 
 def _commit_delete(conn, item: dict, deps: Deps, worktree: str, ops: list, diffs: dict,
-                   edited: list, material: str, *, linter_path: str, model_calls: int) -> Result:
-    """The gates, the commit and the push for a performed removal.
+                   edited: list, material: str, *, linter_path: str, model_calls: int,
+                   model_id: str = "") -> Result:
+    """The gates, the commit, the push and the ledger row for a performed removal.
 
     `material=""` and `outcome=None` are honest: nothing was captured and no filing agent wrote
     here — the ops came off a row a person typed. Every gate that reads either is scoped to CREATED
     pages, and this diff has none.
     """
     from stigmergy.repair import deletion as repair_deletion
+    from stigmergy.repair import store as repair_store
 
     settings = deps.settings
     ctx = gates.GateContext(
@@ -481,8 +502,16 @@ def _commit_delete(conn, item: dict, deps: Deps, worktree: str, ops: list, diffs
     if surviving:
         return Result(schema.REJECTED, "", report.rejected_unremovable(reason=surviving))
 
+    # Taken BEFORE the commit, off the tree the gates just judged: afterwards the working tree is
+    # clean and there is nothing left to diff. It is the reading nobody gave this prose beforehand.
+    whole_diff = gitcmd.working_diff(worktree)
     message = _delete_commit_message(item, ops, material)
     sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this removal")
+    # The permanent record of what left the corpus. The per-page diffs also travel on the capture,
+    # which is where whoever asked reads them — and that row is purged with the retention window,
+    # while this one is not. Written AFTER the push, so a row exists only for a removal that landed.
+    repair_store.record_applied(conn, target_paths=edited, ops=ops, rationale=material,
+                                commit=sha, diff=whole_diff, model_id=model_id)
     return Result(schema.FILED, f"{repair_deletion.deleted_paths(ops)[0]}@{sha}",
                   report.filed_delete(deleted=repair_deletion.deleted_paths(ops),
                                       rewritten=diffs, commit=sha, model_calls=model_calls))
@@ -622,7 +651,7 @@ def _wants_gathered(agent) -> bool:
 def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
               corrective: str, *, passes: "AgentPasses | None" = None,
               linter_path: str = "") -> tuple:
-    """ONE agent pass: run it, apply its declared edits, stamp, and run every gate. Returns
+    """ONE agent pass: run it, apply its declared rewrites, stamp, and run every gate. Returns
     `(result, findings, outcome)`; a non-`None` `result` is TERMINAL, otherwise `findings` is what
     the corrective brief (or the final refusal) is built from.
     """
@@ -673,8 +702,8 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     if outcome is None:
         raise AgentError("the agent produced no usable account of what it did")
 
-    # CODE writes the page on the structured path. Must stay BEFORE the `GateContext` and
-    # `edits.apply_declared`, so the stamp and gates judge it as they judge the agent's.
+    # CODE writes the page on the structured path. Must stay BEFORE the `GateContext` and the
+    # declared rewrites, so the stamp and gates judge it as they judge the agent's.
     if structured:
         page_findings = _require_page_content(outcome)
         if page_findings:
@@ -724,13 +753,16 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
                          if structured else
                          "the agent wrote nothing for a capture it decided to file")
 
-    # Code's own additive edits, from the agent's DECLARATION.
-    # Applied before the diff the gates judge is taken, so the edits land in the same diff.
-    edited, edit_findings = edits.apply_declared(
-        worktree, outcome.edits, new_pages=ctx.in_lane_new_pages())
+    # The pages this capture brings UP TO DATE: the agent declares, code writes, the gates judge
+    # the diff. Told to the gates rather than inferred, like every other widening here, and applied
+    # before the diff the gates judge is taken so the rewrites land in the same diff.
+    rewritten = _apply_declared_rewrites(worktree, outcome)
+    if isinstance(rewritten, list):
+        return None, rewritten, outcome
+    ctx.rewrites_allowed = frozenset(rewritten["paths"])
 
-    # After `apply_declared` (its edits validated against the agent's own pages only) and before
-    # `_stamp` (the whole set stamped and judged as one diff).
+    # After the declared rewrites and before `_stamp` (the whole set stamped and judged as one
+    # diff).
     written_sources = _write_attached_sources(worktree, attachment, outcome, material)
     if isinstance(written_sources, list):
         return None, written_sources, outcome
@@ -744,11 +776,11 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     # Stamping changed the pages the gates are about to judge.
     ctx.entries = gitcmd.diff_entries(worktree)
     ctx.added = gitcmd.added_lines(worktree)
-    findings = gates.run_gates(ctx) + edit_findings + _cross_check_outcome(ctx)
+    findings = gates.run_gates(ctx) + _cross_check_outcome(ctx)
     if not gates.vetoes(findings):
-        return (_file(conn, item, deps, ctx, outcome, findings, worktree, edited=edited,
+        return (_file(conn, item, deps, ctx, outcome, findings, worktree,
                       source_pages=tuple(written_sources["paths"]),
-                      births=births),
+                      rewritten=rewritten, births=births),
                 [], outcome)
     return None, findings, outcome
 
@@ -784,7 +816,6 @@ def _declare_births(ctx: gates.GateContext, births: identity.Births) -> None:
                                      # key" — a field absent from this dict is not compared at
                                      # all, which is the difference between a rule and a hope.
                                      "acl": None}
-
 
 
 # Nothing in the account can name a path: `page.FOLDER_BY_TYPE` decides the folder, the title the
@@ -862,6 +893,86 @@ def _write_declared_pages(worktree: str, outcome, *, created: str) -> "dict | li
                    _build_ordinary_page(plan["stem"], plan["page_type"], page.body,
                                         page.links or outcome.links_created, created))
     return {"paths": [p["path"] for p in plans], "stems": [p["stem"] for p in plans]}
+
+
+def _rewrite_notices(outcome, rewritten) -> list:
+    """`[{path, submitted_by, why}]` — one per page this capture brought up to date.
+
+    The whole point of the list: somebody wrote each of those pages, and the trade that lets a
+    capture revise them rests on that person being TOLD. `submitted_by` is read off the page as it
+    stood BEFORE the rewrite, because the stamp is about to name this capture's submitter instead —
+    read after, every notice would be addressed to the person who did the rewriting.
+    """
+    owners = (rewritten or {}).get("owners") or {}
+    paths = set((rewritten or {}).get("paths") or ())
+    why_by_path = {str(r.get("path") or ""): str(r.get("why") or "") for r in outcome.rewrites}
+    return [{"path": path, "submitted_by": owners.get(path, ""), "why": why_by_path.get(path, "")}
+            for path in sorted(paths)]
+
+
+def _apply_declared_rewrites(worktree: str, outcome) -> "dict | list":
+    """Bring the pages this capture declared up to date, or hand back findings having written none.
+
+    **This is where the wiki stops accumulating and starts being current.** A capture that
+    contradicts what a page says used to be able to append a callout and nothing else, so the page
+    grew a footnote and the reader was left to work out which half was true.
+
+    What protects the page is NOT a proof — there is no separate approval to compare bytes against,
+    and comparing them to what the agent just wrote proves nothing. It is that the change is loud:
+    the diff is attributed, `git revert` is the undo, and **the person whose page it was is told**.
+    Two structural bounds are cheap and stay, and both live in `page.with_body_replaced` rather
+    than in a check: the frontmatter is untouched (a rewrite cannot change who may read a page) and
+    the H1 survives (a rewrite cannot turn a page into a different page while keeping its filename
+    and its inbound links).
+
+    Returns `{"paths": [...], "owners": {path: the submitted_by that page carries}}` — the owners
+    are what the notification is built from, read off the page BEFORE it is rewritten, because the
+    stamp is about to name this capture's submitter instead.
+    """
+    plans, findings = [], []
+    for rewrite in outcome.rewrites:
+        path = str(rewrite.get("path") or "")
+        if not path.startswith(gates.ALLOWED_WRITE_PREFIXES):
+            findings.append(gates.Finding(
+                agent_module._OUTCOME_GATE, "rewrite-outside-lane",
+                f"declares a rewrite of {path or '(no path)'}, which is not a page this capture "
+                f"may touch: only the pages people write are revisable — `sources/` is the "
+                f"verbatim archive and an entity page is the identity writer's",
+                locator=path))
+            continue
+        if not page_policy.is_inside(worktree, path):
+            findings.append(gates.Finding(
+                agent_module._OUTCOME_GATE, "rewrite-outside-worktree",
+                f"{path} does not resolve inside this capture's own checkout; nothing was written",
+                locator=path, repairable=False))
+            continue
+        full = os.path.join(worktree, path)
+        try:
+            with open(full, encoding="utf-8") as f:
+                before = f.read()
+        except (OSError, UnicodeDecodeError):
+            findings.append(gates.Finding(
+                agent_module._OUTCOME_GATE, "rewrite-missing-page",
+                f"declares a rewrite of {path}, which this checkout does not have: a page is "
+                f"brought up to date, never brought into existence, by a rewrite",
+                locator=path))
+            continue
+        if not page_policy.heading_of(before):
+            findings.append(gates.Finding(
+                agent_module._OUTCOME_GATE, "rewrite-headless-page",
+                f"{path} carries no H1, so a rewrite cannot prove the page stayed the page it was",
+                locator=path, repairable=False))
+            continue
+        plans.append({"path": path, "before": before,
+                      "after": page_policy.with_body_replaced(before, rewrite.get("body", "")),
+                      "owner": page_policy.submitted_by_of(before)})
+    if findings:
+        return findings
+    for plan in plans:
+        with page_policy.open_for_rewrite(os.path.join(worktree, plan["path"])) as f:
+            f.write(plan["after"])
+    return {"paths": [p["path"] for p in plans],
+            "owners": {p["path"]: p["owner"] for p in plans if p["owner"]}}
 
 
 def _plan_one_page(worktree: str, outcome, page, *, taken: list) -> "dict | list":
@@ -1067,8 +1178,8 @@ def _commit_and_push(conn, item, deps, ctx, worktree, message, *, what: str) -> 
                        config_env=config_env, author_name=author_name, author_email=author_email)
 
 
-def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
-          source_pages=(), births=None) -> Result:
+def _file(conn, item, deps, ctx, outcome, findings, worktree, *,
+          source_pages=(), rewritten=None, births=None) -> Result:
     """The gates passed: commit, push, and say what happened. `page_path` comes from the DIFF,
     never the outcome. `source_pages` arrives in PART order from the writer's own plan, and is
     excluded when picking `page_path` because `sources/` sorts before `wiki/`; the identity pages
@@ -1077,8 +1188,10 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
     # The FIRST DECLARED page, never the first alphabetically: with a capture writing several, the
     # one every surface names is the one the account put first, which is a decision rather than an
     # accident of sorting. `_cross_check_outcome` has already proven the declaration and the diff
-    # are the same set, so this path is in both.
-    page_path = ctx.declared_pages[0]
+    # are the same set, so this path is in both — and the DIFF's spelling is the one that names a
+    # file on disk, which is what `result_ref` has to resolve against later.
+    written = {page_policy.path_key(p): p for p in ctx.in_lane_new_pages()}
+    page_path = written.get(page_policy.path_key(ctx.declared_pages[0]), ctx.declared_pages[0])
     born = births.entities if births is not None else []
     added_aliases = births.aliases if births is not None else []
     message = _commit_message(item, outcome, page_path, n_sources=len(source_pages),
@@ -1092,10 +1205,10 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
         # `ctx.registry`, the registry this commit PUBLISHED: a newborn entity's name renders
         # from it, where `deps.registry` (the base commit's) would print the bare id.
         report.filed(page_path=page_path, commit=sha, pages_filed=list(ctx.declared_pages),
+                     pages_rewritten=_rewrite_notices(outcome, rewritten),
                      anchoring=outcome.anchoring or {}, registry=ctx.registry,
                      links=list(outcome.links_created),
                      overlaps=[dict(o) for o in outcome.overlaps],
-                     pages_edited=list(edited),
                      agent_rationale=getattr(outcome, "summary", ""),
                      findings=notes,
                      source_pages=list(source_pages),
@@ -1283,6 +1396,16 @@ def _write_attached_sources(worktree: str, attachment: SourceAttachment, outcome
                             in zip(paths, parts, strict=True)}}
 
 
+def _rewrite(worktree: str, path: str, transform) -> None:
+    """Read one file, transform its text, write it back. The one place a page already written in
+    this worktree is rewritten by code — the stamp, and nothing else."""
+    full = os.path.join(worktree, path)
+    with open(full, encoding="utf-8") as f:
+        text = f.read()
+    with page_policy.open_for_rewrite(full) as f:
+        f.write(transform(text))
+
+
 def _stamp_one_source(ctx: gates.GateContext, path: str, *, submitted_by: str, as_of: str,
                       digest: str, extracted_at: str, page_id: str, acl: list[str] | None) -> None:
     """Stamp ONE `sources/` page with the provenance group — THE source stamp for every flow.
@@ -1314,90 +1437,10 @@ def _stamp_attached_sources(ctx: gates.GateContext, deps: Deps, item: dict,
     digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()
     extracted_at = datetime.datetime.now(datetime.UTC).isoformat()
     for path in sorted(ctx.provenance_pages):
-        _stamp_one_source(ctx, path, submitted_by=item["submitted_by"], as_of=deps.as_of(),
+        _stamp_one_source(ctx, path, submitted_by=item["submitted_by"],
+                          as_of=_content_date(item, deps),
                           digest=digest, extracted_at=extracted_at,
                           page_id=str(ids_by_path.get(path) or ""), acl=_capture_acl(item))
-
-
-# The meeting flow: a page SET (source + meeting + N decisions), atomically or nothing. A SEPARATE
-# entry point because it contradicts `process_item`'s invariant of exactly one new page per
-# capture. The lane is flow-scoped on the `GateContext`, never the global `page.FOLDER_BY_TYPE`,
-# so an ordinary capture claiming `type: meeting` still parks.
-
-# EXACTLY these three folders, not the fast-lane set plus two: the knowledge-repo meeting brief and
-# `agent.MEETING_ALLOWED_WRITE_RE` both name three, and widening this would make the injected
-# prompt's claim false. If you change these, change both of those too.
-MEETING_SOURCE_PREFIX = "sources/meetings/"
-MEETING_MEETING_PREFIX = "wiki/meetings/"
-MEETING_DECISION_PREFIX = "wiki/decisions/"
-MEETING_WRITE_PREFIXES = (MEETING_SOURCE_PREFIX, MEETING_MEETING_PREFIX, MEETING_DECISION_PREFIX)
-MEETING_CREATABLE_TYPES = frozenset({"source", "meeting", "decision"})
-MEETING_EXTRA_FOLDER_TYPES = {"sources/meetings": "source", "wiki/meetings": "meeting"}
-
-
-def process_meeting_item(conn, item: dict, deps: Deps) -> Result:
-    """`process_item`'s sibling for `kind == "meeting"` rows; same never-raises contract."""
-    material, early = _pre_agent(conn, item, deps)
-    if early is not None:
-        return early
-    settings = deps.settings
-
-    base, deps = _resolve_filing_base(item, deps, log_noun="meeting submission",
-                                      stale_tail=_STALE_BASE_TAIL_MEETING)
-    passes = AgentPasses()
-    meeting_meta = _meeting_meta(item)
-    with base_inputs.linter_at(deps.repo, base) as linter_path, \
-            gitcmd.ephemeral_worktree(deps.repo, base.sha, settings.worktree_root) as worktree:
-        try:
-            return _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree,
-                                            passes, linter_path=linter_path)
-        except LibrarianError as ex:
-            ex.at_agent_attempt(passes.count, cost_usd=passes.cost_usd)
-            raise
-
-
-def _meeting_meta(item: dict) -> dict:
-    """The drop CLI's hints — the agent's HINTS, never instructions: they bind no placement."""
-    client = (item.get("hints") or {}).get("client", {})
-    return {k: client.get(k, "") for k in ("title", "meeting_date", "attendees", "source_label")}
-
-
-
-
-def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree, passes,
-                             *, linter_path: str = "") -> Result:
-    """`_run_in_worktree`'s meeting sibling: one pass, one corrective pass, then refuse."""
-    settings = deps.settings
-    corrective, findings, outcome, diagnostics = "", [], None, ""
-
-    for attempt in range(1, MAX_AGENT_ATTEMPTS + 1):
-        passes.count = attempt
-        try:
-            result, findings, outcome = _one_meeting_pass(
-                conn, item, deps, material, meeting_meta, worktree, corrective,
-                passes=passes, linter_path=linter_path)
-        except OutcomeShapeError as ex:
-            result, findings, outcome = None, list(ex.findings), None
-            agent_module.discard_outcome_file(worktree)
-        if result is not None:
-            return _stamp_cost(result, passes)
-
-        blocked = gates.unrepairable(findings)
-        if attempt < MAX_AGENT_ATTEMPTS:
-            if not blocked:
-                corrective = gates.corrective_brief(findings)
-                _reset_for_retry(worktree)
-                continue
-            log.warning("meeting item %s: skipping the corrective retry after agent pass %s — "
-                       "%s name(s) no repair the agent can perform", item.get("id"), attempt,
-                       ", ".join(sorted({f"{f.gate}/{f.code}" for f in blocked})))
-
-        diagnostics = preserve_refused_diff(worktree, item, findings,
-                                            root=settings.refused_diff_root)
-        break
-
-    return _stamp_cost(_refuse_meeting(item, findings, outcome, agent_attempts=passes.count,
-                                       diagnostics_path=diagnostics), passes)
 
 
 # Code writes every page in the set; the agent drafts free text as DATA. Its two free-text fields
@@ -1407,37 +1450,6 @@ def _yaml_str(value: str) -> str:
     """One frontmatter scalar, safely quoted — JSON scalars are valid YAML. A bare `f'"{v}"'`
     breaks on a title containing a `"`."""
     return json.dumps(str(value or ""))
-
-
-def _source_stem(meeting_meta: dict) -> str:
-    """Decided by CODE before the agent runs, so the path can be handed to it. No date prefix:
-    only the MEETING page's filename carries one."""
-    return f"{slugify(meeting_meta.get('title') or 'meeting')}-transcript"
-
-
-def _meeting_stem(meeting_date: str, title: str) -> str:
-    """The meeting page's stem — the one filename in this set that DOES carry a date
-    (`YYYY-MM-DD-<slug>`), from the agent's own `meeting_title` and the operator's `--date`."""
-    base = f"{meeting_date}-{title}" if meeting_date else title
-    return slugify(base)
-
-
-def _decision_stems(titles: list) -> list:
-    """One filesystem-safe stem per decision title; same-slug titles get `-2`, `-3`, ... The
-    SUFFIXED stem is registered too: counting bases alone lets `["Pricing", "Pricing",
-    "Pricing (2)"]` mint `pricing-2` twice, and `O_EXCL` then raises `FileExistsError`, which is
-    not a `LibrarianError` and escapes every handler in this flow."""
-    taken: set = set()
-    stems = []
-    for title in titles:
-        base = slugify(title) or "decision"
-        stem, n = base, 1
-        while stem in taken:
-            n += 1
-            stem = f"{base}-{n}"
-        taken.add(stem)
-        stems.append(stem)
-    return stems
 
 
 _SOURCE_SPLIT_LOOKBACK = 30
@@ -1504,57 +1516,6 @@ def _build_source_parts(stem: str, title: str, material: str, *, source_kind: st
     return parts
 
 
-def _build_decision_page(title: str, body: str, source_stem: str, created: str) -> str:
-    """A decision page's DRAFT — frontmatter code owns, body the agent drafted. `created`/`updated`
-    are contract-required but NOT server-owned, so code drafts them from the date `_stamp_meeting`
-    stamps as `as_of`; `sources/meetings/` pages are exempt, hence `_build_source_parts` omits them.
-    """
-    front = [
-        "type: decision",
-        f"title: {_yaml_str(title)}",
-        'owner: ""',
-        f"created: {created}",
-        f"updated: {created}",
-        "tags: [decision]",
-        "related: []",
-        f'sources: ["[[{source_stem}]]"]',
-    ]
-    body_text = (body or "").strip() or "## Context\n\n(not provided)"
-    text = "---\n" + "\n".join(front) + "\n---\n\n" + f"# {title}\n\n{body_text}\n"
-    return text
-
-
-def _build_meeting_page(outcome, title: str, source_stem: str, decision_stems: list,
-                        created: str) -> str:
-    """The meeting (provenance) page, built entirely by CODE; only "## Notes" is the agent's. A
-    links/decisions mismatch is impossible: the link list IS the decision list code just wrote."""
-    front = [
-        "type: meeting",
-        f"title: {_yaml_str(title)}",
-        f"created: {created}",
-        f"updated: {created}",
-        "tags: [meeting]",
-        "related: []",
-        f'sources: ["[[{source_stem}]]"]',
-    ]
-    lines = [f"# {title}", "", "## Attendees", ""]
-    lines += [f"- {a}" for a in outcome.attendees] or ["- (none recorded)"]
-    lines += ["", "## Action Items", ""]
-    items = list(outcome.action_items)
-    if items:
-        for entry in items:
-            box = "[x]" if entry.get("done") else "[ ]"
-            owner, action = entry.get("owner") or "", entry.get("action") or ""
-            row = " — ".join(part for part in (owner, action) if part)
-            lines.append(f"- {box} {row}".rstrip())
-    else:
-        lines.append("- (none)")
-    lines += ["", "## Decisions", ""]
-    lines += [f"- [[{stem}]]" for stem in decision_stems] or ["- (none from this meeting)"]
-    lines += ["", "## Notes", "", (outcome.meeting_notes or "").strip() or "(no additional notes)"]
-    return "---\n" + "\n".join(front) + "\n---\n\n" + "\n".join(lines) + "\n"
-
-
 def _write_new(worktree: str, rel_path: str, text: str) -> None:
     """Create one brand-new page inside `worktree`, or raise `WorktreeError` naming the stage. THE
     write every page-building flow goes through, so both guards live here: `page.is_inside` RESOLVES
@@ -1577,357 +1538,3 @@ def _write_new(worktree: str, rel_path: str, text: str) -> None:
             f"could not write {rel_path} ({ex.__class__.__name__}); nothing was committed") from ex
 
 
-def _write_meeting_pages(worktree: str, outcome, meeting_meta: dict, material: str, *,
-                         source_stem: str, created: str):
-    """CODE writes every page in the set. All-or-nothing: every path is checked against the repo's
-    existing pages before the first byte is written. Returns the plan, or one veto `Finding`."""
-    meeting_date = meeting_meta.get("meeting_date") or ""
-    meeting_title = outcome.meeting_title or meeting_meta.get("title") or "Meeting"
-    meeting_stem = _meeting_stem(meeting_date, meeting_title)
-    meeting_path = f"{MEETING_MEETING_PREFIX}{meeting_stem}.md"
-
-    decision_titles = [d.get("title", "") for d in outcome.decisions]
-    decision_stems = _decision_stems(decision_titles)
-    decision_paths = [f"{MEETING_DECISION_PREFIX}{stem}.md" for stem in decision_stems]
-
-    source_parts = _build_source_parts(source_stem, f"{meeting_title} — transcript", material,
-                                       source_kind="meeting",
-                                       tags=("source", "meeting-transcript"), url="")
-    source_paths = [f"{MEETING_SOURCE_PREFIX}{stem}.md" for stem, _pid, _text in source_parts]
-
-    existing = page_policy.path_keys(gitcmd.tracked_paths(worktree))
-    all_paths = [*source_paths, meeting_path, *decision_paths]
-    collisions = sorted({p for p in all_paths if page_policy.path_key(p) in existing})
-    if collisions:
-        return [gates.Finding(
-            "outcome", "existing-page-collision",
-            f"the page(s) this meeting would create already exist in the repo: "
-            f"{', '.join(collisions)} — the meeting or a decision needs a different title",
-            locator=", ".join(collisions))]
-
-    for path, (_stem, _pid, text) in zip(source_paths, source_parts, strict=True):
-        _write_new(worktree, path, text)
-    for path, declared in zip(decision_paths, outcome.decisions, strict=True):
-        _write_new(worktree, path,
-                  _build_decision_page(declared.get("title", ""), declared.get("body", ""),
-                                       source_stem, created))
-    _write_new(worktree, meeting_path,
-              _build_meeting_page(outcome, meeting_title, source_stem, decision_stems, created))
-
-    return {
-        "source_stems": [stem for stem, _pid, _text in source_parts],
-        # Chain identity per part path; `_stamp_meeting` stamps it as `id:`.
-        "source_ids_by_path": {path: pid for path, (_stem, pid, _text)
-                               in zip(source_paths, source_parts, strict=True)},
-        "meeting_stem": meeting_stem,
-        "decision_stems": decision_stems,
-        "decisions_by_path": dict(zip(decision_paths, outcome.decisions, strict=True)),
-    }
-
-
-def _edits_with_resolved_links(outcome, written: dict) -> list:
-    """The declared edits, with any `link` naming one of THIS capture's own decisions replaced by
-    the stem the worker actually filed that decision under.
-
-    **The agent cannot spell the filename, and must not have to.** It declares a decision's
-    `title`; `_decision_stems` slugifies that title into the page's basename, and a wikilink
-    resolves by basename — so `[[<the title>]]` resolves to nothing. Without this translation a
-    perfectly correct declaration is refused by `edits.validate` as a dead link, which refuses the
-    WHOLE set and spends the capture's one corrective retry on a naming convention the agent was
-    never shown. Observed: `linking [[Q3 sync — decision 1]], which resolves to no page in the
-    graph`, twice, then `failed`.
-
-    Telling the brief to slugify instead was the alternative and it is the weaker one: `slugify`
-    strips accents, folds punctuation AND truncates at 60 characters, so for a real title the rule
-    is a guess, and a wrong guess costs the same retry. The worker names the page, so the worker
-    resolves the name — the same reason it, not the agent, builds the meeting page's own
-    `## Decisions` links out of `decision_stems`.
-
-    A `link` that is already a resolvable page name is passed through untouched, so both spellings
-    work and an existing page is never shadowed by a decision that merely shares its title:
-    lookup is by the capture's declared titles only, and a miss keeps what the agent wrote.
-    """
-    declared = list(outcome.edits or ())
-    if not declared:
-        return declared
-    stem_by_title = {}
-    for decision, stem in zip(outcome.decisions or (), written.get("decision_stems") or (),
-                              strict=False):
-        title = str(decision.get("title", "")).strip()
-        if title:
-            stem_by_title.setdefault(title, stem)
-    return [{**edit, "link": stem_by_title.get(str(edit.get("link", "")).strip(),
-                                               edit.get("link", ""))}
-            for edit in declared]
-
-
-def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, corrective, *,
-                      passes: "AgentPasses | None" = None, linter_path: str = "") -> tuple:
-    """One meeting pass: call the tool-less meeting agent, have CODE write every page of the set,
-    stamp, gate. Same return contract as `_one_pass`; the agent's only write is its outcome file."""
-    settings = deps.settings
-    source_stem = _source_stem(meeting_meta)
-    source_page_path = f"{MEETING_SOURCE_PREFIX}{source_stem}.md"
-    # Built HERE, never inside a backend — `_one_pass`' own reason: both flows must share one
-    # context builder and one fence discipline. Unconditional, unlike the ordinary flow's
-    # `wants_gathered` branch: no backend on this flow holds a tool, so `render_gathered`'s
-    # no-tools defaults are simply the truth here and there is no second shape to declare.
-    # Re-run on the corrective pass, because `_reset_for_retry` resets the tree.
-    gathered = agent_module.render_gathered(
-        gather.gather(worktree, deps.registry, material,
-                      top_k=settings.gather_top_k,
-                      excerpt_lines=settings.gather_excerpt_lines,
-                      acl=_capture_acl(item)))
-    try:
-        run = deps.agent.run_meeting(worktree=worktree, material=material,
-                                     meeting_meta=meeting_meta, registry=deps.registry,
-                                     source_page_path=source_page_path,
-                                     corrective=corrective, gathered=gathered)
-    except AgentError as ex:
-        if passes is not None:
-            passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
-        raise
-    if passes is not None:
-        passes.cost_usd += run.cost_usd
-    outcome = run.outcome
-    agent_module.discard_outcome_file(worktree)
-    if outcome is None:
-        raise AgentError("the meeting agent produced no usable account of what it did")
-
-    written = _write_meeting_pages(worktree, outcome, meeting_meta, material,
-                                   source_stem=source_stem,
-                                   created=meeting_meta.get("meeting_date") or deps.as_of())
-    if isinstance(written, list):
-        return None, written, outcome
-
-    # The identities the account introduces — the same writer the ordinary flow uses, so a meeting
-    # whose decisions are about something new lands with that something created beside them.
-    # `related` names pages by STEM, which is what a wikilink resolves by: the decision pages
-    # this set wrote (slugified, never their titles), or the meeting page when there is none.
-    decision_stems = [os.path.basename(path)[:-len(".md")]
-                      for path in written.get("decisions_by_path", {})]
-    births = identity.write_births(
-        worktree, outcome=outcome, base_registry=deps.registry, material=material,
-        hints=meeting_meta, today=deps.as_of(),
-        registration=schema.registration_from_hints(item.get("hints")),
-        approver=str(item.get("submitted_by") or ""),
-        acl=_capture_acl(item),
-        related=decision_stems or [written["meeting_stem"]])
-    if isinstance(births, list):
-        return None, births, outcome
-
-    # `edits_allowed` keeps its `True` default: this flow HAS an edit mechanism now, the same one
-    # the fast lane has — declared in the account, performed by `edits.apply_declared` below,
-    # judged additive by `gate_body_rewrite` like any other modification.
-    ctx = gates.GateContext(
-        worktree=worktree,
-        entries=gitcmd.diff_entries(worktree),
-        added=gitcmd.added_lines(worktree),
-        material=material, outcome=outcome, registry=births.registry,
-        acl=_capture_acl(item),
-        linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
-        write_prefixes=MEETING_WRITE_PREFIXES, creatable_types=MEETING_CREATABLE_TYPES,
-        extra_folder_types=dict(MEETING_EXTRA_FOLDER_TYPES))
-    _declare_births(ctx, births)
-
-    if not ctx.entries:
-        raise AgentError("the meeting flow wrote nothing for a transcript it decided to file")
-
-    # Code's own additive edits, from the agent's DECLARATION — `_one_pass`' call, unchanged, on
-    # the set's own new pages. `edits.validate` admits the three EDITABLE folders (`page.
-    # FOLDER_BY_TYPE`), which is a wider set than this flow's own lane: an edit to `wiki/notes/` or
-    # `wiki/concepts/` passes there and is then refused by `gate_zone` as out-of-lane, so
-    # `wiki/decisions/` is the one folder a meeting can really edit. The lane is deliberately NOT
-    # widened to match — it is the BUILDER's range and `test_gates_unit.py` pins it as such — and
-    # the brief tells the agent which pages it may name.
-    edited, edit_findings = edits.apply_declared(
-        worktree, _edits_with_resolved_links(outcome, written),
-        new_pages=ctx.in_lane_new_pages())
-    ctx.entries = gitcmd.diff_entries(worktree)
-    ctx.added = gitcmd.added_lines(worktree)
-
-    _stamp_meeting(ctx, deps, item, outcome, meeting_meta, written)
-
-    ctx.entries = gitcmd.diff_entries(worktree)
-    ctx.added = gitcmd.added_lines(worktree)
-    findings = (gates.run_gates(ctx) + edit_findings
-                + _cross_check_meeting_outcome(ctx, outcome))
-    if not gates.vetoes(findings):
-        return (_file_meeting(conn, item, deps, ctx, outcome, findings, worktree,
-                              written, edited=edited, births=births),
-                [], outcome)
-    return None, findings, outcome
-
-
-def _decision_pages(ctx: gates.GateContext) -> list[str]:
-    return sorted(p for p in ctx.in_lane_new_pages() if p.startswith("wiki/decisions/"))
-
-
-def _source_pages(ctx: gates.GateContext) -> list[str]:
-    return sorted(p for p in ctx.in_lane_new_pages() if p.startswith("sources/meetings/"))
-
-
-def _meeting_pages(ctx: gates.GateContext) -> list[str]:
-    return sorted(p for p in ctx.in_lane_new_pages() if p.startswith("wiki/meetings/"))
-
-
-def _cross_check_meeting_outcome(ctx: gates.GateContext, outcome) -> list:
-    """The page-SET's atomicity contract: N >= 1 source pages, exactly one meeting page, N >= 0
-    decision pages, nothing else. Thin because CODE authors every page from this same `outcome`.
-
-    The date-bearing body-link convention is deliberately NOT vetoed here: only the meeting page's
-    filename carries a date, and a date-bearing name in body prose is style rather than safety, so
-    the gardener's `date-bearing-body-link` check flags it over the committed corpus instead."""
-    out = []
-    new_pages = set(ctx.in_lane_new_pages()) - ctx.born_entity_pages
-    source_pages, meeting_pages, decision_pages = (set(_source_pages(ctx)), set(_meeting_pages(ctx)),
-                                                    set(_decision_pages(ctx)))
-    other = new_pages - source_pages - meeting_pages - decision_pages
-    if other:
-        out.append(gates.Finding(
-            "outcome", "unexpected-page",
-            f"created page(s) outside the meeting flow's set (one or more source-page parts, one "
-            f"meeting page, any number of decision pages): {', '.join(sorted(other))}",
-            locator=", ".join(sorted(other))))
-    if len(source_pages) < 1:
-        out.append(gates.Finding(
-            "outcome", "source-page-count",
-            "created no page under sources/meetings/; a meeting capture files at least one "
-            "source-page part",
-            locator="(none)"))
-    if len(meeting_pages) != 1:
-        out.append(gates.Finding(
-            "outcome", "meeting-page-count",
-            f"created {len(meeting_pages)} page(s) under wiki/meetings/; a meeting capture "
-            f"files exactly one meeting page",
-            locator=", ".join(sorted(meeting_pages)) or "(none)"))
-    if len(decision_pages) != len(outcome.decisions):
-        out.append(gates.Finding(
-            "outcome", "decision-count-mismatch",
-            f"the outcome describes {len(outcome.decisions)} decision(s) but "
-            f"{len(decision_pages)} decision page(s) were written — code's own construction "
-            f"disagreed with itself",
-            locator=", ".join(sorted(decision_pages)) or "(none)"))
-
-    return out
-
-
-def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
-                   meeting_meta: dict, written: dict) -> None:
-    """Stamp every page this pass created — PER PAGE, because a decision page's `entity:` differs
-    from its siblings'. `as_of` is the meeting's OWN date, never today's."""
-    as_of = meeting_meta.get("meeting_date") or deps.as_of()
-    # One capture, one audience — the transcript parts, the meeting page and every decision get
-    # the SAME label the door decided. The meeting page carrying none while its
-    # decisions carried theirs is §4 case 5: the set was labelled and the page listing it was not.
-    acl = _capture_acl(item)
-    source_pages, meeting_pages, decision_pages = (_source_pages(ctx), _meeting_pages(ctx),
-                                                    _decision_pages(ctx))
-    ctx.provenance_pages = frozenset(source_pages)
-    decisions_by_path = written.get("decisions_by_path", {})
-
-    source_ids_by_path = written.get("source_ids_by_path", {})
-    digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()
-    extracted_at = datetime.datetime.now(datetime.UTC).isoformat()
-    for path in source_pages:
-        _stamp_one_source(ctx, path, submitted_by=item["submitted_by"], as_of=as_of,
-                          digest=digest, extracted_at=extracted_at,
-                          page_id=str(source_ids_by_path.get(path) or ""), acl=acl)
-
-    for path in meeting_pages:
-        ctx.page_declared[path] = {"page_type": "meeting"}   # no "anchoring" key: provenance only
-        _rewrite(ctx.worktree, path, lambda text, a=acl: page_policy.stamp_server_fields(
-            text, submitted_by=item["submitted_by"], acl=a, as_of=as_of, entity=()))
-        ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "as_of": as_of,
-                                     "submitted_by": item["submitted_by"], "entity": (),
-                                     "acl": acl}
-
-    for path in decision_pages:
-        declared = decisions_by_path.get(path) or {}
-        anchoring = declared.get("anchoring") or {}
-        ctx.page_declared[path] = {"page_type": "decision", "anchoring": anchoring}
-        # `ctx.registry`, the registry this commit publishes: a decision about an entity born in
-        # this same commit resolves exactly like one about an old entity.
-        entity_ids, unresolved = gates.resolve_entity_ids(anchoring, ctx.registry)
-        if str(anchoring.get("kind", "")).lower() == "entity" and (unresolved or not entity_ids):
-            entity_ids = []   # same defence in depth `_stamp` takes for the ordinary flow
-        _rewrite(ctx.worktree, path, lambda text, e=entity_ids, a=acl: page_policy.stamp_server_fields(
-            text, submitted_by=item["submitted_by"], acl=a, as_of=as_of, entity=e))
-        ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "as_of": as_of,
-                                     "submitted_by": item["submitted_by"],
-                                     "entity": entity_ids, "acl": acl}
-
-
-def _rewrite(worktree: str, path: str, transform) -> None:
-    full = os.path.join(worktree, path)
-    try:
-        with open(full, encoding="utf-8") as f:
-            drafted = f.read()
-    except (OSError, UnicodeDecodeError):
-        return
-    with page_policy.open_for_rewrite(full) as f:
-        f.write(transform(drafted))
-
-
-def _meeting_commit_message(item: dict, outcome, n_decisions: int) -> str:
-    """One capture, one commit, one page SET."""
-    return (f"feat(meeting): {_subject(outcome.meeting_title)}\n\n"
-            f"Filed by the librarian's meeting distiller from capture #{item['id']}: 1 source "
-            f"page, 1 meeting page, {n_decisions} decision page(s).\n\n"
-            f"Submitted-by: {item['submitted_by']}\n")
-
-
-def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
-                  *, edited=(), births=None) -> Result:
-    """The gates passed over the whole SET: one commit, push, report. `written` carries the
-    code-computed source parts and the decision-path-to-anchoring map; `edited` is what
-    `edits.apply_declared` actually changed on pages that already existed — the one surface a human
-    reads that names a page this capture touched without creating it."""
-    meeting_pages, decision_pages = _meeting_pages(ctx), sorted(_decision_pages(ctx))
-    # In PART order, not alphabetical — `-p2` sorts before the bare stem's `.md`.
-    source_pages = [f"{MEETING_SOURCE_PREFIX}{stem}.md" for stem in written["source_stems"]]
-    meeting_page = meeting_pages[0]
-    message = _meeting_commit_message(item, outcome, len(decision_pages))
-    sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this meeting")
-
-    decisions_by_path = written.get("decisions_by_path", {})
-    decisions = [{"path": path, "anchoring": (decisions_by_path.get(path) or {}).get("anchoring", {})}
-                for path in decision_pages]
-    notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
-    notes += [f.message for f in findings if f.severity == gates.SEVERITY_NOTE]
-
-    # Touched ids come from `ctx.stamped_by_path` — the server-RESOLVED values, never the agent's
-    # declared names. Best-effort: the set is already pushed, so a regeneration fault must not turn
-    # a filed meeting into a `failed` capture. It pushes a SECOND commit on top, so the branch tip
-    # does NOT name what this capture filed — `result_ref`/`sha` do.
-    touched_ids = sorted({eid for path in decision_pages
-                          for eid in (ctx.stamped_by_path.get(path, {}).get("entity") or [])})
-    if touched_ids:
-        try:
-            # `views_regenerate.run` writes its own `job_runs` row before re-raising.
-            asyncio.run(views_regenerate.run(
-                worktree, conn, touched_ids, registry=deps.registry, branch=deps.settings.branch,
-                guarded=False,
-                job=f"{views_regenerate.JOB_NAME}-on-meeting"))
-        except Exception:  # noqa: BLE001 — a best-effort post-step, see the comment above
-            log.error("view regeneration failed after meeting %s filed (entities: %s)",
-                      item.get("id"), touched_ids, exc_info=True)
-    # `result_ref` names the MEETING PAGE, keeping `dedup.Match.page_path`'s `rsplit("@")` contract.
-    return Result(
-        schema.FILED, f"{meeting_page}@{sha}",
-        report.filed_meeting(source_pages=source_pages, meeting_page=meeting_page,
-                             decisions=decisions, commit=sha, pages_edited=list(edited),
-                             agent_rationale=getattr(outcome, "summary", ""),
-                             registry=ctx.registry,
-                             entities_born=births.entities if births else [],
-                             aliases_added=births.aliases if births else [],
-                             entities_updated=births.updates if births else [],
-                             entities_withheld=births.withheld if births else []),
-        findings=notes)
-
-
-def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
-                    diagnostics_path: str = "") -> Result:
-    """Both meeting passes vetoed — the same two terminal states as the ordinary flow."""
-    return _route_refusal(item, findings, outcome, agent_attempts=agent_attempts,
-                          diagnostics_path=diagnostics_path)

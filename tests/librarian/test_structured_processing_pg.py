@@ -6,10 +6,11 @@ text home instead of writing it.
 The ordinary pydantic-ai run holds tools and writes its own page again, so the content-carrying
 branch of `processing._one_pass` — `_require_page_content`, `_write_ordinary_page`, the filename
 rules, the placement table, the cross-check against a code-written diff — is production code whose
-only exerciser is a `structured_ordinary = True` stand-in. Deleting the branch was not on the table:
-it is the meeting flow's own writer discipline applied to one page, it is what a fourth structured
-backend declares into, and an unexercised branch that ships is the shape this repo refuses. So the
-provider moved out and everything else here stayed.
+only exerciser is a `structured_ordinary = True` stand-in. Deleting the branch was not on the
+table: it is the ONE road on which code is the sole author of a page — the discipline a capture
+that declares N pages depends on — it is what a fourth structured backend declares into, and an
+unexercised branch that ships is the shape this repo refuses. So the provider moved out and
+everything else here stayed.
 
 `test_processing_pg.py` proves the ordinary flow against the offline double, which takes the
 EXPLORING shape — it writes its own page through `agent.confined_write`, as the real backend now
@@ -60,9 +61,9 @@ from stigmergy.librarian.pydantic_backend import (
     FilingAccount,
     NewEntity,
     OrdinaryAnchoring,
-    OrdinaryEdit,
     OrdinaryFinding,
     OrdinaryPage,
+    OrdinaryRewrite,
     PydanticFilingAgent,
 )
 from tests.librarian import support
@@ -92,7 +93,7 @@ def _body(*, link: str = REGISTERED, extra: str = "") -> str:
     """One page body, padded past the contract linter's thirty-line minimum.
 
     `len(lines)`, not the non-blank count: the linter trims only leading and trailing blanks, so a
-    blank line between sections counts toward the minimum — the same arithmetic the meeting
+    blank line between sections counts toward the minimum — the same arithmetic the offline
     double's own body builder documents. A body that under-padded would earn a thin-page finding
     for a reason that has nothing to do with what is being tested.
     """
@@ -111,7 +112,7 @@ def _body(*, link: str = REGISTERED, extra: str = "") -> str:
 
 def _account(*, title: str = "Acme Corp Renewal Window", page_type: str = "note",
              body: str | None = None, anchor: str = REGISTERED, links=(REGISTERED,),
-             edits=(), new_entities=(), company_reason: str = "") -> FilingAccount:
+             new_entities=(), company_reason: str = "") -> FilingAccount:
     """A structured account, in the schema the backend declares as its output type.
 
     `anchor` is what the account DECLARES its aboutness to be and `links` what `related:` is built
@@ -128,7 +129,6 @@ def _account(*, title: str = "Acme Corp Renewal Window", page_type: str = "note"
                             body=_body() if body is None else body)],
         anchoring=anchoring,
         links_created=list(links),
-        edits=list(edits),
         summary="filed the renewal note",
         new_entities=list(new_entities))
 
@@ -202,10 +202,6 @@ class _StructuredAgent:
             raise
         return run
 
-    def run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
-                    corrective=""):                 # pragma: no cover — never called
-        raise AssertionError("the ordinary flow must not reach the meeting call")
-
 
 def _rig(tmp_path, model_factory, *, model: str = PRICED_MODEL, **setting_overrides):
     """A `RepoEnv` + `Deps` whose agent is the structured stand-in above, over `model_factory`.
@@ -274,7 +270,7 @@ def test_a_capture_declaring_several_pages_files_all_of_them_each_anchored_on_it
         decision="file",
         pages=[
             OrdinaryPage(title="Acme Corp Renewal Window", page_type="note", body=_body()),
-            OrdinaryPage(title="Renewal Pricing Decision", page_type="decision", body=_body(),
+            OrdinaryPage(title="Renewal Pricing Rule", page_type="concept", body=_body(),
                          anchoring=OrdinaryAnchoring(kind="company",
                                                      reason="a pricing rule that applies across "
                                                             "the whole company, not to one client"),
@@ -282,22 +278,22 @@ def test_a_capture_declaring_several_pages_files_all_of_them_each_anchored_on_it
         ],
         anchoring=OrdinaryAnchoring(kind="entity", entities=[REGISTERED]),
         links_created=[REGISTERED],
-        summary="filed the renewal note and the pricing decision it established")
+        summary="filed the renewal note and the pricing rule it established")
     env, deps, _ = _rig(tmp_path, lambda: _model(account))
 
     _, result = _file(clean_queue, deps)
 
     assert result.status == schema.FILED, result.report.get("summary")
     sha, changed = _committed(env, result)
-    assert _authored(changed) == ["wiki/decisions/Renewal Pricing Decision.md",
+    assert _authored(changed) == ["wiki/concepts/Renewal Pricing Rule.md",
                                   "wiki/notes/Acme Corp Renewal Window.md"], changed
 
-    # Each page carries ITS OWN anchor: the note the entity it is about, the decision the checked
+    # Each page carries ITS OWN anchor: the note the entity it is about, the concept the checked
     # company-wide declaration. One anchor for the set would have filed the second against Acme.
     note = support.read_filed_page(env.repo, sha, "wiki/notes/Acme Corp Renewal Window.md")
-    decision = support.read_filed_page(env.repo, sha, "wiki/decisions/Renewal Pricing Decision.md")
+    concept = support.read_filed_page(env.repo, sha, "wiki/concepts/Renewal Pricing Rule.md")
     assert f'entity: ["{REGISTERED_ID}"]' in note
-    assert "entity: []" in decision
+    assert "entity: []" in concept
 
     # The FIRST declared page is the one every surface names — the account's own order, never the
     # diff's alphabetical one, which would have named the decision.
@@ -305,6 +301,49 @@ def test_a_capture_declaring_several_pages_files_all_of_them_each_anchored_on_it
     assert result.report["page_path"] == "wiki/notes/Acme Corp Renewal Window.md"
     assert sorted(result.report["pages_filed"]) == sorted(_authored(changed))
     assert "2 pages" in result.report["summary"]
+
+
+def test_every_page_of_a_multi_page_filing_carries_the_captures_audience(
+        tmp_path, clean_queue, require_gitleaks):
+    """The audience is the CAPTURE's, so every page the capture writes carries it — including the
+    second, the third, and the verbatim archive.
+
+    **This case had no home until a capture could write more than one page.** Its sibling,
+    `test_acl_from_the_row_pg.py`'s `test_every_page_a_meeting_capture_writes_carries_the_captures_
+    audience`, runs the offline double, which declares exactly one page — so a stamper that
+    stopped at the first declared page would pass every audience test in the suite and publish the
+    rest of a restricted transcript's conclusions to everyone. The multi-page account only exists
+    on this road, so the check belongs here.
+
+    Read back out of the object database at the sha the filing attributed to itself, not off the
+    worktree: what a reader can see is what landed in the commit.
+    """
+    account = FilingAccount(
+        decision="file",
+        pages=[
+            OrdinaryPage(title="Acme Corp Renewal Window", page_type="note", body=_body()),
+            OrdinaryPage(title="Renewal Pricing Rule", page_type="concept", body=_body(),
+                         anchoring=OrdinaryAnchoring(kind="company",
+                                                     reason="a pricing rule that applies across "
+                                                            "the whole company, not to one client"),
+                         links=[]),
+        ],
+        anchoring=OrdinaryAnchoring(kind="entity", entities=[REGISTERED]),
+        links_created=[REGISTERED],
+        summary="filed the renewal note and the pricing rule it established")
+    env, deps, _ = _rig(tmp_path, lambda: _model(account))
+
+    _, result = _file(clean_queue, deps, acl=["leadership"])
+
+    assert result.status == schema.FILED, result.report.get("summary")
+    sha, changed = _committed(env, result)
+    assert len(_authored(changed)) == 2, changed
+    assert [p for p in changed if p.startswith("sources/")], (
+        f"the verbatim archive is missing, so this test's sharpest page is unchecked: {changed}")
+    for page_path in changed:
+        page = support.read_filed_page(env.repo, sha, page_path)
+        acl_line = next((ln for ln in page.splitlines() if ln.startswith("acl:")), "(none)")
+        assert acl_line == 'acl: ["leadership"]', f"{page_path}\n{page}"
 
 
 def test_two_declared_pages_that_would_take_the_same_path_are_refused_before_anything_is_written(
@@ -329,6 +368,105 @@ def test_two_declared_pages_that_would_take_the_same_path_are_refused_before_any
     assert result.status in (schema.FAILED, schema.REJECTED), result.report.get("summary")
     assert support.branch_sha(env.bare) == before
     assert "Same Title" in result.report["summary"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# A capture brings an existing page UP TO DATE
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def test_a_capture_rewrites_an_existing_page_and_the_person_who_filed_it_is_named(
+        tmp_path, clean_queue, require_gitleaks):
+    """**The pattern's central claim, and the trade it rests on, in one artifact.**
+
+    OLD BEHAVIOUR: an existing page could only GAIN an appended callout. A capture that superseded
+    what a page said left the page asserting both things and the reader to work out which — so the
+    corpus accumulated footnotes instead of getting better, which is the opposite of a wiki a model
+    keeps current.
+
+    What is asserted here is the whole of what protects that page, because there is nothing else:
+
+    * the new body landed, read back out of the object database at the filing's own sha;
+    * the H1 survived, so the page is still the page every inbound link resolves to;
+    * the frontmatter did NOT move — `acl:`, `entity:` and `submitted_by:` are the page's, not the
+      reviser's, and a rewrite that could move `acl:` would let one capture change who may read
+      somebody else's page;
+    * **the person who filed it is named on the report, with the reason** — the notice the Slack
+      transport turns into a DM. There is no proof the new text is right; the bytes are the ones
+      the agent just wrote. What stands in its place is that the change is loud and has an owner,
+      and this field is that half.
+    """
+    body = "\n".join(["## What the note says now", "",
+                       "The renewal window moved to 45 days in August."] + list(_FILLER))
+    account = FilingAccount(
+        decision="file",
+        pages=[OrdinaryPage(title="Acme Corp Renewal Window", page_type="note", body=_body())],
+        anchoring=OrdinaryAnchoring(kind="entity", entities=[REGISTERED]),
+        links_created=[REGISTERED],
+        rewrites=[OrdinaryRewrite(path="wiki/notes/Existing Note.md", body=body,
+                                  why="the 30-day window this page states was superseded in "
+                                      "August; the capture carries the new figure")],
+        summary="filed the renewal note and brought the older one up to date")
+    env, deps, _ = _rig(tmp_path, lambda: _model(account))
+
+    _, result = _file(clean_queue, deps)
+
+    assert result.status == schema.FILED, result.report.get("summary")
+    sha, changed = _committed(env, result)
+    assert "wiki/notes/Existing Note.md" in changed, changed
+
+    page = support.read_filed_page(env.repo, sha, "wiki/notes/Existing Note.md")
+    assert "The renewal window moved to 45 days in August." in page
+    assert "# Existing Note" in page                    # the page is still the same page
+    assert "submitted_by: ana@acme.com" in page         # ...and still hers
+    assert 'related: ["[[Acme Corp]]"]' in page
+
+    notices = result.report["pages_rewritten"]
+    assert [n["path"] for n in notices] == ["wiki/notes/Existing Note.md"]
+    assert notices[0]["submitted_by"] == "ana@acme.com"
+    assert "superseded in August" in notices[0]["why"]
+    assert "up to date" in result.report["summary"]
+
+
+def test_a_rewrite_of_a_page_that_does_not_exist_is_refused_with_nothing_written(
+        tmp_path, clean_queue, require_gitleaks):
+    """A page is brought up to date, never brought into existence, by a rewrite: the declaration
+    names a page the capture did not write, so a missing one is an account describing a corpus that
+    is not there. Refused before anything lands, and the remote does not move."""
+    account = FilingAccount(
+        decision="file",
+        pages=[OrdinaryPage(title="Acme Corp Renewal Window", page_type="note", body=_body())],
+        anchoring=OrdinaryAnchoring(kind="entity", entities=[REGISTERED]),
+        links_created=[REGISTERED],
+        rewrites=[OrdinaryRewrite(path="wiki/notes/Never Existed.md", body="text",
+                                  why="a page this repo does not have")],
+        summary="a rewrite of nothing")
+    env, deps, _ = _rig(tmp_path, lambda: _model(account))
+    before = support.branch_sha(env.bare)
+
+    _, result = _file(clean_queue, deps)
+
+    assert result.status in (schema.FAILED, schema.REJECTED), result.report.get("summary")
+    assert support.branch_sha(env.bare) == before
+
+
+def test_a_rewrite_of_the_verbatim_archive_is_refused(tmp_path, clean_queue, require_gitleaks):
+    """**`sources/` is the one absolute**, and this is the capture road asking for it directly. The
+    archive is what a page's `content_hash` means; a capture that could revise it could make the
+    evidence agree with the synthesis after the fact."""
+    account = FilingAccount(
+        decision="file",
+        pages=[OrdinaryPage(title="Acme Corp Renewal Window", page_type="note", body=_body())],
+        anchoring=OrdinaryAnchoring(kind="entity", entities=[REGISTERED]),
+        links_created=[REGISTERED],
+        rewrites=[OrdinaryRewrite(path="sources/notes/whatever-capture.md", body="rewritten",
+                                  why="tidying the transcript")],
+        summary="a rewrite of the archive")
+    env, deps, _ = _rig(tmp_path, lambda: _model(account))
+    before = support.branch_sha(env.bare)
+
+    _, result = _file(clean_queue, deps)
+
+    assert result.status in (schema.FAILED, schema.REJECTED), result.report.get("summary")
+    assert support.branch_sha(env.bare) == before
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -526,9 +664,6 @@ def test_a_knowledge_folder_symlinked_out_of_the_checkout_refuses_readably_and_w
             passes.append(1)
             return self.inner.run(**kwargs)
 
-        def run_meeting(self, **kwargs):                      # pragma: no cover — never called
-            return self.inner.run_meeting(**kwargs)
-
     deps = dataclasses.replace(deps, agent=_Counting(agent))
     before = support.all_commit_shas(env.bare)
 
@@ -716,10 +851,6 @@ class _ScriptedAgent:
         return AgentRun(outcome=self.outcomes[min(self.calls, len(self.outcomes)) - 1],
                         cost_usd=0.01)
 
-    def run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
-                    corrective=""):                 # pragma: no cover — never called
-        raise AssertionError("the ordinary flow must not reach the meeting call")
-
 
 def _raw_account(*, title: str = "Acme Corp Renewal Window", page_type: str = "note",
                  body: str | None = None, findings=()) -> dict:
@@ -769,10 +900,6 @@ class _PathClaimingAgent:
             flow_note="", gathered="", acl=None):
         self.gathered_seen.append(gathered)
         return AgentRun(outcome=self.outcome, cost_usd=0.0)
-
-    def run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
-                    corrective=""):                     # pragma: no cover — never called
-        raise AssertionError("the ordinary flow must not reach the meeting call")
 
 
 def test_an_account_claiming_a_page_path_it_did_not_write_is_cross_checked_and_refused(
@@ -844,8 +971,10 @@ def test_the_filename_is_the_title_and_is_never_slugified(tmp_path, clean_queue,
     corpus of Title Case pages would break every `[[Acme Corp Renewal Window]]` a human, or the
     other shape of this flow for the same capture, writes.
 
-    The meeting flow slugifies because its own filenames are slugs. This flow is not that flow, and
-    the difference is a decision rather than an inconsistency.
+    OLD BEHAVIOUR: the meeting flow slugified, because its own filenames were slugs, and this
+    docstring existed to say the difference was a decision rather than an inconsistency. There is
+    one pipe and one naming rule now: `_ordinary_stem` trims the title's edges and files it as it
+    was written, whatever the capture's kind.
     """
     env, deps, _ = _rig(tmp_path, lambda: _model(_account()))
 
@@ -1027,9 +1156,6 @@ def test_the_corrective_pass_is_told_what_was_wrong_rather_than_asked_to_guess(
             seen.append(kwargs.get("corrective", ""))
             return self.inner.run(**kwargs)
 
-        def run_meeting(self, **kwargs):                      # pragma: no cover — never called
-            return self.inner.run_meeting(**kwargs)
-
     factory = _ThenGood(_account(title="Existing Note"), _account())
     env, deps, agent = _rig(tmp_path, factory)
     deps = dataclasses.replace(deps, agent=_Recording(agent))
@@ -1138,8 +1264,8 @@ def test_the_retry_policy_lives_above_the_shape_branch_so_both_paths_share_it(tm
     return.
 
     `gates.unrepairable`'s six findings all judge a MODIFIED page or a scanner that could not run,
-    and on this path the only thing that modifies an existing page is `edits.apply_declared`, whose
-    two admitted shapes are exactly what `gate_body_rewrite` allows. So the branch is unreachable
+    and on this path the only thing that modifies an existing page is a DECLARED rewrite, which
+    `gate_body_rewrite` judges by its two structural bounds. So the branch is unreachable
     here BY CONSTRUCTION — which is a property worth stating rather than a gap worth faking with a
     hand-built finding.
 
@@ -1220,9 +1346,6 @@ def test_the_flow_note_reaches_the_structured_prompt(tmp_path, clean_queue, requ
             seen.append(kwargs.get("flow_note", ""))
             return self.inner.run(**kwargs)
 
-        def run_meeting(self, **kwargs):                      # pragma: no cover — never called
-            return self.inner.run_meeting(**kwargs)
-
     _, deps, agent = _rig(tmp_path, lambda: _model(_account()))
     deps = dataclasses.replace(deps, agent=_Recording(agent))
 
@@ -1254,9 +1377,6 @@ def test_every_capture_is_told_the_archive_is_already_handled(tmp_path, clean_qu
         def run(self, **kwargs):
             seen.append(kwargs.get("flow_note", ""))
             return self.inner.run(**kwargs)
-
-        def run_meeting(self, **kwargs):                      # pragma: no cover — never called
-            return self.inner.run_meeting(**kwargs)
 
     env, deps, agent = _rig(tmp_path, lambda: _model(_account()))
     deps = dataclasses.replace(deps, agent=_Recording(agent))
@@ -1549,59 +1669,17 @@ def test_a_title_at_exactly_the_byte_ceiling_files_all_the_way_through(tmp_path,
 # been worse than deleting them — the property is "what the FRAMEWORK does with a schema", and a
 # stand-in cannot have one, so the test would have gone green while measuring nothing.
 #
-# The mechanism itself is NOT unprotected; it moved to the flow that still ships it. The same three
-# cases (never completes → exhausted and priced; incomplete then good → repaired in one pass;
-# complete first → asked once) run against `MeetingAccount` in
-# `test_structured_schema_unit.py`'s LEG 4, which is where the schema-through-framework road is now
-# real. LEGS 1-3 there still cover `FilingAccount` itself as pure pydantic.
+# The mechanism itself has no flow left at all. The same three cases (never completes → exhausted
+# and priced; incomplete then good → repaired in one pass; complete first → asked once) moved to
+# `MeetingAccount` in `test_structured_schema_unit.py`'s LEG 4 — and retired with it when the
+# meeting flow went, because `run_meeting` was the last call that wired an `output_type`. That
+# file's own tombstone carries the reasoning; what survives is the SCHEMA's completeness rules as
+# pure pydantic (its LEGS 1-3), which is the half this repository owns.
 #
 # **What genuinely has no owner yet is the ordinary flow's NEW equivalent**: a model that never
 # writes an outcome file, or writes an unparseable one, landing terminal with nothing written and
 # the pass priced. That is a defense test for the road the agentic pydantic harness opened rather than a pin this change
 # moved — the tester owns it, and `agent.read_outcome`'s two refusals are its seam.
-
-
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
-# The declared edits, which the structured account still owns
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
-def test_a_declared_edit_is_performed_by_code_and_lands_in_the_same_commit(
-        tmp_path, clean_queue, require_gitleaks):
-    """The agent cannot touch an existing page on either shape — it DECLARES the edit and
-    `edits.apply_declared` performs it. The structured account carries the same `edits` field, so
-    the declaration road has to still work when the page beside it was written by code rather than
-    by the agent."""
-    env, deps, _ = _rig(tmp_path, lambda: _model(_account(
-        edits=[OrdinaryEdit(path="wiki/notes/Existing Note.md", kind="backlink",
-                            link="Acme Corp Renewal Window",
-                            note="a later capture continues this")])))
-
-    _, result = _file(clean_queue, deps)
-
-    assert result.status == schema.FILED, result.report.get("summary")
-    sha, changed = _committed(env, result)
-    assert set(_authored(changed)) == {"wiki/notes/Acme Corp Renewal Window.md",
-                                       "wiki/notes/Existing Note.md"}
-    edited = support.read_filed_page(env.repo, sha, "wiki/notes/Existing Note.md")
-    assert "[[Acme Corp Renewal Window]]" in edited
-    # ...additively: the page's own frontmatter and body survive
-    assert 'title: "Existing Note"' in edited
-    assert "This is a pre-existing page in the fixture knowledge repo" in edited
-
-
-def test_the_declared_edits_are_still_refused_against_an_entity_page(tmp_path, clean_queue,
-                                                                      require_gitleaks):
-    """The one edit the brief forbids outright, on the new shape: an entity page's `related:` is
-    the registry's business and not a capture's. Refused by `edits.validate`, which is code and not
-    a prompt rule — and `apply_declared` is all-or-nothing, so nothing lands."""
-    env, deps, _ = _rig(tmp_path, lambda: _model(_account(
-        edits=[OrdinaryEdit(path="wiki/entities/Acme Corp.md", kind="backlink",
-                            link="Acme Corp Renewal Window", note="linking the entity")])))
-    before = support.all_commit_shas(env.bare)
-
-    _, result = _file(clean_queue, deps)
-
-    assert result.status != schema.FILED
-    _nothing_landed(env, before)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════

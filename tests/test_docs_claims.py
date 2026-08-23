@@ -325,7 +325,7 @@ def _mcp_tool_count() -> int:
     (INDEX, "deterministic corpus-health checks", len(ALL_CHECK_SLUGS)),
     (REFERENCE / "operator-runbook.md", "gates", len(ALL_GATES)),
     (REFERENCE / "operator-runbook.md", "MCP tools", _mcp_tool_count()),
-    (REFERENCE / "gardener-digest.md", "deterministic checks", len(ALL_CHECK_SLUGS)),
+    (REFERENCE / "gardener.md", "deterministic checks", len(ALL_CHECK_SLUGS)),
     (REFERENCE / "page-contract.md", "page types", len(PAGE_TYPES)),
     (REFERENCE / "knowledge-repo.md", "page types", len(FAST_LANE_TYPES)),
     (REFERENCE / "librarian.md", "values of", len(REJECTION_REASONS)),

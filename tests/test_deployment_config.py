@@ -91,9 +91,11 @@ def test_the_slack_process_command_carries_every_baked_file_it_needs():
         f"the app group passes {sorted(missing)} and the slack group does not. Both hold NO "
         f"checkout, so every one of these files is the only source of what it configures for "
         f"BOTH — a flag on one command and not the other is a group silently running without it")
-    # Not derived from the Dockerfile's COPY set on purpose: `slack-channels.json` is baked for the
-    # admin console and reached through `[env]`, not through a flag on either command. The
-    # invariant that catches real drift is the SYMMETRY between two commands that need the same
+    # Not derived from the Dockerfile's COPY set on purpose: `slack-channels.json` is baked but
+    # named by NEITHER command — the channel->audience map reaches `stigmergy-slack` through
+    # `--channels`, which this deployment does not pass, so the transport falls back to the empty
+    # audience set. That is a wiring gap, not a symmetry break, and this test is not the place to
+    # assert it: the invariant here is the SYMMETRY between two commands that need the same
     # things, not "every baked file appears everywhere".
 
 
@@ -153,7 +155,7 @@ def test_every_deploy_copy_has_a_placeholder_in_the_container_e2e():
     error that names a file, not a cause.
 
     This has happened twice: the first container-e2e run on CI (a bare redirection into a missing
-    directory) and the admin console's `slack-channels.json` COPY, added without its placeholder. The rule
+    directory) and the `slack-channels.json` COPY, added without its placeholder. The rule
     lived in a comment both times; it is a test now."""
     script = CONTAINER_E2E.read_text(encoding="utf-8")
     missing = sorted(name for name in _dockerfile_deploy_copies()

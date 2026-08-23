@@ -2,7 +2,7 @@
 on its way to a terminal.
 
 Below every CLI, because two of its readers are not CLIs at all: `capture.latency` renders a
-summary with `format_ms` and is imported by `server.pilot_report`, so a serving process would
+summary with `format_ms` and is imported by `admin.measurements`, so a serving process would
 otherwise pull `stigmergy-queue` — connection seam, environment reads and all — in to format a
 number. `stigmergy-librarian` and `stigmergy-queue` import these so two tools in one
 operator's terminal print one dialect.

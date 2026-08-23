@@ -2,12 +2,11 @@
 
 The entity door is built entirely on per-page `entity:` anchoring — `pages_index.entity`, read as
 `<id> = ANY(entity)` by BOTH `BrainService.search`'s `entity` filter and `describe_entity`'s
-timeline query, and mirrored by `views.skeleton.members_of`'s own repo-parse filter (`entity_id in
-r.entity`). A page that bundles several subjects into one company-wide filing with `entity: []` is
-therefore STRUCTURALLY invisible to all three mechanisms, however clearly its own title and body
-name those subjects: a page that would be company-wide because it bundles several subjects is a
-granularity error. The identical content filed one page per subject is fully visible through the
-same three mechanisms.
+timeline query. A page that bundles several subjects into one company-wide filing with
+`entity: []` is therefore STRUCTURALLY invisible to both mechanisms, however clearly its own title
+and body name those subjects: a page that would be company-wide because it bundles several
+subjects is a granularity error. The identical content filed one page per subject is fully visible
+through the same two mechanisms.
 
 This is the standing instrument for that rule: the SAME three commitments, filed two ways, in the
 SAME test run over the SAME content — so a silent granularity collapse (the entity door quietly
@@ -31,17 +30,16 @@ from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.server.identity import resolve_audiences
 from stigmergy.server.service import BrainService
 from stigmergy.server.settings import Settings
-from stigmergy.views import skeleton
 from tests.server.conftest import connect_or_skip, write_page
 
 STEWARD = "steward@example.com"
 
 # Three commitments, three subjects, filed BOTH ways over the same quarter so the two filings are
 # lexically comparable — the tripwire is about ANCHORING structure, not about search finding words.
-MERGED_PAGE = "wiki/decisions/q3-vendor-roundup-merged.md"
-SPLIT_VANTAGE = "wiki/decisions/vantage-robotics-q3-renewal.md"
-SPLIT_COBALT = "wiki/decisions/cobalt-freight-q3-pricing.md"
-SPLIT_MERIDIAN = "wiki/decisions/meridian-health-q3-sla.md"
+MERGED_PAGE = "wiki/notes/q3-vendor-roundup-merged.md"
+SPLIT_VANTAGE = "wiki/notes/vantage-robotics-q3-renewal.md"
+SPLIT_COBALT = "wiki/notes/cobalt-freight-q3-pricing.md"
+SPLIT_MERIDIAN = "wiki/notes/meridian-health-q3-sla.md"
 
 VANTAGE = "vantage-robotics"
 COBALT = "cobalt-freight"
@@ -121,7 +119,7 @@ def _service(conn, fx) -> BrainService:
     return BrainService(settings, conn, build_embedder("fake"), audiences, identity=STEWARD)
 
 
-# ── the split filing IS visible through all three entity-door mechanisms ────────────────────────
+# ── the split filing IS visible through both entity-door mechanisms ────────────────────────────
 def test_split_filing_is_visible_through_the_entity_filter(granularity_indexed):
     conn, fx = granularity_indexed
     svc = _service(conn, fx)
@@ -141,14 +139,7 @@ def test_split_filing_is_visible_in_describe_entity_timeline(granularity_indexed
         assert split_path in paths, f"{entity_id}: split filing {split_path} missing from timeline"
 
 
-def test_split_filing_is_a_view_member(granularity_indexed):
-    _, fx = granularity_indexed
-    for entity_id, split_path in SUBJECTS:
-        members = {m.path for m in skeleton.members_of(fx.repo, entity_id)}
-        assert split_path in members, f"{entity_id}: split filing {split_path} missing from members_of"
-
-
-# ── the merged filing is INVISIBLE through all three, despite naming all three subjects ─────────
+# ── the merged filing is INVISIBLE through both, despite naming all three subjects ──────────────
 def test_merged_filing_is_invisible_to_the_entity_filter(granularity_indexed):
     conn, fx = granularity_indexed
     svc = _service(conn, fx)
@@ -168,19 +159,11 @@ def test_merged_filing_is_invisible_in_describe_entity_timeline(granularity_inde
             f"{entity_id}: merged filing {MERGED_PAGE} leaked into the timeline"
 
 
-def test_merged_filing_is_not_a_view_member_of_any_bundled_subject(granularity_indexed):
-    _, fx = granularity_indexed
-    for entity_id, _split_path in SUBJECTS:
-        members = {m.path for m in skeleton.members_of(fx.repo, entity_id)}
-        assert MERGED_PAGE not in members, \
-            f"{entity_id}: merged filing {MERGED_PAGE} leaked into members_of"
-
-
 # ── the benign twin: the merged page is not broken or ACL-hidden — plain search finds it fine ───
 def test_merged_filing_is_a_normal_visible_page_outside_the_entity_door(granularity_indexed):
     """The tripwire is about ANCHORING, not brokenness: the merged page indexes, is ACL-visible,
     and is lexically findable through plain search and `read_page` — it
-    is invisible ONLY to the entity-anchored mechanisms above. Without this twin, the six tests
+    is invisible ONLY to the entity-anchored mechanisms above. Without this twin, the four tests
     above could all be passing because the merged page is simply broken/unindexed, which would
     prove nothing about granularity collapse specifically."""
     conn, fx = granularity_indexed

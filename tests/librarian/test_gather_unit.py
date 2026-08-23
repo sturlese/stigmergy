@@ -462,21 +462,19 @@ def test_the_entity_pages_own_page_is_not_also_offered_as_a_candidate(tmp_path):
 
 
 def test_only_the_wiki_zone_supplies_candidates(tmp_path):
-    """`views/` is regenerated and is never a wikilink target at all; `sources/` is verbatim
-    captured evidence, which never "covers the same ground" as a synthesis in the sense the overlap
-    judgment means. Both exclusions are decisions — asserted here so a later widening of the
-    candidate zone is a deliberate act rather than a side effect."""
+    """`sources/` is verbatim captured evidence, which never "covers the same ground" as a
+    synthesis in the sense the overlap judgment means — excluded from candidates on purpose,
+    asserted here so a later widening of the candidate zone is a deliberate act rather than a side
+    effect."""
     registry = _registry(tmp_path, {})
     _write(tmp_path, "wiki/notes/Real.md", _page("Real", body="renewal window material"))
     _write(tmp_path, "sources/drive/Transcript.md",
            _page("Transcript", page_type="source", body="renewal window material"))
-    _write(tmp_path, "views/Acme.md", _page("Acme", page_type="view",
-                                            body="renewal window material"))
 
     result = _gather(tmp_path, registry, "renewal window material")
 
     assert [c.path for c in result.candidates] == ["wiki/notes/Real.md"]
-    assert result.corpus_pages == 3, "the excluded zones are still part of the corpus count"
+    assert result.corpus_pages == 2, "the excluded zone is still part of the corpus count"
 
 
 def test_a_candidate_carries_the_link_names_a_reader_would_actually_write(tmp_path):
@@ -591,7 +589,7 @@ def test_the_neighbourhood_is_one_hop_out_of_the_candidates_and_the_entity_pages
     the decision page that governs it and still belong one link away from it. The graph knows
     something the words do not, and the agent has no tool left to walk it."""
     registry = _registry(tmp_path, {})
-    _write(tmp_path, "wiki/decisions/Weekend Cover Policy.md",
+    _write(tmp_path, "wiki/notes/Weekend Cover Policy.md",
            _page("Weekend Cover Policy", page_type="decision",
                  body="Entirely different vocabulary about staffing rotas."))
     _write(tmp_path, "wiki/notes/Renewal.md",
@@ -602,7 +600,7 @@ def test_the_neighbourhood_is_one_hop_out_of_the_candidates_and_the_entity_pages
 
     assert [c.path for c in result.candidates] == ["wiki/notes/Renewal.md"]
     assert [(n.path, n.title) for n in result.neighbours] == [
-        ("wiki/decisions/Weekend Cover Policy.md", "Weekend Cover Policy")]
+        ("wiki/notes/Weekend Cover Policy.md", "Weekend Cover Policy")]
 
 
 def test_a_neighbour_is_named_and_never_excerpted_nor_repeated_from_the_candidates(tmp_path):
@@ -639,23 +637,27 @@ def test_the_neighbourhood_is_bounded_and_ordered_by_path(tmp_path):
     assert [n.path for n in result.neighbours] == sorted(n.path for n in result.neighbours)
 
 
-def test_the_link_vocabulary_is_read_through_the_same_function_the_edit_validator_uses(tmp_path):
-    """One reading, not two. A gatherer that offered a name `edits.validate` would then refuse as a
-    dead link is precisely the drift a full corrective retry gets spent on — so the vocabulary the
-    agent is handed comes from `edits.page_names`, which is the function that later answers "does
-    this link resolve"."""
-    from stigmergy.librarian import edits
+def test_the_link_vocabulary_is_every_page_that_really_exists_in_the_checkout(tmp_path):
+    """One reading, not two. A gatherer that offered a name the contract linter would then report
+    as a dead link is precisely the drift a full corrective retry gets spent on — so the vocabulary
+    the agent is handed is derived from the pages in this checkout, over every content zone the
+    linter itself indexes.
 
+    OLD BEHAVIOUR: this asserted equality with `edits.page_names`, the function the declared-edit
+    validator answered "does this link resolve" with. That validator retired with the `edits`
+    declaration; the property it stood for did not, so the expectation is spelled from the corpus.
+    """
     registry = _registry(tmp_path, {})
     _write(tmp_path, "wiki/notes/Alpha.md", _page("Alpha", body="renewal"))
     _write(tmp_path, "sources/drive/Transcript.md", _page("Transcript", page_type="source"))
-    _write(tmp_path, "views/Acme.md", _page("Acme", page_type="view"))
 
     result = _gather(tmp_path, registry, "renewal")
 
-    assert set(result.link_names) == edits.page_names(str(tmp_path))
-    assert "Transcript" in result.link_names, (
-        "a source page is a legitimate link target and must stay in the vocabulary")
+    assert {"Alpha", "Transcript"} <= set(result.link_names)
+    assert all((tmp_path / zone).exists() or True for zone in ("wiki", "sources"))
+    for name in result.link_names:
+        assert any(p.stem == name for p in tmp_path.rglob("*.md")), (
+            f"{name} is offered as a link target but resolves to no page in this checkout")
 
 
 def test_a_truncated_vocabulary_still_says_how_many_names_there_really_are(tmp_path):

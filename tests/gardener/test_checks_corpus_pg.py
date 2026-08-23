@@ -210,16 +210,11 @@ def test_a_page_anchored_to_a_retired_identity_is_reported(conn, repo):
 
 def test_the_absorbed_pages_own_self_anchor_never_fires_this_check(conn, repo):
     """**The population rule that keeps the baseline at zero.** The absorbed page keeps its
-    self-anchor forever, BY DESIGN (its own history is its own), and its view keeps declaring the
-    id as a member set of one — so a check whose predicate were only "anchored to a superseded id"
-    would report two permanent, unfixable findings per merge, forever: exactly the disease this
-    loop exists to end. The entity zone and the machine zones are outside the population, and the
-    moment a merge lands the count is exactly zero."""
+    self-anchor forever, BY DESIGN (its own history is its own) — so a check whose predicate were
+    only "anchored to a superseded id" would report a permanent, unfixable finding per merge,
+    forever: exactly the disease this loop exists to end. The entity zone is outside the
+    population, and the moment a merge lands the count is exactly zero."""
     _merged_pair(repo, anchored_note=False)
-    support.write_page(repo, "views", "cofers-holdings.md",
-                       frontmatter={"type": "view", "title": "Cofers Holdings",
-                                   "entity": ["cofers-holdings"]},
-                       body="A derived rollup.")
     support.rebuild_index(conn, repo)
 
     assert checks.check_anchored_to_superseded_entity(conn) == []
@@ -340,16 +335,3 @@ def test_link_to_narrower_says_something_DIFFERENT_about_an_unreadable_page(conn
     assert [f["subject"] for f in findings] == ["wiki/notes/pointer.md"]
     assert "cannot read the frontmatter of" in findings[0]["detail"], findings[0]["detail"]
 
-
-def test_link_to_narrower_never_names_a_VIEW_as_the_offender(conn, repo):
-    """A view is derived: nobody can reword its sentence, and the suggested action would be
-    impossible to follow. It is excluded as a SOURCE and stays available as a target."""
-    _note(repo, "board-terms", acl=["leadership"])
-    support.write_registry(repo, {"acme-corp": {"name": "Acme Corp", "type": "organization"}})
-    support.write_page(repo, "views", "acme-corp.md",
-                       frontmatter={"type": "view", "title": "Acme Corp — view",
-                                   "entity": ["acme-corp"], "tier": 3},
-                       body="Timeline mentions [[board-terms]].")
-    support.rebuild_index(conn, repo)
-
-    assert [f["subject"] for f in checks.check_link_to_narrower_page(conn)] == []

@@ -28,7 +28,7 @@ states a capture used to park in are retired (see [The queue](#the-queue)).
 | `evidence.py` | the content-addressed store: `S3EvidenceStore` (MinIO/R2), `MemoryEvidenceStore` (the offline double), `content_key` |
 | `ops.py` | the operational spine: `job_runs` / `ingest_errors` writers and the `job_run` context manager |
 | `retention.py` | `purge` — physical deletion of `payload`/`hints`/`outcome` on old terminal rows, plus the age-independent reconciliation for a secret/PII rejection; `purge_secret_capture_immediately` — `payload`/`hints`, right now, for exactly that rejection |
-| `latency.py` | capture→filed and capture→searchable p50/p95 from the trace alone, here rather than in `stigmergy.librarian` so `stigmergy.server.pilot_report` can reach it too |
+| `latency.py` | capture→filed and capture→searchable p50/p95 from the trace alone, here rather than in `stigmergy.librarian` so `stigmergy.admin.measurements` can reach it too |
 | `render.py` | the operator dialect every CLI prints in: `depth_line`, `format_ms`, `format_age`, `clean_for_terminal`, `RECLAIM_NOW`. Below the CLIs, because `latency.py` and `stigmergy-librarian` read it too; it reaches nothing but `stigmergy.text` |
 | `cli.py` | `stigmergy-queue` — the operator's view: list · show · claim · reclaim · purge. None of the five enqueues anything. `render.py`'s names are re-exported here for the CLIs that already take them from this module |
 | `errors.py` | the domain exceptions (`SubmissionRejected`, `EvidenceError`, `QueueStateError`), all under `CaptureError` |
@@ -64,15 +64,15 @@ exists there.
 
 Both requirement sets are checked in `schema.prepare_submission` — the seam every caller of
 `queue.submit` crosses, so no door can skip them, and the refusal happens before any blob or row is
-written. Each requirement earns its place: a missing `meeting_date` silently degrades every filed
-decision page's `as_of` to today, and a document with no title has no identity for its source page
-to carry.
+written. Each requirement earns its place: a document with no title has no identity for its archived
+source to carry, and a transcript's own text routinely states neither when the meeting happened nor
+who was in it — `meeting_date` and `attendees` reach the filing agent as fenced hints, which is the
+only way that context gets there at all.
 
-What the worker does with them differs. A `meeting` runs the second flow and files a page SET
-(source + meeting + one decision page per decision — [meeting-distiller.md](./meeting-distiller.md));
-every capture archives its material verbatim, and the kind chooses the folder it lands in — a
-`document`'s parts go to `sources/documents/` with `source_url` as their `url:`, a plain capture's
-to `sources/notes/`
+**What the worker does with them does not differ.** Every kind rides the same filing flow: the
+material is archived verbatim and the agent declares the `wiki/` pages it establishes. The kind
+chooses the archive's folder — a `meeting`'s parts go to `sources/meetings/`, a `document`'s to
+`sources/documents/` with `source_url` as their `url:`, a plain capture's to `sources/notes/`
 ([librarian.md → The source archive](./librarian.md#the-source-archive-every-capture-always)).
 
 ### Nothing is ever asked of a submitter
@@ -84,8 +84,8 @@ which identities the capture bore, and that is the whole of it — no queue, no 
 to decide. The mechanism is
 [librarian.md → Writing an identity](./librarian.md#writing-an-identity-what-a-filing-does-to-the-registry).
 What a wrong identity costs is paid afterwards, not before: a second identity for one thing is what
-the gardener's duplicate-identity pass finds and a merge repair fixes
-([gardener-digest.md](./gardener-digest.md), [repair.md](./repair.md)).
+the gardener's duplicate-identity pass used to find, before both that pass and the merge that
+answered it were removed ([gardener.md](./gardener.md)).
 
 ### Attribution is the server's
 

@@ -2,7 +2,6 @@
 for the decisions: every mutation lands through the SAME library seams the CLIs and the review
 lane use, so what these prove is parity, not a parallel implementation."""
 import argparse
-import asyncio
 import json
 import os
 import shutil
@@ -25,7 +24,6 @@ from stigmergy.admin.service import (
 )
 from stigmergy.capture import ops, queue
 from stigmergy.capture import schema as capture_schema
-from stigmergy.capture.errors import CaptureError
 from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB
 from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.gardener.store import insert_findings
@@ -37,8 +35,7 @@ from tests.admin.conftest import (
     LANDED_COMMIT,
     finish_one,
     landed_delete,
-    landed_entity_body,
-    landed_repair,
+    landed_retired,
     refused_repair,
     register_entity,
     submit_one,
@@ -351,7 +348,7 @@ def test_overview_aggregates_without_erroring_on_an_empty_world(service):
     assert data["gardener"]["run"] is None
 
 
-# ── gardener / digest / index ─────────────────────────────────────────────────────────────────
+# ── gardener / index ──────────────────────────────────────────────────────────────────────────
 def test_gardener_state_reads_the_latest_completed_run_and_finds_partial_honest(conn, service):
     ensure_gardener_schema(conn)
     run_id = ops.record_job_run(conn, GARDENER_JOB, status="partial",
@@ -367,53 +364,6 @@ def test_gardener_state_reads_the_latest_completed_run_and_finds_partial_honest(
     severities = {f["severity"] for f in state["findings"]}
     assert severities == {"warn", "info"}, "the gardener's own vocabulary: info/warn"
     assert state["history"][0]["status"] == "partial"
-
-
-def test_digest_preview_builds_a_body_and_post_refuses_without_its_pieces(conn, service,
-                                                                          monkeypatch):
-    monkeypatch.delenv("STIGMERGY_DIGEST_CHANNEL_ID", raising=False)
-    preview = asyncio.run(service.digest_preview())
-    assert preview["body"], "a dry run must render the would-post body"
-    assert service.digest_state()["history"][0]["job"] == "digest-dry-run"
-    with pytest.raises(AdminRefused, match="STIGMERGY_DIGEST_CHANNEL_ID"):
-        asyncio.run(service.digest_post(actor="steward"))
-
-
-# ── the async mutation seam must refuse the way its sync twin does ────────────────────────────────
-# `digest_post` is `_mutate_async`'s only caller, and its `_post` closure reaches `digest.run` ->
-# the queue and the Slack Web API — so the CaptureError branch is exercised at the seam itself
-# rather than by manufacturing a library failure three packages down through a real Slack post.
-def test_an_async_mutation_refused_by_a_library_is_the_same_409_its_sync_twin_gives(conn, service):
-    """OLD BEHAVIOUR: a 500. `_mutate` maps `CaptureError` to `AdminRefused` — the routes' 409,
-    carrying the library's own operator-facing sentence — and `admin/index.md` promises that
-    mapping for `_mutate`/`_mutate_async` alike. `_mutate_async` had only `except Exception`, so the
-    identical refusal came back through the routes' last-resort arm as an opaque server error, and
-    the operator lost the sentence telling them what to do about it."""
-    async def _refuse(_by):
-        raise CaptureError("nothing to post — the window is empty")
-
-    with pytest.raises(AdminRefused, match="the window is empty"):
-        asyncio.run(service._mutate_async("digest.post", "steward", {}, _refuse))
-
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == \
-        ("steward", "digest.post", "error")
-    assert recorded["error_class"] == "CaptureError", (
-        "admin_actions must keep the library's OWN exception class, not the AdminRefused it was "
-        "renamed to on the way out — the same rule `entity_approve` already holds")
-
-
-def test_an_async_mutation_failing_for_any_other_reason_still_propagates_unrenamed(conn, service):
-    """The benign twin of the branch above: only a domain refusal becomes `AdminRefused`. Anything
-    else stays itself all the way to the routes' 500, class name only — a genuine fault must never
-    be dressed up as an operator-actionable refusal."""
-    async def _boom(_by):
-        raise RuntimeError("psycopg fell over mid-post")
-
-    with pytest.raises(RuntimeError, match="psycopg fell over"):
-        asyncio.run(service._mutate_async("digest.post", "steward", {}, _boom))
-
-    assert _actions(conn)[0]["error_class"] == "RuntimeError"
 
 
 def test_index_state_and_substrate_check_run_over_the_real_store(service):
@@ -677,14 +627,15 @@ def test_repairs_list_carries_every_outcome_and_the_whole_tables_counts(conn, se
     only grows, and `counts` is the whole of it. A surface drawing a part-to-whole from the page
     would understate history the moment the page fills — which is exactly what an operator asking
     "how much has this loop done" would be reading."""
-    applied_id = landed_repair(conn, path="wiki/notes/Renewals.md")
+    applied_id = landed_delete(conn)
     failed_id = refused_repair(conn)
 
     listed = service.repairs_list()
 
     assert [row["id"] for row in listed["recent"]] == [failed_id, applied_id], "newest first"
-    assert listed["recent"][1]["target_paths"] == ["wiki/notes/Renewals.md"]
-    assert listed["recent"][1]["ops"][0]["op"] == "backlink"
+    assert listed["recent"][1]["target_paths"] == ["wiki/notes/Old Memo.md",
+                                                   "wiki/notes/Refunds.md"]
+    assert listed["recent"][1]["ops"][0]["op"] == repair_schema.DELETE_OP_NAME
     assert listed["counts"] == {repair_schema.STATUS_APPLIED: 1, repair_schema.STATUS_FAILED: 1,
                                 repair_schema.STATUS_SKIPPED: 0}
     assert listed["recent_limit"] == admin_service.REPAIR_RECENT_LIMIT
@@ -695,8 +646,9 @@ def test_repairs_list_carries_every_outcome_and_the_whole_tables_counts(conn, se
 def test_an_applied_repair_reaches_the_console_carrying_the_diff_nobody_read_first(conn, service):
     """The column this page exists for. Nobody read the change before it was pushed, so the stored
     diff IS the reading — a console that listed paths alone would be offering a summary of prose a
-    model wrote, which is `entity-body`'s own mistake made at the level of the whole table."""
-    repair_id = landed_repair(conn)
+    model wrote, and the capture that carries the same reading is purged with the retention
+    window."""
+    repair_id = landed_delete(conn)
 
     row = service.repair_show(repair_id)
 
@@ -708,9 +660,10 @@ def test_an_applied_repair_reaches_the_console_carrying_the_diff_nobody_read_fir
 
 
 def test_a_failed_repair_reaches_the_console_carrying_the_sentence_that_refused_it(conn, service):
-    """The other outcome, and the only place it is ever explained: a `failed` row is never retried,
-    so `error` is the whole of what anybody will ever know about why that finding stopped being
-    answered."""
+    """A row of the RETIRED elective loop, and the only place its outcome is ever explained: a
+    `failed` row was never retried, so `error` is the whole of what anybody will ever know about
+    why that finding stopped being answered. Nothing writes one any more; a deployed table holds
+    them, and the console renders them unchanged."""
     repair_id = refused_repair(conn)
 
     row = service.repair_show(repair_id)
@@ -728,8 +681,11 @@ def test_repair_show_sanitizes_every_untrusted_string_and_404s_on_nothing(conn, 
     `\\x07`/`\\x1b`, not `\\x00`: Postgres refuses a NUL in a text column outright, so the byte this
     console has to strip is the one that CAN be stored — an escape sequence a terminal would act on
     and a browser would render as nothing."""
-    repair_id = landed_repair(conn, kind="overlap", note="covers the same\x07 ground",
-                              rationale="the two pages\x1b[2J overlap")
+    repair_id = landed_retired(
+        conn, kind=repair_schema.RETIRED_KINDS[0],
+        ops=[{"op": "overlap", "path": "wiki/notes/Refunds.md", "link": "Existing Note",
+              "note": "covers the same\x07 ground"}],
+        rationale="the two pages\x1b[2J overlap")
 
     row = service.repair_show(repair_id)
 
@@ -749,41 +705,46 @@ def test_a_failed_repairs_sentence_is_sanitized_like_everything_else(conn, servi
         "the gates refused it[2J (zone/outside-lane)")
 
 
-def test_a_body_draft_reaches_the_console_readable_and_whole(conn, service):
+def test_a_retired_kinds_op_reaches_the_console_with_every_field_it_stored(conn, service):
     """OLD BEHAVIOUR: `_repair` reshaped every op into `{op, path, link, note}`, so an
     `entity-body` op arrived at the console with its `body_markdown` and `role` DROPPED — the
-    drafted prose is the only thing there is to read for this kind, and the console showed a row
+    drafted prose is the only thing there is to read for that kind, and the console showed a row
     with an empty `link` where the draft should have been.
 
-    Newlines survive `_clean` by design (control characters die, structure does not): a body
-    flattened to one line is a body nobody can read as the page it became."""
-    repair_id = landed_entity_body(conn, body="## What / Who\n\nA freight\x07 broker.\n",
-                                   role="A freight broker in the north-west.")
+    The three kinds that could produce such an op are retired and no renderer is maintained for
+    them any more, so the fix is stronger rather than narrower: an op whose NAME this version does
+    not know carries every string field it stored. Newlines survive `_clean` by design (control
+    characters die, structure does not): a body flattened to one line is a body nobody can read as
+    the page it became."""
+    repair_id = landed_retired(
+        conn, kind=repair_schema.RETIRED_KINDS[1],
+        ops=[{"op": "entity-body", "path": "wiki/entities/Meridian Partners.md",
+              "body_markdown": "## What / Who\n\nA freight\x07 broker.\n",
+              "role": "A freight broker in the north-west."}])
 
     row = service.repair_show(repair_id)
 
-    assert row["kind"] == repair_schema.KIND_ENTITY_BODY
+    assert row["kind"] in repair_schema.RETIRED_KINDS
     assert row["ops"][0]["body_markdown"] == "## What / Who\n\nA freight broker.\n"
     assert row["ops"][0]["role"] == "A freight broker in the north-west."
 
 
-def test_an_additive_op_keeps_exactly_the_fields_it_had(conn, service):
-    """The benign twin for the reshaping change: a second kind's fields must not appear on the
-    first kind's ops, where a console table would render an empty column for every repair."""
-    repair_id = landed_repair(conn, kind="overlap", note="the same ground")
+def test_a_removals_op_keeps_exactly_the_fields_its_kind_has(conn, service):
+    """The benign twin for the reshaping rule above: the ONE kind this version writes is rendered
+    by its own table, so a retired kind's fields must not appear on its ops, where a console table
+    would render an empty column for every removal."""
+    (delete_op, scrub_op) = service.repair_show(landed_delete(conn))["ops"]
 
-    (op,) = service.repair_show(repair_id)["ops"]
-
-    assert sorted(op) == ["link", "note", "op", "path"]
+    assert sorted(delete_op) == ["op", "path"]
+    assert sorted(scrub_op) == ["op", "path", "planned_after"]
 
 
 def test_a_deletion_reaches_the_console_with_the_prose_that_landed(conn, service):
-    """The third kind's shape. A DELETE op is a path and nothing else — which page stopped existing
-    is the whole of it — and a SCRUB op carries its `planned_after` through, because those bytes are
-    a MODEL's prose and this page is the only reading they get.
+    """The removal's shape. A DELETE op is a path and nothing else — which page stopped existing is
+    the whole of it — and a SCRUB op carries its `planned_after` through, because those bytes are a
+    MODEL's prose and this page is the only reading they get once the capture is purged.
 
-    Red before that: the console showed two path lists, so model-written bodies were invisible —
-    `entity-body`'s own mistake, which that kind's renderer exists to avoid."""
+    Red before that: the console showed two path lists, so model-written bodies were invisible."""
     repair_id = landed_delete(conn)
 
     row = service.repair_show(repair_id)

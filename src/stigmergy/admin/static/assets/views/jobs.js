@@ -19,7 +19,7 @@ export async function jobsView(host) {
         "Each pass fires on the librarian's idle branch — never while a capture is waiting, so maintenance cannot delay a filing. Nothing here needs a schedule, a token or a button.")),
       el("div", { class: "grid halves" }, ...data.jobs.map((job) => jobCard(job, metrics))),
     ];
-    const other = ["repair", "digest", "webhook-index-upsert", "capture-reclaim"].filter((j) => (metrics.job_history[j] || []).length);
+    const other = ["webhook-index-upsert", "capture-reclaim"].filter((j) => (metrics.job_history[j] || []).length);
     if (other.length) {
       children.push(el("section", { class: "card" },
         el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "Other recorded work"), el("div", { class: "sub" }, "jobs that run on their own interval, on demand, or on a push"))),

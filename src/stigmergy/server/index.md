@@ -32,7 +32,6 @@ path, authenticated by HMAC instead.
 | `ratelimit.py` | `RateLimiter` — per-identity token buckets: overall 30/min plus a stricter 10/min for `ask`; injectable clock. A new expensive tool is one entry in `_extra`, never a new branch in `check` |
 | `settings.py` | `Settings.from_args` — the ONE place flags and env fallbacks are read; no module here reads the environment at import time |
 | `errors.py` | `StigmergyServerError` and its subclasses (`IdentityError`, `StartupError`, `CapabilityUnavailableError`, `RegistryError`, `RateLimitError`); library code never raises `SystemExit` |
-| `pilot_report.py` | `stigmergy-pilot-report` — the measurement table from columns other code already writes. Reads only, no DDL: it works under a read-only database role |
 | `issue_token.py` | `stigmergy-issue-token <email>` — prints the plaintext bearer token once and the sha256 store line |
 
 ## Consumers (one-way, except the admin console's ASGI branch, composed only in `transport_http.build_http_app`)
@@ -41,12 +40,10 @@ path, authenticated by HMAC instead.
 |---|---|
 | `answer` | `service.BrainService` (`search`, `read_page`, `describe_entity`, `fetch_page_raw`, `scoped_entities`), `service.fence`/`neutralize_fence` |
 | `slack` | `service.open_scoped_resources`/`BrainService`/`SLACK_DOOR`, `identity.resolve_audiences`, `audit`, `ratelimit`, `settings.Settings`, `errors` |
-| `admin` | `review` (`queue_deletion`, `commission_registration`, `ensure_repair_schema`), `pilot_report`, `identity.hash_token`, `webhook.JOB_NAME`, `errors` |
+| `admin` | `review` (`queue_deletion`, `commission_registration`, `ensure_repair_schema`), `identity.hash_token`, `webhook.JOB_NAME`, `errors` |
 | `gardener` | `errors`, `acl.visible` |
-| `digest` | `errors`, `acl.visible` |
 
-Neither `gardener` nor `digest` reaches the write lane at all: the gardener reports findings and
-the digest broadcasts them, and neither has anything to decide.
+`gardener` does not reach the write lane at all: it reports findings and has nothing to decide.
 
 ## Invariants
 

@@ -13,7 +13,6 @@ from stigmergy.server.errors import StartupError
 
 TOKEN_HASH_ENV = "STIGMERGY_ADMIN_TOKEN_HASH"
 ACTOR_ENV = "STIGMERGY_ADMIN_ACTOR"
-CHANNELS_PATH_ENV = "STIGMERGY_ADMIN_CHANNELS_PATH"
 
 # Attribution, not authorization — the default `--by` every mutation form is prefilled with.
 DEFAULT_ACTOR = "admin-console"
@@ -27,7 +26,6 @@ _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 class AdminSettings:
     token_hash: str = ""
     actor: str = DEFAULT_ACTOR
-    channels_path: str = ""
 
     def configured(self) -> bool:
         return bool(self.token_hash)
@@ -45,5 +43,4 @@ class AdminSettings:
         return cls(
             token_hash=token_hash,
             actor=(source.get(ACTOR_ENV) or "").strip() or DEFAULT_ACTOR,
-            channels_path=(source.get(CHANNELS_PATH_ENV) or "").strip(),
         )

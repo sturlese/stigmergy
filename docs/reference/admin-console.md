@@ -2,10 +2,10 @@
 
 The web control room over what already runs — the capture queue read-only beside the two levers
 over the whole of it, the entity registry this stack serves and the one door for registering a name
-nobody has captured about yet, the ledger of repairs the worker made of the gardener's findings —
-each with the diff it pushed — and the Remove pages button beside it, which queues one, corpus
+nobody has captured about yet, the ledger of what has left the corpus — each row with the diff it
+pushed — and the Remove pages button beside it, which queues one, corpus
 health, the index and
-the ops files it serves, the worker, the three scheduled jobs, the digest, and who is using the
+the ops files it serves, the worker, the three scheduled jobs, and who is using the
 brain — served by the SAME `app` process group that serves MCP, behind its own token.
 Code map:
 [`src/stigmergy/admin/index.md`](../../src/stigmergy/admin/index.md), which carries the full route
@@ -18,16 +18,15 @@ entity no capture has introduced, and it holds no verdict at all.
 
 What it deliberately is NOT: a brain client. No search, no page rendering, no `ask` — the
 architecture tests enforce that boundary on the package. It reads page *paths* in three places
-(the substrate check, the gardener's findings, and a repair's target paths), it reads the
+(the substrate check, the gardener's findings, and a removal's target paths), it reads the
 **entity registry** (an `ops/` control file — the vocabulary, which every MCP identity already
 reads through `list_entities`), and it fetches no page: everything it renders comes from rows in
 this database, never from the knowledge repo. Two things on it read as page PROSE, and each is
-there because nobody read those bytes before they landed. An applied repair carries the unified
-DIFF it pushed, out of the `repairs` row that recorded it — page bytes, but bytes this console's
-own subject produced, and the whole reason the page exists. A removal carries the same
-thing per rewritten page, on the capture it was queued as — the reading that happens after the
-push rather than before it, and on the row rather than in the response, because
-this process is no longer the one that pushes.
+there because nobody read those bytes before they landed, and both are a removal's. On the
+**capture** it was queued as, a unified diff per rewritten page — the reading that happens after
+the push rather than before it, and on the row rather than in the response, because this process is
+no longer the one that pushes. On the **`repairs` row** the worker wrote when it landed, the
+commit's whole diff — the same reading, kept after the capture's payload is purged.
 
 **The one thing that boundary does not cover, said plainly:** the Activity page renders the `ask`
 QUESTIONS in `audit_log`. No answer, no page, no snippet — but a question is user content, and it
@@ -77,8 +76,6 @@ running yesterday's `app.js` against today's imports; the API carries `no-store`
 
 | Piece | Secret / env | Without it |
 |---|---|---|
-| Digest: Post now | `SLACK_BOT_TOKEN` (already an app-wide Fly secret) + `STIGMERGY_DIGEST_CHANNEL_ID` | the post button refuses naming the missing piece; Preview still works |
-| Digest: audience scoping | `STIGMERGY_ADMIN_CHANNELS_PATH` → the baked `/app/slack-channels.json` (set in `fly.toml`, written by `scripts/deploy_staging.sh`) | every audience falls back to the safe empty default — same behavior as a repo with no channels file |
 | The registry browser, and the registry check on a name | a registry this server can read: the index's `ops/entity-registry.json` snapshot (refreshed by the push webhook and by a rebuild), or the `--entity-registry` file where there is no snapshot | the Entities page lists no entity and says no registry is readable here, and every name check answers `unchecked`. Register an entity still works — it queues a capture, and the birth gate runs when the librarian files, inside that capture's own worktree, against the knowledge repo as it stands |
 | Actor prefill on mutation forms | `STIGMERGY_ADMIN_ACTOR` (default `admin-console`) | forms prefill the default; every form field is editable |
 
@@ -130,7 +127,7 @@ toggle away, and nothing on a chart is reachable only by hovering.
 - **Dashboard** — the window's **captures filed** as the number that means work: a capture that
   landed is a page, and the identities it introduced were born in the same commit, so the number
   beside it is not a backlog but what did NOT land (refused by a gate, could not finish, still
-  moving), with in-flight, queued and the repairs the worker APPLIED in the window on the statline. Beside it,
+  moving), with in-flight, queued and the ledger's applied rows on the statline. Beside it,
   **the write path, live**: the window's captures flowing through the model's draft and code's
   gates into landed-in-git, refused and could-not-finish, with the legacy handled-by-hand outcome
   kept for as long as old rows carry it. Then captures per day by what became of them, questions
@@ -186,20 +183,21 @@ toggle away, and nothing on a chart is reachable only by hovering.
   shipped from `/admin/api/meta`; aliases are optional. The console registers under the admin token
   with the actor as ATTRIBUTION, exactly like every other console mutation — and that actor is the
   name `approved_by:` carries on the page the librarian writes.
-- **Repairs** — what the worker's repair pass made of the gardener's findings
-  ([repair.md](./repair.md)). **This page decides nothing**; it is the reading nobody gave
-  a repair before it landed. Repairs by outcome over the whole table, the pass's run strip, and a
-  bounded page of the ledger newest first — every outcome together, because the three are one
-  history and separating them would invite reading only the good half.
-  An **applied** row's detail carries the unified DIFF that was pushed, which is the point of the
-  page: it is the only place those bytes are ever read. A **failed** row carries the sentence that
-  refused it — a gate, a validator, or a fault — and it matters more than it looks: a failed
-  repair's key is remembered, so that finding has stopped being answered and this row is where an
-  operator finds out why. A **skipped** row says what the pass could not express, and is remembered
-  by nothing. Every row also shows what its KIND changed — one line per declared edit for the
-  additive kinds; the drafted body in full for an `entity-body` repair; for a `delete`, the pages
-  that stopped existing and the pages rewritten so they no longer link to them; for an
-  `entity-alias` merge, which identity survived and which was retired.
+- **Repairs** — the ledger of what has LEFT the corpus ([repair.md](./repair.md)). **This page
+  decides nothing**; it is the reading nobody gave a removal before it landed. The ledger by
+  outcome over the whole table, and a bounded page of it newest first. A row's detail carries the
+  unified DIFF that was pushed, which is the point of the page: the capture that asked for the
+  removal carries the same reading per page and is purged with the retention window, so after that
+  this is the only place those bytes are ever read. Every row also shows what it did — the pages
+  that stopped existing, and the pages rewritten so they no longer link to them, each with the
+  bytes a model wrote.
+
+  **Rows of a retired kind are still here.** An elective repair loop used to derive `edits`,
+  `entity-body` and `entity-alias` repairs from the gardener's findings and apply them unattended;
+  it was removed, and its rows keep their own kinds and its two other outcomes (`failed` for a
+  repair a gate refused, `skipped` for a finding it could not express). The console labels the kind
+  *(retired)*, renders those ops generically, and says on the row that nothing will attempt them
+  again.
 
   **Remove pages** is the one button here that writes anything, and what it writes is a QUEUE ROW.
   A person names the pages and says why; the console queues a `delete` capture under its actor and
@@ -239,8 +237,8 @@ what the console's token buys here is the
   duration, colour the outcome). The truth column names its source: a `job_runs` row for the
   gardener and the retention purge, `index_meta.built_at` for the rebuild, which writes none. The
   rebuild's row names the command instead of a time, because it is the one pass the worker cannot
-  run — no embedding key, by design. Other recorded work — the repair pass, the digest, the
-  webhook, reclaims — is listed below.
+  run — no embedding key, by design. Other recorded work — the webhook, reclaims — is listed
+  below.
 
   **There are no levers on this page, and that is the design.** These passes used to be GitHub
   Actions crons the console dispatched, enabled and disabled through a PAT; they now schedule
@@ -248,10 +246,6 @@ what the console's token buys here is the
   switch off from a browser. What is left is what an operator actually needed: when each pass last
   ran, and what it did.
 
-- **Digest** — the configured-pieces checklist, Preview (the byte-identical dry-run body), Post
-  now (disabled until both Slack pieces are configured, with the checklist saying which is
-  missing; it names the duplicate-window risk before it posts), the run strip and history. Still
-  command-only: no schedule exists.
 - **Activity** — calls in the window and questions asked, the answer shape (answered with a
   citation, without one, honest refusal — from the verifier's verdict, never the text), capture
   → searchable and capture → filed, calls per day by tool, who asks, per-tool calls/errors/latency,
@@ -269,29 +263,26 @@ it is logged loudly and the work still lands; bookkeeping must never fail the wo
 **`admin_actions` is the only ledger this console writes, and there is no second one anywhere.**
 Nothing keeps a governance table: an identity is born in the commit that files the capture that
 introduced it, so the page and the registry ARE the record of who stands behind it,
-and a repair's whole record lives on
-its own `repairs` row — `status`, `applied_commit`, and the `diff` it pushed. "What changed the
-corpus, and why" is answered by that row and by `git log`, whose trailer says which kind of act it
-was: `Approved-by:` when a person asked for it, `Repair: <check> #<finding>` when the worker
-derived it.
+and a removal that landed has its own `repairs` row — `target_paths`, `ops`, `applied_commit` and
+the `diff` it pushed. "What changed the corpus, and why" is answered by that row and by `git log`,
+whose `Approved-by:` trailer names the person who asked.
 
 One asymmetry is deliberate: a removal the worker cannot perform leaves a `rejected` CAPTURE
-carrying the sentence that refused it, not a `repairs` row — a removal is queued, not derived, so
-its record is the row it was queued as. The `admin_actions` row for the request is there already,
-saying who asked and when. Nothing is retried and nothing is put back — the operator reads both and
-decides whether to ask again.
+carrying the sentence that refused it, and NO `repairs` row — the ledger records what happened to
+the corpus, and a refusal changed nothing. The `admin_actions` row for the request is there
+already, saying who asked and when. Nothing is retried and nothing is put back — the operator reads
+both and decides whether to ask again.
 
 **`entities/create` decides nothing and touches no git.** It writes its `admin_actions` row and a
 `capture_queue` row, and that is all this process does; the entity page, its `approved_by:` naming
 the actor on the form, and the regenerated registry are the librarian worker's commit, minutes
 later. The page and the registry are what say who introduced the identity.
 
-Four POSTs write no such row, because none of them mutates anything:
+Three POSTs write no such row, because none of them mutates anything:
 
 | Call | Why it is not a mutation | What it *does* leave behind |
 |---|---|---|
 | Retention purge with **Dry run** | a preview, by construction the same row set the real purge would take | nothing |
-| Digest **Preview** | dry-run render only; nothing is posted to Slack | a `digest-dry-run` row in `job_runs` — which is why the Digest page's history fills with them |
 | **Substrate check** | an in-process lint over the live index | nothing |
 | **Registry check** (`entities/resolve`) | a read of the served registry with the birth gate's own folds; it runs as somebody types into Register an entity, and stops the moment the dialog closes | nothing |
 

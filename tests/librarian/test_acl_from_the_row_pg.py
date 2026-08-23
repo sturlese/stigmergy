@@ -102,10 +102,25 @@ def test_the_verbatim_source_page_carries_the_same_audience_as_its_synthesis(rig
         assert _acl_line(page) == 'acl: ["leadership"]', f"{page_path}\n{page}"
 
 
-def test_every_page_of_a_meeting_set_carries_the_captures_audience(rig, clean_queue):
-    """§4 case 5, closed. The meeting page LISTS its decision pages by title, and was stamped
-    `acl=None` unconditionally — so a restricted meeting published the titles of every decision it
-    produced, to everyone, on a page that named them all in one place."""
+def test_every_page_a_meeting_capture_writes_carries_the_captures_audience(rig, clean_queue):
+    """§4 case 5, closed — and re-aimed at the pipe that replaced the flow.
+
+    OLD BEHAVIOUR: `kind="meeting"` had an entry point of its own that wrote a page SET (a source,
+    a meeting page, one page per decision), and the meeting page LISTED its decision pages by
+    title while being stamped `acl=None` unconditionally — so a restricted meeting published the
+    titles of every decision it produced, to everyone, on a page that named them all in one place.
+
+    A transcript rides the ordinary flow now: `kind` chooses the archive folder
+    (`sources/meetings/`) and the brief, never a code path, and the page count is whatever the
+    account declared. What the case asserts is unchanged and is the reason it survives its flow —
+    ONE capture, ONE audience, every page it writes, the verbatim archive included. The archive is
+    the sharpest half: it is the submitted material itself, at a path the synthesis cites.
+
+    The multi-page half of the same property — a capture declaring several pages, each stamped —
+    is `test_structured_processing_pg.py`'s
+    `test_every_page_of_a_multi_page_filing_carries_the_captures_audience`, because the offline
+    double this rig runs declares exactly one page.
+    """
     env, deps = rig
     support.submit_meeting(
         clean_queue, deps,
@@ -113,14 +128,17 @@ def test_every_page_of_a_meeting_set_carries_the_captures_audience(rig, clean_qu
         title="Renewals", acl=SCOPED)
     _item, result = worker.process_next(clean_queue, deps)
     assert result.status == schema.FILED, result.report.get("summary")
-    _path, sha = result.result_ref.rsplit("@", 1)
+    path, sha = result.result_ref.rsplit("@", 1)
 
     # `wiki/entities/` is excluded BY DESIGN, not by accident: an entity page is the brain's
     # shared vocabulary and carries no audience at all. Asserting "every page" would
-    # demand the wrong behaviour the day a meeting births one.
+    # demand the wrong behaviour the day a transcript births one.
     pages = [p for p in support.paths_in_commit(env.repo, sha)
              if p.endswith(".md") and not p.startswith("wiki/entities/")]
-    assert len(pages) >= 3, f"a meeting set is a source, a meeting page and its decisions: {pages}"
+    assert path in pages, f"the filed page is not in its own commit: {pages}"
+    assert [p for p in pages if p.startswith("sources/meetings/")], (
+        f"a transcript archives to `sources/meetings/`, and that page is the submitted material "
+        f"itself — if it is absent this test's sharpest case is not being checked: {pages}")
     for page_path in pages:
         page = support.read_filed_page(env.repo, sha, page_path)
         assert _acl_line(page) == 'acl: ["leadership"]', f"{page_path}\n{page}"
@@ -129,24 +147,23 @@ def test_every_page_of_a_meeting_set_carries_the_captures_audience(rig, clean_qu
 # ── the write lane: material may only be ADDED to a page its readers could already read ───────
 def test_a_scoped_capture_may_not_append_to_an_open_page(rig, clean_queue):
     """The audience-from-the-door change's other half. The input scope stops a model READING out of
-    scope; this stops the
-    edit it declares landing out of scope — and edits are not only a model's doing (the deletion
-    sweep and the repair loop write here too), so the check belongs at the gate.
+    scope; this stops the change it declares landing out of scope — and a page is not only changed
+    by a model's account (a removal's sweep writes here too), so the check belongs at the gate.
 
-    `gate_zone` judges what the diff DID: a `[leadership]` capture appending a back-link sentence
-    to an open note would put restricted material in front of readers it was restricted from."""
+    `gate_zone` judges what the diff DID: a `[leadership]` capture rewriting an open note would put
+    restricted material in front of readers it was restricted from."""
     env, deps = rig
     support.submit(clean_queue, deps,
-                   f"DOUBLE:backlink={EXISTING_OPEN_PAGE}\n{_material('append')}",
+                   f"DOUBLE:refresh={EXISTING_OPEN_PAGE}\n{_material('append')}",
                    submitted_by="scoped@stigmergy.test", acl=SCOPED)
     before = support.branch_sha(env.bare)
     _item, result = worker.process_next(clean_queue, deps)
-    # The status is the double's: it declares the same edit again on the corrective pass, so the
-    # veto fires twice and the row ends terminal-but-not-filed. What this test pins is the
-    # PROPERTY — the edit was refused and nothing reached the remote — not which terminal state a
+    # The status is the double's: it declares the same rewrite again on the corrective pass, so
+    # the veto fires twice and the row ends terminal-but-not-filed. What this test pins is the
+    # PROPERTY — the change was refused and nothing reached the remote — not which terminal state a
     # test double's second identical answer produces.
     assert result.status != schema.FILED, result.report.get("summary")
-    assert support.branch_sha(env.bare) == before, "a refused edit must commit nothing at all"
+    assert support.branch_sha(env.bare) == before, "a refused change must commit nothing at all"
     # WHICH gate refused, read off the preserved diff's own header rather than inferred from the
     # terminal status — `report["stage"]` says only "zone", and this run must fail for THIS
     # reason and not for any other zone veto.
@@ -154,12 +171,12 @@ def test_a_scoped_capture_may_not_append_to_an_open_page(rig, clean_queue):
     assert "zone/edit-outside-audience" in refused, refused[:400]
 
 
-def test_the_benign_twin_an_OPEN_capture_may_append_to_an_open_page(rig, clean_queue):
-    """The specificity half: this gate runs on every declared edit anybody makes, and open into
-    open is the case that must sail through untouched."""
+def test_the_benign_twin_an_OPEN_capture_may_rewrite_an_open_page(rig, clean_queue):
+    """The specificity half: this gate runs on every change anybody's capture declares, and open
+    into open is the case that must sail through untouched."""
     env, deps = rig
     support.submit(clean_queue, deps,
-                   f"DOUBLE:backlink={EXISTING_OPEN_PAGE}\n{_material('append-open')}",
+                   f"DOUBLE:refresh={EXISTING_OPEN_PAGE}\n{_material('append-open')}",
                    submitted_by="open@stigmergy.test")
     _item, result = worker.process_next(clean_queue, deps)
     assert result.status == schema.FILED, result.report.get("summary")

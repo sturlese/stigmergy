@@ -12,15 +12,11 @@ Shutdown is not a cooperative cancel: nothing can abort a `process_item` already
 to completion (and may well be filed, with a real commit). Only a kill returns the row to the
 queue, after the visibility timeout, with its worktree reaped at the next startup.
 
-The periodic view sweep below is cooperative BETWEEN ENTITIES and uncancellable within one. That
-line is where the two properties meet: one entity is one commit, so any prefix of a pass is a
-valid repo state and stopping between them costs one interval, while inside an entity there is a
-synthesis call and a push that tearing in half would gain nothing. So a signal is observed after
-at most one entity instead of after a whole ceiling's worth of model calls — which matters because
-the deployed kill window is finite and `ops.job_run` writes its row on the way OUT, so a pass that
-gets to SIGKILL leaves no row at all.
+The maintenance passes below all run on the IDLE branch and never while a capture is waiting
+(`librarian.schedule` owns the due-ness arithmetic). None of them can be torn in half: a pass is
+observed as a whole, and `ops.job_run` writes its row on the way OUT, so a pass that gets to
+SIGKILL leaves no row at all.
 """
-import asyncio
 import datetime
 import logging
 import os
@@ -33,7 +29,6 @@ from stigmergy.gardener import schema as gardener_schema
 from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import base_inputs, config, gates, gitcmd, processing, schedule
 from stigmergy.librarian.errors import GitError, LibrarianConfigError, StaleBaseError
-from stigmergy.views import regenerate as views_regenerate
 
 log = logging.getLogger(__name__)
 
@@ -122,9 +117,6 @@ def startup_checks(settings) -> dict:
     # The agent's operating procedure, checked at the ref the run will use — the same bytes the
     # backend reads out of the worktree, not the local checkout.
     if settings.backend in agent_module.SKILL_READING_BACKENDS:
-        # The meeting-distiller brief is deliberately NOT checked here: every claimed item needs
-        # the skill, while only `kind="meeting"` rows need the brief, and
-        # `agent.read_meeting_brief` already fails closed at the point of need.
         _check_skill_at(repo, base)
     _check_push_identity(repo)
 
@@ -156,59 +148,6 @@ def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> str:
         raise LibrarianConfigError(
             f"the librarian skill at {where} could not be read ({ex})") from ex
     return agent_module.validate_skill(text, where=where)
-
-
-def check_garden_model(settings, *, environ: dict | None = None) -> None:
-    """The gardener's own model key, checked before the pass runs — because the night shift moved
-    INTO this process and brought a second model with it.
-
-    This is not the librarian's check repeated for tidiness. It closes a trap the move created:
-    `gardener.settings.DEFAULT_GARDENER_MODEL` is a BARE model id, which `kernel.llm` resolves
-    through the OpenAI Responses API — and `OPENAI_API_KEY` is exactly what
-    `bootstrap.READ_PATH_ONLY_ENV` strips before exec'ing this worker. So the default that is
-    correct on a laptop authenticates with nothing on a deployment.
-
-    **Deliberately NOT a startup refusal**, though it was written as one first. A worker whose
-    gardener model is unconfigured must still file captures: refusing to boot over a nightly
-    maintenance pass would take the queue down for the one thing that never depends on it, which
-    is this package's own rule everywhere else in the night shift. So it fails the PASS, and
-    `maybe_garden` records the refusal as a `job_runs` error row — which is what makes it loud
-    rather than a log line nobody reads, and what stops it re-firing on every idle tick.
-
-    What that would look like WITHOUT this check is the reason it is a refusal at all: the
-    deterministic checks need no model and would keep working, so every night would produce a
-    `partial` run with real findings and a quiet `sweep_error` — a pass that looks alive, forever,
-    while two of its three model passes have never once run. Fail closed and loud, at startup, by
-    name, is this package's posture for every other secret; the night shift does not get an
-    exemption for being maintenance.
-    """
-    from stigmergy.gardener.settings import MODEL_ENV, GardenerSettings
-    from stigmergy.librarian import bootstrap, pydantic_backend
-
-    if str(settings.garden_at or "").strip().lower() == config.DAILY_OFF:
-        return
-    model = GardenerSettings.from_args(None).model
-    source = os.environ if environ is None else environ
-    provider = pydantic_backend.provider_of(model)
-    key_env = pydantic_backend.PROVIDER_KEY_ENV.get(provider) if provider else "OPENAI_API_KEY"
-    if key_env is None or source.get(key_env):
-        return
-    stripped = key_env in bootstrap.READ_PATH_ONLY_ENV
-    raise LibrarianConfigError(
-        f"the nightly garden pass would run {model!r}, which authenticates with ${key_env}, and "
-        f"${key_env} is not set in this worker's environment."
-        + (f" **On the DEPLOYED worker that is a dead end rather than a missing export**: "
-           f"`stigmergy-librarian-boot` strips {key_env} on purpose, because it belongs to the "
-           f"READ path's embedder and Fly secrets are app-wide. Nothing you export in that "
-           f"container survives the strip. Set ${MODEL_ENV} to a provider-prefixed model whose "
-           f"key this worker holds — the filing model's own provider is the obvious one "
-           f"({settings.model!r})."
-           if stripped else
-           f" Export {key_env}, or set ${MODEL_ENV} to a model whose provider key this worker "
-           f"holds.")
-        + f" Or set ${config.GARDEN_AT_ENV}={config.DAILY_OFF} to run no garden pass at all — a "
-          f"deliberate 'not here' is fine; a pass that reports findings every night while its "
-          f"model half has never run is not.")
 
 
 def _check_pydantic_backend(settings, *, environ: dict | None = None) -> None:
@@ -316,139 +255,17 @@ def swept_clause(result: dict, settings) -> str:
             f"{human_duration(settings.visibility_timeout_s)})")
 
 
-# ── the periodic view sweep ───────────────────────────────────────────────────────────────────
-# A view is DERIVED, so it can go stale whenever anything writes a page — an ordinary capture, a
-# Slack drop, an applied repair, an identity born with a capture, a hand edit in the repo. The
-# fix is deliberately NOT a call at each of those doors: two of them run inside the HTTP server
-# process, and any new door would have to remember. It is a state-based convergence pass that asks
-# the corpus what is divergent NOW, which covers every writer that will ever exist.
-#
-# It lives HERE, in the worker, rather than in a cron: this process already holds the GitHub App
-# credential the commit needs, and a scheduled Actions run that pushed would put that credential in
-# a runner's environment. The same argument moved the repair pass here, and then the rest of the
-# night shift after it — there is no scheduled job outside this deployment any more.
-
-
-# The two refusals below both fail CLOSED before a single view is touched, and both exist because
-# this pass is the one writer in the system with no operator in front of it: every other caller of
-# `views.regenerate` is either a human at a terminal or a capture somebody submitted, and can
-# afford to learn about a bad input from an error message.
-_ABSENT_REGISTRY_REFUSAL = (
-    "refusing to converge views/: the entity registry is not readable at {where}. It resolves to "
-    "an EMPTY registry, and an empty registry makes every existing view an orphan — this pass's "
-    "answer to an orphan is to DELETE it, so a fetch that raced a force-push, a corrupt object or "
-    "a missing file would remove every view in the repo, {ceiling} per pass, for as long as the "
-    "worker runs. The ceiling bounds the pass, not the incident. A registry that is present and "
-    "declares no entities is a different thing — a committed, reviewable statement — and is "
-    "honoured.")
-_STALE_BASE_REFUSAL = (
-    "refusing to converge views/: the base resolved to the local {base} instead of "
-    "origin/{branch}, so the fetch failed and this deployed worker's checkout is whatever it was "
-    "cloned at. A pass off a stale base re-derives every view from an OLD member set and then "
-    "`gitcmd.push` rebases that state onto the current tip — replaying an older, potentially "
-    "WIDER acl over the current one. `processing._resolve_filing_base` refuses a filing for the "
-    "same fault; this is the same rule, and it binds harder here, because a capture writes new "
-    "content while this writes DERIVED state over content somebody else already fixed.")
-
-
-def run_view_sweep(conn, deps: processing.Deps, *, should_stop=None) -> views_regenerate.RunResult:
-    """One convergence pass over `views/`, on this worker's own fresh worktree.
-
-    **The worktree is materialized here, and that is what keeps `guarded=False` honest.** The
-    post-meeting hook BORROWS the capture's worktree, so it inherits the "always a fresh, detached
-    checkout" justification `views.regenerate.regenerate_entity` states for skipping the
-    dirty-tree/wrong-branch guards. An idle pass has no capture to borrow from, so it builds the
-    same thing itself off a freshly-fetched `origin/<branch>` — the justification stays literally
-    true for this caller instead of quietly becoming a claim nobody checks.
-
-    The registry is read at THIS pass's base, not at startup: a de-registration pushed since the
-    worker booted is exactly the input that turns an orphaned view into a removal, and a pre-flight
-    copy would miss it until the next restart. That is also why the base and the registry are both
-    CHECKED here rather than trusted — see the two refusals above, and note that each is returned
-    as a `skip_reason` on a `RunResult` rather than raised: a raise reaches
-    `Worker.maybe_sweep_views`, which logs and swallows, leaving the one unattended loop in the
-    system to refuse silently every interval.
-
-    `should_stop` is threaded down to `views.regenerate.run`, which consults it BETWEEN entities
-    and stops on the reason it answers with.
-    """
-    settings = deps.settings
-    base = gitcmd.base_ref(deps.repo, settings.branch)
-    if settings.require_remote_base and not base.remote:
-        return _refused_sweep(conn, _STALE_BASE_REFUSAL.format(base=base.describe(),
-                                                               branch=settings.branch),
-                              error=StaleBaseError)
-    if not base_inputs.registry_present_at(deps.repo, base):
-        return _refused_sweep(conn, _ABSENT_REGISTRY_REFUSAL.format(
-            where=base_inputs.where(base, config.REGISTRY_RELPATH),
-            ceiling=settings.view_sweep_ceiling), error=LibrarianConfigError)
-    with gitcmd.ephemeral_worktree(deps.repo, base.sha, settings.worktree_root) as worktree:
-        registry = base_inputs.load_registry(deps.repo, base)
-        return asyncio.run(views_regenerate.sweep(
-            worktree, conn, registry=registry, branch=settings.branch, guarded=False,
-            max_changes=settings.view_sweep_ceiling, should_stop=should_stop))
-
-
-def run_repairs(conn, deps: processing.Deps, *, should_stop=None):
-    """One repair pass: the latest gardener findings, derived into repairs and applied.
-
-    Returns `repair.run.RepairRunResult`, or `None` when the pass had nothing to run against —
-    which is the ordinary state, not a fault: a deployment whose gardener has not completed a run
-    since the last pass has no findings to answer, and saying so every idle tick would bury the
-    passes that did something.
-
-    IMPORTED HERE, not at module scope, and that is load-bearing: `repair.run` loads a model stack
-    and pulls `pydantic_ai` in with it. The worker's filing path must not pay for that at import
-    time, and `tests/test_architecture.py` pins the edge as a function-level exception.
-
-    `should_stop` is threaded down and consulted BETWEEN repairs — never inside one, because a
-    repair is a model call, the gates and a push, and abandoning it half-way is what leaves the
-    corpus in a state nobody chose.
-    """
-    from stigmergy.gardener import store as gardener_store
-    from stigmergy.repair import run as repair_run
-    from stigmergy.repair.settings import RepairSettings
-
-    latest = gardener_store.latest_completed_run(conn)
-    if latest is None:
-        return None
-    # The watermark: this pass answers a gardener run, and a pass that ran since that run finished
-    # has already answered it. Without this the loop would re-derive the same findings every
-    # interval — cheap only because the ledger's memory catches each one afterwards, which is
-    # paying for a model call to be told what a timestamp already knew.
-    last = ops.latest_run(conn, repair_run.JOB_NAME)
-    if last is not None and last.get("finished_at") and latest.get("finished_at") \
-            and last["finished_at"] >= latest["finished_at"]:
-        return None
-    return asyncio.run(repair_run.run_repairs(
-        conn, settings=RepairSettings.from_env(), repo=deps.repo,
-        branch=deps.settings.branch, worktree_root=deps.settings.worktree_root,
-        should_stop=should_stop))
-
-
-def repair_clause(result) -> str:
-    """One line about a repair pass, or `""` when it did nothing — `view_sweep_clause`'s shape, for
-    the same reason: a maintenance pass that printed "nothing to do" every interval would bury the
-    passes that changed the corpus."""
-    if result is None:
-        return ""
-    stats = result.stats
-    if not (stats["applied"] or stats["failed"] or stats["skipped_invalid"]):
-        return ""
-    line = (f"repairs: {stats['findings_seen']} finding(s) seen — {stats['applied']} applied, "
-            f"{stats['failed']} failed, {stats['skipped_known']} already answered")
-    if stats["failures"]:
-        line += " — " + "; ".join(stats["failures"][:3])
-    return line
-
-
 def run_garden(conn, deps: processing.Deps) -> dict:
     """One gardener pass — the night shift's whole-corpus half.
 
-    IMPORTED INSIDE THE FUNCTION, not at module scope: `gardener.run` builds a model stack at
-    import time, and every librarian process would pay for it at startup, including the ones that
-    never garden. `tests/test_architecture.py` pins that edge as a named exception with a fresh
-    interpreter, exactly as the views reach in the other direction is pinned.
+    IMPORTED INSIDE THE FUNCTION, not at module scope: the gardener is a peer this worker
+    SCHEDULES, not a library the filing path is built on, and every librarian process — including
+    `stigmergy-librarian once`, which never gardens — would otherwise carry its import weight and
+    its whole transitive edge. `tests/test_architecture.py` pins that edge as a named exception.
+
+    **The pass asks no model.** Every gardener check is deterministic, so this is the one night
+    shift pass with no key to preflight and no model spend to bound — it needs a database and a
+    readable checkout and nothing else.
 
     **The index rebuild is deliberately not a second half of this pass, and cannot be**: the
     deployed worker's environment has no embedding key at all — `bootstrap.READ_PATH_ONLY_ENV`
@@ -466,8 +283,7 @@ def run_garden(conn, deps: processing.Deps) -> dict:
     from stigmergy.gardener.run import run_gardener
     from stigmergy.gardener.settings import GardenerSettings
 
-    check_garden_model(deps.settings)
-    result = asyncio.run(run_gardener(conn, repo=deps.repo, settings=GardenerSettings.from_args(None)))
+    result = run_gardener(conn, repo=deps.repo, settings=GardenerSettings.from_args(None))
     return {"findings": len(result.findings), "pages_checked": result.pages_checked,
             "entities_checked": result.entities_checked}
 
@@ -503,38 +319,6 @@ def retention_clause(result: dict | None) -> str:
     return f"retention: purged the payload of {result['purged']} terminal capture(s)"
 
 
-def _refused_sweep(conn, reason: str, *, error: type[BaseException]) -> views_regenerate.RunResult:
-    """A pass that did not run, in the shape a pass that did returns — so `view_sweep_clause`
-    prints it and nothing downstream needs a second kind of answer.
-
-    It also writes its own `job_runs` error row, named for the exception the FILING path raises for
-    the same fault, because a maintenance pass nobody is watching that refuses only into a log has
-    no operator-facing surface at all: `job_runs` is where the pass is read from.
-    """
-    log.error("%s", reason)
-    result = views_regenerate.RunResult(skip_reasons=[reason])
-    ops.record_job_run(conn, views_regenerate.SWEEP_JOB_NAME, status="error",
-                       stats=result.stats, error=error.__name__)
-    return result
-
-
-def view_sweep_clause(result: views_regenerate.RunResult) -> str:
-    """One line about a view sweep, or `""` when it converged with nothing to do — `swept_clause`'s
-    shape, for the same reason: a maintenance pass that printed "nothing changed" every interval
-    would bury the passes that did change something."""
-    stats = result.stats
-    if not (stats["written"] or stats["removed"] or stats["refused"] or result.skip_reasons):
-        return ""
-    line = (f"view sweep: {stats['checked']} of {stats['population']} entity(ies) checked — "
-            f"{stats['written']} regenerated, {stats['removed']} removed, "
-            f"{stats['unchanged']} already current")
-    if stats["refused"]:
-        line += f", {stats['refused']} refused"
-    if result.skip_reasons:
-        line += " — " + "; ".join(result.skip_reasons)
-    return line
-
-
 def build_deps(settings, resolved: dict, evidence) -> processing.Deps:
     return processing.Deps(
         settings=settings, evidence=evidence, agent=agent_module.build_agent(settings),
@@ -555,12 +339,11 @@ def process_next(conn, deps: processing.Deps):
     if item is None:
         return None
 
-    # Dispatch by `kind`, through the SAME fenced claim — claiming stays kind-agnostic and only
-    # the processing seam differs.
+    # ONE pipe for material, ONE lane for removal — and that is the whole dispatch. `kind` chooses
+    # the prose (what the brief asks for, the byte cap, the `sources/` folder) and never a code
+    # path: a transcript and a note are the same journey, and a removal is not material at all.
     try:
-        if item.get("kind") == schema.MEETING:
-            result = processing.process_meeting_item(conn, item, deps)
-        elif item.get("kind") == schema.DELETE:
+        if item.get("kind") == schema.DELETE:
             result = processing.process_delete_item(conn, item, deps)
         else:
             result = processing.process_item(conn, item, deps)
@@ -661,48 +444,19 @@ class Worker:
     """The long-running loop. `once` uses `process_next` directly and never constructs this."""
 
     def __init__(self, conn, deps: processing.Deps, *, on_output=print,
-                 view_sweep=run_view_sweep, repair_pass=run_repairs, now=time.monotonic,
                  garden=run_garden, purge=run_retention, utcnow=None):
         self.conn = conn
         self.deps = deps
         self.on_output = on_output
         self.stopping = False       # do not claim another item after this one
         self.releasing = False      # do not claim another item, and do not sleep waiting either
-        # The maintenance pass and the clock that schedules it, both injected: the interval is a
-        # timing contract, and a test that had to wait one out could only prove it by sleeping.
-        self._view_sweep = view_sweep
-        self._repair_pass = repair_pass
+        # The maintenance passes, injected: when one runs is a timing contract, and a test that
+        # had to wait one out could only prove it by sleeping.
         self._garden = garden
         self._purge = purge
-        self._now = now
-        # A SECOND clock, and deliberately not `now`: the two convergence passes are scheduled off
-        # a monotonic counter (an interval must not move when the host's wall clock is corrected),
-        # while the daily passes are scheduled off a WALL time somebody wrote as "05:07". One
-        # injected clock could not serve both, and a test that fed a monotonic float to
-        # `daily_due` would be testing nothing.
+        # A WALL clock, deliberately: the daily passes are scheduled off a time somebody wrote as
+        # "05:07", and a test that fed a monotonic float to `daily_due` would be testing nothing.
         self._utcnow = utcnow or (lambda: datetime.datetime.now(datetime.UTC))
-        # `None` means "due at the first idle tick" — a worker that has just started converges
-        # `views/` before it waits an interval, the same posture `sweep()` above already takes.
-        self._view_sweep_due_at: float | None = None
-        self._repair_due_at: float | None = None
-        # "Something this worker did changed the corpus since the last view sweep." Set by the
-        # loop after a filing and by the repair pass after an applied repair; read and CLEARED by
-        # the sweep it causes, so one piece of work makes the sweep due once rather than forever.
-        self._corpus_changed = False
-
-    def _sweep_pause_reason(self) -> str:
-        """Why the view sweep should yield between entities, or `""` — read at the moment it is
-        asked, never captured. Two causes, each in its own words because the recorded deferral
-        repeats them: a shutdown signal landed, or a capture is WAITING in the queue — a pass that
-        held the worker's only loop through a whole ceiling of syntheses would put up to ten model
-        calls and pushes between a capture and its filing, the exact latency the queue exists to
-        avoid (issue #102). Stopping costs one interval and loses nothing: the population is
-        recomputed from state on the next idle tick."""
-        if self.stopping or self.releasing:
-            return "the process is shutting down"
-        if queue.work_waiting(self.conn):
-            return "a capture is waiting in the queue"
-        return ""
 
     def install_signal_handlers(self) -> None:
         signal.signal(signal.SIGINT, self._on_sigint)
@@ -746,13 +500,11 @@ class Worker:
             # `stopping` guards the CLAIM, not just the exit: the contract is that the flags stop
             # the NEXT claim, and a break placed after the claim cannot deliver that — the loop
             # would file, commit and push one more item first.
-            worked = False
             while not self.releasing and not self.stopping:
                 outcome = (process_next(self.conn, self.deps)
                            if not (self.releasing or self.stopping) else None)
                 if outcome is not None:
                     processed += 1
-                    worked = True
                     item, result = outcome
                     self.on_output(f"#{item['id']} -> {result.status}")
                     # After EVERY item, not once after the loop: `StaleBaseError` escapes this
@@ -762,107 +514,14 @@ class Worker:
                 if self.stopping:
                     break
                 if outcome is None:
-                    # The queue is empty — where maintenance belongs. On its OWN interval, not
-                    # every idle tick: an empty queue polls every few seconds and a corpus parse
-                    # per tick is not free.
-                    #
-                    # EXCEPT on the tick that follows work. A capture, a repair or a removal has
-                    # just changed the corpus, and `views/` is derived from it — waiting out a
-                    # whole interval would leave a view describing a page that is no longer there.
-                    # "Something just changed the corpus" is the moment the rollups
-                    # are most likely to be wrong and the cheapest time to fix them.
-                    #
-                    # The repair pass runs FIRST for exactly that reason: it is one of the things
-                    # that changes the corpus, and a sweep asked before it would converge the tree
-                    # as it was a moment ago. `_corpus_changed` is what carries the fact across —
-                    # set by a filing here and by an applied repair inside the pass, read and
-                    # cleared by the sweep.
-                    self._corpus_changed = self._corpus_changed or worked
-                    worked = False
-                    self.maybe_run_repairs()
-                    self.maybe_sweep_views(due_now=self._corpus_changed)
-                    # The daily passes go LAST, and the garden last but one on purpose: it writes
-                    # findings the repair pass answers, and putting it after that pass gives them
-                    # a whole repair interval to be seen rather than a whole day.
+                    # The queue is empty — where maintenance belongs. Each pass decides for
+                    # itself whether it is due: an empty queue polls every few seconds, and a
+                    # pass that ran on every one of those ticks would not be maintenance.
                     self.maybe_garden()
                     self.maybe_purge()
                     self._sleep(self.deps.settings.poll_interval_s)
             stats["processed"] = processed
         return processed
-
-    def maybe_sweep_views(self, *, due_now: bool = False) -> bool:
-        """Run the convergence pass if its interval has elapsed — or if `due_now`, which is the
-        first idle tick after this worker actually did something. Returns whether it ran.
-
-        SKIPPED, never blocked: the idle branch returns immediately when the pass is not due, so
-        `_sleep` keeps polling in slices and a signal is still observed promptly.
-
-        A fault is recorded and swallowed — `views.regenerate.run` has already written its own
-        `job_runs` error row by the time one reaches here — because filing must never depend on a
-        rollup. That is the post-meeting hook's posture, for the same reason.
-
-        The pass is handed `self._sweep_pause_reason` rather than a copy of any flag: it is
-        consulted between entities, and by then a signal may have landed or a capture may have
-        arrived. Not starting one is still the first guard — a shutdown must not pick up a fresh
-        multi-entity pass on its way out.
-        """
-        interval = float(self.deps.settings.view_sweep_interval_s)
-        if interval <= config.VIEW_SWEEP_OFF or self.stopping or self.releasing:
-            return False
-        now = self._now()
-        if not due_now and self._view_sweep_due_at is not None and now < self._view_sweep_due_at:
-            return False
-        self._corpus_changed = False
-        # Scheduled BEFORE the pass runs, off the moment it STARTED: a fault would otherwise
-        # re-attempt on every idle tick, and a pass slower than its own interval would owe another
-        # the instant it finished.
-        self._view_sweep_due_at = now + interval
-        try:
-            result = self._view_sweep(self.conn, self.deps, should_stop=self._sweep_pause_reason)
-        except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
-            log.error("the periodic view sweep failed; the queue keeps draining", exc_info=True)
-            return True
-        clause = view_sweep_clause(result)
-        if clause:
-            self.on_output(clause)
-        return True
-
-    def maybe_run_repairs(self) -> bool:
-        """Run the repair pass if its interval has elapsed. Returns whether it ran.
-
-        `maybe_sweep_views`' shape, and every sentence of that docstring applies here: skipped
-        rather than blocked, due-time scheduled BEFORE the pass so a fault cannot re-attempt every
-        tick, and a fault logged and swallowed because filing must never depend on maintenance.
-
-        What differs is what a fault costs. A view sweep that dies has regenerated nothing; a
-        repair pass that dies may have PUSHED — each repair is committed and pushed on its own —
-        so the ledger, not this method's return value, is where an operator reads what happened.
-        That is why every repair records itself before the next one is derived.
-        """
-        interval = float(self.deps.settings.repair_interval_s)
-        if interval <= config.REPAIR_PASS_OFF or self.stopping or self.releasing:
-            return False
-        now = self._now()
-        if self._repair_due_at is not None and now < self._repair_due_at:
-            return False
-        self._repair_due_at = now + interval
-        try:
-            result = self._repair_pass(self.conn, self.deps,
-                                       should_stop=self._sweep_pause_reason)
-        except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
-            # A pass that died may still have PUSHED before it died — each repair commits on its
-            # own — so the corpus is marked changed either way. A sweep that had nothing to do
-            # costs a corpus parse; a view left describing a page a repair removed costs a wrong
-            # answer.
-            self._corpus_changed = True
-            log.error("the periodic repair pass failed; the queue keeps draining", exc_info=True)
-            return True
-        if result is not None and result.stats.get("applied"):
-            self._corpus_changed = True
-        clause = repair_clause(result)
-        if clause:
-            self.on_output(clause)
-        return True
 
     def maybe_garden(self) -> bool:
         """Run the daily gardener pass if today's time has come and it has not run today.
@@ -876,7 +535,7 @@ class Worker:
 
         A fault is logged and swallowed, as with every maintenance pass — and the `job_runs` row
         the gardener wrote before failing is what stops the next idle tick from retrying it all
-        night. `_corpus_changed` is NOT set: the gardener writes findings, never pages.
+        night.
         """
         at = self._daily_at(self.deps.settings.garden_at, schedule.DEFAULT_GARDEN_AT)
         if at is None or not self._daily_due(GARDEN_JOB_NAME, at):

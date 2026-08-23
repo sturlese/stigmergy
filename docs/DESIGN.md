@@ -98,7 +98,7 @@ Everything about the shape of this list is a decision, so each one is stated:
   to. The entity page plus everything anchored to it *is* the project page; a page type would put
   the same thing in two places and let them disagree.
 - **There is no `meta` type.** Operational state — what the last sweep found, what the queue is
-  doing — lives in Postgres, the admin console and the digest: surfaces retrieval cannot reach. A
+  doing — lives in Postgres and the admin console: surfaces retrieval cannot reach. A
   `meta` page would be indexed, and then `ask` could answer a business question with the state of
   a maintenance pass.
 - **`sources/` is a top-level zone, not `wiki/sources/`.** The zone boundary is what `gate_zone`
@@ -191,14 +191,9 @@ design and not a nicety.
 This document is the definition; the code converges on it. What is still open, so that nobody
 reads a false sentence above as a description of today:
 
-- **The page vocabulary is still seven types in code** (`librarian.page.PAGE_TYPES`): `decision`,
-  `meeting` and `view` have not yet been merged away.
-- **There are still two filing flows** — the ordinary one and a separate meeting flow that files
-  a page set. §4's one pipe replaces both.
-- **A capture still cannot rewrite a page body**; it can only append through a closed vocabulary
-  of declared edits. §4's rewrite rule is the change that opens it.
-- **Views are still materialised pages** under `views/`, kept fresh by a convergence sweep.
+- **The page vocabulary is still six types in code** (`librarian.page.PAGE_TYPES`): `decision`
+  and `meeting` have not yet been merged away.
 - **Some subsystems have not yet been measured against §2's criterion** — the gardener's model
-  passes, the elective half of the repair loop, the weekly digest.
+  passes.
 
 Each line here is deleted by the change that makes it false, in the same commit.

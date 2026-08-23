@@ -12,9 +12,8 @@ per facet, each facet with its own denominator:
   - folder     where it landed
   - anchor     the page's server-stamped `entity:` — resolved registry ids; `[]` is the
                company-wide answer, distinguished from a wrong entity
-  - edits      which OTHER pages the commit changed, scored by containment (`_edits_match`)
   - proposals  for a name the registry does not know: the identity the filing INTRODUCED
-  - decisions  for a meeting: one decision page per decision, each with its OWN anchor
+  - pages      the whole page SET one capture established, each page with its OWN anchor
 
 Every capture is ONE scored phase. Nothing parks, nothing is asked, nothing is re-filed:
 a name the registry does not know is proposed as an entity in the same commit as the page, and a
@@ -64,8 +63,8 @@ FIXTURE = ROOT / "evals" / "filing"
 
 # Every facet this instrument knows, in the order the table prints them: quality first, then the
 # two cost counters, which carry no bar.
-QUALITY_FACETS = ("status", "reason", "type", "folder", "anchor", "edits",
-                  "proposals", "decisions")
+QUALITY_FACETS = ("status", "reason", "type", "folder", "anchor",
+                  "proposals", "pages")
 COST_FACETS = ("attempts", "bounces")
 FACETS = QUALITY_FACETS + COST_FACETS
 
@@ -81,8 +80,17 @@ FACETS = QUALITY_FACETS + COST_FACETS
 # gone with the states they measured, and `proposals` takes the former's denominator of 2.
 # Scores before and after are comparable per FACET and not per run — see evals/README.md's growth
 # protocol, and say so in the history row's own commit.
+#
+# MOVED AGAIN when the meeting flow was folded into the one pipe. No NUMBER changed and a NAME
+# did: `decisions: 2` became `pages: 2`, over the same two transcripts. The old facet counted the
+# `decision` pages a meeting flow wrote into `wiki/decisions/`; there is no `decision` type and no
+# meeting flow, so what those two captures are scored on is the page SET the ordinary pipe
+# established — same count, same one-to-one anchoring, different vocabulary. The rename is
+# deliberate and is the point: a `decisions` key and a `pages` key can never be joined into one
+# trend line by accident, and every row in evals/history.ndjson recorded before this landing
+# measured a flow that no longer exists.
 EXPECTED_DENOMINATORS = {"status": 14, "reason": 1, "type": 13, "folder": 13, "anchor": 10,
-                         "edits": 1, "proposals": 2, "decisions": 2,
+                         "proposals": 2, "pages": 2,
                          "attempts": 12, "bounces": 12}
 
 # Words carried by nearly every title in this domain; matching on them would let any two titles
@@ -141,30 +149,27 @@ def _anchor_matches(expected: dict, observed: dict) -> bool:
             and sorted(expected.get("ids") or []) == sorted(observed.get("ids") or []))
 
 
-def _edits_match(expected: list, observed: list) -> bool:
-    """Every edit the expectation names was performed. Observed EXTRAS do not fail the facet.
+def _pages_match(expected: list, observed: list) -> bool:
+    """One filed page per expected page, each matched loosely by title and exactly by anchor, with
+    no page left over on either side.
 
-    Containment, not equality: an extra edit is additive and already gate-checked, and captures file
-    one after another into ONE growing repo, so a later capture may legitimately backlink a page an
-    earlier one created — under equality that would score run order.
+    RENAMED from `_decisions_match` when the meeting flow was folded into the one pipe. It used to
+    pair the `decision` pages a meeting wrote; there is no `decision` type and no meeting flow, and
+    what it pairs now is `report['pages_filed']` — every page a capture established, whatever its
+    kind. The predicate is unchanged, because the property is: a transcript that establishes two
+    conclusions owes two pages, each anchored on its OWN aboutness.
 
-    Consequence when writing an expectation: `edits: []` is vacuously true and still fills the
-    denominator. "This capture owes no edit" is said by naming no `edits` key at all.
-    """
-    return set(expected) <= set(observed)
+    The count is part of the check: five pages where two were expected is a granularity failure,
+    not over-delivery, and one page where two were expected is two conclusions lumped into one.
+    Matching is greedy and one-to-one.
 
-
-def _decisions_match(expected: list, observed: list) -> bool:
-    """One decision page per expected decision, each matched loosely by title and exactly by
-    anchor, with no page left over on either side.
-
-    The count is part of the check: five decision pages where two were expected is a granularity
-    failure, not over-delivery. Matching is greedy and one-to-one.
-
-    An entry MAY omit `title` and then pairs on its ANCHOR alone — a decision's aboutness is a fact
+    An entry MAY omit `title` and then pairs on its ANCHOR alone — what a page is about is a fact
     with one spelling, its title is prose. A title-less entry is the WEAKEST matcher and must be
     written LAST, or greedy pairing lets it take a titled sibling's page; `_check_set` refuses a set
     ordered the other way.
+
+    The `sources/` archive is deliberately NOT in `pages_filed` and so is never among the pages
+    counted here: it is the captured material verbatim, not something the capture established.
     """
     if len(expected) != len(observed):
         return False
@@ -224,12 +229,10 @@ def score_phase(expect: dict, observed: dict) -> dict:
         out["folder"] = observed.get("folder") == expect["folder"]
     if "anchor" in expect:
         out["anchor"] = _anchor_matches(expect["anchor"], observed.get("anchor") or {})
-    if "edits" in expect:
-        out["edits"] = _edits_match(expect["edits"], observed.get("edits") or [])
     if "proposals" in expect:
         out["proposals"] = _proposals_match(expect["proposals"], observed.get("proposals") or [])
-    if "decisions" in expect:
-        out["decisions"] = _decisions_match(expect["decisions"], observed.get("decisions") or [])
+    if "pages" in expect:
+        out["pages"] = _pages_match(expect["pages"], observed.get("pages") or [])
     if "attempts" in expect:
         out["attempts"] = observed.get("attempts") == expect["attempts"]
     if "bounces" in expect:
@@ -378,10 +381,6 @@ class CountingAgent:
         self.calls += 1
         return self.inner.run(**kwargs)
 
-    def run_meeting(self, **kwargs):
-        self.calls += 1
-        return self.inner.run_meeting(**kwargs)
-
 
 # The backend that calls a model; `double` is the keyless plumbing self-check. Named here rather
 # than imported so `--help` costs nothing. The VALUE must not change: history rows key on it.
@@ -496,7 +495,7 @@ def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) ->
        recognize, so `achor:` would silently leave the anchor denominator;
     3. no entry carries the retired ask-back keys (`RETIRED_ENTRY_KEYS`);
     4. the denominators are the pinned ones;
-    5. a decision entry asserts a `title` or an `anchor`, and title-less entries come LAST.
+    5. a `pages` entry asserts a `title` or an `anchor`, and title-less entries come LAST.
 
     `whole_set=False` is a PROPER subset: only check 4 changes, to "this subset scores something".
     """
@@ -532,21 +531,21 @@ def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) ->
     empty, misordered = [], []
     for entry in expectations["expectations"]:
         for block in _expect_blocks(entry):
-            decisions = block.get("decisions") or []
-            if any("title" not in d and "anchor" not in d for d in decisions):
+            pages = block.get("pages") or []
+            if any("title" not in p and "anchor" not in p for p in pages):
                 empty.append(entry["id"])
             seen_titleless = False
-            for decided in decisions:
-                if "title" not in decided:
+            for filed_page in pages:
+                if "title" not in filed_page:
                     seen_titleless = True
                 elif seen_titleless:
                     misordered.append(entry["id"])
                     break
     if empty:
-        sys.exit(f"these expectations name a decision with neither a `title` nor an `anchor`, so it "
-                 f"matches whatever page is left and measures nothing: {sorted(set(empty))}")
+        sys.exit(f"these expectations name a filed page with neither a `title` nor an `anchor`, so "
+                 f"it matches whatever page is left and measures nothing: {sorted(set(empty))}")
     if misordered:
-        sys.exit(f"these expectations put a title-less decision BEFORE a titled one; matching is "
+        sys.exit(f"these expectations put a title-less page BEFORE a titled one; matching is "
                  f"greedy in file order and an anchor-only entry is the weakest matcher, so it "
                  f"would take the titled entry's page and score a correct page set a miss. Write "
                  f"the titled entries first: {sorted(set(misordered))}")
@@ -591,9 +590,10 @@ def _run(args, manifest: dict, expectations: dict, *, kinds: list | None = None)
     for name in (githubapp.APP_ID_ENV, githubapp.INSTALLATION_ID_ENV, githubapp.PRIVATE_KEY_ENV,
                  githubapp.PRIVATE_KEY_FILE_ENV, githubapp.APP_LOGIN_ENV):
         os.environ.pop(name, None)
-    # Same doctrine, one credential over: a filed meeting triggers `_file_meeting`'s best-effort
-    # view regeneration, which would otherwise spend real money this instrument does not price. No
-    # score depends on it — scored pages are read back at `result_ref`'s sha, the filing's own commit.
+    # Same doctrine, one credential over. Nothing in `process_next` reaches a second model-backed
+    # seam today; the pin stays because it costs nothing and it is the only thing standing between
+    # a stray one and an operator's own key, which `make` exports into this process. No score
+    # depends on it — scored pages are read back at `result_ref`'s sha, the filing's own commit.
     os.environ["CLEAN_LLM"] = "fake"
 
     model = args.model or librarian_config.DEFAULT_MODEL
@@ -751,6 +751,13 @@ def _observe(result, attempts: int, *, env, support, split_frontmatter) -> dict:
     Pages are read back out of git at the commit that was pushed (`support.read_filed_page`), never
     from a worktree or from the agent's own account of what it wrote — what landed in the commit is
     all a reader of the knowledge repo will ever see.
+
+    OLD BEHAVIOUR: a `kind="meeting"` result was observed through a `filed_meeting` block on the
+    report — its own meeting page, its own decision list, its own source pages — and every other
+    kind through `page_path`. There is one pipe and one report shape: `pages_filed` names every
+    page ANY capture established, in the account's own order, and `source_pages` names the verbatim
+    archive beside them. Reading `filed_meeting` after the flow went would have observed `{}` for
+    every transcript and scored two captures 0.00 against a backend that had filed them correctly.
     """
     report = result.report or {}
     observed = {
@@ -761,7 +768,6 @@ def _observe(result, attempts: int, *, env, support, split_frontmatter) -> dict:
         # except on a refusal decided before the agent ran, which spends none at all.
         "bounces": max(0, attempts - 1),
         "cost_usd": float(report.get("cost_usd", 0.0) or 0.0),
-        "edits": list(report.get("pages_edited") or []),
         # The identities this filing CREATED unconfirmed, by the NAME the account chose — the id
         # is `slugify(name)` and would score the spelling, which `_proposals_match` exists not to.
         "proposals": [str(e.get("name", "")) for e in (report.get("entities_born") or [])
@@ -777,27 +783,31 @@ def _observe(result, attempts: int, *, env, support, split_frontmatter) -> dict:
         # sha, which differs on every run.
         "page_path": report.get("page_path", ""),
         "anchored_to": report.get("anchored_to", ""),
+        # The captured material archived VERBATIM, reported and never scored. Which folder it lands
+        # in is `processing._source_attachment`'s answer to the capture's own kind, with no agent
+        # judgment in it at all, so a facet over it would be a cell that can never fail — the
+        # permanently-green cell a facet over it would be. It is here because a reader of a red
+        # `pages` cell needs to see whether the archive leaked into the page set.
+        "source_pages": list(report.get("source_pages") or []),
     }
     if "@" not in (result.result_ref or ""):
         return observed                 # a refusal: nothing was committed to read back
     sha = result.result_ref.rsplit("@", 1)[1]
 
-    meeting = report.get("filed_meeting")
-    if meeting:
-        meeting_page = meeting.get("meeting_page", "")
-        observed["folder"] = _folder_of(meeting_page)
-        observed["type"] = _page_type(env, sha, meeting_page, support, split_frontmatter)
-        observed["decisions"] = [
-            {"path": d.get("path", ""),
-             "anchor": _page_anchor(env, sha, d.get("path", ""), support, split_frontmatter)}
-            for d in meeting.get("decisions") or []]
-        observed["source_pages"] = list(meeting.get("source_pages") or [])
-        return observed
-
+    # `page_path` is the FIRST page the account declared, which is what `result_ref` names and what
+    # `type`/`folder`/`anchor` are scored on. The whole set is `pages` below.
     page_path = report.get("page_path", "")
     observed["folder"] = _folder_of(page_path)
     observed["type"] = _page_type(env, sha, page_path, support, split_frontmatter)
     observed["anchor"] = _page_anchor(env, sha, page_path, support, split_frontmatter)
+    # Every page this capture ESTABLISHED, in the account's own order, each anchor read from that
+    # page's OWN committed frontmatter rather than from the first page's or from the report's
+    # prose — which is the property a single-anchor implementation cannot express and the reason
+    # this is a facet rather than a count.
+    observed["pages"] = [
+        {"path": path,
+         "anchor": _page_anchor(env, sha, path, support, split_frontmatter)}
+        for path in (report.get("pages_filed") or [])]
     return observed
 
 

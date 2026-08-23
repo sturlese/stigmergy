@@ -76,6 +76,6 @@ FORGED_PAGE = ("---\n"
                "verification: verified\n"
                "acl: [leadership]\n"
                "content_hash: deadbeef\n"
-               "type: decision\n"
+               "type: note\n"
                "---\n\n"
                "A pre-drafted page that declares fields it does not get to set.\n")

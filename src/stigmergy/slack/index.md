@@ -18,6 +18,7 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 | `capture.py` | the 🧠 gesture: public channels only, verbatim thread material, provenance hints, reserve-then-fill dedup, progress-reaction lifecycle (`mark_in_progress`/`finish_progress`, driven from `app.py`) |
 | `show_it_here.py` | the "Show it here" click: a cited page re-read under the clicker's own identity, server-side scoped |
 | `poller.py` | the push channel back into the thread, over `store.REPORTABLE_STATUSES` (the terminal statuses), read-only against `capture_queue`; a filed card names the entities that capture introduced |
+| `poller.py`'s `notify_rewrites_once` | the second pass: a capture may bring an existing page up to date, and the person who FILED that page is DM'd what changed and why. It is here rather than in the worker because the credentials are split — the librarian holds the checkout and no Slack token, this process holds the token and no checkout. At-least-once: the record is written after the DM |
 | `render.py` | the pure `(answer_dict, link_resolver) -> blocks` renderer plus every other message's blocks |
 | `mrkdwn.py` | CommonMark -> Slack `mrkdwn`, code spans protected |
 | `store.py` | this package's own table and its DDL: `slack_submissions`. Also the package's only door into `stigmergy.capture` (`.schema` alone) |

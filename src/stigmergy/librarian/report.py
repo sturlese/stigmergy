@@ -123,13 +123,14 @@ def _resolution_note(anchoring: dict, registry=None) -> str:
 
 
 def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps: list,
-          findings: list, pages_edited: list = (), agent_rationale: str = "", registry=None,
+          findings: list, agent_rationale: str = "", registry=None,
           source_pages: list = (), entities_born: list = (), aliases_added: list = (),
           entities_updated: list = (), entities_withheld: list = (),
-          pages_filed: list = ()) -> dict:
+          pages_filed: list = (), pages_rewritten: list = ()) -> dict:
     """The ordinary success: page, commit and anchor, plus the not-searchable-yet clause in the same
-    sentence. `pages_edited` is what code actually wrote from the agent's declared edits, while
-    `overlaps_flagged` is the agent's JUDGMENT about which pages overlap — a different field.
+    sentence. `pages_rewritten` is what code actually wrote from the account's declared rewrites,
+    while `overlaps_flagged` is the agent's JUDGMENT about which pages overlap — a different
+    field.
 
     An entity anchor's `reason` rides beside the anchor as `anchor_reason` and in the sentence,
     never folded into `anchored_to`: that field names the identity a read path branches on, and a
@@ -159,6 +160,16 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
         # first would hide the rest from the one person who could tell they are wrong.
         summary += (f" This capture established {len(filed_paths)} pages: "
                     f"{_listed(filed_paths)}.")
+    rewritten = [{"path": _clean((r or {}).get("path", ""), 200),
+                  "submitted_by": _clean_identity((r or {}).get("submitted_by", ""), 120),
+                  "why": _clean((r or {}).get("why", ""), RATIONALE_WIDTH)}
+                 for r in _as_list(pages_rewritten)]
+    if rewritten:
+        # Named on the SUBMITTER's own receipt as well as on the owner's notice: a capture that
+        # revised somebody else's page is a fact both of them get to see, and the person who
+        # caused it should not learn it only from a git log.
+        summary += (f" It also brought {_listed([r['path'] for r in rewritten])} up to date; "
+                    f"whoever filed each of those is told what changed and why.")
     source_paths = [_clean(path, 200) for path in _as_list(source_pages)]
     if source_paths:
         summary += (f" The captured material itself is filed verbatim at "
@@ -173,12 +184,12 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
         anchor_reason=resolution,
         links_created=[_clean(link, 120) for link in _as_list(links)],
         overlaps_flagged=[_clean(path, 200) for path in overlap_paths],
-        pages_edited=[_clean(path, 200) for path in _as_list(pages_edited)],
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
         findings=list(_as_list(findings)),
         entities_born=born, aliases_added=added_aliases,
         entities_updated=updated, entities_withheld=withheld,
         pages_filed=filed_paths or [_clean(page_path, 200)],
+        pages_rewritten=rewritten,
         **({"source_pages": source_paths} if source_paths else {}))
 
 
@@ -255,68 +266,6 @@ def births_clause(born: list, added_aliases: list, updated: list = (),
                 f"everyone: they are on the page this capture filed, at its own audience. If any "
                 f"of them belongs in the open, say it in a capture filed open.")
     return (" " + " ".join(parts)) if parts else ""
-
-
-# ── filed_meeting: the report for a page SET ──────────────────────────────────────────────────
-def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, commit: str,
-                  pages_edited: list = (), agent_rationale: str = "", registry=None,
-                  entities_born: list = (), aliases_added: list = (),
-                  entities_updated: list = (), entities_withheld: list = ()) -> dict:
-    """`filed`'s sibling for a page SET: N >= 1 source pages, a meeting page, and N decision pages,
-    each with its OWN anchor outcome. `decisions` is `[{"path": ..., "anchoring": ...}]`, and
-    `result_ref` names the MEETING PAGE alone or `dedup.Match.page_path`'s `rsplit("@")` breaks.
-
-    `pages_edited` is `filed`'s own field with `filed`'s own meaning — what code actually wrote from
-    the agent's declared edits, on pages this capture did NOT create. It was a hardcoded `(none)`
-    line for as long as this flow had no edit mechanism; a page a commit changes and no report names
-    is a page nobody knows was touched."""
-    n = len(decisions)
-    source_pages = list(source_pages)
-    n_source = len(source_pages)
-    source_label = "source page" if n_source == 1 else f"source page ({n_source} parts)"
-    head = (f"{schema.FILED} — 1 {source_label}, 1 meeting page, {n} decision page(s), committed "
-            f"as {_clean(commit)}. {SEARCHABILITY_NOTE}")
-    lines = [head, "",
-            f"  source page       {_listed([_clean(p) for p in source_pages])} (the transcript "
-            f"— permanent evidence, never distilled)",
-            f"  meeting page      {_clean(meeting_page)} (provenance — attendees, action items, "
-            f"and links to the {n} decision(s) below; carries no anchor of its own)"]
-    decision_rows = []
-    if decisions:
-        lines.append("  decision pages:")
-        for index, d in enumerate(decisions, start=1):
-            anchoring = d.get("anchoring") or {}
-            anchor = _anchor_phrase(anchoring, registry)
-            # Per DECISION, because a meeting anchors each one independently: one resolution
-            # judgment per page, and the reader has to be able to tell which page it was about.
-            resolution = _resolution_note(anchoring, registry)
-            lines.append(f"    {index}. {_clean(d.get('path', ''))} — anchored to {anchor}"
-                         + (f". {RESOLUTION_PREFIX} {resolution}" if resolution else ""))
-            decision_rows.append({"path": _clean(d.get("path", ""), 200), "anchored_to": anchor,
-                                  "anchor_reason": resolution})
-    else:
-        lines.append("  decision pages    (none — nothing from this meeting was drafted as a "
-                     "decision worth its own page)")
-    edited_paths = [_clean(path, 200) for path in _as_list(pages_edited)]
-    lines.append(f"  links_created     {NONE_LABEL}")
-    lines.append(f"  overlaps_flagged  {NONE_LABEL}")
-    lines.append(f"  pages_edited      {_listed(edited_paths)}")
-    lines.append(f"  agent_rationale   {_clean(agent_rationale, RATIONALE_WIDTH) or NONE_LABEL}")
-    born, added_aliases = _birth_lists(entities_born, aliases_added)
-    updated = _updated_list(entities_updated)
-    withheld = _withheld_list(entities_withheld)
-    if born or added_aliases or updated or withheld:
-        lines.append("")
-        lines.append("  " + births_clause(born, added_aliases, updated, withheld).strip())
-    return base_report(
-        status=schema.FILED, summary="\n".join(lines), page_path=meeting_page, commit=commit,
-        agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
-        pages_edited=edited_paths,
-        # The structured sibling of the rendered lines above, for a caller that branches on facts.
-        filed_meeting={"source_pages": [_clean(p, 200) for p in source_pages],
-                      "meeting_page": meeting_page, "decisions": decision_rows},
-        entities_born=born, aliases_added=added_aliases, entities_updated=updated,
-        entities_withheld=withheld)
 
 
 def filed_retry(*, original_id: int, page_path: str, commit: str) -> dict:
@@ -474,13 +423,10 @@ def render_prose(report: dict) -> str:
     paths, which carry no field block."""
     lines = [report.get("summary", "")]
     status = report.get("status")
-    is_meeting = "filed_meeting" in report
-    if status == schema.FILED and not is_meeting:
-        # `filed_meeting` renders its own field block INTO `summary`; appending these duplicates.
+    if status == schema.FILED:
         lines.append(f"  anchor_reason    {report.get('anchor_reason') or NONE_LABEL}")
         lines.append(f"  links_created    {_listed(report.get('links_created'))}")
         lines.append(f"  overlaps_flagged {_listed(report.get('overlaps_flagged'))}")
-        lines.append(f"  pages_edited     {_listed(report.get('pages_edited'))}")
         lines.append(f"  agent_rationale  {report.get('agent_rationale') or NONE_LABEL}")
         born = report.get("entities_born") or []
         if born:

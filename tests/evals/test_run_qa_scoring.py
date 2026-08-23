@@ -81,19 +81,21 @@ def test_a_literal_prose_expectation_still_matches_literally():
 # -------------------------------------------------------------------------------- chains
 
 def test_cites_accepts_a_chain_and_any_page_in_it_counts_as_the_citation():
-    """A view-backed answer may legitimately cite the view OR the source page it
-    summarizes. Pinning one of the two scored the other as uncited."""
-    source = "sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md"
-    case = {"id": "aurora-view-summary", "kind": "prose", "family": "entity-shaped",
-            "expect_contains": "SSO", "cites": ["views/aurora-systems.md", source]}
+    """An entity-shaped answer may legitimately cite ANY of the several source documents that
+    back the same claim (`qa_golden.json`'s `aurora-dossier-count`, four documents, one chain).
+    Pinning one of them scored the others as uncited."""
+    first = "sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md"
+    second = "sources/entities/aurora-systems/kpi-metrics-2026-42501c.md"
+    case = {"id": "aurora-dossier-summary", "kind": "prose", "family": "entity-shaped",
+            "expect_contains": "SSO", "cites": [first, second]}
 
-    assert run_qa._score(case, _res("Pendiente el SSO.", cites=["views/aurora-systems.md"]))["ok"]
-    assert run_qa._score(case, _res("Pendiente el SSO.", cites=[source]))["ok"]
+    assert run_qa._score(case, _res("Pendiente el SSO.", cites=[first]))["ok"]
+    assert run_qa._score(case, _res("Pendiente el SSO.", cites=[second]))["ok"]
 
 
 def test_a_citation_outside_the_chain_is_still_a_miss():
     case = {"id": "x", "kind": "prose", "family": "entity-shaped", "expect_contains": "SSO",
-            "cites": ["views/aurora-systems.md"]}
+            "cites": ["sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md"]}
     scored = run_qa._score(case, _res("Pendiente el SSO.", cites=["sources/units/product/roadmap-2026-9e7390.md"]))
     assert not scored["ok"]
     assert scored["miss"]["cited_expected_page"] is False

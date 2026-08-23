@@ -1,8 +1,8 @@
 """Non-fixture test support for the gardener suite: the shared Postgres connection seam
 (`tests/capture/conftest.py`'s own posture, several packages over), a throwaway `--repo` tree
-(registry + views, plain files — the gardener never writes, so it needs none of
-`tests/views/conftest.py`'s real-git-remote machinery), and the raw-SQL seeding helpers every
-`tests/gardener/*_pg.py` file needs and none of them should reinvent.
+(registry + pages, plain files — the gardener never writes, so it needs no real-git-remote
+machinery), and the raw-SQL seeding helpers every `tests/gardener/*_pg.py` file needs and none of
+them should reinvent.
 
 Deliberately a plain module, not a `conftest.py` — the same reasoning `tests/librarian/support.py`
 gives for itself: fixtures are per-package pytest wiring, this is plain code any file can import.
@@ -56,11 +56,11 @@ def unique_claim(label: str = "candidate") -> str:
     return f"{label} claim {uuid.uuid4()}"
 
 
-# ── job_runs fixtures: the sweep's own watermark, `sweep.previous_run_watermark` ────────────────
+# ── job_runs fixtures: the row shape `store.latest_completed_run` reads ────────────────────────
 def seed_gardener_job_run(conn, *, stats: dict | None = None, status: str = "ok",
                           started_days_ago: int = 0) -> int:
     """A `job_runs` row for `job='gardener'`, backdated via SQL like `seed_filed_capture` — the
-    real row shape `sweep.previous_run_watermark` reads (`started_at`, `status`, `stats`), without
+    real row shape `store.latest_completed_run` reads (`started_at`, `status`, `stats`), without
     running an entire gardener pass just to get one into existence."""
     run_id = capture_ops.record_job_run(conn, JOB_NAME, status=status, stats=stats or {})
     if started_days_ago:
@@ -85,23 +85,11 @@ def write_page(root: str, zone: str, relpath: str, *, frontmatter: dict, body: s
     return f"{zone}/{relpath}".replace(os.sep, "/")
 
 
-# ── the two entity bodies the empty-body pass exists to tell apart ─────────────────────────────
-# NEITHER carries an angle-marked placeholder line, so `entity-placeholder-body` is blind to both
-# and no other deterministic check reads a body at all. That is the gap `model-empty-entity-body`
-# was added for, and these two fixtures are what "it works" and "it is not noise" mean.
-EMPTY_ENTITY_BODY_TEXT = "Cofers is a company we work with."
-
-
-def empty_entity_body(title: str = "Cofers") -> str:
-    """A body somebody typed in thirty seconds: one sentence that would read identically with any
-    other company's name in it. The reported case."""
-    return f"# {title}\n\n{EMPTY_ENTITY_BODY_TEXT}\n"
-
-
+# ── a written entity body ─────────────────────────────────────────────────────────────────────
 def written_entity_body(title: str = "Cofers") -> str:
-    """The BENIGN TWIN, and the one that matters: five specific facts, each wikilinked to the page
-    that states it, plus a connections section. A check that flags this has bounced a steward's
-    real work, which is how a corpus-health check turns into noise nobody reads."""
+    """An entity page somebody actually wrote: five specific facts, each wikilinked to the page
+    that states it, plus a connections section. What every "a clean corpus" fixture needs — an
+    entity page still carrying its template, or blank below its title, is itself a finding."""
     return f"""# {title}
 
 ## What / Who
@@ -133,20 +121,6 @@ def write_registry(root: str, entities: dict) -> None:
         json.dump({"entities": entities}, f)
 
 
-def write_view(root: str, entity_id: str, *, member_hash: str, backlink_hash: str) -> str:
-    """A minimal `views/<id>.md` carrying only the frontmatter fields `list_stale_entities` reads
-    — real view files carry far more, but the staleness check touches these two.
-
-    BOTH are required, and that is the point of the signature: since #85 staleness is a PAIR
-    (member set, rendered backlinks), and a fixture that wrote only half of it would describe a
-    view no generator produces — one that reads as permanently stale, which is what a benign twin
-    must never be built on."""
-    return write_page(root, "views", f"{entity_id}.md",
-                      frontmatter={"type": "view", "member_hash": member_hash,
-                                   "backlink_hash": backlink_hash},
-                      body=f"# {entity_id}\n")
-
-
 def rebuild_index(conn, repo: str):
     """`pages_index`, for real, from `repo`'s own files — `index.build.rebuild` drops and
     recreates the table, so this IS the isolation between tests that need it. Exercise the real
@@ -162,18 +136,20 @@ def rebuild_index(conn, repo: str):
     return stats
 
 
-# ── capture_queue fixtures: "the last N filings", the population the windowed checks share, and
-# the same rows `stigmergy.digest`'s "pages filed"/"corrections filed" read, `report` included ─────
+# ── capture_queue fixtures: "the last N filings", the population the windowed checks share,
+# `report` included ────────────────────────────────────────────────────────────────────────────
 def seed_filed_capture(conn, *, result_ref: str, finished_days_ago: int = 0,
                        submitted_by: str = STEWARD, report: dict | None = None) -> int:
     """A `capture_queue` row already `status='filed'`, backdated via SQL — the clock-injection
     pattern `tests/capture/test_retention_pg.py::_terminal_row` already establishes one package
     over (a real `now() - make_interval(...)`, never a wall-clock sleep).
 
-    `report` is optional (`None` leaves the row's `report` unset): a caller building a
-    meeting-style fixture passes `{"filed_meeting": {...}}`, the exact shape
-    `librarian.report.filed_meeting` produces (`stigmergy.digest.sections._filed_page_paths`'s own
-    documented contract) — never fabricated ad hoc at more than this one seeding point."""
+    `report` is optional (`None` leaves the row's `report` unset). A caller passes the fact set
+    `librarian.report.filed` builds, and builds it with that function rather than by hand
+    wherever it can. The
+    historical `{"filed_meeting": {...}}` block is the one shape that HAS to be written out: the
+    builder that produced it is deleted and the rows carrying it are still in the table. Neither is
+    fabricated ad hoc at more than this one seeding point."""
     ack = capture_queue.submit(conn, MemoryEvidenceStore(), kind="raw",
                                material=unique_material(), hints={"title": "t"},
                                submitted_by=submitted_by)

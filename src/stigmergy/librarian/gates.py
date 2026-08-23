@@ -27,11 +27,15 @@ from stigmergy.librarian.errors import LibrarianConfigError
 
 log = logging.getLogger(__name__)
 
+# The zone whose pages are EVIDENCE: written once from the captured material, byte for byte, and
+# never rewritten. `gate_zone` refuses any entry under it that is not this run's own archive.
+PROVENANCE_ZONE_PREFIXES = ("sources/",)
+
 # Whitelist, not a blocklist: a zone added tomorrow is out of bounds by default.
 ALLOWED_WRITE_PREFIXES = tuple(f"{folder}/" for folder in page_policy.FOLDER_BY_TYPE.values())
 
 # The identity zone and the file derived from it — this module's own spelling of the knowledge
-# repo's layout, the posture `repair.deletion` and `repair.entity_alias` take for the same two
+# repo's layout, the posture `repair.deletion` takes for the same two
 # strings: a gate talks to the checkout through paths, never through `entities.generator`'s API,
 # which this package may not import. `librarian.identity` (the one module that may) passes the
 # same two in as the run's widened lane, and `test_architecture` pins the spellings together.
@@ -78,7 +82,7 @@ class GateContext:
     linter_path: str = ""
     gitleaks_bin: str = "gitleaks"
     # How long ONE subprocess a gate runs may take. TOLD, never inferred: the worker holds a lease
-    # and has all night (`None`, today's behaviour), while `repair.apply` runs these same gates on
+    # and has all night (`None`, today's behaviour), while a caller inside an HTTP request runs them on
     # the thread an HTTP request arrived on, where an unbounded `gitleaks` or contract linter pins
     # a server worker until somebody restarts the process.
     subprocess_timeout_s: float | None = None
@@ -99,14 +103,13 @@ class GateContext:
     stamped_by_path: dict = field(default_factory=dict)
     # Paths where the provenance fields are LEGITIMATE, server-stamped ones.
     provenance_pages: frozenset = field(default_factory=frozenset)
-    # `False` for a caller granting no edit mechanism at all: a status-`M` entry from such a flow
-    # is never legitimate, additive or not, because nothing in it could have produced one
-    # legitimately. **No caller passes `False` today** — the meeting flow, which did, gained the
-    # fast lane's declared-edit mechanism and now grants it too. The field and its check
-    # stay because the property is a CALLER's to declare, not a fact about which flows exist; the
-    # branch is exercised by `test_gates_unit.py`'s explicit contexts, which is where its red proof
-    # lives now that no production flow reaches it.
-    edits_allowed: bool = True
+    # `False` for a caller that touches no page that already exists: a status-`M` entry from such
+    # a flow is never legitimate, because nothing in it could have produced one. **No caller passes
+    # `False` today** — every flow left either declares its rewrites or sweeps a removal. The field
+    # and its check stay because the property is a CALLER's to declare, not a fact about which
+    # flows happen to exist this month; the branch is exercised by `test_gates_unit.py`'s explicit
+    # contexts, which is where its red proof lives now that no production flow reaches it.
+    modifications_allowed: bool = True
     # The pages this capture DECLARED it would write, in the order the account declared them.
     # `_cross_check_outcome` holds the diff to exactly this list — the generalisation of "a capture
     # files exactly one page" to a capture that files as many as its material establishes. The
@@ -114,14 +117,15 @@ class GateContext:
     # subject, the dedup pointer), and it is the agent's choice rather than an alphabetical
     # accident.
     declared_pages: tuple = ()
-    # The ONE exception to `gate_body_rewrite`'s additive proof, and it is a set of PATHS rather
-    # than a flag: the governed repair loop's `entity-body` kind replaces one entity page's prose
-    # below its own H1, which no additive proof can admit. A path in here is judged by
-    # the dedicated checks instead — frontmatter unchanged but for `PERMITTED_REWRITE_KEYS`, the
-    # page is an entity page, the path is inside this run's lane. TOLD by the caller and never
-    # inferred, empty by default: a flow that has never heard of this field permits nothing, which
-    # is why the librarian's own worker keeps the additive proof it has always had.
-    body_rewrite_allowed: frozenset = field(default_factory=frozenset)
+    # The EXISTING pages this capture declared it brings up to date, and the widest permission in
+    # this file. It is not a proof and does not pretend to be one: there is no separate approval to
+    # compare bytes against, because the bytes are the ones the agent just wrote. What stands in
+    # its place is that the change is LOUD — attributed, diffed, revertible, and the page's own
+    # submitter is told. The two bounds this gate still owns are structural and cheap: the H1
+    # survives (a rewrite must not turn a page into a different page while keeping its filename and
+    # its inbound links) and the frontmatter does not move except `updated:` (a rewrite must not
+    # change who may read a page).
+    rewrites_allowed: frozenset = field(default_factory=frozenset)
     # The `delete` kind's two told facts, and the same posture: empty by default, so the librarian's
     # own flows are judged exactly as they were before either existed.
     #
@@ -142,10 +146,9 @@ class GateContext:
     # every content gate for the folder it lands in — which is exactly why the exception is a set
     # of PATHS the caller names rather than a flag, and why `gate_zone` also requires each of them
     # to be in `expected_bytes`: the page-shape proof is only suspended for a file whose whole
-    # content the caller computed and this run proves byte for byte. The governed repair loop's
-    # `entity-alias` kind is the one caller; it names
-    # `ops/entity-registry.json`, which the worker rebuilds from the entity
-    # pages the same commit rewrites.
+    # content the caller computed and this run proves byte for byte. `librarian.identity` is the
+    # one caller; it names `ops/entity-registry.json`, which the worker rebuilds from the entity
+    # pages the same commit writes.
     derived_files: frozenset = field(default_factory=frozenset)
     # The identities THIS run created (`librarian.identity.write_births`), told by the caller
     # exactly as every other widening is: the entity pages code WROTE. (A new spelling EDITS a
@@ -163,7 +166,7 @@ class GateContext:
     # `gate_zone` asks it of
     # every page this run MODIFIED: material at one audience may only be added to a page whose
     # readers could already read that material. `None` is an open capture, which flows into any
-    # page — and is the right default for the flows that carry no capture at all (the repair loop,
+    # page — and is the right default for the flows that carry no capture at all (a removal,
     # the deletion sweep), whose work is derived from the corpus rather than from somebody's
     # material.
     acl: list = None
@@ -243,19 +246,56 @@ def _page_acl(worktree: str, path: str):
 # The code `processing._uncreatable_type` routes on: the message is this module's to reword, the
 # code is its contract.
 TYPE_NOT_CREATABLE = "type-not-creatable"
+# The catch-all a status-`M` entry reaches when its caller touches no existing page at all.
+MODIFICATION_REFUSED = "modification-refused"
+
+
+def _provenance_write_allowed(ctx: GateContext, status: str, path: str) -> bool:
+    """The three ways an entry under `sources/` is legal, and there is no fourth.
+
+    A CAPTURE may only ADD its own archive — that is the absolute, and it is what makes a page's
+    `content_hash` mean something. The other two are a PERSON's removal, performed by the
+    worker: the doomed source page itself (`D`, named in `deletions_allowed`) and a surviving one
+    whose links to it are scrubbed (`M`, whose whole new content the caller computed and this run
+    proves byte for byte). Both are told on the context by the caller that authorized them; a flow
+    that declares neither gets no exemption, which is the property every widening here shares.
+    """
+    if status == "A":
+        return path in ctx.provenance_pages
+    if status == "D":
+        return path in ctx.deletions_allowed
+    if status == "M":
+        return path in ctx.expected_bytes
+    return False
 
 
 def gate_zone(ctx: GateContext) -> list[Finding]:
-    """Vetoes writes outside the whitelisted folders, deletions, non-additive edits, edits where
-    the caller grants no edit mechanism, and pages of an uncreatable type. Reads what the agent
-    DID, not what it said: an agent reporting `decision` while writing into `wiki/entities/` is
-    caught by the path."""
+    """Vetoes writes outside the whitelisted folders, deletions nobody was permitted, changes to a
+    page whose audience this capture may not reach, modifications where the caller grants no
+    mechanism for one, and pages of an uncreatable type. Reads what the agent DID, not what it
+    said: an agent reporting `decision` while writing into `wiki/entities/` is caught by the
+    path."""
     out = []
     for entry in ctx.entries:
         status, path = entry.status, entry.path
+        # **`sources/**` is written once, by the archive, and never rewritten.** DESIGN.md calls
+        # that the one absolute, and until this gate existed it was an absence rather than a rule:
+        # nothing wrote there, so nothing had to be refused. The lane now carries a `sources/`
+        # folder on EVERY capture, which is exactly when an absolute needs a gate — an absolute
+        # standing on "no caller does this today" is a promise, not a property. A run's OWN
+        # archive is the one legal write, and it is told on the context like every other widening.
+        if path.startswith(PROVENANCE_ZONE_PREFIXES):
+            if not _provenance_write_allowed(ctx, status, path):
+                out.append(Finding(
+                    "zone", "provenance-write",
+                    f"{path}: `sources/` is the verbatim archive — written once, by the worker, "
+                    f"and never rewritten by a capture. This run declared neither that path as "
+                    f"its own archive nor a person's removal covering it",
+                    locator=path, repairable=False))
+            continue
         if status == "D":
-            # ONE exception, per-PATH and caller-declared, exactly as `body_rewrite_allowed` is:
-            # the governed repair loop's `delete` kind removes pages a person named themselves.
+            # ONE exception, per-PATH and caller-declared, exactly as `expected_bytes` is: a
+            # removal takes away pages a person named themselves.
             # A caller is trusted about WHICH path it approved and about nothing else,
             # so the lane is still asked — a permission sitting outside this run's write lane is a
             # permission and a lane that disagree, and neither is honoured.
@@ -272,11 +312,10 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
             continue
         # The write lane's half of "a model never reads what it may not cite": an EXISTING page
         # may only gain material its own readers
-        # could already have read. A `[leadership]` capture appending lines to an open note is the
-        # leak this closes, and it is asked here rather than at the input scope because the model
-        # is not the only way an edit is produced (`edits.apply_declared` performs what the
-        # account declared, and the account is the model's, but the sweep and the repair loop
-        # write here too). A new page is not asked: every one this run creates is stamped WITH
+        # could already have read. A `[leadership]` capture rewriting an open note is the leak this
+        # closes, and it is asked here rather than at the input scope because the model is not the
+        # only way a page is modified — code performs what the account declared, and a removal's
+        # sweep writes here too. A new page is not asked: every one this run creates is stamped WITH
         # the capture's own audience, so it is in scope by construction — with one exception that
         # is handled at the writer rather than here, the born ENTITY page, which is stamped with
         # no audience at all because the registry is the brain's shared vocabulary.
@@ -355,7 +394,7 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
             #
             # The per-type check below is skipped along with the page-shape one, and it has to be:
             # a derived file has no page TYPE and its folder implies none. What still bounds a
-            # CREATION here is the caller — `repair.apply`'s cross-check requires every entry in
+            # CREATION here is the caller — a removal's own cross-check requires every entry in
             # an `entity-alias` diff to be a modification, and its plan refuses a corpus with no
             # registry to regenerate.
             if path not in ctx.expected_bytes:
@@ -384,15 +423,12 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
         # ADDITION to being a modification and gets first say. `repairable=False` for EVIDENCE
         # PRESERVATION — `processing.preserve_refused_diff` runs only on the terminal path, so a
         # repairable finding lets the retry's reset erase the trace of an unexplained write.
-        # The CODE keeps the name of the flow that motivated it: it is what a preserved refused
-        # diff's `# refused by:` header already says on deployed stacks, and renaming it would
-        # orphan those artifacts for nothing. The MESSAGE states the rule instead of that flow.
-        if status == "M" and not ctx.edits_allowed:
+        if status == "M" and not ctx.modifications_allowed:
             # The anti-blame clause comes FIRST, before the explanation: `report.failed_system`
             # clamps `reason` at 200 characters and the path can be 95 of them, so a clause after
             # the explanation is truncated out of the report an operator actually reads. Bound
             # measured and pinned in `test_gates_unit.py`.
-            out.append(Finding("zone", "meeting-edit-refused",
+            out.append(Finding("zone", MODIFICATION_REFUSED,
                                f"modified {path}: a worker defect or worktree interference, not "
                                f"the material — this flow grants no edit mechanism at all; the "
                                f"refused diff is preserved for inspection",
@@ -458,59 +494,32 @@ def _base_text(worktree: str, path: str) -> str | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
-def _appended_callout_only(base_body: list[str], new_body: list[str]) -> bool:
-    """Is `new_body` `base_body` plus nothing but appended callout lines? Every base line must
-    survive in place, and every line beyond it be blank or a `>` quote — the only shape
-    `page.with_callout` emits."""
-    if new_body[:len(base_body)] != base_body:
-        return False
-    return all(not line.strip() or line.startswith(">") for line in new_body[len(base_body):])
-
-
-def _related_growth_ok(base_text: str, new_text: str) -> bool:
-    """Did the page's `related:` field change only by GAINING links? The one field an additive
-    edit may rewrite, and it needs a semantic rather than a byte rule, since a flow list means
-    adding a link replaces the line. Identical bytes pass; otherwise the link set must be a
-    STRICT superset, so a drop, reorder, reformat or unparseable value is refused."""
-    base_block, base_links = page_policy.related_declaration(base_text)
-    new_block, new_links = page_policy.related_declaration(new_text)
-    if base_block == new_block:
-        return True
-    if base_links is None or new_links is None:
-        return False        # an unprovable before/after must never read as "nothing was lost"
-    return set(base_links) < set(new_links)
-
-
-# The two frontmatter lines a permitted rewrite may change, and the ONLY two. `updated:` is the
-# apply date; `role:` is one sentence of identity a drafted body may fill in when the page declares
-# an empty one — the "only when empty" half is the WRITER's rule (`repair.entity_body`, checked at
-# both propose and apply time), not this gate's: a gate reads a diff and cannot see what a proposal
-# claimed. What this gate owns is that nothing ELSE moved.
-PERMITTED_REWRITE_KEYS = ("updated", "role")
-
-
 def gate_body_rewrite(ctx: GateContext) -> list[Finding]:
-    """An existing page may gain `related:` links and callouts — never a rewritten body. Proven
-    against the base BLOB, never a rendered diff: classifying diff lines by prefix is defeatable
-    from page content. An unestablishable "before" is refused rather than assumed additive.
+    """A page that already exists may be MODIFIED only by a caller that said it would be, and only
+    in the shape that caller declared. Proven against the base BLOB, never a rendered diff:
+    classifying diff lines by prefix is defeatable from page content. An unestablishable "before"
+    is refused rather than assumed harmless.
 
-    TWO exceptions, both per-PATH and caller-declared, and neither weakens anything for a path
-    nobody named — a page no caller declared is judged exactly as it was before either field
-    existed, which is the property `test_gates_unit.py` pins from both sides.
+    TWO per-PATH permissions, both caller-declared, and neither weakens anything for a path nobody
+    named — a page no caller declared is refused outright, which is the property
+    `test_gates_unit.py` pins from both sides.
 
-      · `ctx.expected_bytes` names a file the caller COMPUTED in full, and the proof becomes
-        byte-equality. That is stronger than the additive proof, not softer: additive says "nothing
-        disappeared", this says "this is precisely the file that was approved". It is the only
-        proof available to the `delete` kind's sweep, where lines disappearing is the point.
-      · `ctx.body_rewrite_allowed` swaps the additive proof for `_permitted_rewrite_findings`'
-        three dedicated ones.
+      · `ctx.expected_bytes` names a file the caller COMPUTED in full, and the proof is
+        byte-equality: "this is precisely the file that was planned". It is the only proof
+        available to a removal's sweep, where lines disappearing is the point, and to the entity
+        pages `librarian.identity` writes.
+      · `ctx.rewrites_allowed` names a page THIS CAPTURE declared it brings up to date, judged by
+        `_declared_rewrite_findings`' two structural bounds. It is the widest permission in this
+        file, and its whole defense is that the change is loud rather than proven.
 
-    They are disjoint by construction — one kind produces each — and the byte-compare is asked
-    first because it needs nothing from the page but its bytes.
+    They are disjoint by construction, and the byte-compare is asked first because it needs
+    nothing from the page but its bytes. **A modification outside both is refused with no shape
+    admitted at all** — OLD BEHAVIOUR: an appended `> [!NOTE]` callout plus a grown `related:`
+    list passed here, because the filing agent could DECLARE such an edit and code performed it.
+    That mechanism is gone; nothing produces the shape, so nothing may pass wearing it.
 
-    Every finding is `repairable=False`: a modified page comes from `edits.apply_declared`, from
-    `repair.entity_body` or from nothing, so a corrective brief would tell the agent to repair
-    somebody else's action.
+    Every finding is `repairable=False`: a modified page comes from code, never from the agent, so
+    a corrective brief would tell it to repair somebody else's action.
     """
     out = []
     for path in sorted({e.path for e in ctx.entries if e.status == "M"}):
@@ -533,113 +542,89 @@ def gate_body_rewrite(ctx: GateContext) -> list[Finding]:
                                locator=path, repairable=False))
             continue
 
-        # Parse before the LINE-span comparisons trust it: an indented line after a flow-style
-        # `related:` list is absorbed as a continuation rather than read as a new field.
+        # Parsed before anything compares frontmatter LINE spans: a modification whose new
+        # frontmatter is not a YAML mapping is refused before its before/after is judged, because
+        # what the page would actually declare cannot be established.
         new_front_block, _ = page_policy.split_frontmatter(new_text)
         try:
-            parsed_front = yaml.safe_load(new_front_block) if new_front_block.strip() else {}
-            if parsed_front is not None and not isinstance(parsed_front, dict):
+            parsed = yaml.safe_load(new_front_block) if new_front_block.strip() else {}
+            if parsed is not None and not isinstance(parsed, dict):
                 raise yaml.YAMLError("frontmatter does not parse to a mapping")
         except yaml.YAMLError:
-            message = (f"{path}: the frontmatter this edit would commit is not valid YAML, so "
+            message = (f"{path}: the frontmatter this change would commit is not valid YAML, so "
                       f"what this page would actually declare cannot be established — refusing "
                       f"before comparing it against the base version")
             out.append(Finding("zone", "unparseable", message, locator=path, repairable=False))
             continue
 
-        # BEFORE the additive proof, never instead of a check: the parse above still ran, so a
-        # planned path is a path whose frontmatter this gate could read.
+        # BEFORE the declared-rewrite bounds, never instead of a check: the parse above still ran,
+        # so a planned path is a path whose frontmatter this gate could read.
         if path in ctx.expected_bytes:
             if new_text != ctx.expected_bytes[path]:
                 out.append(Finding("zone", "unexpected-bytes",
-                                   f"{path} on disk is not the file this repair planned: the "
-                                   f"approval covered a computed set of bytes and these are not "
+                                   f"{path} on disk is not the file this run planned: the "
+                                   f"permission covered a computed set of bytes and these are not "
                                    f"them, so nothing about the difference is judged — it is "
                                    f"refused",
                                    locator=path, repairable=False))
             continue
 
-        if path in ctx.body_rewrite_allowed:
-            out.extend(_permitted_rewrite_findings(ctx, path, base_text, new_text,
-                                                   parsed_front or {}))
+        if path in ctx.rewrites_allowed:
+            out.extend(_declared_rewrite_findings(ctx, path, base_text, new_text))
             continue
 
-        if not _appended_callout_only(page_policy.body_lines(base_text),
-                                      page_policy.body_lines(new_text)):
-            out.append(Finding("zone", "body-rewrite",
-                               f"rewrote existing content in {path}: edits to a page that already "
-                               f"exists may only ADD a back-link or a callout",
-                               locator=path, repairable=False))
-            continue
-
-        base_front, new_front = (page_policy.frontmatter_lines(base_text),
-                                 page_policy.frontmatter_lines(new_text))
-        base_block, _ = page_policy.related_declaration(base_text)
-        new_block, _ = page_policy.related_declaration(new_text)
-        base_rest = _without(base_front, base_block)
-        new_rest = _without(new_front, new_block)
-
-        if base_rest != new_rest:
-            out.append(Finding("zone", "body-rewrite",
-                               f"rewrote existing frontmatter in {path}: edits to a page that "
-                               f"already exists may only ADD a back-link or a callout",
-                               locator=path, repairable=False))
-            continue
-        if not _related_growth_ok(base_text, new_text):
-            out.append(Finding("zone", "body-rewrite",
-                               f"changed the `related:` field of {path} without adding to it: an "
-                               f"edit to a page that already exists may only GROW its link list",
-                               locator=path, repairable=False))
+        out.append(Finding("zone", "body-rewrite",
+                           f"modified {path}, a page that already exists, without declaring it: "
+                           f"a page is changed by being named in the account's `rewrites`, or by "
+                           f"a caller that computed its bytes in full — never by writing into it",
+                           locator=path, repairable=False))
     return out
 
 
-def _permitted_rewrite_findings(ctx: GateContext, path: str, base_text: str, new_text: str,
-                                parsed_front: dict) -> list[Finding]:
-    """The three checks that replace the additive proof for a path the caller permitted.
+# The one frontmatter line a capture's declared rewrite may move. `updated:` is the date the page
+# last changed, which a rewrite by definition does; everything else — the anchor, the audience, the
+# submitter, the status — belongs to the page rather than to whoever revised it.
+DECLARED_REWRITE_KEYS = ("updated",)
 
-    They are not a softer version of it — they are a different question. The additive proof asks
-    "did anything disappear?", which a drafted body answers "yes" to by construction. These ask
-    the question that still has to be true: this is an ENTITY page, in THIS run's lane, and every
-    frontmatter line but the two permitted ones survived. A caller is trusted about WHICH path it
-    approved and about nothing else, so each of the three is asked of the diff rather than assumed
-    from the permission.
+
+def _declared_rewrite_findings(ctx: GateContext, path: str,
+                               base_text: str, new_text: str) -> list[Finding]:
+    """The two bounds a capture's rewrite still answers to, and there is no third.
+
+    Deliberately NOT a proof that nothing was lost — losing text is what a rewrite is for, and the
+    trade this design makes is stated rather than defended: a rewriting capture is covered by the
+    other gates, by the audience check, and by attribution plus the diff plus `git revert`. By
+    nothing structural. What makes that acceptable is that the rewrite is not silent, which is why
+    the notification to the page's own submitter is part of the design and not a nicety.
+
+    So what is checked here is what a rewrite must never be able to DO: change the page's identity,
+    or change who may read it.
     """
     out = []
     if not path.startswith(ctx.write_prefixes):
         out.append(Finding("zone", "rewrite-outside-lane",
-                           f"a body rewrite of {path} was permitted, but that path is outside this "
-                           f"run's write lane ({', '.join(ctx.write_prefixes)}): the permission and "
-                           f"the lane disagree, so neither is honoured",
+                           f"a rewrite of {path} was declared, but that path is outside this run's "
+                           f"write lane ({', '.join(ctx.write_prefixes)}): the declaration and the "
+                           f"lane disagree, so neither is honoured",
                            locator=path, repairable=False))
-    page_type = str(parsed_front.get("type") or "").strip().lower()
-    if page_type != page_policy.ENTITY_PAGE_TYPE:
-        out.append(Finding("zone", "rewrite-not-an-entity",
-                           f"a body rewrite of {path} was permitted, but the page declares type "
-                           f"{page_type!r}: only an entity page's body may be replaced, and the "
-                           f"folder does not make one",
+    base_heading = page_policy.heading_of(base_text)
+    if page_policy.heading_of(new_text) != base_heading:
+        out.append(Finding("zone", "rewrite-changed-the-page",
+                           f"{path}'s H1 changed: a rewrite brings a page up to date, and a page "
+                           f"whose title moved is a different page wearing the old one's filename "
+                           f"and inbound links. File the new one instead",
                            locator=path, repairable=False))
     base_rest = page_policy.strip_key_lines(page_policy.frontmatter_lines(base_text),
-                                            PERMITTED_REWRITE_KEYS)
+                                            DECLARED_REWRITE_KEYS)
     new_rest = page_policy.strip_key_lines(page_policy.frontmatter_lines(new_text),
-                                           PERMITTED_REWRITE_KEYS)
+                                           DECLARED_REWRITE_KEYS)
     if base_rest != new_rest:
         out.append(Finding("zone", "rewrite-frontmatter",
-                           f"rewrote frontmatter in {path} beyond "
-                           f"{'/'.join(f'`{k}:`' for k in PERMITTED_REWRITE_KEYS)}: permission to "
-                           f"replace a body is not permission to change what the page declares",
+                           f"{path}'s frontmatter moved beyond `updated:`: bringing a page up to "
+                           f"date is not permission to change what it declares — its anchor, its "
+                           f"audience and its submitter are the page's, not the reviser's",
                            locator=path, repairable=False))
     return out
-
-
-def _without(lines: list[str], block: list[str]) -> list[str]:
-    """`lines` with the first contiguous occurrence of `block` removed; an empty block removes
-    nothing."""
-    if not block:
-        return list(lines)
-    for index in range(len(lines) - len(block) + 1):
-        if lines[index:index + len(block)] == block:
-            return lines[:index] + lines[index + len(block):]
-    return list(lines)
 
 
 # ── a page is text: the precondition every content gate depends on ────────────────────────────
@@ -701,7 +686,7 @@ def _gitleaks_dir(scratch: str, gitleaks_bin: str, *, timeout_s: float | None = 
              "--report-format", "json", "--report-path", "-"],
             capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as ex:
-        # A CONFIG error, like every other way this scanner can fail to run: `repair.apply`'s
+        # A CONFIG error, like every other way this scanner can fail to run: the removal flow's
         # `except LibrarianError` seam turns it into a recorded failure on the proposal, and the
         # worker's own routing already knows this class.
         raise LibrarianConfigError(
@@ -998,7 +983,7 @@ def gate_contract(ctx: GateContext) -> list[Finding]:
 
     The FILTER is what a second caller needs the raw scan for: this gate answers "is the change
     this capture made contract-clean", which is the right question for every kind of write whose
-    blast radius is its own diff. `repair.apply`'s `delete` kind is the one whose is not, and it
+    blast radius is its own diff. A removal is the one whose is not, and it
     reads `lint_report` directly rather than asking this gate to stop filtering.
     """
     report = lint_report(ctx.worktree, ctx.linter_path, timeout_s=ctx.subprocess_timeout_s)
@@ -1132,7 +1117,7 @@ def _per_page_anchoring(ctx: GateContext, new_pages: list[str]) -> list[Finding]
 
 
 def _unresolved_message(declared: list[str], unresolved: list[str]) -> str:
-    """Names EVERY unresolved id, not just the first, so one repair pass fixes all of them."""
+    """Names EVERY unresolved id, not just the first, so one corrective pass fixes all of them."""
     if not declared:
         return ('declared an entity anchor, but "anchoring.entities" names no entity at all')
     ids = unresolved or declared
@@ -1445,11 +1430,10 @@ def gate_identity(ctx: GateContext) -> list[Finding]:
     `approved_by` naming EXACTLY the person `ctx.confirmed_entity_pages` says introduced it — the
     capture is the approval, so a page that named nobody, or named somebody else,
     would be an identity nobody stands behind. A MODIFIED entity page must carry a proof CODE
-    produced before the diff existed: its planned bytes in `ctx.expected_bytes` (the worker's new
-    spelling, a repair's merge or sweep — `gate_body_rewrite` does the comparing, this gate makes
-    sure the proof was asked for) or the per-path body-rewrite permission an approved `entity-body`
-    repair tells the apply (`ctx.body_rewrite_allowed`). Both are set by callers code
-    controls, never from an outcome. Anything else in the zone is refused, and `repairable=False`:
+    produced before the diff existed: its planned bytes in `ctx.expected_bytes` — the worker's new
+    spelling, or a removal's scrub of a link to a page that is going. `gate_body_rewrite` does the
+    comparing; this gate makes sure the proof was asked for. It is set by callers code controls,
+    never from an outcome. Anything else in the zone is refused, and `repairable=False`:
     no agent could have written it legitimately — the agent's own write tool refuses the zone — so
     the diff is preserved rather than retried.
     """
@@ -1469,12 +1453,11 @@ def gate_identity(ctx: GateContext) -> list[Finding]:
             out.extend(_born_page_findings(ctx, path))
             continue
         if entry.status == "M":
-            if path not in ctx.expected_bytes and path not in ctx.body_rewrite_allowed:
+            if path not in ctx.expected_bytes:
                 out.append(Finding("identity", "unplanned-entity-edit",
                                    f"modified {path}, an entity page nothing planned an edit for: "
-                                   f"an existing identity changes only by an alias the worker "
-                                   f"appends and proves byte for byte, or by a repair the worker "
-                                   f"applied through its own gates",
+                                   f"an existing identity changes only by bytes the worker "
+                                   f"computed and proves byte for byte",
                                    locator=path, repairable=False))
             continue
         # A deletion or a typechange in the zone is already `gate_zone`'s veto; nothing to add.

@@ -5,7 +5,7 @@ from stigmergy.gardener import schema, store
 from tests.gardener import support
 
 
-def _finding(check="stale-view", severity=schema.SEVERITY_WARN, subject="wiki/x.md",
+def _finding(check="orphan-page", severity=schema.SEVERITY_WARN, subject="wiki/x.md",
             **extra):
     f = {"check": check, "severity": severity, "source": schema.SOURCE_DETERMINISTIC,
         "subject": subject, "detail": "some detail", "suggested_action": "some action"}
@@ -35,8 +35,13 @@ def test_insert_and_read_back_round_trips_every_field(conn):
     assert row["created_at"] is not None
 
 
-# ── model_id ────────────────────────────────────────────────────────────────────────────────────
-def test_a_model_sourced_finding_round_trips_its_model_id(conn):
+# ── source/model_id: the columns a retired model pass wrote into ────────────────────────────────
+def test_a_row_a_retired_model_pass_wrote_still_reads_back_as_what_it_is(conn):
+    """Nothing produces `source='model'` any more — the gardener's model passes are gone — but a
+    deployed `gardener_findings` holds rows that do, and this store is what an operator, the admin
+    console and `--json` read them through. The `source` CHECK constraint must still ACCEPT the
+    value, and the row must come back labelled `model` rather than silently relabelled
+    `deterministic`. This is the whole reason `schema.SOURCE_MODEL` is still declared."""
     store.insert_findings(conn, 500, [_finding(
         check="model-contradiction", severity="warn", source=schema.SOURCE_MODEL,
         subject="wiki/a.md, wiki/b.md", model_id="gpt-5.4-mini")])
@@ -106,10 +111,13 @@ def test_latest_completed_run_reads_the_most_recent_ok_run(conn):
 
 
 def test_latest_completed_run_also_reads_a_partial_run(conn):
-    """A run whose sweep failed (`status='partial'`, `gardener.run.run_gardener`) still has
-    complete, trustworthy deterministic findings — this read must not blank out for it."""
+    """`'partial'` is now a HISTORICAL status: it meant a gardener model pass had failed while the
+    deterministic findings committed anyway, and no run written today can be one. The predicate
+    still accepts it because a deployed `job_runs` holds such rows — narrowing to `'ok'` would
+    blank the digest and the console's gardener page on every deployment whose last completed run
+    predates this change, until the next nightly pass."""
     run_id = support.seed_gardener_job_run(
-        conn, status="partial", stats={"sweep": {"error": "SweepGarbage"}})
+        conn, status="partial", stats={"sweep": {"error": "SweepGarbage"}})   # a real old row
 
     run = store.latest_completed_run(conn)
 
@@ -123,9 +131,9 @@ def test_latest_completed_run_ignores_an_error_run(conn):
 
 
 def test_latest_completed_run_picks_the_most_recent_among_ok_and_partial(conn):
-    """Proves the widened `status IN ('ok', 'partial')` predicate orders correctly ACROSS the two
-    statuses, not merely within one of them — a more recent 'partial' run must win over an older
-    'ok' one."""
+    """Proves the `status IN ('ok', 'partial')` predicate orders correctly ACROSS the two
+    statuses, not merely within one of them — a more recent (historical) 'partial' run must win
+    over an older 'ok' one."""
     support.seed_gardener_job_run(conn, status="ok", stats={"tag": "older-ok"},
                                   started_days_ago=5)
     newer_id = support.seed_gardener_job_run(conn, status="partial", stats={"tag": "newer-partial"},

@@ -19,17 +19,18 @@ SEVERITIES = (SEVERITY_INFO, SEVERITY_WARN)
 SEVERITY_ORDER = (SEVERITY_WARN, SEVERITY_INFO)
 
 # ── source — the column's CHECK constraint accepts exactly these two ─────────────────────────
+# Every finding a run writes now is `deterministic`: the model passes that were the only producer
+# of `model` are retired. `SOURCE_MODEL` stays, and stays in `SOURCES`, for the rows they already
+# wrote — a deployed `gardener_findings` holds them, and this is what says what such a row means
+# rather than leaving a reader to guess. Keeping it in the CHECK also keeps a fresh database's
+# constraint identical to a deployed one's, which `CREATE TABLE IF NOT EXISTS` could not have
+# reconciled afterwards in either direction.
 SOURCE_DETERMINISTIC = "deterministic"
-SOURCE_MODEL = "model"
+SOURCE_MODEL = "model"          # historical only — nothing produces it any more
 SOURCES = (SOURCE_DETERMINISTIC, SOURCE_MODEL)
 
 # The deterministic checks' bound on corpus-derived text in `detail`/`suggested_action`.
 MAX_DETAIL_CHARS = 500
-
-# The model sweep's TIGHTER bound on `detail` (rationale + excerpt combined). Enforced twice:
-# `_validate` rejects an oversized excerpt, and the composed string is hard-clamped regardless —
-# the clamp is what actually guarantees the column bound.
-MAX_MODEL_DETAIL_CHARS = 200
 
 # The two CHECK constraints are the vocabularies above, spelled for SQL — a value the code can
 # produce and the column would reject is the drift these constants exist to make impossible.
@@ -57,13 +58,15 @@ CREATE TABLE IF NOT EXISTS gardener_findings (
 )
 """
 # `ADD COLUMN IF NOT EXISTS` because `CREATE TABLE IF NOT EXISTS` never adds a column to a table
-# that already exists; the DEFAULT fills pre-existing rows, so no backfill is needed.
+# that already exists; the DEFAULT fills pre-existing rows, so no backfill is needed. It is `''`
+# on every row a run writes now — only a retired model pass ever named a model — and the column
+# stays because dropping it would destroy the record of which model made the findings it made.
 _GARDENER_FINDINGS_MODEL_ID_COLUMN = (
     "ALTER TABLE gardener_findings ADD COLUMN IF NOT EXISTS model_id TEXT NOT NULL DEFAULT ''"
 )
 # `subject` is the DISPLAY string — a report line, comma-joined when a finding names several
-# pages. `subjects` is the same fact as DATA, so a consumer that has to act on the pages (the
-# repair proposer) reads a list instead of re-splitting prose that was never a parseable format.
+# pages. `subjects` is the same fact as DATA, so a consumer that has to act on the pages reads a
+# list instead of re-splitting prose that was never a parseable format.
 # Added the same additive way as `model_id`: the `'[]'` default fills every pre-existing row, so
 # no backfill is needed and a finding filed before this column existed reads as "names no page",
 # which is exactly what its `subject` could be recovered as anyway.

@@ -43,13 +43,12 @@ def flows_into(content_acl: list[str] | None, page_acl: list[str] | None) -> boo
     would leak to the rest of it.
 
     Its callers are every seam where a model reads one governed page while writing another
-    (the filing port, the meeting distiller's corpus context, the repair proposer, the view
-    synthesis), plus the write-lane check in `gate_zone` and the view's own member and backlink
-    feeds. Its default posture is fail-closed: called with `page_acl=None` — an open page, the
-    widest audience there is — it admits open content only.
+    (the filing port's corpus context, the removal sweep), plus the write-lane check in
+    `gate_zone`. Its default posture is fail-closed: called with `page_acl=None` — an open page,
+    the widest audience there is — it admits open content only.
 
-    This was `visible_to_view`, and shipped for the view backlink feed alone. The
-    question it answers was never view-shaped: it is asked of every model input, because
+    This was `visible_to_view`, and shipped for one feed of a page type that no longer exists. The
+    question it answers was never that feed's: it is asked of every model input, because
     the page linking upward to something its readers cannot see was written by an agent that had
     searched the corpus unrestricted.
     """

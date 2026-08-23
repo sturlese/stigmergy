@@ -30,6 +30,11 @@ class PageType:
 # Mirrors the contract linter's own `VALID_TYPES`. Only types carrying a `folder` may be created
 # here; everything else lands in `triage` rather than being downgraded. Every label carries its
 # article and the word `page`, because `report.triage_type` drops it in whole.
+#
+# **A conclusion is a `note`.** There is no `decision` type: splitting conclusions into two folders
+# by their grammatical mood bought nothing and forced a placement question at every filing. There
+# is no `meeting` type either — a meeting is an EVENT, so its transcript is archived under
+# `sources/meetings/` and what it established is filed as ordinary pages.
 _IDENTITY_REASON = "identity pages are written by the birth fold, not by the filing agent"
 # Named because three separate rules ask "is this an identity page?" and must not drift:
 # `gates.gate_body_rewrite`'s permitted-rewrite branch, `repair.entity_body`'s validator, and this
@@ -37,15 +42,10 @@ _IDENTITY_REASON = "identity pages are written by the birth fold, not by the fil
 ENTITY_PAGE_TYPE = "entity"
 PAGE_TYPES = (
     PageType("note", folder="wiki/notes", label="a note page"),
-    PageType("decision", folder="wiki/decisions", label="a decision page"),
     PageType("concept", folder="wiki/concepts", label="a concept page"),
     PageType(ENTITY_PAGE_TYPE, label="an entity page", reason=_IDENTITY_REASON),
     PageType("source", label="a source page", provenance=True,
-             reason="source pages are written by code from a captured document, never drafted"),
-    PageType("meeting", label="a meeting page", provenance=True,
-             reason="meeting pages arrive with the meeting distiller"),
-    PageType("view", label="a view page",
-             reason="view pages are regenerated from an entity's members, never captured"),
+             reason="source pages are written by code from the captured material, never drafted"),
 )
 
 _BY_NAME = {page_type.name: page_type for page_type in PAGE_TYPES}
@@ -55,7 +55,7 @@ FOLDER_BY_TYPE = {p.name: p.folder for p in PAGE_TYPES if p.folder}
 FAST_LANE_TYPES = frozenset(FOLDER_BY_TYPE)
 
 # `entity: []` is a checked company-wide declaration on a `wiki/**` page, but "about nothing" on a
-# PROVENANCE page — which `stigmergy.views` therefore makes a member of nothing, by contract.
+# PROVENANCE page: the extractor found no evidence, never a statement about the company.
 PROVENANCE_PAGE_TYPES = frozenset(p.name for p in PAGE_TYPES if p.provenance)
 
 
@@ -435,15 +435,6 @@ def unnameable_reason(stem: str) -> str:
     return ""
 
 
-# ── additive edits to a page that already exists ──────────────────────────────────────────────
-# Performed by CODE from the agent's declaration; `gate_body_rewrite` still judges the result.
-_RELATED_KEY = "related"
-
-
-def _wikilink(name: str) -> str:
-    return f"[[{name}]]"
-
-
 def _parse_list_value(text: str) -> list[str]:
     """A YAML sequence value into a list of strings, `[]` when it is not one."""
     try:
@@ -484,45 +475,9 @@ def top_level_key_span(front_lines: list[str], key: str) -> tuple[int, int]:
     return -1, -1
 
 
-def _related_span(front_lines: list[str]) -> tuple[int, int]:
-    return top_level_key_span(front_lines, _RELATED_KEY)
-
-
-def related_links(text: str) -> list[str]:
-    """The raw values the page's `related:` frontmatter declares, in flow or block spelling."""
-    front, _ = split_frontmatter(text)
-    lines = front.splitlines()
-    start, end = _related_span(lines)
-    if start < 0:
-        return []
-    inline = _match_key(lines[start])[1].strip()
-    if inline:
-        return _parse_list_value(inline)
-    # A block sequence: dedented, the item lines ARE a top-level YAML sequence.
-    return _parse_list_value("\n".join(line.strip() for line in lines[start + 1:end]
-                                       if line.strip()))
-
-
-def related_links_from_line(line: str) -> list[str] | None:
-    """The values ONE `related:` line declares, or `None` when that cannot be established (not a
-    top-level `related:`, not a YAML list, or a bare `related:` opening a block). `None` is
-    "unknown", never "empty" — `gate_body_rewrite` refuses on it."""
-    matched = _match_key(line or "")
-    if not matched or (line or "")[:1].isspace() or matched[0] != _RELATED_KEY:
-        return None
-    value = matched[1].strip()
-    if not value:
-        return None
-    try:
-        parsed = yaml.safe_load(value)
-    except yaml.YAMLError:
-        return None
-    return [str(v) for v in parsed] if isinstance(parsed, list) else None
-
-
 def frontmatter_lines(text: str) -> list[str]:
-    """The frontmatter block as lines, normalized the way `with_related_link` reassembles it, so a
-    before/after comparison cannot fail on a blank line the writer would have dropped anyway."""
+    """The frontmatter block as lines, normalized, so a before/after comparison cannot fail on a
+    blank line a writer would have dropped anyway."""
     front, _ = split_frontmatter(text)
     stripped = front.strip("\n")
     return stripped.split("\n") if stripped else []
@@ -536,56 +491,44 @@ def body_lines(text: str) -> list[str]:
     return stripped.split("\n") if stripped else []
 
 
-def related_declaration(text: str) -> tuple[list[str], list[str] | None]:
-    """`(raw lines of the top-level `related:` block, the links it declares)`. Links are `None` when
-    the declaration exists but its contents cannot be established — "I could not tell what was
-    lost" must never read as "nothing was lost". `([], [])` means no `related:` key at all."""
-    lines = frontmatter_lines(text)
-    start, end = _related_span(lines)
-    if start < 0:
-        return [], []
-    block = lines[start:end]
-    inline = _match_key(lines[start])[1].strip()
-    if inline:
-        return block, related_links_from_line(lines[start])
-    items = [line.strip() for line in lines[start + 1:end] if line.strip()]
-    if not items:
-        return block, None
-    parsed = _parse_list_value("\n".join(items))
-    return block, (parsed or None)
+def submitted_by_of(text: str) -> str:
+    """The identity a page's frontmatter names as its submitter, or `""`.
+
+    Read for ONE purpose: a rewrite has to be able to tell that person their page changed. It is a
+    plain scan rather than a YAML parse because a page whose frontmatter will not parse is a page
+    the gates refuse anyway, and a rewrite must not fail to name an owner because of it.
+    """
+    for line in frontmatter_lines(text):
+        if line.startswith("submitted_by:"):
+            return line.split(":", 1)[1].strip().strip('"\'')
+    return ""
 
 
-def with_related_link(text: str, name: str) -> tuple[str, bool]:
-    """Add `[[name]]` to the page's `related:` list; returns `(text, changed)`. Three shapes, all
-    additions — the flow list is rewritten in place, and `gate_body_rewrite` proves that rewrite
-    additive by requiring the link set to GROW."""
-    link = _wikilink(name)
-    front, rest = split_frontmatter(text)
-    if not front:
-        return text, False              # no frontmatter: the linter refuses the page anyway
-    lines = front.splitlines()
-    start, end = _related_span(lines)
+def heading_of(text: str) -> str:
+    """The page's H1 line, verbatim, or `""` when it has none.
 
-    if start < 0:
-        lines.append(f"{_RELATED_KEY}: [{_yaml_scalar(link)}]")
-    else:
-        existing = related_links(text)
-        if link in existing:
-            return text, False
-        inline = _match_key(lines[start])[1].strip()
-        if inline:
-            values = existing + [link]
-            lines[start] = f"{_RELATED_KEY}: {_yaml_list(values)}"
-        else:
-            indent = " " * 2
-            for candidate in lines[start + 1:end]:
-                if candidate.lstrip().startswith("- "):
-                    indent = candidate[:len(candidate) - len(candidate.lstrip())]
-                    break
-            lines.insert(end, f"{indent}- {_yaml_scalar(link)}")
+    Read as the FIRST `# ` line of the body rather than by parsing markdown: the H1 is what makes a
+    page the page it is, and the rewrite rule that keeps it is a byte comparison, not a judgment.
+    """
+    for line in body_lines(text):
+        if line.startswith("# "):
+            return line
+    return ""
 
-    front_matter = "\n".join(lines).strip("\n")
-    return _rebuild(front_matter, rest.lstrip("\n")), True
+
+def with_body_replaced(text: str, body: str) -> str:
+    """The page with everything below its H1 replaced by `body`, frontmatter and H1 untouched.
+
+    THE writer for a declared rewrite, and it is deliberately incapable of doing anything else: a
+    rewrite that could move the frontmatter could change who may read the page, and one that could
+    move the H1 could turn a page into a different page while keeping its filename and its inbound
+    links. Neither is a rule a gate has to catch here, because neither is representable.
+    """
+    front, _ = split_frontmatter(text)
+    heading = heading_of(text)
+    block = f"---\n{front.strip(chr(10))}\n---\n\n" if front.strip() else ""
+    return f"{block}{heading}\n\n{(body or '').strip()}\n" if heading else \
+           f"{block}{(body or '').strip()}\n"
 
 
 def _yaml_scalar(value: str) -> str:
@@ -595,10 +538,11 @@ def _yaml_scalar(value: str) -> str:
 
 
 # ── one frontmatter field, rewritten in place ─────────────────────────────────────────────────
-# The line editors every governed rewrite of an existing page shares: the repair loop's merge
-# (`repair.entity_alias`) and the identity decisions (`entities.decide`) both set one scalar or one
-# list on a page somebody else authored, and two writers of "replace this field's line" would be
-# two opinions about block sequences, re-cased keys and where a new line may land.
+# The line editors every governed rewrite of an existing page shares: a removal's scrub
+# (`repair.deletion`, dropping the entries that named a page that is going) and the identity writer
+# (`librarian.identity`, teaching a registered entity a spelling) both set one scalar or one list on
+# a page somebody else authored, and two writers of "replace this field's line" would be two
+# opinions about block sequences, re-cased keys and where a new line may land.
 def front_and_tail(text: str) -> tuple[list[str], str]:
     """`(frontmatter lines, everything from the closing fence onward)`.
 
@@ -637,9 +581,9 @@ def with_list_field(front_lines: list[str], key: str, values: list[str]) -> list
 
     Always a flow list, always on the field's own single line: the fields this rewrites have
     shapes nobody chose (the entity template writes `aliases: []`), and reproducing a block
-    sequence's indentation would be a second opinion about a shape `with_related_link` already
-    owns. A field the page does not declare is APPENDED at the end of the frontmatter, which is
-    the one place a new line cannot land inside somebody else's block.
+    sequence's indentation would be a second opinion about a shape nothing else here owns. A field
+    the page does not declare is APPENDED at the end of the frontmatter, which is the one place a
+    new line cannot land inside somebody else's block.
     """
     start, _raw = top_level_key_line(front_lines, key)
     line = f"{key}: {_yaml_list(values)}"
@@ -659,31 +603,9 @@ def with_scalar_field(front_lines: list[str], key: str, value: str) -> list[str]
     return front_lines[:start] + [line] + front_lines[end:]
 
 
-# Public aliases for `repair.entity_body` and `repair.deletion`, which write one frontmatter scalar
-# and one frontmatter LIST of their own: a page whose `related:` line was re-emitted by a different
-# escaper is a page the contract linter reads differently from the one this module wrote.
+# Public aliases for `repair.deletion`, which writes one frontmatter scalar and one frontmatter
+# LIST of its own: a page whose `related:` line was re-emitted by a different escaper is a page the
+# contract linter reads differently from the one this module wrote.
 yaml_scalar = _yaml_scalar
 yaml_list = _yaml_list
 parse_list_value = _parse_list_value
-
-
-CALLOUT_STYLES = {
-    # kind -> (obsidian callout type, the phrase that opens the line)
-    "overlap": ("NOTE", "Overlaps with"),
-    "contradiction": ("WARNING", "Contradiction with"),
-}
-
-# The three shapes an existing page may change in: `backlink` is the reciprocal `related:` entry
-# alone, a callout kind adds that link AND the callout. Here, not in `edits.py`, so
-# `agent.parse_outcome` can validate a declared kind without importing the applier.
-EDIT_KINDS = ("backlink", *CALLOUT_STYLES)
-NOTE_REQUIRED_KINDS = tuple(CALLOUT_STYLES)
-
-
-def with_callout(text: str, *, kind: str, name: str, note: str) -> str:
-    """Append an overlap/contradiction callout naming `[[name]]` to the end of the page body — an
-    append and nothing else, so its diff contains only `+` lines."""
-    callout, phrase = CALLOUT_STYLES[kind]
-    base = (text or "").rstrip("\n")
-    return (f"{base}\n\n> [!{callout}] {phrase} {_wikilink(name)}\n"
-            f"> {' '.join(str(note or '').split())}\n")

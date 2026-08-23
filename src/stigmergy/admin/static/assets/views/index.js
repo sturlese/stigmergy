@@ -44,8 +44,8 @@ export async function indexView(host) {
         })),
       el("div", { class: "grid halves" },
         chartCard({
-          title: "Pages per zone", sub: "sources are the machine's, wiki is the team's, views are derived rollups",
-          chart: hbars({ rows: zones.map(([z, n]) => ({ label: `${z}/`, value: n, color: z === "wiki" ? "human" : z === "views" ? "model" : "code" })), labelWidth: 90 }),
+          title: "Pages per zone", sub: "sources are the machine's, wiki is the team's",
+          chart: hbars({ rows: zones.map(([z, n]) => ({ label: `${z}/`, value: n, color: z === "wiki" ? "human" : "code" })), labelWidth: 90 }),
           tableSpec: { headers: ["zone", "pages"], rows: zones.map(([z, n]) => ({ cells: [z, String(n)] })) },
         }),
         chartCard({

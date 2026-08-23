@@ -120,9 +120,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
     @mcp.tool()
     def describe_entity(entity: str) -> str:
         """Everything anchored to one entity, layered and dated — never a flat list: registry
-        metadata plus its own page reference, its view reference (null if none was generated),
-        and a timeline of every other page anchored to it (dated entries first, newest first,
-        then undated by path). `entity` accepts a registered id, name, or alias — or the verbatim
+        metadata plus its own page reference, and a timeline of every other page anchored to it
+        (dated entries first, newest first, then undated by path). This IS the per-entity rollup,
+        assembled per reader and scoped to what you may see; there is no stored rollup page to
+        read instead. `entity` accepts a registered id, name, or alias — or the verbatim
         id of an anchored page you can see even when the registry lacks it (exactly the ids
         list_entities serves). An unknown
         entity and one that exists but is entirely out of your scope return the BYTE-IDENTICAL
@@ -145,11 +146,13 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         """Capture something into the brain's write queue. `kind` names the SHAPE of the
         material: 'raw' (a conversation excerpt, a decision, a gotcha — the usual case), 'page'
         (markdown you already drafted), 'meeting' (a transcript; hints carry `title`,
-        `meeting_date` as YYYY-MM-DD and optionally `attendees`, and it files as a source page, a
-        meeting page and one decision page per decision) or 'document' (the text of a document
-        you already hold — read it from Drive or disk yourself; hints carry `title` and optionally
-        `source_url`, where it came from — and it files as a synthesis page beside the verbatim
-        source). Text up to 256 KB for raw/page and 1 MB for meeting/document. `hints` otherwise
+        `meeting_date` as YYYY-MM-DD and optionally `attendees`) or 'document' (the text of a
+        document you already hold — read it from Drive or disk yourself; hints carry `title` and
+        optionally `source_url`, where it came from). Every kind takes the same road: the material
+        is archived verbatim as a `sources/` page, and the librarian files the page — or pages,
+        one per thing the material establishes — that distil it, each citing that archive. `kind`
+        chooses the brief and the archive's folder, never a different flow.
+        Text up to 256 KB for raw/page and 1 MB for meeting/document. `hints` otherwise
         suggests placement: type, path, entity, title — suggestions only, the librarian
         decides. Returns an acknowledgement with the submission id: the capture is
         QUEUED and attributed to you, not yet in the brain — a librarian files it, and

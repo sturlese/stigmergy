@@ -467,10 +467,9 @@ def test_two_citation_only_problems_refuse_with_findings(ask_service, monkeypatc
 
 # ── `UsageLimitExceeded` on the ask path. The bounded agent catches exactly ONE of pydantic_ai's
 # five exception classes, deliberately — a model outage is a different question, answered
-# elsewhere. The other bounded agent in this codebase (`views.synthesis.write_synthesis`) closes
-# the identical defect at its own call site; these two stubs mirror
-# `tests.views.test_synthesis._BudgetExceededFirstCall`/`_BudgetExceededOnRetry` exactly, adapted
-# to `ask`'s two `agent.run()` call sites. ──────────────────────────────────────────────────────
+# elsewhere. Every other bounded agent in this codebase (`librarian.pydantic_backend`,
+# `repair.sweep`) closes the identical defect at its own call site; these two stubs are `ask`'s own
+# pair, adapted to its two `agent.run()` call sites. ─────────────────────────────────────────────
 class _BudgetExceededFirstRun:
     """`UsageLimitExceeded` on the very FIRST `agent.run()` call, before any `AnswerOutput` ever
     existed to verify — observed on the real model (ANSWER_LLM=openai) over the 8-tool-call

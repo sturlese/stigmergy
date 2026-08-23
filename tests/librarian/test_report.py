@@ -47,8 +47,13 @@ def test_filed_names_the_page_the_commit_and_says_the_brain_cannot_answer_about_
 
 
 def test_filed_with_source_pages_names_them_in_the_summary_and_the_fact_set():
-    """`filed_meeting`'s field, on the fast lane's slimmer report — the sentence for the human,
-    the list for a caller, and the citation stated so nobody learns it from `git show`."""
+    """The verbatim archive, on the ONE report every capture gets — the sentence for the human, the
+    list for a caller, and the citation stated so nobody learns it from `git show`.
+
+    OLD BEHAVIOUR: `source_pages` was `report.filed_meeting`'s field and `filed` carried a slimmer
+    copy of it for the fast lane. That builder is deleted: every kind of material takes the same
+    road, so `filed` is where the archive path is stated and there is no second shape to compare.
+    """
     out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
                        anchoring={"kind": "entity", "entities": ["Acme Corp"]}, links=[],
                        overlaps=[], findings=[],
@@ -190,24 +195,6 @@ def test_a_hostile_reason_is_clamped_and_control_stripped_like_every_other_echoe
     assert out["anchor_reason"] == out["agent_rationale"]
 
 
-def test_a_meeting_reports_the_resolution_of_each_decisions_own_anchor():
-    """A meeting anchors every decision INDEPENDENTLY, so a resolution note belongs per decision and
-    not per capture — a reader has to be able to tell which page a judgment was about."""
-    out = report.filed_meeting(
-        source_pages=["sources/meetings/t.md"], meeting_page="wiki/meetings/m.md",
-        decisions=[{"path": "wiki/decisions/d1.md",
-                    "anchoring": {"kind": "entity", "entities": ["acme-corp"],
-                                  "reason": "the group form of the registered name"}},
-                   {"path": "wiki/decisions/d2.md",
-                    "anchoring": {"kind": "entity", "entities": ["acme-corp"]}}],
-        commit="cafefeed", registry=_registry())
-
-    rows = out["filed_meeting"]["decisions"]
-    assert rows[0]["anchor_reason"] == "the group form of the registered name"
-    assert rows[1]["anchor_reason"] == ""
-    assert "the group form of the registered name" in out["summary"]
-
-
 def test_filed_with_company_scope_names_the_written_reason():
     out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
                        anchoring={"kind": "company", "reason": "applies company-wide"},
@@ -330,7 +317,7 @@ def test_failed_system_omits_the_agent_counter_when_the_fault_landed_before_the_
 def test_a_truncated_reason_stops_at_a_word_boundary():
     """The walk's `— it is th…`. A sentence cut mid-word reads as a rendering bug and costs the
     reader the one word that would have named the problem."""
-    reason = ("rewrote existing content in wiki/decisions/Git as the Canonical Store.md: "
+    reason = ("rewrote existing content in wiki/notes/Git as the Canonical Store.md: "
               "edits to a page that already exists may only ADD a back-link or a callout, and "
               "this one removed a line that the human who wrote the page had put there")
     out = report.failed_system(attempts=1, stage="zone", reason=reason)
@@ -398,22 +385,13 @@ def test_render_prose_lists_every_finding_with_a_bang_prefix():
     assert "! finding: material attempted" in prose
 
 
-def test_render_prose_of_a_filed_meeting_report_does_not_double_render_agent_rationale():
-    # Findings cycle 2: `filed_meeting`'s summary already carries its own `agent_rationale` line
-    # (and its own `links_created`/`overlaps_flagged`/`pages_edited` lines) —
-    # `render_prose`'s `elif` fallback used to catch the meeting case (status FILED, excluded from
-    # the primary branch) and append `agent_rationale` a second time.
-    out = report.filed_meeting(
-        source_pages=["sources/meetings/q3-sync-transcript.md"],
-        meeting_page="wiki/meetings/2026-07-29-q3-sync.md", decisions=[],
-        commit="cafefeed",
-        agent_rationale="Filed the Borealis + Stigmergy sync as a source, meeting, and decisions.")
-    prose = report.render_prose(out)
-    assert prose.count("Filed the Borealis + Stigmergy sync") == 1
-    # every other field the meeting summary already carries is likewise not appended a second time
-    assert prose.count("links_created") == 1
-    assert prose.count("overlaps_flagged") == 1
-    assert prose.count("pages_edited") == 1
+# The `filed_meeting` branch of `render_prose` is GONE, and with it the test that pinned it.
+# Nothing writes that key and nothing reads it any more: the separate meeting road, its report
+# builder and the branch that kept `render_prose` from double-rendering its field block were
+# removed together. An old row in `capture_queue` still carries the key and now renders the
+# ordinary field block beside its stored summary — visibly redundant, never wrong, and the
+# alternative was keeping a branch alive for rows nobody files any more.
+
 
 
 # ── echoed text is sanitized (the same seam capture.cli uses for untrusted terminal text) ───────
@@ -423,50 +401,26 @@ def test_echoed_page_path_with_control_characters_is_sanitized_in_the_summary():
     assert "\x1b" not in out["summary"]
 
 
-# ── filed_meeting: the page-SET report. End-to-end tests assert on `report["filed_meeting"]`
-# fields; these exercise `report.filed_meeting` directly, at the unit level, against a
-# company-wide reason and the zero-decisions case. ──────────────────────────────────────────────
-def test_filed_meeting_names_every_page_path_and_every_decisions_own_anchor():
-    out = report.filed_meeting(
-        source_pages=["sources/meetings/q3-sync-transcript.md"],
-        meeting_page="wiki/meetings/2026-07-29-q3-sync.md",
-        decisions=[
-            {"path": "wiki/decisions/q3-sync-decision-1.md",
-             "anchoring": {"kind": "entity", "entities": ["acme-corp"]}},
-            {"path": "wiki/decisions/q3-sync-decision-2.md",
-             "anchoring": {"kind": "company",
-                          "reason": "applies to every customer, not one of them"}},
-        ],
-        commit="cafefeed", registry=_registry())
-    assert out["status"] == schema.FILED
-    assert out["page_path"] == "wiki/meetings/2026-07-29-q3-sync.md"   # the one door in
-    rows = out["filed_meeting"]["decisions"]
-    assert out["filed_meeting"]["source_pages"] == ["sources/meetings/q3-sync-transcript.md"]
-    assert out["filed_meeting"]["meeting_page"] == "wiki/meetings/2026-07-29-q3-sync.md"
-    assert len(rows) == 2
-    assert rows[0]["path"] == "wiki/decisions/q3-sync-decision-1.md"
-    assert rows[0]["anchored_to"] == "Acme Corp (`acme-corp`)"
-    assert rows[1]["path"] == "wiki/decisions/q3-sync-decision-2.md"
-    # the company-wide reason is carried verbatim
-    assert rows[1]["anchored_to"] == ("company-wide scope (applies to every customer, not one "
-                                      "of them)")
-    # the reason also has to survive into the rendered prose a human actually reads
-    assert "applies to every customer, not one of them" in out["summary"]
-    # `filed_meeting`'s `head` sentence composes its own copy of the wording contract
-    # (report.py, ~line 355) rather than reusing `filed`'s — pinned literally here too.
-    assert "at the next index rebuild" in out["summary"]
-    assert "incremental upsert" in out["summary"]
-    assert "whichever lands first" in out["summary"]
-    assert "invisible to search_brain" not in out["summary"]
-
-
-def test_filed_meeting_with_zero_decisions_says_so_rather_than_omitting_the_line():
-    out = report.filed_meeting(source_pages=["sources/meetings/standup-transcript.md"],
-                               meeting_page="wiki/meetings/2026-07-29-standup.md",
-                               decisions=[], commit="deadbeef")
-    assert "decision page(s)" in out["summary"]
-    assert "none — nothing from this meeting was drafted as a decision" in out["summary"]
-    assert out["filed_meeting"]["decisions"] == []
+# ── DELETED with `report.filed_meeting`, the builder for a page SET filed down its own road ────
+# `test_filed_meeting_names_every_page_path_and_every_decisions_own_anchor`,
+# `test_filed_meeting_with_zero_decisions_says_so_rather_than_omitting_the_line`,
+# `test_filed_meeting_names_its_births_in_the_rendered_block_and_the_fact_set` and
+# `test_a_meeting_reports_the_resolution_of_each_decisions_own_anchor` all called that builder, and
+# every sentence they pinned was composed inside it. There is one road now, so there is one
+# builder: what they measured survives here on `filed` — the anchor phrase and the resolution note
+# (the `Resolved:` tests above), the births clause (the births section below), the searchability
+# wording (pinned literally on `filed`'s plain and overlap branches, which are the two copies of it
+# left in `report.py`), and the page SET itself, which is `filed(pages_filed=...)` now and is
+# pinned end to end in `tests/librarian/test_structured_processing_pg.py`.
+#
+# What died with the builder and has NO home: a report that states a DIFFERENT anchor per filed
+# page. `filed` takes one `anchoring` for the whole capture, so the per-decision anchor rows and
+# their per-decision resolution notes are not expressible in the report layer at all — the pages
+# still carry their own `entity:` frontmatter, and that is where the per-page anchor is asserted
+# now (`test_structured_processing_pg.py`, reading the committed pages back out of git).
+#
+# `render_prose`'s branch on a STORED `filed_meeting` key is a different property and it is alive:
+# see `test_render_prose_of_a_stored_filed_meeting_row_does_not_double_render_its_field_block`.
 
 
 # ── births: the page landed AND the capture introduced these identities ──────────────────────
@@ -505,16 +459,6 @@ def test_an_ordinary_filing_carries_empty_birth_lists_and_an_unchanged_sentence(
     assert out["entities_born"] == [] and out["aliases_added"] == []
     assert "introduces" not in out["summary"]
     assert "entities_born" not in report.render_prose(out)
-
-
-def test_filed_meeting_names_its_births_in_the_rendered_block_and_the_fact_set():
-    out = report.filed_meeting(
-        source_pages=["sources/meetings/q3-sync-transcript.md"],
-        meeting_page="wiki/meetings/2026-07-29-q3-sync.md", decisions=[], commit="cafefeed",
-        entities_born=[{"id": "scircle", "name": "Scircle", "type": "organization"}])
-    assert "It introduces 1 new entity: Scircle (`scircle`)" in out["summary"]
-    assert out["entities_born"][0]["id"] == "scircle"
-    assert out["aliases_added"] == []
 
 
 def test_a_born_name_is_cleaned_through_the_identity_cleaner_never_echoed_raw():

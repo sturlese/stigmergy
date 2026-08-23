@@ -36,6 +36,16 @@ class SlackGateway(Protocol):
         unmapped)."""
         ...
 
+    async def users_lookup_by_email(self, email: str) -> str:
+        """`users.lookupByEmail` — the Slack user id for an email, or `""` when this workspace has
+        nobody at that address. The ONE call that goes from an identity the brain knows to a person
+        Slack can reach, and it exists for exactly one reason: telling somebody their page changed.
+
+        A miss is `""` rather than an error: the brain's identities are not all Slack members, and
+        a page filed by somebody who has left is a page whose notice has nowhere to go — which is
+        a fact to record, not a failure to retry."""
+        ...
+
     async def conversations_info(self, channel_id: str) -> dict:
         """Channel metadata — `is_private`, `is_im`, `is_mpim`, `name`."""
         ...
@@ -164,6 +174,7 @@ class FakeSlackGateway:
         # `_raise_if_invalid_blocks`).
         self.fail_users_info: set[str] = set()
         self.fail_conversations_info: set[str] = set()
+        self.fail_lookup_by_email: set[str] = set()
         self.fail_post_count = 0
         self.fail_update_count = 0
         # The Slack error CODE a scripted `chat.update` failure carries. `""` is the coded-less
@@ -214,6 +225,14 @@ class FakeSlackGateway:
         if display_name:
             profile["display_name"] = display_name
         return {"user": {"id": user_id, "profile": profile}}
+
+    async def users_lookup_by_email(self, email: str) -> str:
+        if email in self.fail_lookup_by_email:
+            raise SlackApiError(f"users.lookupByEmail failed for {email}")
+        for user_id, known in self.users.items():
+            if known and known.lower() == (email or "").lower():
+                return user_id
+        return ""
 
     async def conversations_info(self, channel_id: str) -> dict:
         if channel_id in self.fail_conversations_info:

@@ -6,8 +6,9 @@
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/tools/stigmergy_lint.py` |
-| **Copied at commit** | `eb583fe147514ffb59c0d66c009f95362c3e2cbb` |
+| **Copied at commit** | `8a19fbd052b7f0d3d7a31d498babb0206131a662` |
 | **Drift guard** | `tests/librarian/test_frozen_linter.py` |
+
 
 What the copy carries is whatever the knowledge repo's linter carries at that commit; the rule
 set is that file's own business and its own tests (`test_stigmergy_lint.py` beside it) describe

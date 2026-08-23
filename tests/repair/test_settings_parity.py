@@ -7,7 +7,7 @@ import pytest
 
 from stigmergy.gardener import settings as gardener_settings
 from stigmergy.repair import settings as repair_settings
-from stigmergy.repair.settings import MAX_BATCH_SIZE, RepairSettings
+from stigmergy.repair.settings import RepairSettings
 from stigmergy.server.errors import StartupError
 
 
@@ -35,15 +35,15 @@ def test_both_count_validators_enforce_the_same_rules(validator, monkeypatch):
         validator("PARITY_TEST_KNOB", 3)
 
 
-def test_a_runaway_repair_batch_is_refused_at_startup(monkeypatch):
-    """Red before the fix: `STIGMERGY_REPAIR_BATCH` accepted any positive integer while
-    multiplying a per-call model budget by six — the one count knob whose blast radius is a bill,
-    and the one with no maximum."""
-    monkeypatch.setenv(repair_settings.BATCH_SIZE_ENV, str(MAX_BATCH_SIZE + 1))
-    with pytest.raises(StartupError, match="maximum"):
+def test_the_plan_ceiling_is_refused_when_it_is_not_a_positive_integer(monkeypatch):
+    """The one count knob this package still has, driven through `from_env` rather than through the
+    validator alone — a settings field wired to the wrong env name would pass the parity test above
+    and fail nowhere else."""
+    monkeypatch.setenv(repair_settings.MAX_PLAN_BYTES_ENV, "0")
+    with pytest.raises(StartupError, match="positive integer"):
         RepairSettings.from_env()
 
 
-def test_the_maximum_itself_is_accepted_the_benign_twin(monkeypatch):
-    monkeypatch.setenv(repair_settings.BATCH_SIZE_ENV, str(MAX_BATCH_SIZE))
-    assert RepairSettings.from_env().batch_size == MAX_BATCH_SIZE
+def test_a_configured_plan_ceiling_is_accepted_the_benign_twin(monkeypatch):
+    monkeypatch.setenv(repair_settings.MAX_PLAN_BYTES_ENV, "12345")
+    assert RepairSettings.from_env().max_plan_bytes == 12345

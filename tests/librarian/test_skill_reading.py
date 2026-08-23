@@ -7,8 +7,8 @@ MCP servers and hung forever), and it has two enforcement points that must agree
 
 * **`worker.startup_checks` → `_check_skill_at`**, before a single item is claimed, reading the
   blob AT THE COMMIT the worktrees will branch from;
-* **`agent.read_skill` / `agent.read_meeting_brief`**, inside the item's own worktree, reading the
-  file the backend is actually briefed with.
+* **`agent.read_skill`**, inside the item's own worktree, reading the file the backend is actually
+  briefed with.
 
 Both refuse with `LibrarianConfigError` — "the worker cannot run", not "this item failed" — and
 both apply the size ceiling BEFORE the bytes are read, because a cap applied to an
@@ -57,14 +57,17 @@ def _write(path: pathlib.Path, text: str = SKILL_TEXT) -> pathlib.Path:
 
 @pytest.fixture()
 def checkout(tmp_path) -> pathlib.Path:
-    """A directory shaped like a worktree, carrying the librarian skill and the meeting brief.
+    """A directory shaped like a worktree, carrying the one procedure there is to read.
 
     A plain directory, not a git repo: `read_skill` opens a file, and giving it a repo would test
     the fixture rather than the seam. The base-commit half lower down is where git belongs.
+
+    OLD BEHAVIOUR: it also carried `.claude/skills/meeting-distiller/SKILL.md`, for the second
+    reader `agent.read_meeting_brief` — a `kind="meeting"` capture is filed by the librarian brief
+    like every other capture now, so there is one procedure and one reader of it.
     """
     root = tmp_path / "worktree"
     _write(root / agent_module.SKILL_RELPATH)
-    _write(root / agent_module.MEETING_BRIEF_RELPATH)
     return root
 
 
@@ -150,25 +153,6 @@ def test_the_ceiling_is_applied_BEFORE_the_bytes_are_read(checkout):
     assert "UnicodeDecodeError" not in message, (
         "the file was decoded before its size was checked — the ceiling is being applied to bytes "
         "that have already been read into memory")
-
-
-def test_the_meeting_brief_reader_is_the_same_seam_with_its_own_sentence(checkout):
-    """`read_meeting_brief` is `read_skill`'s sibling and shares `check_skill_size`/`validate_skill`
-    — so it is exercised, but for its OWN message. It fails closed at the point of need rather than
-    at startup (`worker.startup_checks` deliberately does not pre-flight it: a deployment may never
-    claim a `meeting` row), which makes its refusal the only thing standing between a meeting
-    capture and a silent one."""
-    assert agent_module.read_meeting_brief(str(checkout)) == SKILL_TEXT
-
-    (checkout / agent_module.MEETING_BRIEF_RELPATH).unlink()
-
-    with pytest.raises(LibrarianConfigError) as exc_info:
-        agent_module.read_meeting_brief(str(checkout))
-
-    message = str(exc_info.value)
-    assert "meeting-distiller brief" in message
-    assert agent_module.MEETING_BRIEF_RELPATH in message
-    assert "will not distil without it" in message
 
 
 # ── `_check_skill_at`: the same three faults, one moment earlier, AT THE BASE COMMIT ───────────

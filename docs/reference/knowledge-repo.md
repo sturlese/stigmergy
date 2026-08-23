@@ -2,8 +2,8 @@
 
 This platform stores no pages. It reads and writes a **separate git repository** — the knowledge
 repo — which is where your knowledge actually lives. Point at it with `--repo`, or with
-`STIGMERGY_REPO` for the commands that read it: the librarian, the gardener, the digest, the views
-and the repair proposer all default to `../stigmergy-brain`, a sibling of this checkout, when
+`STIGMERGY_REPO` for the commands that read it: the librarian, the gardener, the
+and the removal sweep all default to `../stigmergy-brain`, a sibling of this checkout, when
 neither is set. **`stigmergy-index`, `stigmergy-search` and `stigmergy-server` do not** — they read
 no `STIGMERGY_REPO` at all and refuse without an explicit `--repo`, which is deliberate on a
 process that serves reads to other people. Note also that nothing under `src/` loads a `.env` file:
@@ -22,7 +22,7 @@ own reason. What each one needs before it will run at all:
 
 | To run | The repo must carry | If absent |
 |---|---|---|
-| `stigmergy-index --rebuild` | **at least one page** under `wiki/` · `sources/` · `views/` | `EmptyCorpusError`. And since the server refuses to serve an empty index, this is what makes a truly empty repo unusable rather than merely quiet: you cannot index it, so you cannot serve it, so you cannot `brain_submit` into it |
+| `stigmergy-index --rebuild` | **at least one page** under `wiki/` · `sources/` | `EmptyCorpusError`. And since the server refuses to serve an empty index, this is what makes a truly empty repo unusable rather than merely quiet: you cannot index it, so you cannot serve it, so you cannot `brain_submit` into it |
 | `stigmergy-server` | `ops/identities.json` | stdio refuses to start; HTTP refuses every request with the generic `401`. Never an open brain, on either transport |
 | the librarian worker (either backend) | `.claude/tools/stigmergy_lint.py`, **in the commit it files against** | `LibrarianConfigError` at startup, before a single item is claimed |
 | the librarian worker, `--backend pydantic` | `.claude/skills/librarian/SKILL.md`, same commit | the same refusal — the real agent has no operating procedure without it |
@@ -37,17 +37,16 @@ which is the cheapest way to see the shape before you commit to one.
 ```
 stigmergy-brain/
 ├── wiki/              # what people wrote — the zone the agent may file into
-│   ├── notes/         # type: note      ─┐ the three folders the librarian agent
-│   ├── decisions/     # type: decision   │ may CREATE a page in
-│   ├── concepts/      # type: concept   ─┘
-│   ├── meetings/      # type: meeting — written only by the meeting flow
+│   ├── notes/         # type: note     ─┐ the two folders the librarian agent
+│   ├── concepts/      # type: concept  ─┘ may CREATE a page in
 │   └── entities/      # one page per entity, written by the librarian in the commit that
 │                      # files the capture that introduced it. Nothing else creates one
-├── sources/           # captured raw material, verbatim — never edited
-│   ├── meetings/      # the transcript behind a meeting page
+├── sources/           # captured raw material, verbatim — never edited. EVERY capture
+│   │                  # archives here; the door and the kind choose which folder
+│   ├── meetings/      # the transcript behind a `kind="meeting"` capture
 │   ├── slack/         # the thread behind a 🧠 capture
-│   └── documents/     # the text behind a `kind="document"` capture
-├── views/             # views/<entity-id>.md — written only by `stigmergy.views`
+│   ├── documents/     # the text behind a `kind="document"` capture
+│   └── notes/         # the text behind every other capture
 └── ops/               # configuration the platform reads
     ├── identities.json        # REQUIRED — the server fails closed without it
     ├── entity-registry.json
@@ -56,10 +55,10 @@ stigmergy-brain/
         └── entity.md         # REQUIRED before any entity page can be written — its shape
 ```
 
-## The three zones
+## The two zones
 
-`wiki` · `sources` · `views` (`index.corpus.ZONES` — an include-list, so a directory absent from it
-is not indexed). Only markdown files under these three directories are indexed as pages — anything
+`wiki` · `sources` (`index.corpus.ZONES` — an include-list, so a directory absent from it
+is not indexed). Only markdown files under these two directories are indexed as pages — anything
 else in the repo is invisible to search, which is what makes `ops/`, `.claude/` and a `README.md`
 safe to keep beside them.
 
@@ -67,9 +66,28 @@ The zones differ by **who writes them**:
 
 | Zone | Written by | Contains |
 |---|---|---|
-| `wiki/` | people; the librarian, through the nine gates (`wiki/entities/` too, in the same commit as the capture that introduced the identity); the meeting flow (`wiki/meetings/`); an applied repair (a drafted entity body, a merge) | what someone concluded |
-| `sources/` | the librarian worker only, from the captured material, byte for byte | what someone said or sent — written once, never edited |
-| `views/` | `stigmergy.views` only — ONE writer and two entry points, both inside the librarian worker: its convergence sweep (the guarantee) and the hook right after a meeting files (best-effort). There is no command | derived rollups, regenerated from their members |
+| `wiki/` | people; the librarian, through the nine gates (`wiki/entities/` too, in the same commit as the capture that introduced the identity); a removal's sweep, on the pages that referred to a page that went | what someone concluded |
+| `sources/` | the librarian worker only, from the captured material, byte for byte — every capture, always | what someone said or sent — written once, never edited |
+
+### If your repo already has a `views/` directory
+
+There used to be a third zone. `views/<entity-id>.md` held a per-entity rollup that a convergence
+sweep kept fresh; both the rollup and the sweep are gone, because a per-entity rollup is a
+read-time answer — `describe_entity` assembles it per reader and ACL-scoped, which one shared file
+never could.
+
+**Nothing deletes those files, and nothing reads them.** They are not in `ZONES`, so they are not
+indexed: they will not appear in `search`, `read_page` or `ask`, and no command in this system
+writes to that directory any more. They are inert markdown sitting in git, and they stay exactly
+where they are — deleting somebody's files is not a thing this system does on its own.
+
+If you want them gone, that is your call to make in your own repo, and it is one line:
+
+```bash
+git rm -r views/ && git commit -m "chore: drop the retired views zone"
+```
+
+Leaving them costs nothing but disk. Their history stays in git either way.
 
 A capture **door** (the 🧠 gesture, `brain_submit` from any MCP client, the console's *Register an
 entity*) never writes a page. It puts a row on the queue and archives the material in the evidence
@@ -78,19 +96,22 @@ captured" are different states, and the second one is much rarer than it looks.
 
 ### The fast lane
 
-The librarian agent may create exactly **three** page types, each in a fixed folder:
+The librarian agent may create exactly **two** page types, each in a fixed folder:
 
 | `type:` | Folder |
 |---|---|
 | `note` | `wiki/notes/` |
-| `decision` | `wiki/decisions/` |
 | `concept` | `wiki/concepts/` |
 
-The page vocabulary is **seven** types (`librarian.page.PAGE_TYPES`, one table every placement
-question reads). The other four — `entity`, `source`, `meeting`, `view` — may be read, linked and
-cross-referenced by the agent but never created by it: each has exactly one writer elsewhere (a
-governed command, or a flow that owns it). A capture that would need one is REFUSED naming the type
-and why, rather than being quietly downgraded to a `note`.
+**A conclusion is a `note`.** There is no separate type for a decision: what a page IS does not
+change with the mood of its sentences, and the split forced a placement question at every filing.
+
+The page vocabulary is **four** types (`librarian.page.PAGE_TYPES`, one table every placement
+question reads). The other two — `entity` and `source` — may be read, linked and
+cross-referenced by the agent but never created by it, and each has exactly one writer elsewhere:
+`entity` the identity writer, `source` the verbatim archive.
+A capture that would need one is REFUSED naming the type and why, rather than being quietly
+downgraded to a `note`.
 
 `entity` is the interesting row, because the fast lane does reach that folder — but never as the
 agent's own write. When a capture is about something the registry does not know, the agent DECLARES
@@ -112,8 +133,8 @@ restrictions apply".
 | File | Shape | What it controls | Absent |
 |---|---|---|---|
 | `identities.json` | `{identity: [group names]}` | who exists and what they may see. One shape, a list of groups; membership of `brain-admins` is unrestricted; an empty list is a principal who reads every OPEN page and no other; `all` is a reserved word (open is the ABSENCE of a label on a page). Keys beginning with `_` are comments. The HTTP transport resolves a bearer token to an email and then looks that email up here, on every request | **REQUIRED** — stdio refuses to start, HTTP refuses every request with the generic `401`, and an identity absent from the file gets no access at all |
-| `entity-registry.json` | `{"entities": {id: {name, type, aliases, approved_by}}}` | the entity vocabulary, and who introduced each identity. Anchoring resolves against it; a name it does not carry cannot be anchored to, which is what makes the librarian WRITE the entity rather than invent an anchor. **Derived, never hand-written**: it is a pure function of `wiki/entities/*.md`, regenerated by `entities.generator` in the same commit as any page that changes one — `librarian.identity` introducing an identity or teaching one a spelling, and an applied `entity-alias` merge | an empty registry — the graph works unregistered, with no aliases and no entity-first resolution |
-| `slack-channels.json` | `{channel_id: [group names]}` | the groups a public-channel answer or a broadcast is computed at, so a digest cannot spill scoped material into an open channel — and the label a 🧠 capture taken there is FILED at. Same grammar as `identities.json`, same parser | the **empty set** for every channel — a channel not listed is public: it reads only pages carrying no label, and a capture from it is filed open |
+| `entity-registry.json` | `{"entities": {id: {name, type, aliases, approved_by}}}` | the entity vocabulary, and who introduced each identity. Anchoring resolves against it; a name it does not carry cannot be anchored to, which is what makes the librarian WRITE the entity rather than invent an anchor. **Derived, never hand-written**: it is a pure function of `wiki/entities/*.md`, regenerated by `entities.generator` in the same commit as any page that changes one — `librarian.identity` introducing an identity or teaching one a spelling | an empty registry — the graph works unregistered, with no aliases and no entity-first resolution |
+| `slack-channels.json` | `{channel_id: [group names]}` | the groups a public-channel answer is computed at, so an answer cannot spill scoped material into an open channel — and the label a 🧠 capture taken there is FILED at. Same grammar as `identities.json`, same parser | the **empty set** for every channel — a channel not listed is public: it reads only pages carrying no label, and a capture from it is filed open |
 
 `identities.json` is the one with teeth. TWO of the other three are read at the commit the work
 is happening against, never from a working tree: the librarian resolves
@@ -183,20 +204,18 @@ about it — that it is not empty and that it is under a size ceiling — and de
 
 | Path | What it is |
 |---|---|
-| `.claude/skills/librarian/SKILL.md` | how an ordinary capture becomes a page |
-| `.claude/skills/meeting-distiller/SKILL.md` | how a transcript becomes a source page, a meeting page and one decision page per decision |
+| `.claude/skills/librarian/SKILL.md` | how a capture becomes the page or pages its material establishes — **one brief, for every kind** |
 | `.claude/tools/stigmergy_lint.py` | the contract linter the gates run over every produced page |
 
-Both skills and the linter are read **at the base commit the worker files against**, not from a
+The skill and the linter are read **at the base commit the worker files against**, not from a
 working tree, and startup refuses if the linter is not in that commit. A local edit nobody pushed
 might as well not exist.
 
-This repository keeps a **frozen copy** of the linter and of BOTH briefs as test fixtures, and a
+This repository keeps a **frozen copy** of the linter and of the brief as test fixtures, and a
 test asserts each is byte-identical to the knowledge repo's own when both are on the same machine
 (and skips cleanly when they are not). A stale frozen copy would mean CI enforcing a contract the
-agent is no longer given. Each brief is a **two-sided contract** with the platform's own code, and
-each has its own rule table asserted in both directions —
-`tests/librarian/test_meeting_brief_contract.py` and `test_librarian_brief_contract.py` — so an
+agent is no longer given. The brief is a **two-sided contract** with the platform's own code, with a
+rule table asserted in both directions (`tests/librarian/test_librarian_brief_contract.py`) — so an
 edit to either side alone turns the suite red rather than being discovered by a filing.
 
 **The librarian brief is backend-NEUTRAL**: it describes a worker that hands the agent
@@ -217,17 +236,17 @@ only a defense if nothing in the repo can add to it.
 
 - **It never force-pushes and never rewrites history.** Every commit is additive — with one named
   exception, a person's own `brain_delete`: the pages they named go, and every page that referred to
-  one is rewritten in the same commit, with the diff handed straight back to them.
-An `entity-alias` merge removes no page at
-  all: the absorbed identity keeps its page, marked `superseded_by:` the survivor.
+  one is rewritten in the same commit, with the diff handed straight back to them. Nothing removes
+  an entity page: an identity is retired by removing what made it one, never by deleting the page
+  out from under everything anchored to it.
 - **It never commits content the gates did not approve.** The commit is scoped to exactly the
   approved paths *and their approved bytes*, so neither an unrelated file that happened to be dirty
   in the worktree nor an in-place rewrite of an approved page can ride along.
-- **It never writes outside the three zones and `ops/`.** `ops/entity-registry.json` is regenerated
+- **It never writes outside the two zones and `ops/`.** `ops/entity-registry.json` is regenerated
   from the entity pages, in the same commit that changed one, and only by the two writers that may
   change one: the librarian WRITING an identity (authored as the librarian App, `Submitted-by:` the
-  capture's submitter) and an applied `entity-alias` merge (authored as the App, with the person who
-  approved it in an `Approved-by:` trailer).
+  capture's submitter) and a person's own removal, when the pages it swept included an entity page
+  (authored as the App, with the person who asked in an `Approved-by:` trailer).
 - **It never invents the name behind an identity.** The librarian writes an entity page with
   `approved_by:` naming the capture's own submitter, and the ninth gate refuses any other name —
   including none. The name in that

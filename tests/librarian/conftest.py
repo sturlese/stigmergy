@@ -177,3 +177,31 @@ def minio_or_skip() -> evidence_plane.S3EvidenceStore:
 @pytest.fixture()
 def require_minio():
     return minio_or_skip()
+
+
+class FakeConn:
+    """A `job_runs` write needs a real Postgres `conn` in the live system
+    (`capture.ops.record_job_run`); this suite is otherwise entirely offline, so this double lets
+    `ops.job_run`'s context manager — and a direct `ops.record_job_run` call, the
+    `KeyboardInterrupt` path — run their `try/except`/yield contract without one. It records every
+    attempted write instead of touching a database: good enough to assert "a job_runs write was
+    attempted, with this shape", not to assert what Postgres actually stored, which belongs to a
+    `_pg.py` suite. Lives here because this suite is its one remaining user."""
+
+    def __init__(self):
+        self.executed = []
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params):
+        self.executed.append((sql, params))
+
+    def fetchone(self):
+        return (1,)

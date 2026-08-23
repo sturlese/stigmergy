@@ -151,7 +151,31 @@ END $$
 
 # Every statement `ensure_slack_schema` runs, in order — the table first, because the collapse
 # pre-check below needs it to exist before the dedup key is added.
-_SCHEMA_DDL = (_DDL, _DEDUP_KEY_MIGRATION, _INDEX_THREAD, _INDEX_SUBMISSION)
+# ── the rewrite notice: telling somebody their page changed ───────────────────────────────────
+# A capture may now bring an existing page up to date, and the whole trade that allows it is that
+# the change is LOUD: attributed, diffed, revertible — and the page's own submitter is TOLD. This
+# table is the "told" half, and it is here rather than in `capture_queue` because the librarian
+# worker holds no Slack credential and this process holds no git checkout: the worker records what
+# it rewrote on the capture's report, and the transport that can reach a person drains it.
+#
+# One row per (capture, page), so a page rewritten by two captures earns two notices and a poller
+# pass that dies between the DM and the write repeats exactly one — the same at-least-once posture
+# `last_status` takes next door, for the same reason: a notice sent twice is noise, and a notice
+# never sent is the property this design rests on.
+_CREATE_REWRITE_NOTICES = """
+CREATE TABLE IF NOT EXISTS page_rewrite_notices (
+    id BIGSERIAL PRIMARY KEY,
+    submission_id BIGINT NOT NULL,
+    path TEXT NOT NULL,
+    submitted_by TEXT NOT NULL,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (submission_id, path)
+)
+"""
+
+
+_SCHEMA_DDL = (_DDL, _DEDUP_KEY_MIGRATION, _INDEX_THREAD, _INDEX_SUBMISSION,
+               _CREATE_REWRITE_NOTICES)
 
 
 def _log_pending_dedup_collapse(cur) -> None:
@@ -231,6 +255,42 @@ def release_reservation(conn, reservation_id: int) -> None:
     with conn.cursor() as cur:
         cur.execute("DELETE FROM slack_submissions WHERE id = %s AND submission_id IS NULL",
                     (reservation_id,))
+
+
+
+# Every rewrite a FILED capture recorded, minus the ones already told. Read-only against
+# `capture_queue`, exactly like `_DUE_FOR_REPORT`: this process never claims, leases or mutates a
+# capture. `submitted_by` is the page's OWN, read off the page before the rewrite landed.
+_DUE_REWRITE_NOTICES = """
+SELECT q.id AS submission_id, q.result_ref, r ->> 'path' AS path,
+       r ->> 'submitted_by' AS submitted_by, r ->> 'why' AS why
+FROM capture_queue q
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(q.report -> 'pages_rewritten', '[]'::jsonb)) AS r
+WHERE q.status = %(filed)s
+  AND COALESCE(r ->> 'submitted_by', '') <> ''
+  AND NOT EXISTS (
+      SELECT 1 FROM page_rewrite_notices n
+      WHERE n.submission_id = q.id AND n.path = r ->> 'path')
+ORDER BY q.id
+"""
+
+
+def due_rewrite_notices(conn) -> list[dict]:
+    """Every page a filed capture rewrote whose own submitter has not been told yet."""
+    with conn.cursor() as cur:
+        cur.execute(_DUE_REWRITE_NOTICES, {"filed": FILED})
+        columns = [c.name for c in cur.description]
+        return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+
+
+def mark_notice_sent(conn, submission_id: int, path: str, submitted_by: str) -> None:
+    """Record that this page's own submitter has been told. `ON CONFLICT DO NOTHING`: two poller
+    passes racing must not turn one notice into an error."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO page_rewrite_notices (submission_id, path, submitted_by) "
+            "VALUES (%s, %s, %s) ON CONFLICT (submission_id, path) DO NOTHING",
+            (submission_id, path, submitted_by))
 
 
 _DUE_FOR_REPORT = """

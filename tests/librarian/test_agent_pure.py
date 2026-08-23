@@ -12,7 +12,6 @@ import unicodedata
 import pytest
 
 from stigmergy.librarian import agent, gates
-from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.double import DoubleAgent
 from stigmergy.librarian.errors import AgentError, LibrarianConfigError, OutcomeShapeError
 
@@ -180,7 +179,12 @@ def test_build_agent_rejects_an_unknown_backend_rather_than_falling_through():
 # that room to rewrite a human-authored page — twice, the second time immediately after being handed
 # the finding. Existing pages are now changed only by code, from a declaration.
 LANE_PAGE = "wiki/notes/A New Page.md"
-EXISTING = "wiki/decisions/Git as the Canonical Store.md"
+# In a LIVE lane folder on purpose. OLD BEHAVIOUR: this named `wiki/notes/`, and when that
+# folder left the vocabulary every assertion below that relies on "an ordinary in-lane page that
+# already exists" started passing on the lane rule instead — refused before the tracked-paths
+# check it exists to exercise. A test that goes green one branch too early reads as coverage and
+# is none.
+EXISTING = "wiki/notes/Git as the Canonical Store.md"
 
 
 def test_a_new_page_in_the_lane_is_writable(tmp_path):
@@ -198,6 +202,10 @@ def test_the_outcome_file_is_the_one_permitted_exception(tmp_path):
     "wiki/notes/.gitattributes",
     "wiki/notes/not-a-page.txt",
     "wiki/entities/Acme Corp.md",       # in `wiki/`, NOT one of the creatable folders
+    # A RETIRED folder, which is the same answer for a different reason: the lane is derived from
+    # `page.FOLDER_BY_TYPE`, so a folder that leaves the page vocabulary leaves the lane with it.
+    # OLD BEHAVIOUR: `wiki/decisions/` was creatable, and an agent writing here was in bounds.
+    "wiki/decisions/Renew Acme at the Pilot Rate.md",
     "../outside.md",
     "",
 ])
@@ -223,38 +231,41 @@ def test_the_outcome_file_stays_writable_even_if_something_tracked_it(tmp_path):
                                 existing={agent.OUTCOME_FILENAME}) is True
 
 
-# ── ONE rule, both flows: what carries the meeting flow's single legal write ────────────────────
-# The meeting flow used to get a NARROWER lane — `confined_write(..., allowed_re=_MEETING_NO_PAGE_
-# WRITES_RE)`, a regex matching nothing, so "the outcome file and nothing else". Both the regex and
-# the parameter retired with the tool-holding backend, and the tombstone in `agent.py` claims the
-# property they expressed was never carried by them. The three tests below are what makes that
-# claim checkable rather than a sentence in a comment:
+# ── ONE rule, one pipe: what carries a page-less backend's single legal write ───────────────────
+# OLD BEHAVIOUR: the meeting flow was a second entry point with a NARROWER lane —
+# `confined_write(..., allowed_re=_MEETING_NO_PAGE_WRITES_RE)`, a regex matching nothing, so "the
+# outcome file and nothing else". The regex, the parameter and the flow are all retired, and the
+# tombstone in `agent.py` claims the property they expressed was never carried by them. The
+# property itself did not retire with them: a `structured_ordinary` backend writes NO page either
+# (`filing_port`'s side-effect rules — code is the sole author and the page's text rides in the
+# account), so the outcome file is still the whole of one shipped shape's write budget. The three
+# tests below are what makes that claim checkable rather than a sentence in a comment:
 #
-#   * the outcome-file exception is UNCONDITIONAL, which is the whole of what the meeting flow
+#   * the outcome-file exception is UNCONDITIONAL, which is the whole of what a page-less backend
 #     relies on (the developer dropped that branch mid-edit once and restored it);
 #   * a caller cannot re-narrow the rule per flow without that being a deliberate, test-breaking
-#     act, which is how the two flows came to have two lanes in the first place;
-#   * and the lane rule is unchanged for the ordinary flow, which is the twin that stops "one rule"
-#     being read as "no rule".
-def test_the_outcome_file_exception_carries_the_meeting_flows_one_legal_write(tmp_path):
-    """The meeting agent writes exactly one file, ever — its own account — and code writes every
-    page in the set (`processing._write_meeting_pages`). Nothing about that write is conditional on
-    the flow, on what is tracked, or on where the worktree came from, so nothing here parametrizes
-    it: this is the branch the whole meeting flow's single write goes through.
+#     act, which is how the two lanes came to exist in the first place;
+#   * and the lane rule is unchanged for a page-WRITING backend, which is the twin that stops "one
+#     rule" being read as "no rule".
+def test_the_outcome_file_exception_carries_a_page_less_backends_one_legal_write(tmp_path):
+    """A `structured_ordinary` agent writes exactly one file, ever — its own account — and code
+    writes every page the capture declared (`processing._write_declared_pages`). Nothing about that
+    write is conditional on the kind, on what is tracked, or on where the worktree came from, so
+    nothing here parametrizes it: this is the branch that whole shape's single write goes through.
     """
-    meeting_set = {"wiki/sources/Acme Sync 2026-08-11.md",
-                   "wiki/meetings/Acme Sync 2026-08-11.md",
-                   "wiki/decisions/Renew Acme at the Pilot Rate.md"}
+    already_filed = {"sources/meetings/acme-sync-transcript.md",
+                     "wiki/notes/Acme Sync 2026-08-11.md",
+                     "wiki/notes/Renew Acme at the Pilot Rate.md"}
 
     assert agent.confined_write(str(tmp_path), agent.OUTCOME_FILENAME,
-                                existing=meeting_set) is True
+                                existing=already_filed) is True
 
 
 def test_no_caller_can_hand_this_rule_a_narrower_lane_of_its_own(tmp_path):
     """**The retired seam, pinned as retired.** `allowed_re` was a per-caller narrowing, and its
     last caller passed `None` on every path — so it enforced nothing while reading as though it
-    did. Re-introducing a per-flow lane is a legitimate decision; doing it accidentally, and
-    leaving one flow narrower than the other with nothing saying so, is the failure. This makes
+    did. Re-introducing a per-caller lane is a legitimate decision; doing it accidentally, and
+    leaving one backend narrower than another with nothing saying so, is the failure. This makes
     the first case break a test and the second case impossible."""
     with pytest.raises(TypeError):
         agent.confined_write(str(tmp_path), agent.OUTCOME_FILENAME,
@@ -262,9 +273,9 @@ def test_no_caller_can_hand_this_rule_a_narrower_lane_of_its_own(tmp_path):
 
 
 def test_the_ordinary_lane_rule_is_untouched_by_that_removal(tmp_path):
-    """"One rule for both flows" must not quietly mean "the loosest of the two". The ordinary
-    flow's allow-list is exactly what it was: a NEW `.md` page in a creatable folder, and nothing
-    else — asserted here beside the removal so the two are read together."""
+    """"One rule for every backend" must not quietly mean "the loosest of them". The allow-list a
+    page-WRITING backend is judged by is exactly what it was: a NEW `.md` page in a creatable
+    folder, and nothing else — asserted here beside the removal so the two are read together."""
     assert agent.confined_write(str(tmp_path), LANE_PAGE) is True
     assert agent.confined_write(str(tmp_path), LANE_PAGE, existing={LANE_PAGE}) is False
     assert agent.confined_write(str(tmp_path), ".claude/skills/librarian/SKILL.md") is False
@@ -313,7 +324,7 @@ def test_the_nfc_spelling_is_refused_against_an_nfd_tracked_path_too(tmp_path):
 @pytest.mark.parametrize("target,label", [
     ("wiki/notes/Existing Notes.md", "one letter more — a different page"),
     ("wiki/notes/Existing.md", "a shorter name — a different page"),
-    ("wiki/decisions/Existing Note.md", "same basename, another folder — a different page"),
+    ("wiki/concepts/Existing Note.md", "same basename, another folder — a different page"),
 ])
 def test_a_page_differing_by_more_than_case_is_still_writable(tmp_path, target, label):
     """The benign twin, and the one that matters: case-folding must not become "any similar name is
@@ -322,55 +333,44 @@ def test_a_page_differing_by_more_than_case_is_still_writable(tmp_path, target, 
     assert agent.confined_write(str(tmp_path), target, existing=existing) is True, label
 
 
-# ── the declared edits: bounded and vocabulary-checked at the outcome boundary ───────────────────
+# ── the declared rewrites: bounded and required-field-checked at the outcome boundary ──────────
+# OLD BEHAVIOUR: this section pinned `edits` — a vocabulary of three ADDITIVE shapes an account
+# could declare against a page that already existed, performed by code and judged by
+# `gate_body_rewrite`. Both the field and the vocabulary are gone: a capture brings a page up to
+# date by declaring it in `rewrites`, which is the same discipline one step further and the only
+# declaration left that names somebody else's page.
 def _outcome(**extra):
     """A well-formed `file` outcome plus whatever the case under test varies."""
     return agent.parse_outcome({**MINIMAL_FILE_OUTCOME, **extra})
 
 
-def test_parse_outcome_accepts_a_well_formed_declared_edit():
-    outcome = _outcome(edits=[{"path": EXISTING, "kind": "overlap", "link": "A New Page",
-                               "note": "covers the same ground"}])
-    assert outcome.edits == ({"path": EXISTING, "kind": "overlap", "link": "A New Page",
-                              "note": "covers the same ground"},)
+def _rewrite(**over):
+    return {"path": EXISTING, "body": "# Existing Note\n\nBrought up to date.\n",
+            "why": "the renewal closed at a different number", **over}
 
 
-def test_parse_outcome_defaults_edits_to_empty_for_a_capture_that_declares_none():
-    assert _outcome().edits == ()
+def test_parse_outcome_accepts_a_well_formed_declared_rewrite():
+    outcome = _outcome(rewrites=[_rewrite()])
+    assert outcome.rewrites == (_rewrite(),)
 
 
-@pytest.mark.parametrize("kind", sorted(page_policy.EDIT_KINDS))
-def test_parse_outcome_accepts_every_declared_kind_the_applier_implements(kind):
-    """One vocabulary, read from `page.EDIT_KINDS` by both the boundary and the applier — so a
-    fourth kind cannot be accepted here and be unimplemented there."""
-    outcome = _outcome(edits=[{"path": EXISTING, "kind": kind, "link": "X", "note": "n"}])
-    assert outcome.edits[0]["kind"] == kind
+def test_parse_outcome_defaults_rewrites_to_empty_for_a_capture_that_declares_none():
+    assert _outcome().rewrites == ()
 
 
-def test_parse_outcome_refuses_an_invented_edit_kind_rather_than_passing_it_on():
-    with pytest.raises(AgentError, match="edit of kind"):
-        _outcome(edits=[{"path": EXISTING, "kind": "rewrite-body", "link": "X"}])
-
-
-def test_parse_outcome_refuses_a_kind_that_is_a_container():
-    with pytest.raises(AgentError, match="container"):
-        _outcome(edits=[{"path": EXISTING, "kind": {"a": 1}, "link": "X"}])
-
-
-def test_parse_outcome_refuses_edits_that_are_not_a_list():
+def test_parse_outcome_refuses_rewrites_that_are_not_a_list():
     with pytest.raises(AgentError, match="not a list"):
-        _outcome(edits={"path": EXISTING})
+        _outcome(rewrites=_rewrite())
 
 
-def test_parse_outcome_refuses_a_string_where_an_edit_object_belongs():
+def test_parse_outcome_refuses_a_string_where_a_rewrite_object_belongs():
     with pytest.raises(AgentError, match="not an object"):
-        _outcome(edits=["wiki/notes/X.md"])
+        _outcome(rewrites=["wiki/notes/X.md"])
 
 
-def test_parse_outcome_bounds_the_number_of_declared_edits():
-    with pytest.raises(AgentError, match="more than"):
-        _outcome(edits=[{"path": EXISTING, "kind": "backlink", "link": "X"}
-                        for _ in range(agent.MAX_LIST_LEN + 1)])
+def test_parse_outcome_bounds_the_number_of_declared_rewrites():
+    with pytest.raises(OutcomeShapeError, match="over the .*-page ceiling"):
+        _outcome(rewrites=[_rewrite() for _ in range(agent.MAX_REWRITES_PER_CAPTURE + 1)])
 
 
 # ── two KINDS of bound: an identifier is refused, prose is truncated ─────────────────────────────
@@ -393,10 +393,9 @@ def test_a_long_anchoring_reason_is_truncated_rather_than_refused():
     assert outcome.anchoring["reason"].strip()
 
 
-def test_a_long_edit_note_is_truncated_rather_than_refused():
-    outcome = _outcome(edits=[{"path": EXISTING, "kind": "overlap", "link": "X",
-                               "note": "z" * (agent.MAX_PROSE_LEN + 1)}])
-    assert len(outcome.edits[0]["note"]) == agent.MAX_PROSE_LEN
+def test_a_long_rewrite_reason_is_truncated_rather_than_refused():
+    outcome = _outcome(rewrites=[_rewrite(why="z" * (agent.MAX_PROSE_LEN + 1))])
+    assert len(outcome.rewrites[0]["why"]) == agent.MAX_PROSE_LEN
 
 
 def test_a_long_overlap_note_is_truncated_rather_than_refused():
@@ -425,13 +424,9 @@ def test_an_over_long_identifier_is_refused_because_it_names_something(field):
     assert field in raised.value.findings[0].message
 
 
-def test_an_over_long_edit_path_or_link_is_refused_too():
+def test_an_over_long_rewrite_path_is_refused_too():
     with pytest.raises(OutcomeShapeError, match="longer than"):
-        _outcome(edits=[{"path": "k" * (agent.MAX_IDENTIFIER_LEN + 1), "kind": "backlink",
-                         "link": "X"}])
-    with pytest.raises(OutcomeShapeError, match="longer than"):
-        _outcome(edits=[{"path": EXISTING, "kind": "backlink",
-                         "link": "L" * (agent.MAX_IDENTIFIER_LEN + 1)}])
+        _outcome(rewrites=[_rewrite(path="k" * (agent.MAX_IDENTIFIER_LEN + 1))])
 
 
 def test_a_container_where_prose_belongs_is_still_a_wrong_type():
@@ -474,10 +469,10 @@ def test_every_shape_problem_is_reported_in_ONE_pass_not_the_first_one_found():
     """There is exactly ONE corrective retry, so a parse that stopped at the first problem would
     spend it on a fraction of the fixes — the same reason `run_gates` runs every gate."""
     with pytest.raises(OutcomeShapeError) as raised:
-        agent.parse_outcome({"decision": "publish", "edits": [{"kind": "rewrite-body"}],
+        agent.parse_outcome({"decision": "publish", "rewrites": [{"path": "wiki/notes/X.md"}],
                              "links_created": "not-a-list"})
     assert sorted(f.code for f in raised.value.findings) == [
-        "unknown-decision", "unknown-edit-kind", "wrong-type"]
+        "missing-field", "unknown-decision", "wrong-type"]
 
 
 @pytest.mark.parametrize("raw, expected", [
@@ -504,52 +499,41 @@ def test_a_missing_required_field_is_a_correctable_finding_and_never_an_invented
     assert expected in raised.value.findings[0].message
 
 
-# ── `edits`: ONE parser, so the two flows cannot mean different things by a declaration ─────────
-# `agent._parse_edits` is shared by `parse_outcome` and `parse_meeting_outcome` because the same
-# `edits.apply_declared` performs the result and the same `gate_body_rewrite` judges it. These two
-# tests are the pair that keeps the sharing honest: the vocabulary is one vocabulary, and the
-# findings a model reads on its one corrective pass are the SAME TEXT for the same mistake, so a
-# distiller and a librarian are not told different things about an identical bad declaration.
-def _one_edit(entry) -> tuple:
-    """The same declaration through both parsers, as `(ordinary, meeting)`."""
-    return (agent.parse_outcome({"decision": "file", "title": "T", "page_path": "wiki/notes/T.md",
-                                 "edits": [entry]}),
-            agent.parse_meeting_outcome({"decision": "file", "meeting_title": "T",
-                                         "edits": [entry]}))
+# ── `rewrites`: ONE parser, because there is one pipe ─────────────────────────────────────────
+# OLD BEHAVIOUR: `agent._parse_edits` was SHARED by `parse_outcome` and `parse_meeting_outcome`,
+# and a pair of tests ran the same declaration through both to prove a distiller and a librarian
+# could not be told different things about an identical bad declaration. Both the second entry
+# point and the `edits` vocabulary are gone; what survives is the property that made the pair worth
+# writing — the sentence a bad declaration gets back is behaviour, because it is the whole of what
+# the one corrective retry has to work from.
+def _one_rewrite(entry):
+    """The declaration through the one parser there is."""
+    return agent.parse_outcome({"decision": "file", "title": "T", "page_path": "wiki/notes/T.md",
+                                "rewrites": [entry]})
 
 
-def test_a_declared_edit_parses_identically_on_both_flows():
-    """The benign twin first: a well-formed declaration survives both parsers as the same dict, so
-    `edits.validate` and `edits.apply` receive one shape whichever flow produced it."""
-    entry = {"path": "wiki/decisions/Refunds.md", "kind": "Overlap", "link": "Refund Policy v2",
-             "note": "earlier version of the same policy"}
-    ordinary, meeting = _one_edit(entry)
+def test_a_declared_rewrite_parses_into_the_shape_code_performs():
+    """The benign twin first: a well-formed declaration survives the parser as the normalized dict
+    `processing._apply_declared_rewrites` receives, every field kept."""
+    entry = {"path": "wiki/notes/Refunds.md", "body": "# Refunds\n\nThe policy changed.\n",
+             "why": "the policy changed in March and this page still said otherwise"}
 
-    assert ordinary.edits == meeting.edits
-    assert meeting.edits == ({"path": "wiki/decisions/Refunds.md", "kind": "overlap",
-                              "link": "Refund Policy v2",
-                              "note": "earlier version of the same policy"},)
+    assert _one_rewrite(entry).rewrites == (entry,)
 
 
-def test_an_unknown_edit_kind_is_refused_with_the_SAME_sentence_on_both_flows():
-    """The vocabulary half. `kind` outside `page.EDIT_KINDS` is a correctable shape fault on both
-    flows, and the message is byte-identical — a second copy of this parser would be a second
-    sentence, and the one a model reads would then depend on which skill it was running."""
-    entry = {"path": "wiki/decisions/Refunds.md", "kind": "rewrite", "link": "Refund Policy v2"}
-    messages = []
-    for parse, raw in ((agent.parse_outcome,
-                        {"decision": "file", "title": "T", "page_path": "wiki/notes/T.md",
-                         "edits": [entry]}),
-                       (agent.parse_meeting_outcome,
-                        {"decision": "file", "meeting_title": "T", "edits": [entry]})):
-        with pytest.raises(OutcomeShapeError) as raised:
-            parse(raw)
-        codes = {f.code for f in raised.value.findings}
-        assert "unknown-edit-kind" in codes, codes
-        messages.append([f.message for f in raised.value.findings if f.code == "unknown-edit-kind"])
+def test_a_rewrite_with_no_reason_is_a_correctable_shape_fault_that_says_why():
+    """The required-field half, and the one bound that is not a size. `why` is what the rewritten
+    page's own submitter is told, so a rewrite without one is a silent overwrite of somebody's
+    work — and the message has to say that, because the one corrective retry is all the account
+    gets."""
+    entry = {"path": "wiki/notes/Refunds.md", "body": "# Refunds\n\nThe policy changed.\n"}
 
-    assert messages[0] == messages[1], messages
-    assert "rewrite" in messages[0][0]
+    with pytest.raises(OutcomeShapeError) as raised:
+        _one_rewrite(entry)
+
+    messages = [f.message for f in raised.value.findings if f.code == "missing-field"]
+    assert messages, [f.code for f in raised.value.findings]
+    assert "silent overwrite" in messages[0]
 
 
 def test_nesting_past_the_depth_ceiling_stays_a_plain_agent_error():
@@ -617,15 +601,25 @@ def test_a_hint_value_lands_inside_a_fence_not_in_the_instruction_region():
     assert hint_at > first_fence, "the hint value is above every fence — instruction-side"
 
 
-def test_meeting_drop_metadata_is_fenced_too():
-    """`meeting_meta` is the drop CLI's hints — same channel, same treatment. Attendee names come
-    from a transcript or a filename, neither of which this system authored."""
-    prompt = agent.build_meeting_prompt(
-        material="transcript text", registry={},
-        meeting_meta={"title": _FENCE_BREAKOUT, "attendees": ["Ana"]},
-        source_page_path="sources/meetings/x.md")
+def test_a_meeting_captures_own_hints_are_fenced_on_the_one_channel_there_is():
+    """A transcript's metadata — title, date, attendees — is a hint like any other now.
+
+    OLD BEHAVIOUR: `meeting_meta` reached the model through `agent.build_meeting_prompt`, a second
+    builder with its own fence discipline; this test was that builder's copy of the fence proof.
+    `kind="meeting"` chooses the prose and never a code path, so the drop CLI's metadata rides
+    `build_prompt`'s ordinary hint channel — and the property that made the second copy worth
+    having is kept here: a hint value is fenced whatever its SHAPE, `attendees` being a LIST where
+    every other hint is a string, and a hostile value inside it cannot close the span early.
+    """
+    prompt = agent.build_prompt(
+        material="transcript text",
+        hints={"title": _FENCE_BREAKOUT, "meeting_date": "2026-07-29",
+               "attendees": ["Ana", _FENCE_BREAKOUT]},
+        submitted_by="steward@example.com")
+
     opens, closes = _fence_delimiters(prompt)
     assert opens == closes, "meeting metadata forged an unbalanced fence"
+    assert "Ana" in prompt, "the attendee list did not reach the prompt at all"
 
 
 def test_the_hints_are_still_labelled_as_suggestions_and_still_reach_the_agent():
@@ -653,8 +647,6 @@ def test_triage_is_no_longer_a_decision_the_boundary_knows():
                              "triage": {"kind": "unresolved-entity", "names": ["Jack"]}})
     assert [f.code for f in raised.value.findings] == ["unknown-decision"]
     assert agent.DECISIONS == ("file",)
-    with pytest.raises(OutcomeShapeError):
-        agent.parse_meeting_outcome({"decision": "triage", "meeting_title": "T"})
 
 
 def test_a_complete_proposal_round_trips_with_every_field_and_its_lists_as_tuples():
@@ -690,15 +682,6 @@ def test_the_prose_fields_of_a_proposal_are_truncated_never_refused_and_the_list
             "new_entities": [{"name": f"E{i}", "entity_type": "organization", "summary": "s"}
                              for i in range(agent.MAX_NEW_ENTITIES + 1)]})
     assert "too-many" in [f.code for f in raised.value.findings]
-
-
-def test_the_meeting_account_carries_the_same_proposal_shape():
-    outcome = agent.parse_meeting_outcome({
-        "decision": "file", "meeting_title": "Sync",
-        "new_entities": [{"name": "Scircle", "entity_type": "organization", "summary": "s"}],
-        "new_aliases": [{"entity": "acme-corp", "alias": "Acme Corporation"}]})
-    assert outcome.new_entities[0]["name"] == "Scircle"
-    assert outcome.new_aliases == ({"entity": "acme-corp", "alias": "Acme Corporation"},)
 
 
 # ── `entity_updates`: what a filing adds to a registered entity's page ──────────────────

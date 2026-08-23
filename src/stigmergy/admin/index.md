@@ -1,17 +1,17 @@
 # admin — code map
 
 The operations console: one web surface over what already runs — the entity registry and the door
-for registering one, the captures (read-only), the repair ledger, page removal, the four
-the night shift, the gardener's findings, the digest, the index and the ops files it serves,
+for registering one, the captures (read-only), the removal ledger, page removal, the four
+the night shift, the gardener's findings, the index and the ops files it serves,
 activity and the worker's lease. Mounted as an ASGI branch in front of the MCP
 transport, inside the `app` process group, behind its own single credential.
 Narrative: [`docs/reference/admin-console.md`](../../../docs/reference/admin-console.md).
 
 **It is a skin, not a subsystem.** Every act lands on a seam another package owns and tests:
 `capture.retention`, `capture.queue` (reads, plus `release_expired`), `capture.latency`,
-`gardener.store`, `digest.run`, `index.check`, `index.store`, `repair.store`,
+`gardener.store`, `index.check`, `index.store`, `repair.store`,
 `server.review.commission_registration`, `server.review.queue_deletion`,
-`server.pilot_report` (the report and its per-day classifier), `kernel.registry`. The only state
+`kernel.registry`. The only state
 it owns is `admin_actions`.
 
 **Captures are READ-ONLY here.** Nothing drains a queue row: the two write buttons on that page
@@ -25,8 +25,8 @@ introduces the entity it is about, confirmed by whoever captured.
 module here, so the rule is a property of the import graph. (The Activity page does show `ask`
 questions — user content, not corpus content — and the Entities page reads the entity REGISTRY,
 an `ops/` control file every MCP identity already reads through `list_entities`. The Repairs
-page does carry page bytes: the `diff` an applied repair pushed, and on a failed one the body it
-never wrote — bytes the repair pass produced and recorded in `repairs`, never a page this console
+page does carry page bytes: the `diff` a removal pushed, and on a row of a RETIRED kind the body it
+never wrote — bytes a sweep produced and recorded in `repairs`, never a page this console
 fetched, and read AFTER the push because nothing read them before it. A page removal hands back
 the same thing, a unified diff per rewritten page.)
 
@@ -36,11 +36,12 @@ the same thing, a unified diff per rewritten page.)
 |---|---|
 | `routes.py` | `compose(inner, *, conn, server_settings, admin_settings=None, evidence=None)` — the only door into this package, `evidence` being the process's one evidence store, without which Register an entity has nothing to archive a capture's material into, called by `server.transport_http.build_http_app`. Also `_Branch` (outermost ASGI router), `_AdminGate` (host → token → security headers), `_json_endpoint` (domain-exception → status map) and the route table |
 | `service.py` | `AdminService`, one method per route; `ADMIN_DOOR` (the `source` every governed call names); `NIGHT_SHIFT` (what runs unattended, and where each one's database truth lives) and `INDEX_REBUILD_COMMAND` (the one pass no process here can run); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the registry check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`REPAIR_RECENT_LIMIT`, `MAX_RESOLVE_NAMES`, `LATENCY_SAMPLE_LIMIT`, `MAX_METRICS_DAYS`); `_clean`, the one sanitizing seam every untrusted string leaves through; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
-| `settings.py` | `AdminSettings` + `from_env`, the three `*_ENV` constants, `DEFAULT_ACTOR`, and the sha256-shape refusal that turns a malformed hash into a `StartupError` |
+| `measurements.py` | the Activity page's numbers, read from columns other code already wrote (`audit_log.result`, `capture_queue`, `job_runs`): `build_report` (questions per identity per week, answer shape, capture→filed and capture→searchable latency), plus `shape_of` and its SQL mirror `answer_shape_by_day` — the ONE reading of an `ask` result, so the table and the dashboard's chart cannot disagree. Reads only, and provisions nothing |
+| `settings.py` | `AdminSettings` + `from_env`, the two `*_ENV` constants, `DEFAULT_ACTOR`, and the sha256-shape refusal that turns a malformed hash into a `StartupError` |
 | `auth.py` | `token_matches` (sha256 + `hmac.compare_digest`), `bearer_token` (two `Authorization` headers → `None`), `host_allowed` |
 | `schema.py` | `admin_actions`: `ensure_admin_schema` (behind `capture.schema.startup_ddl_lock`), `record_action` (never raises), `recent_actions` |
 | `cli.py` | `stigmergy-admin-token` — mints the one credential: 32 random bytes, plaintext printed once beside its `STIGMERGY_ADMIN_TOKEN_HASH=` line, nothing stored |
-| `static/` | the SPA, no build step: `index.html` + `assets/app.js` (shell, grouped nav, hash router with the old tab names as aliases, login), `theme.js` (the ONE classic script: it stamps the chosen theme on `<html>` before the first paint — a module would be deferred and flash, an inline script is refused by the CSP), `api.js` (the one fetch seam), `state.js` (the server's meta + the chart window), `copy.js` (the VOCABULARY — every system word's human label, meaning and who decides; the per-page explainers), `ui.js` (DOM helpers, pills, the confirm-with-form modal with live field checks, tooltips, the theme picker), `charts.js` (SVG charts built with `createElementNS`, each with a table twin), `views/` (one module per page: `dashboard`, `captures`, `entities`, `repairs`, `gardener`, `index`, `worker`, `jobs`, `digest`, `activity`, plus `common.js` for the loading wrapper, the mutation helper, the report renderer and the trace timeline), `styles.css` |
+| `static/` | the SPA, no build step: `index.html` + `assets/app.js` (shell, grouped nav, hash router with the old tab names as aliases, login), `theme.js` (the ONE classic script: it stamps the chosen theme on `<html>` before the first paint — a module would be deferred and flash, an inline script is refused by the CSP), `api.js` (the one fetch seam), `state.js` (the server's meta + the chart window), `copy.js` (the VOCABULARY — every system word's human label, meaning and who decides; the per-page explainers), `ui.js` (DOM helpers, pills, the confirm-with-form modal with live field checks, tooltips, the theme picker), `charts.js` (SVG charts built with `createElementNS`, each with a table twin), `views/` (one module per page: `dashboard`, `captures`, `entities`, `repairs`, `gardener`, `index`, `worker`, `jobs`, `activity`, plus `common.js` for the loading wrapper, the mutation helper, the report renderer and the trace timeline), `styles.css` |
 
 Exactly one module imports this package — `server/transport_http.py`, pinned by
 `test_only_the_http_transport_composes_the_admin_branch`.
@@ -58,21 +59,18 @@ cannot need a token to render).
 | GET | `/admin/assets/…` | `StaticFiles(static/assets)` | no |
 | GET | `/admin/api/meta` | `meta()` — configuration facts plus every closed vocabulary the frontend renders | yes |
 | GET | `/admin/api/overview` | `overview()` | yes |
-| GET | `/admin/api/metrics` | `metrics()`, in a worker thread — `?days=` (default 30, clamped to 1–365; non-integer is a 400): captures by arrival day and current status, capture→filed samples, `ask` outcomes per day (`pilot_report.answer_shape_by_day`, grouped in SQL), calls per day/tool/identity, each job's run history, and the repair table's status counts beside a bounded page of its newest rows (`repair.store.counts_by_status` / `recent`) | yes |
+| GET | `/admin/api/metrics` | `metrics()`, in a worker thread — `?days=` (default 30, clamped to 1–365; non-integer is a 400): captures by arrival day and current status, capture→filed samples, `ask` outcomes per day (`measurements.answer_shape_by_day`, grouped in SQL), calls per day/tool/identity, each job's run history, and the repair table's status counts beside a bounded page of its newest rows (`repair.store.counts_by_status` / `recent`) | yes |
 | GET | `/admin/api/queue` | `queue_list()` — repeatable `?status=`, `?submitter=`, `?limit=` (default 50; non-integer is a 400) | yes |
 | POST | `/admin/api/queue/reclaim` | `queue_reclaim()` — optional int `visibility_timeout_s`; omitted means the worker's derived lease, resolved per call; the horizon is clamped at 0 | yes |
 | POST | `/admin/api/queue/purge` | `queue_purge()` — optional int `older_than_days`, `dry_run` | yes |
 | GET | `/admin/api/queue/{id:int}` | `queue_show()` | yes |
 | GET | `/admin/api/gardener` | `gardener_state()` | yes |
-| GET | `/admin/api/digest` | `digest_state()` | yes |
-| POST | `/admin/api/digest/preview` | `digest_preview()` (async) | yes |
-| POST | `/admin/api/digest/post` | `digest_post()` (async) | yes |
 | GET | `/admin/api/index` | `index_state()` | yes |
 | POST | `/admin/api/index/check` | `index_substrate_check()` | yes |
 | GET | `/admin/api/entities/registry` | `entities_registry()` — the served registry, sorted by name, with `by_type` and freshness | yes |
 | POST | `/admin/api/entities/resolve` | `entities_resolve()` — `names` must be a JSON list of strings (≤ `MAX_RESOLVE_NAMES`); one verdict per non-blank name. Writes no `admin_actions` row | yes |
 | POST | `/admin/api/entities/create` | `entity_create()` — `name`/`entity_type`/`about` required, `entity_id`/`aliases` optional; commissions the entity by queueing a capture and answers the queued row (`id`, `status`, `entity_id`, `name`, `message`). Off the event loop, for the archive write. The page is the librarian's to write, and the identity is born confirmed by the actor | yes |
-| GET | `/admin/api/repairs` | `repairs_list()` — the newest `REPAIR_RECENT_LIMIT` repairs whatever their outcome, each carrying the diff it pushed, the whole table's `counts` by status, and the repair pass's `job_runs` history. Read-only: a repair is applied by the pass, and this page is the reading afterwards | yes |
+| GET | `/admin/api/repairs` | `repairs_list()` — the newest `REPAIR_RECENT_LIMIT` ledger rows whatever their kind, each carrying the diff it pushed, plus the whole table's `counts` by status. Read-only: a removal is performed by the worker, and this page is the reading afterwards | yes |
 | GET | `/admin/api/repairs/{id:int}` | `repair_show()` | yes |
 | POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, QUEUED through `server.review.queue_deletion`, the same seam MCP's `brain_delete` runs, and performed by the librarian worker. It passes no per-path guard: the operator token is the authorization, which makes this the console's most consequential button. What comes back is a queue acknowledgement, and the per-page diffs are read afterwards on the capture | yes |
 | GET | `/admin/api/activity` | `activity()` | yes |
@@ -131,9 +129,9 @@ What stays here is the
   itself rather than by inference.
 - `queue.outcomes_by_day` — the metrics' capture series, beside `counts_by_status` in the queue
   module because it is the same fact with a time axis; the console never carries its own query
-  over `capture_queue`. `pilot_report.answer_shape_by_day` is the `ask` series: the report's own
-  classifier (`shape_of`) as SQL, pinned against the Python original by test, so a chart and the
-  report cannot disagree about what an answer was. `repair.store.counts_by_status` is the repair ledger's
+  over `capture_queue`. `measurements.answer_shape_by_day` is the `ask` series: the Activity
+  table's own classifier (`shape_of`) as SQL, pinned against the Python original by test, so a
+  chart and the table cannot disagree about what an answer was. `repair.store.counts_by_status` is the removal ledger's
   histogram — aggregated in the database, because that table only grows.
 - `auth.token_matches` / `bearer_token` / `host_allowed` — pure; never re-derive a header parse.
 - `service._clean` (= `stigmergy.text.sanitize`) — the one cleaning seam for untrusted strings on
@@ -176,21 +174,21 @@ What stays here is the
   handler, so a keyless console never loads the Slack SDK. `stigmergy.kernel.registry` and
   `stigmergy.kernel.normalize` are in the set for the registry check and nothing else, and
   `stigmergy.entities.remote` is deliberately ABSENT — the governed door is reached through
-  `server.review`, the same reason `stigmergy.repair.remote` is absent.
+  `server.review`, the same reason nothing that WRITES the corpus is reachable from here.
 - Reading `pages_index` for anything but an aggregate. `_zone_counts` is the single read and a
   named entry in `ACL_REACHABILITY_EXCEPTIONS`; anything more names a `visible()` predicate.
 - Writing SQL for something a library already exposes. The only SQL owned here is read-side
   plumbing nothing else surfaces: `job_runs`/`ingest_errors`, the `audit_log` aggregates (per
   identity/tool, per day, the `ask` outcome rows the console shapes in Python, the rate-limit
-  trips), the digest watermark, the zone counts, and `admin_actions`.
+  trips), the zone counts, and `admin_actions`.
 - Raising a message that could carry captured content across the HTTP boundary. The catch-all in
   `_json_endpoint` returns `the operation failed (<ClassName>)`; only the three domain errors
   cross with their sentence.
 - Deriving a decision in the frontend. `views/repairs.js` sends Remove pages and nothing else —
-  it renders a ledger of what the repair pass already did and computes no verdict of its own;
+  it renders a ledger of what the worker already did and computes no verdict of its own;
   `views/entities.js` renders the registry check's verdict beside the field it belongs to and acts
   on none of it. Whether a name may be born is the birth gate's answer inside the commit, and
-  whether a repair lands is the nine gates' answer inside the pass — on every door alike. The
+  whether a removal lands is the nine gates' answer inside the worker — on every door alike. The
   frontend renders a decision and never derives one.
 - Turning the `similar` verdict into a refusal, anywhere. It is a listing for a person's eyes;
   the only "collides" is `Registry.collision_id`, and the gate runs again after the clone.
@@ -203,7 +201,8 @@ What stays here is the
   events and takes no focus, so the hint is unreachable; the same test greps for the pair. Render
   the reason as visible text beside the control instead.
 - Holding a cursor across an `await` — this service shares the process-wide autocommit connection,
-  and the async digest methods await inside `digest.run`, between statements.
+  and every method here is synchronous: a route that needs the loop free hands the whole call to a
+  worker thread.
 - Adding a CLI flag. The server's command line is pinned byte-identical between `fly.toml` and the
   Dockerfile `CMD`; configuration is env-only so that pin never moves.
 
@@ -221,11 +220,9 @@ paths would otherwise meet as a bare `UndefinedTable` on a fresh database.
 |---|---|---|
 | `STIGMERGY_ADMIN_TOKEN_HASH` | `""` | the master switch: unset → the console does not exist. Must be 64 sha256 hex (uppercase normalized); any other non-empty value raises `StartupError` at startup |
 | `STIGMERGY_ADMIN_ACTOR` | `admin-console` | the `actor` fallback and the form prefill |
-| `STIGMERGY_ADMIN_CHANNELS_PATH` | `""` | the digest's audience-scoping map |
 
 Read but not owned: `STIGMERGY_PUBLIC_HOST` (`routes._public_hosts_from_env`, a two-line copy of
-the transport's parser — importing it would close a cycle through the composition point), and
-`SLACK_BOT_TOKEN`/`STIGMERGY_DIGEST_CHANNEL_ID` through `digest.settings`.
+the transport's parser — importing it would close a cycle through the composition point).
 
 **Wire contract**: JSON everywhere except the shell (`text/html`) and the assets. Errors are
 `{"error": "<sentence>"}` at 400 (`AdminBadRequest`), 401 (generic, never a reason), 404
@@ -292,9 +289,8 @@ token so a view that resolves after the next navigation started has its cleanup 
 - **The gate's order is load-bearing**: `Host` first (421), token second (401), headers on the way
   out of both — so the host check also covers the tokenless shell. With no `$STIGMERGY_PUBLIC_HOST`
   every host passes, which keeps local dev unchanged.
-- **Not every POST is a mutation.** `queue/purge --dry-run`, `digest/preview`, `index/check` and
-  `entities/resolve` write no `admin_actions` row. `digest/preview` still records a
-  `digest-dry-run` row in `job_runs`, which is why the Digest page's history fills with them.
+- **Not every POST is a mutation.** `queue/purge --dry-run`, `index/check` and
+  `entities/resolve` write no `admin_actions` row.
 - **Every read of a table that only grows has a ceiling**, applied in SQL: the repair ledger's
   page (`REPAIR_RECENT_LIMIT`, and every applied row on it carries a whole diff), the
   capture→filed sample the percentiles are cut from (`LATENCY_SAMPLE_LIMIT`), the metrics window

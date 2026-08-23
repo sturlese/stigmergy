@@ -4,8 +4,8 @@ The fast lane's back half: drains `capture_queue` one row at a time and turns ea
 committed page in the knowledge repo or an honest, actionable refusal. **The agent judges**
 (placement, wikilinks, anchoring, duplication, which identity a capture is about — meaning
 problems); **code vetoes** (the nine gates, over the diff, after the fact) **and code writes**
-(the page on the structured road, the declared edits, every identity the account declares and
-every fact it adds to one the registry already knows).
+(the page on the structured road, the pages the account brings up to date, every identity it
+declares and every fact it adds to one the registry already knows).
 Gates check; they never interpret — judgment belongs in
 the skill (`.claude/skills/librarian/SKILL.md`, versioned in the knowledge repo, not here).
 
@@ -16,21 +16,24 @@ submitter. A capture whose
 hints carry a registration pins the name and type that page is written under; either way there is
 no other road into `wiki/entities/`.
 
-Narrative: [`docs/reference/librarian.md`](../../../docs/reference/librarian.md); the meeting
-flow: [`docs/reference/meeting-distiller.md`](../../../docs/reference/meeting-distiller.md);
-view regeneration: [`docs/reference/views.md`](../../../docs/reference/views.md). This file is for
+**One pipe.** Every capture rides `process_item`, whatever `kind` it was submitted as: the material
+is archived verbatim under `sources/`, and the agent declares the `wiki/` pages that material
+establishes — one, or several, each with its own anchor. `kind` chooses the prose and the archive's
+folder, never a code path. The one row that leaves the pipe is a `delete`, which is not material.
+
+Narrative: [`docs/reference/librarian.md`](../../../docs/reference/librarian.md). This file is for
 whoever is about to edit this package, not run it.
 
 Layering (`tests/test_architecture.py` enforces it): `librarian` imports `capture` and
 `stigmergy.kernel`, and never `server` or `answer` — a worker beside the API; the two talk only
 through the durable queue row. `stigmergy.index.corpus` is a declared LIBRARY reach (a pure
 repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is reached by
-`cli.py` alone; `processing.py` and `worker.py` may import exactly one `stigmergy.views` symbol
-(`views.regenerate`) — the post-meeting hook and the periodic sweep, nothing wider. `worker.py`
-also reaches `stigmergy.repair` and `stigmergy.gardener` for the night shift, and both RUN imports
-sit INSIDE their functions: those packages load a model stack, and the filing path must not pay for
-it at import time (a fresh-interpreter test pins that the gardener's does not leak in). The
-gardener's `schema` and `store` are module-scope, and are constants and findings rows only.
+`cli.py` alone. `worker.py`
+also reaches `stigmergy.gardener` for the night shift, and its RUN import sits INSIDE the function:
+that package loads a model stack, and the filing path must not pay for it at import time (a
+fresh-interpreter test pins that it does not leak in). `stigmergy.repair` is reached the same way
+from `processing.py`, for the removal flow — `deletion`, `sweep`, `brief`, its errors and its
+settings — because `sweep` loads a model stack too.
 
 **`stigmergy.entities` is reachable from `identity.py` and from nowhere else**, and only for
 `entities.birth`, `entities.generator` and `entities.errors`: this is the ONE writer of an entity
@@ -44,18 +47,18 @@ deletes the entry if `identity.py` ever stops using it.
 
 | Module | What it is |
 |---|---|
-| `processing.py` | `process_item` — one capture end to end (`Result`, `Deps`, the refused-diff digest); `process_meeting_item` — the sibling for `kind="meeting"` rows, filing a page SET; and `process_delete_item` — the sibling for `kind="delete"`, which files nothing and REMOVES: a person's own removal, planned and swept and gated here because this process is the only writer the corpus has. Every capture archives its material verbatim: `_source_attachment` answers WHERE, never whether. The three flows share one spine, and a fourth would join it rather than copy it: `_resolve_filing_base` (this item's base commit, plus the `Deps` re-read at it), `_commit_and_push` (gated commit → lease re-check → push), `_declare_births` (what the gates are TOLD about the identities this run wrote) and `_route_refusal` (which terminal state a surviving veto earns — `rejected` or `failed`, and nothing else). Read it first when tracing a capture's path; everything else is reached from it |
-| `worker.py` | the loop: `startup_checks` (every fail-closed startup refusal), `sweep` (stranded claims), `Worker` (signal handling, and the idle branch's FOUR maintenance passes), `process_next` — the only caller of the whole processing path — plus the pass functions and their one operator line each: `run_view_sweep`/`view_sweep_clause`, `run_repairs`/`repair_clause`, `run_garden`/`garden_clause` and `run_retention`/`retention_clause` |
+| `processing.py` | `process_item` — ONE capture of any kind, end to end (`Result`, `Deps`, the refused-diff digest); and `process_delete_item` — the one sibling, for `kind="delete"`, which files nothing and REMOVES: a person's own removal, planned and swept and gated here because this process is the only writer the corpus has. Every capture archives its material verbatim: `_source_attachment` answers WHERE, never whether. `_write_declared_pages` writes every page the account declared, all-or-nothing, and `_cross_check_outcome` holds the diff to exactly that declaration. The two lanes share one spine, and a third would join it rather than copy it: `_resolve_filing_base` (this item's base commit, plus the `Deps` re-read at it), `_commit_and_push` (gated commit → lease re-check → push), `_declare_births` (what the gates are TOLD about the identities this run wrote) and `_route_refusal` (which terminal state a surviving veto earns — `rejected` or `failed`, and nothing else). Read it first when tracing a capture's path; everything else is reached from it |
+| `worker.py` | the loop: `startup_checks` (every fail-closed startup refusal), `sweep` (stranded claims), `Worker` (signal handling, and the idle branch's TWO daily maintenance passes), `process_next` — the only caller of the whole processing path — plus the pass functions and their one operator line each: `run_garden`/`garden_clause` and `run_retention`/`retention_clause` |
 | `schedule.py` | the night shift's due-ness, in one place: `parse_daily` (`"HH:MM"`, falling back rather than refusing to boot), `daily_due` (past today's time · inside the window · not already run today) and `last_run_at` (the `job_runs` read that makes a daily pass survive a restart). Owns the two default times and the window; owns no pass |
 | `gates.py` | the one veto surface: `Finding`, `GateContext`, `run_gates`, `ALL_GATES` (nine gates: zone, binary, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity). A new check is a `(ctx) -> list[Finding]` added to `ALL_GATES`, never a special case in `processing.py` |
 | `identity.py` | the identity WRITER, and the ONE module here that may reach `stigmergy.entities`: `write_births` turns an account's `new_entities`/`new_aliases`/`entity_updates` into a created entity page per identity (rendered from the knowledge repo's own template through `entities.birth`, with `approved_by` naming the capture's own submitter — the capture is the approval), a new `aliases:` entry on a registered entity's page, appended `## Facts`/`## Connections` lines on the pages the account adds to (`_append_to_sections`: in place under the heading, or a new section at the end; never a line the page already carries; `updated:` moved to today), and the regenerated registry — or into `Finding`s having written NOTHING. Its own refusals: the two honesty checks on a declared identity (named in the material, not colliding with a registered spelling), `registration-missing` when the account ignores a registration the capture carries, `update-unknown-entity` and `update-of-new-entity` on an update. `Births` carries what the gates must be told: the registry the commit will PUBLISH, the created / `confirmed` / edited / `updated_pages` paths, the byte proofs, and the lists the report names |
-| `agent.py` | the agent seam's shared half: `build_agent`, `BACKENDS`, `parse_outcome` / `parse_meeting_outcome` (the trust boundary both backends' accounts cross), `confined_write` (the write allow-list), the prompt builders and the fence |
-| `pydantic_backend.py` | `PydanticFilingAgent` — the real backend, serving both flows: an iterating ordinary run (five confined tools, an outcome file, it writes its own page) and one structured meeting call. `FilingToolbox` holds the tool bodies so every confinement rule is testable with no model; `_register_tools` writes the model-facing docstrings, which ARE the tool schema. Every account schema extends `StructuredInbound`, which decodes a nested list or object a provider serialized as its JSON STRING — inbound only, structured fields only, so a prose field's brackets are never parsed |
+| `agent.py` | the agent seam's shared half: `build_agent`, `BACKENDS`, `Outcome`/`OutcomePage` and `parse_outcome` (the trust boundary every backend's account crosses, where the singular `page`/`page_path` spellings fold into the plural `pages`/`page_paths` and `MAX_PAGES_PER_CAPTURE` bounds the declaration), `confined_write` (the write allow-list), the prompt builders and the fence |
+| `pydantic_backend.py` | `PydanticFilingAgent` — the real backend: an iterating run (five confined tools, an outcome file, it writes its own pages). `FilingToolbox` holds the tool bodies so every confinement rule is testable with no model; `_register_tools` writes the model-facing docstrings, which ARE the tool schema. `FilingAccount` is the STRUCTURED account's schema and is deliberately not wired as an `output_type` today — asking for the account twice, in two shapes, is what that would mean. Every account schema extends `StructuredInbound`, which decodes a nested list or object a provider serialized as its JSON STRING — inbound only, structured fields only, so a prose field's brackets are never parsed |
 | `double.py` | `DoubleAgent` — the offline, directive-driven backend the whole keyless suite runs against; misbehaves on demand, behaves perfectly on ordinary material, and writes through `agent.confined_write` like the real one |
-| `filing_port.py` | `FilingAgent` — the port `processing.py` is written against: the two calls, the `AgentRun` envelope, `priced()`, the fault contract, the per-flow side-effect rules, and the two declared capabilities (`structured_ordinary`, `wants_gathered`). Imports `errors` and nothing else |
-| `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material, acl)` producing the seeded context BOTH flows get (the ordinary agent's seed, and the tool-less meeting agent's whole view of the corpus), and the bodies every model-facing read tool shares (`load_corpus`, `search_candidates`, `confined_page`, `may_read`, `match_registry`). **`acl` is the module's most important argument**: `load_corpus` keeps only rows that `flows_into` the audience of the page about to be written, and `link_names` is derived from the same rows, so a model cannot read — or be handed the name of — a page its own output could not cite. `confined_page` answers containment and `may_read` answers audience; a read tool asks both. Reads the checkout, never `pages_index` |
-| `page.py` | the placement table (`PAGE_TYPES`: SEVEN types known, THREE creatable — `note`, `decision`, `concept`; every derived list and regex computes from it), path identity (`path_key`, `is_inside`), server-owned frontmatter (`SERVER_OWNED_KEYS`, `stamp_server_fields`, `stamp_source_fields`), page-name policy (`unnameable_reason`), the additive-edit primitives |
-| `edits.py` | declared edits to existing pages, on BOTH flows: the agent declares, `validate`/`apply` perform — all-or-nothing, judged by the gates like any other write. Its editable set is `page.FOLDER_BY_TYPE`'s three folders; a caller whose own lane is narrower (the meeting flow) sees the difference refused by `gate_zone` |
+| `filing_port.py` | `FilingAgent` — the port `processing.py` is written against: the ONE call (`run`), the `AgentRun` envelope, `priced()`, the fault contract, the side-effect rules, and the two declared capabilities (`structured_ordinary`, `wants_gathered`). Imports `errors` and nothing else |
+| `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material, acl)` producing the seeded context a run starts from (a SEED an exploring agent goes further than, and the whole view of the corpus a tool-less one would get), and the bodies every model-facing read tool shares (`load_corpus`, `search_candidates`, `confined_page`, `may_read`, `match_registry`). **`acl` is the module's most important argument**: `load_corpus` keeps only rows that `flows_into` the audience of the page about to be written, and `link_names` is derived from the same rows, so a model cannot read — or be handed the name of — a page its own output could not cite. `confined_page` answers containment and `may_read` answers audience; a read tool asks both. Reads the checkout, never `pages_index` |
+| `page.py` | the placement table (`PAGE_TYPES`: SEVEN types known, THREE creatable — `note`, `decision`, `concept`; every derived list and regex computes from it), path identity (`path_key`, `is_inside`), server-owned frontmatter (`SERVER_OWNED_KEYS`, `stamp_server_fields`, `stamp_source_fields`), page-name policy (`unnameable_reason`), and the frontmatter LINE editors every governed rewrite of an existing page shares (`front_and_tail`, `with_list_field`, `with_scalar_field`, and the one YAML escaper they all emit through) |
+| `page.py`'s `with_body_replaced` / `heading_of` / `submitted_by_of` | the REWRITE writer and its two readers: a declared rewrite replaces the body below the H1 and is incapable of touching the frontmatter or the heading, which is why neither is a check. `submitted_by_of` reads the page's own owner BEFORE the rewrite, because the stamp is about to name this capture's submitter instead — that value is the notification's whole addressee |
 | `report.py` | the ONLY place a sentence a human reads about a fast-lane outcome is composed; the CLI (`render_prose`) and `brain_submissions` render the same fact set. Its shape (`base_report`) and `SEARCHABILITY_NOTE` live in `capture.schema`, re-exported. `births_clause` is the one sentence saying what a filing did to the identity layer — born and confirmed by the submitter (`entities_born`), spelled (`aliases_added`), or added to (`entities_updated`) — appended by both filed builders |
 | `dedup.py` | the two DB-backed pre-agent levels: `find_retry` (retry collapse) and `find_already_filed` (exact re-file), keyed on the queue's own content hash |
 | `base_inputs.py` | the ONLY way the fast lane reads the entity registry and the contract linter — at `base.sha`, never off the working tree, so a capture is judged by the rules its own base commit carries |
@@ -72,7 +75,8 @@ deletes the entry if `identity.py` ever stops using it.
 
 - **Path questions go through `page.path_key` / `path_keys` / `is_inside`, never `==`** — the one
   answer that is correct on a case- and normalization-insensitive filesystem, shared by
-  `agent.confined_write`, `edits.validate`, `gather._confined` and `processing._write_new`.
+  `agent.confined_write`, `gather._confined`, `processing._apply_declared_rewrites` and
+  `processing._write_new`.
 - **`processing._write_new` is THE write for every page-building flow** — containment plus
   `OSError`-to-`WorktreeError` in one place; never call `page.open_for_new` from a flow directly.
 - **Gates read the diff through `gitcmd.diff_entries` / `added_lines`, never a hand-parsed
@@ -84,7 +88,7 @@ deletes the entry if `identity.py` ever stops using it.
   #77), so a spelling the registry does not carry resolves only because the agent declared that
   entity's id — and code still refuses an id the registry does not hold, and REPORTS the resolution
   (`report.filed`'s `anchor_reason`, from `anchoring.reason`). An automatic decision nobody can see
-  is what this repo does not allow. The registry it resolves against is `Proposals.registry`, the
+  is what this repo does not allow. The registry it resolves against is `Births.registry`, the
   one the COMMIT will publish, re-derived from the files as written — which is what lets a page
   anchor to an entity born three lines above it. Widen the resolver; never bolt a second beside it.
   The birth gate keeps the coarse fold and is a different question
@@ -117,24 +121,31 @@ deletes the entry if `identity.py` ever stops using it.
 - **The three repo-sourced inputs are read at `base.sha` through `base_inputs`** —
   `Settings.registry_path` / `linter_path` answer only "where does this live in a
   checkout", for the operator tooling and its messages.
-- **The agent never touches an existing page** — `agent.confined_write` admits one NEW `.md` page
-  in a creatable folder; an edit is declared in the outcome and performed by `edits.py`.
+- **The agent never touches an existing page** — `agent.confined_write` admits a NEW `.md` page in a
+  creatable folder (and its own outcome file), never one that already exists; a page that is
+  brought up to date is declared in the outcome's `rewrites` and written by `processing.py`.
+- **A capture declares every page it writes** — `Outcome.pages` / `Outcome.page_paths` is the
+  declaration, `ctx.declared_pages` carries it in the account's own ORDER, and
+  `_cross_check_outcome` refuses a diff that carries anything else (`undeclared-page`,
+  `declared-page-missing`). The FIRST declared page is the one every surface names — `result_ref`,
+  the commit subject, the dedup pointer — because that is a decision the account made and not an
+  accident of sorting. Never add a hardcoded page count beside it: the agreement IS the bound, with
+  `agent.MAX_PAGES_PER_CAPTURE` as the ceiling.
 - **A gate is TOLD a fact, it never infers one** — the flow-scoped `GateContext` fields default
-  to the ordinary lane, and the callers that widen them (the meeting flow, the source
-  attachment, a run that wrote an identity) widen the instance they build, never a module
-  constant: a new flow is out of bounds by default. `edits_allowed` is the one field no caller
-  declares any more: the meeting flow set it `False` until it gained the same declared-edit
-  mechanism.
+  to the ordinary lane, and the callers that widen them (the source archive, a run that wrote an
+  identity) widen the instance they build, never a module
+  constant: a new caller is out of bounds by default. `modifications_allowed` is the one field no caller
+  declares at all; its branch is exercised by `test_gates_unit.py`'s explicit contexts, because a
+  check no production caller reaches still has to have a red proof somewhere.
   Several SUSPEND a proof rather than narrowing a lane, and each has its granting surface
-  pinned both directions in `tests/test_architecture.py`. Three are `repair/apply.py`'s alone:
-  `body_rewrite_allowed` names the single page whose body a governed repair may replace,
-  `deletions_allowed` the paths a governed sweep may remove, and `expected_bytes` the
-  exact file a caller computed for a page it rewrites. Empty, each changes nothing — every capture
-  still meets `gate_body_rewrite`'s additive proof unchanged, and `gate_zone`'s "the librarian never
-  deletes a file" stays literally true. `provenance_pages` has two granters making the
-  same claim: `processing.py` for the source pages one capture just wrote, and `repair/apply.py`
-  for the machine-zone pages a sweep rewrites — those stamps are the librarian's own, and neither
-  flow is the thing that asserted one. `born_entity_pages` / `alias_edited_pages` are
+  pinned both directions in `tests/test_architecture.py`. `processing.py` is the only granter of
+  any of them, because the worker is the only writer the corpus has: `rewrites_allowed` names the
+  pages one capture declared it brings up to date, `deletions_allowed` the paths a person's removal
+  may remove, `expected_bytes` the exact file this run computed for a page it rewrites, and
+  `provenance_pages` the machine-zone pages whose stamps are the librarian's own — the source pages
+  a capture just wrote, and the pages a removal's sweep only ever removes a link from. Empty, each
+  changes nothing: a modified page nobody declared is refused outright, and `gate_zone`'s "the
+  librarian never deletes a file" stays literally true for every capture. `born_entity_pages` / `alias_edited_pages` are
   `_declare_births`' alone — with `confirmed_entity_pages`, the `{path: approver}` map that says who
   each newborn identity is confirmed by: they are what make "the agent never writes an identity" a
   proof rather than a tool's refusal, and `identity.py` also puts the registry into `derived_files`
@@ -143,10 +154,9 @@ deletes the entry if `identity.py` ever stops using it.
 - **Wording for humans lives in `report.py` only**; a read path branches on `reason_code`
   (`capture.schema.REJECTION_REASONS`), never on prose and never on `stage`, which is
   `failed_system`'s alone. `births_clause` is the ONE sentence about what a filing did to the
-  identity layer — born, spelled or added to — shared by `filed` and `filed_meeting` so an ordinary
-  capture and a meeting cannot start describing the same fact differently.
-- **`processing._route_refusal` is the ONE router from findings to a terminal state**, and both
-  flows call it (`_refuse`, `_refuse_meeting`). Two destinations only: `rejected` when the fix is
+  identity layer — born, spelled or added to — appended by `report.filed`.
+- **`processing._route_refusal` is the ONE router from findings to a terminal state**, reached
+  through `_refuse`. Two destinations only: `rejected` when the fix is
   the submitter's, `failed` when it is the librarian's. An anchor that still does not resolve after
   the corrective pass is the librarian's — the brief told the agent it could declare the entity,
   and it did not.
@@ -172,50 +182,25 @@ deletes the entry if `identity.py` ever stops using it.
 - **Do not run two long-running workers on the same repo AND the same worktree root** — give each
   its own `STIGMERGY_LIBRARIAN_WORKTREE_ROOT`.
 - **The skill is the agent's ONE briefing**, read at the base commit and injected into the system
-  prompt; adding a second injected text is a design decision, not a patch. The ordinary and
-  meeting briefs live in the knowledge repo and each has a two-sided rule-table contract test
-  (`test_librarian_brief_contract.py`, `test_meeting_brief_contract.py`) — resync both sides,
-  and both frozen copies, in one landing.
+  prompt; adding a second injected text is a design decision, not a patch. There is one brief for
+  every capture, whatever its kind. It lives in the knowledge repo and has a two-sided rule-table
+  contract test against a frozen copy (`test_librarian_brief_contract.py`) — resync the brief, the
+  code side and the frozen copy in one landing.
 - **A backend that reports tokens must be priced** (`pricing.require_priced`, at startup) — a
   silent `$0.00` reads as free, in the one direction nobody audits.
-- **`result_ref`/`sha` name a meeting's OWN commit, not the branch tip** — the post-filing view
-  regeneration can push a second commit on top; code that reads "the current tip" to learn what
-  a capture filed is wrong (see [`views/index.md`](../views/index.md)).
-- **The periodic view sweep is maintenance on the IDLE branch, on its own clock** — "the queue is
-  empty" is where it belongs, but a corpus parse per poll is not free, so
-  `Worker.maybe_sweep_views` skips (never blocks) until `view_sweep_interval_s` has elapsed and
-  `_sleep` keeps slicing so a signal is still observed promptly. It materializes its OWN
-  `ephemeral_worktree` off a fresh `base_ref`, because that fresh-checkout fact is exactly what
-  `guarded=False` is justified by, and it reads the registry at that base rather than at startup.
-  Neither is trusted: a deployed base that did not come from the remote (`require_remote_base`),
-  and a base carrying no registry, each skip the pass and write their own `job_runs` error row
-  (`_refused_sweep`) — an unattended loop that refused only into a log has no operator-facing
-  surface at all. `view_sweep_ceiling` bounds one pass's model calls, and
-  `Worker._sweep_pause_reason` — handed down as `should_stop`, asked BETWEEN entities — yields the
-  loop back when a signal lands or a capture is waiting, so no filing queues behind a whole
-  ceiling's worth of syntheses. A fault is logged and swallowed, because filing must never depend
-  on a rollup. Both knobs and the clock are injectable (`Worker(view_sweep=…, now=…)`) — the
-  interval is a timing contract, not something to sleep out in a test.
-- **The periodic repair pass is the second maintenance loop, on the same idle branch and its own
-  clock** (`repair_interval_s`). It answers the gardener's findings by deriving repairs
-  and applying them — one commit per repair, one worktree per repair, at a base fetched for each —
-  and it is skipped entirely unless a completed gardener run is NEWER than the last pass
-  (`ops.latest_run` is the watermark). Everything the view sweep's paragraph says about skipping
-  rather than blocking, scheduling the due-time before the pass and swallowing a fault holds here
-  too. What differs is the cost of a fault: a view sweep that dies has regenerated nothing, while
-  this one may already have PUSHED — which is why every repair records its own outcome in the
-  ledger before the next is derived, and why the ledger, not this pass's return value, is where an
-  operator reads what happened.
+- **`result_ref`/`sha` name a capture's OWN commit, not the branch tip** — another capture's
+  filing, or a removal, may push between two reads, so code that reads "the current tip" to learn
+  what a capture filed is wrong.
 - **The two DAILY passes are the night shift** (`librarian/schedule.py`): the gardener
   at `garden_at` and the retention purge at `retention_at`, both UTC `"HH:MM"`, both taking `off`.
-  They share the idle branch and the shutdown guards with the two passes above, and differ in one
+  They share the idle branch and the shutdown guards with the pass above, and differ in one
   way that matters: **due-ness is a wall time answered from the ledger, not an interval counted in
   the process.** A worker restarts far more often than once a day — a deploy, a crash, a scale
   event — and an in-process timer would garden again every time one did; `daily_due` reads the
   pass's own last `job_runs` row instead, whatever its outcome, so a failed night is one bad night
   rather than a retry on every idle tick until morning. The window (`DUE_WINDOW_MINUTES`) is the
-  other half: a pass that missed its slot by twelve hours would land after the repair passes that
-  were supposed to answer its findings, so it waits for tomorrow.
+  other half: a pass that lands twelve hours late reports on a corpus nobody was reading it
+  against, so it waits for tomorrow.
 
   Neither pass writes a `job_runs` row here — each library writes its own, and two rows for one
   pass would make "when did it last run" ambiguous, which is the question `daily_due` asks.

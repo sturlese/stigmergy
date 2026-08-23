@@ -94,7 +94,7 @@ class AnswerBrain:
 
     def entity_text(self, entity: str, ctx=None) -> str:
         """One entity's territory as the agent reads it: the service's `describe_entity` dict laid
-        out as text — registry identity, its own page, its view, the dated timeline with the
+        out as text — registry identity, its own page, the dated timeline with the
         service's truncation note. Every field arrives already ACL-scoped and neutralized and is
         rendered verbatim (`_render_nav` posture). Bookkeeping mirrors `search_text`: the lookup
         lands on `ctx.searched`, and every page reference shown counts as SURFACED."""
@@ -115,14 +115,6 @@ class AnswerBrain:
             lines.append(f"page: {page['path']} — {page['title']}")
         else:
             lines.append("page: (none)")
-        view = result.get("view")
-        if view is not None:
-            if ctx is not None:
-                ctx.note_page(view["path"])
-            lines.append(f"view: {view['path']} — {view['title']}"
-                         f" (generated {view['generated_at'] or 'unknown'})")
-        else:
-            lines.append("view: (none)")
         lines.append(f"timeline: {result['timeline_note']}")
         for item in result["timeline"]:
             if ctx is not None:

@@ -507,9 +507,8 @@ def test_a_run_that_dies_mid_drain_still_records_the_work_it_already_pushed(rig,
     A worker that drained five captures before its installation token expired recorded a run that
     read as having done nothing at all.
 
-    `views/regenerate` states the rule this now follows, in prose, for exactly this reason:
-    updating only at the end writes "a `job_runs` audit trail lying by omission about real,
-    already-pushed work".
+    The rule it follows: updating only at the end writes a `job_runs` audit trail lying by
+    omission about real, already-pushed work.
     """
     _, deps = rig
     loop = worker.Worker(None, deps, on_output=lambda _msg: None)

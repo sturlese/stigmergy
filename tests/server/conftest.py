@@ -89,17 +89,6 @@ class Fixture:
                     "entity": "['vault-corp', 'quill-industries']", "as_of": "2026-02",
                     "verification": "verified", "acl": "['eng']"},
                    "A note anchored to two entities at once, visible only to eng.")
-        # a view page, in the `views/` zone, carrying the SAME `acl:`/`entity:` frontmatter
-        # contract every other page here does — proof that the existence-leak guarantee is generic
-        # (`server/acl.py::visible` never branches on zone or type) rather than something the view
-        # layer had to build for itself. `acl: ['finance']` mirrors the ACME_PAGE scoping above
-        # deliberately, so the SAME two identities (ANA/ENG) exercise both a real page and a
-        # derived one with the fixture's existing dichotomy.
-        write_page(self.repo, "views/acme-corp.md",
-                   {"type": "view", "title": "Acme — view", "entity": "['acme-corp']",
-                    "tags": "[view]", "tier": 3, "verification": "verified",
-                    "acl": "['finance']"},
-                   "## Timeline\n\nView rollup for Acme. quarterly revenue synthesis.")
         os.makedirs(os.path.dirname(self.identities_path), exist_ok=True)
         with open(self.identities_path, "w", encoding="utf-8") as f:
             f.write(json.dumps({
@@ -107,7 +96,6 @@ class Fixture:
             }))
 
     ACME_PAGE = "wiki/finance/acme-payroll.md"
-    VIEW_PAGE = "views/acme-corp.md"
     OPEN_PAGE = "wiki/notes/initech-kpi.md"
     SUPERSEDED_PAGE = "wiki/notes/old-kpi.md"
     EMPTY_ACL_PAGE = "wiki/notes/globex-widget-empty-acl.md"

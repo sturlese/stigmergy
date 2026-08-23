@@ -1,63 +1,50 @@
-"""The repair ledger's contract: the DDL and the vocabularies.
+"""The removal ledger's contract: the DDL and the vocabularies.
 
 Idempotent DDL behind `capture.schema.startup_ddl_lock`, the shared advisory lock — the same
 posture `gardener/schema.py` takes, and for the same reason: two processes may start at once.
 
-**A repair is applied or it is not; nothing waits.**
-The worker derives a repair from a gardener finding, validates it against a real checkout, applies
-it through the nine gates and records what happened here. There is no pending state, no verdict
-and nobody to ask — the three outcomes are `applied`, `failed` and `skipped`.
+**One row per page removal that LANDED**, written by `librarian.processing` once the commit is
+pushed. That is the whole of what this table is for now, and the reason it exists beside the
+capture row that asked for the removal: the capture is purged with the retention window, and what
+left the corpus is not something a deployment may forget. A removal that was refused changed
+nothing and is answered on its own capture.
 
-The one design decision worth stating here rather than in prose elsewhere: **`content_key` is
-permanent, and it is what stops the loop repeating itself.** It identifies a repair by what it
-would DO, not by which finding suggested it, so an applied repair a person later reverted in git
-is never re-derived, and a repair a gate refused is not retried every night. That is a deliberate
-trade: the loop forgets nothing, so a `failed` row is where an operator looks when a finding stops
-being answered. A `skipped` row carries no key (nothing was derived to key on) and carries its
-reason instead.
+**A removal is applied or it is not; nothing waits.** The person decided at the door, the worker
+performed it, and this records what it did — the pages that went, the pages that were rewritten so
+they would stop pointing at them, and the diff of both, because nobody read that prose before it
+landed.
+
+**Rows this version can no longer write still live here.** A real database holds `edits`,
+`entity-body` and `entity-alias` rows from the elective repair loop, and `pending`/`approved`/
+`rejected` statuses from before it applied without asking. `KINDS` and `STATUSES` below are the
+vocabulary a ROW MAY CARRY — history included — while `WRITABLE_KIND` and `WRITABLE_STATUS` are
+what this version inserts. Narrowing the CHECK to what code writes would refuse the rows already
+there: `ALTER TABLE ... ADD CONSTRAINT ... CHECK` validates the existing table, and the whole DDL
+sequence would abort on every start.
 """
-import hashlib
-
 from stigmergy.capture.schema import startup_ddl_lock
 
-JOB_NAME = "repair"
-
-# ── kind — what a proposal WOULD DO ──────────────────────────────────────────────────────────
-# `edits` is the librarian's three additive declared-edit shapes, applied by `edits.apply_declared`
-# and proven additive by `gate_body_rewrite`. `entity-body` is the one kind that REPLACES text, and
-# it is a separate kind rather than a fourth op precisely because it is a different question for
-# the gates: it may only touch a page in the entity zone, only below that page's own H1, and only
-# with the apply telling `GateContext.body_rewrite_allowed` which path was authorized.
-#
-# The string doubles as the OP name inside such a repair's single op, deliberately: one
-# vocabulary word for one shape means a surface listing a repair's ops names what happened
-# without a second lookup table.
-#
-# `delete` is the ONE kind that breaks that doubling, and deliberately: one repair performs two
-# different actions — pages removed, pages rewritten to stop pointing at them — so its ops carry
-# `delete-page`/`scrub-page` (`repair.deletion.OP_NAMES`) and a reader can tell which is which.
-# A single word there would hide the half of the blast radius that is not the pages anybody
-# named.
-#
-# `entity-alias` is the fourth, and it breaks the doubling for the same reason `delete` does: one
-# repair performs four different actions — the survivor's page gains the absorbed entity's
-# spellings, the absorbed page is marked superseded, every page anchored to it is re-anchored, and
-# the derived registry is rebuilt — so its ops carry their own names
-# (`repair.entity_alias.OP_NAMES`) and a reader can tell which is which.
-KIND_EDITS = "edits"
-KIND_ENTITY_BODY = "entity-body"
+# ── kind — what a row DID to the corpus ──────────────────────────────────────────────────────
+# `delete` is the one kind anything writes: one removal performs two different actions — pages
+# removed, pages rewritten to stop pointing at them — so its ops carry `delete-page`/`scrub-page`
+# (`DELETE_OP_NAMES`) and a reader can tell which is which.
 KIND_DELETE = "delete"
-KIND_ENTITY_ALIAS = "entity-alias"
-KINDS = (KIND_EDITS, KIND_ENTITY_BODY, KIND_DELETE, KIND_ENTITY_ALIAS)
+WRITABLE_KIND = KIND_DELETE
 
-# ── status — what happened to a derived repair, and the whole vocabulary of it ────────────────
-# `applied` landed a commit. `failed` was derived and refused — by its own validator, by a gate,
-# or by a fault — and the `error` column says which; the row is the operator-facing record, and
-# its key is not retried. `skipped` never became a repair at all: a finding no kind can express, a
-# ceiling that bound, a model that declined. Only `skipped` carries a `reason`.
+# The three the elective repair loop wrote before it was measured against `docs/DESIGN.md` §2 and
+# removed: an additive edit, a drafted entity body, a merge of two registry entries. Named rather
+# than dropped, because they are the `kind` of rows a deployed database still holds and the CHECK
+# below is asserted against those rows.
+RETIRED_KINDS = ("edits", "entity-body", "entity-alias")
+KINDS = (KIND_DELETE, *RETIRED_KINDS)
+
+# ── status — what happened, and the whole vocabulary a row may carry ─────────────────────────
+# `applied` landed a commit, and it is the only one this version writes. `failed` and `skipped`
+# are the elective loop's — a repair derived and refused, and a finding no repair could answer.
 STATUS_APPLIED = "applied"
 STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
+WRITABLE_STATUS = STATUS_APPLIED
 STATUSES = (STATUS_APPLIED, STATUS_FAILED, STATUS_SKIPPED)
 
 # The CHECK constraints are the vocabularies above, spelled for SQL. `repr`, not
@@ -74,7 +61,7 @@ CREATE TABLE IF NOT EXISTS repairs (
     run_id BIGINT NOT NULL DEFAULT 0,
     finding_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     finding_subjects JSONB NOT NULL DEFAULT '[]'::jsonb,
-    kind TEXT NOT NULL DEFAULT '{KIND_EDITS}' CHECK (kind IN ({_KIND_SQL_LIST})),
+    kind TEXT NOT NULL DEFAULT '{KIND_DELETE}' CHECK (kind IN ({_KIND_SQL_LIST})),
     target_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
     ops JSONB NOT NULL DEFAULT '[]'::jsonb,
     rationale TEXT NOT NULL DEFAULT '',
@@ -89,10 +76,10 @@ CREATE TABLE IF NOT EXISTS repairs (
 """
 
 # The rename, and the reason it is a rename rather than a fresh table beside the old one: the rows
-# in `repair_proposals` are the record of every repair this deployment ever landed, and a new table
-# would leave that history in a table nothing reads. Runs BEFORE the `CREATE TABLE IF NOT EXISTS`
-# above, so a database that has the old name arrives at the new one with its rows, and a fresh
-# database skips it entirely.
+# in `repair_proposals` are the record of every change this deployment ever landed outside a
+# filing, and a new table would leave that history in a table nothing reads. Runs BEFORE the
+# `CREATE TABLE IF NOT EXISTS` above, so a database that has the old name arrives at the new one
+# with its rows, and a fresh database skips it entirely.
 _RENAME_FROM_PROPOSALS = """
 DO $$
 BEGIN
@@ -114,7 +101,7 @@ _REPAIRS_COLUMNS = (
 )
 
 # What the three retired statuses become. A row that was waiting on somebody when this shipped was
-# never applied and never refused: it is a repair that did not happen, which is what `skipped`
+# never applied and never refused: it is a change that did not happen, which is what `skipped`
 # means. The reason says so rather than leaving a status a reader has to remember the history of.
 # Idempotent by construction — after the first run no row matches.
 # **Dropped BEFORE the migration below, and this ordering is the whole of a production defect.**
@@ -151,9 +138,10 @@ _DROP_DECISION_COLUMNS = (
     "ALTER TABLE repairs DROP COLUMN IF EXISTS notes",
 )
 
-# ONE row per content key, over every status that has one — the permanent memory the module
-# docstring describes. Partial, because a `skipped` row has no ops to key on and several of them
-# would otherwise collide on the empty string.
+# ONE row per content key, over the rows that have one. Partial, because the elective loop's
+# `skipped` rows had no ops to key on and several of them would otherwise collide on the empty
+# string — which is also what lets a removal, keyed by nothing, be recorded as often as somebody
+# asks for one.
 _REPAIRS_CONTENT_KEY_INDEX = (
     "CREATE UNIQUE INDEX IF NOT EXISTS repairs_content_key_idx "
     "ON repairs (content_key) WHERE content_key <> ''"
@@ -225,158 +213,28 @@ def ensure_repair_schema(conn) -> None:
             cur.execute(statement)
 
 
-# ── the op record: the stored shape of ONE edit, and what identifies a repair ─────────────────
-# Pure string and dict work, with no import of its own beyond hashlib, because BOTH ends of the
-# loop need it: the agent that declares a repair (which loads a model stack) and `apply`, which
-# must not drag one in. Living here rather than beside either is what keeps the import graph
-# honest — the rule outlived the review lane that first made it matter, because the worker still
-# derives with a model and applies without one.
-#
-# The stored key is `op`, not `kind`, so a persisted repair is never mistaken for a librarian
-# outcome's `edits` entry by anything reading JSON — `declared_edits` is the ONE translation
-# between the two vocabularies, and both validations run on its output, so propose time and apply
-# time cannot come to judge different things.
+# ── the op record: the stored shape of ONE act inside a removal ──────────────────────────────
+# The stored key is `op`, not `kind`, so a persisted op is never mistaken for the row's own `kind`
+# by anything reading JSON.
 OP_KIND_KEY = "op"
-# The stored op shape, PER KIND — every reader of an op (the console's cleaner, the applier) is
-# shaped by which of these it is looking at, so the shapes are named rather than left implicit in
-# separate reshapes. `entity-body` carries PROSE where the additive kinds carry a link and a note,
-# and a reader that assumed one shape for both rendered an empty cell where the draft should have
-# been.
-EDIT_OP_FIELDS = (OP_KIND_KEY, "path", "link", "note")
-ENTITY_BODY_OP_FIELDS = (OP_KIND_KEY, "path", "body_markdown", "role")
 # The `delete` kind's two op names and two shapes. A removal names only the page; a scrub carries
 # the bytes it was computed FROM (so "the corpus moved" is a fact rather than a guess) and the bytes
 # it would write (so the apply's recomputation has something to byte-compare against).
 #
-# The NAMES live here rather than in `repair.deletion` because `content_key` below has to tell one
-# from the other, and this module is the bottom of this package: it imports nothing of its own.
+# The NAMES live here rather than in `repair.deletion` because this module is the bottom of this
+# package: it imports nothing of its own.
 DELETE_OP_NAME = "delete-page"
 SCRUB_OP_NAME = "scrub-page"
 DELETE_OP_FIELDS = (OP_KIND_KEY, "path")
 SCRUB_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
-# The GROUP, beside the names, `ALIAS_IDENTITY_OP_NAMES` below being the precedent: four surfaces
-# have to know "every op this kind performs" — the kind's own validator, the console's op cleaner
-# and the applier — and each rebuilding the tuple is how a fifth op reaches a reader rendered as
-# something else. `tests/test_architecture.py` pins the console's tables against these two.
+# The GROUP, beside the names: three surfaces have to know "every op a removal performs" — the
+# validator, the console's op cleaner and the plan — and each rebuilding the tuple is how a third
+# op reaches a reader rendered as something else. `tests/test_architecture.py` pins the console's
+# table against this one.
 DELETE_OP_NAMES = (DELETE_OP_NAME, SCRUB_OP_NAME)
-
-# The `entity-alias` kind's four op names, and its ONE op shape. Every op in a merge carries the
-# whole file it would write, exactly as a scrub does and for the identical reason: what each one
-# writes depends on every OTHER page in the corpus, so the apply recomputes the plan and
-# byte-compares it. The names live here for `content_key`'s sake — the key below has to tell the
-# two IDENTITY ops from the rest — and this module is the bottom of the package: it imports
-# nothing of its own.
-ALIAS_OP_NAME = "alias-survivor"
-RETIRE_OP_NAME = "retire-absorbed"
-REANCHOR_OP_NAME = "reanchor-page"
-REGISTRY_OP_NAME = "regenerate-registry"
-ALIAS_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
-# All four as one group, `DELETE_OP_NAMES` above and for the same reason.
-ALIAS_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME, REANCHOR_OP_NAME, REGISTRY_OP_NAME)
-# The two ops that say WHICH pair this merge is about, as against the pages it also touches.
-ALIAS_IDENTITY_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME)
-
-
-def merge_direction(ops) -> dict:
-    """`{"survivor", "absorbed", "reanchored"}` for an `entity-alias` proposal — `{}` for any other
-    kind, since no other proposal has a direction.
-
-    **Why a reader exists at all, rather than each surface reading `ops` itself.** For every
-    other kind the paths say what happens to them: a `backlink` names the page that gains a link, a
-    `delete` names the page that goes. A merge names two entity pages and the whole decision is
-    WHICH ONE SURVIVES — and in `target_paths`, a sorted list, that is invisible. A reader would
-    otherwise have only the model-authored `rationale`, whose text is derived from two page bodies
-    somebody else wrote; the direction is the half code owns, and it has to be on the same screen.
-
-    Derived from `ops` and never from `target_paths`: the cross-check judges one of those against
-    the other, and a display built from the thing being judged would let one stored column vouch
-    for its own consistency with the other.
-    """
-    by_name = {str(o.get(OP_KIND_KEY, "")): str(o.get("path", "")) for o in (ops or ())}
-    survivor, absorbed = by_name.get(ALIAS_OP_NAME, ""), by_name.get(RETIRE_OP_NAME, "")
-    if not (survivor and absorbed):
-        return {}
-    return {"survivor": survivor, "absorbed": absorbed,
-            "reanchored": sum(1 for o in ops or ()
-                              if str(o.get(OP_KIND_KEY, "")) == REANCHOR_OP_NAME)}
-
-
-def declared_edits(ops) -> list[dict]:
-    """Stored ops -> the `edits.validate`/`edits.apply_declared` declaration shape."""
-    return [{"kind": str(o.get(OP_KIND_KEY, "")), "path": str(o.get("path", "")),
-             "link": str(o.get("link", "")), "note": str(o.get("note", ""))}
-            for o in (ops or ())]
 
 
 def target_paths(ops) -> list[str]:
-    """The pages a proposal would touch, deduplicated and sorted — the second stored fact
-    `remote.apply_via_clone` cross-checks the produced diff against.
-
-    An op that carries BOTH the bytes it was computed from and the bytes it would write, and whose
-    two agree, names a page this proposal would NOT touch, and it is excluded. That case is real
-    rather than theoretical: an `entity-alias` merge regenerates `ops/entity-registry.json` every
-    time and the file usually comes out identical (the absorbed entity declared no alias to move),
-    so a `target_paths` that named it would demand a diff entry git will never produce and the
-    cross-check would refuse every such merge. Both keys are required before an op is skipped, so
-    the kinds whose ops carry neither are unaffected.
-    """
-    return sorted({str(o.get("path", "")) for o in (ops or ())
-                   if str(o.get("path", "")) and not _unchanged(o)})
-
-
-def _unchanged(op) -> bool:
-    before = str(op.get("expected_before_hash", ""))
-    if not before or "planned_after" not in op:
-        return False
-    return hashlib.sha256(str(op.get("planned_after", "")).encode("utf-8")).hexdigest() == before
-
-
-def page_set_key(paths) -> str:
-    """The comparable spelling of a SET OF PAGES — sorted, deduplicated, hashed.
-
-    Here rather than in either caller because both ends of the memory have to spell it the same
-    way: the ledger writes what a repair stood for, and the derivation asks whether a finding is
-    already answered. A key built two ways is two keys, and the failure it produces is silent —
-    the loop re-answering something it answered last night.
-    """
-    return hashlib.sha256("|".join(sorted({str(p) for p in (paths or ()) if p}))
-                          .encode()).hexdigest()
-
-
-def content_key(ops, *, kind: str = KIND_EDITS) -> str:
-    """What identifies a repair: WHAT IT DOES, never which finding suggested it.
-
-    Order-independent (the op lines are sorted) so two runs that derive the same repair in a
-    different order collide as they should, and `note` is deliberately EXCLUDED: two repairs that
-    add the same callout to the same page with differently-worded sentences are the same
-    question answered twice, and a repair already applied must not land again tomorrow with the
-    sentence reworded.
-
-    The same exclusion does the same work for the other kinds, and it matters more there: an
-    `entity-body` op has no `link`, so its key is `kind + path` and the DRAFTED BODY is not part of
-    it. **A re-drafted body is the same repair** — a page whose body this loop already wrote is not
-    rewritten tomorrow with the prose rearranged.
-
-    `delete` needs one step more than an exclusion, and `entity-alias` needs the same step for the
-    same reason: their keys are built from the ops that ARE the question. A deletion's key is its
-    DELETIONS alone — the scrubs are a fact about the rest of the corpus rather than about the
-    question, so keying on them would re-derive a settled deletion every time somebody linked to
-    the doomed page. A merge's key is its two IDENTITY ops alone, and which pages are anchored to the
-    absorbed entity moves the same way.
-
-    `entity-alias` goes one step further still, and it is the only kind that does: its key drops
-    the OP NAME as well, so the two paths are keyed as an unordered PAIR. Which of two entities
-    survives is the model's judgment and it may legitimately come out the other way tomorrow — but
-    a merge that happened — or was refused — settled the PAIR, and a key that carried the direction
-    would let the loop merge them back the other way the moment the answer flipped (#69's
-    `finding_subjects` is the pre-model half of the same memory).
-    """
-    if kind == KIND_ENTITY_ALIAS:
-        pair = sorted({str(o.get("path", "")) for o in (ops or ())
-                       if str(o.get(OP_KIND_KEY, "")) in ALIAS_IDENTITY_OP_NAMES})
-        return hashlib.sha256(f"{kind}|{'|'.join(pair)}".encode()).hexdigest()
-    keyed = [o for o in (ops or ())
-             if kind != KIND_DELETE or str(o.get(OP_KIND_KEY, "")) == DELETE_OP_NAME]
-    body = "|".join(sorted(f"{o.get(OP_KIND_KEY, '')}:{o.get('path', '')}:{o.get('link', '')}"
-                           for o in keyed))
-    return hashlib.sha256(f"{kind}|{body}".encode()).hexdigest()
+    """The pages a removal touched, deduplicated and sorted — the stored column beside `ops`, and
+    what a reader scans before opening the diff."""
+    return sorted({str(o.get("path", "")) for o in (ops or ()) if str(o.get("path", ""))})

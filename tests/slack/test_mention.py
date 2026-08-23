@@ -641,7 +641,7 @@ def test_a_dm_question_is_refused_for_a_scoped_identity_lacking_the_needed_label
 # ── Slack's `ask` must go through the SAME audited, rate-limited seam every other transport uses
 # — `_run_ask` used to call `AnswerService(service).ask(question)` directly, never touching
 # `service.call_async`, so a Slack question left NO `audit_log` row at all and never spent the
-# `ask` rate-limit bucket. `stigmergy-pilot-report` builds its metrics over `audit_log`'s `ask`
+# `ask` rate-limit bucket. The console's Activity page builds its metrics over `audit_log`'s `ask`
 # rows, and most real asking happens in Slack — this is what those rows depend on existing in the
 # first place. ────────────────────────────────────────────────────────────────────────────────
 def _audit_rows_for(conn, identity: str) -> list[dict]:

@@ -53,7 +53,7 @@ def clean_llm(monkeypatch):
 
 @pytest.fixture()
 def rig(tmp_path, require_gitleaks):
-    """`(env, deps, corpus)`: a real bare remote + clone carrying the repair-proposer skill (the
+    """`(env, deps, corpus)`: a real bare remote + clone carrying the removal-sweep skill (the
     sweep writer is briefed from the base commit, so it has to be committed), the deletion corpus
     every test here removes out of, and `Deps` wired to that pair."""
     env = repair_support.build_repo(tmp_path)

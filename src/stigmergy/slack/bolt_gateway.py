@@ -34,6 +34,18 @@ class BoltSlackGateway:
     async def users_info(self, user_id: str) -> dict:
         return await self._call(self._client.users_info, user=user_id)
 
+    async def users_lookup_by_email(self, email: str) -> str:
+        """`""` for a workspace that has nobody at that address, rather than an error: the brain's
+        identities are not all Slack members, and Slack answers `users_not_found` for the ordinary
+        case of a person who never joined or has left."""
+        try:
+            data = await self._call(self._client.users_lookupByEmail, email=email)
+        except SlackApiError as ex:
+            if "users_not_found" in str(ex):
+                return ""
+            raise
+        return str((data.get("user") or {}).get("id") or "")
+
     async def conversations_info(self, channel_id: str) -> dict:
         return await self._call(self._client.conversations_info, channel=channel_id)
 

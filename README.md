@@ -96,7 +96,7 @@ claim can always be walked back to what actually arrived.
 
 Two narrow seams do all the work: **one writer** into git, and **one API** out of it.
 
-The dashed box on the right is the part people are usually surprised by: **there is a web console**, at `/admin`, for the operations you would otherwise do from a terminal — browsing the vocabulary the brain has grown and registering the one entity nobody has captured about yet (its name checked against the rest of the registry as you type), reading what the night shift did last night, the gardener's findings and the repairs the worker made of them (each with the diff that landed), removing pages, previewing the digest, watching the worker — with the write path drawn live from the same rows, in the colours of this README's own key. It rides the same process group as MCP but is an ASGI branch in *front* of the bearer middleware, so it never borrows MCP's auth: it has its own token, it is a **404 until that token's hash is configured**, and an architecture test keeps it from ever becoming a reader of pages. Full tour: [`docs/reference/admin-console.md`](./docs/reference/admin-console.md).
+The dashed box on the right is the part people are usually surprised by: **there is a web console**, at `/admin`, for the operations you would otherwise do from a terminal — browsing the vocabulary the brain has grown and registering the one entity nobody has captured about yet (its name checked against the rest of the registry as you type), reading what the night shift did last night, the gardener's findings, and the ledger of what has left the corpus (each row with the diff that landed), removing pages, watching the worker — with the write path drawn live from the same rows, in the colours of this README's own key. It rides the same process group as MCP but is an ASGI branch in *front* of the bearer middleware, so it never borrows MCP's auth: it has its own token, it is a **404 until that token's hash is configured**, and an architecture test keeps it from ever becoming a reader of pages. Full tour: [`docs/reference/admin-console.md`](./docs/reference/admin-console.md).
 
 ### The write path
 
@@ -127,14 +127,18 @@ submitter, and a name the registry already knows becomes a new spelling on that 
 rather than a twin. The registry is regenerated from the entity pages in that same commit, so the
 two sides can never be edited apart.
 
-Two flows sit on top: the **meeting distiller** (a submitted transcript becomes a source page, a
-meeting page and one decision page per decision, each anchored) and **views** (per-entity rollups
-whose ACL is the intersection of their members'). A view is derived, so it can go stale whatever
-wrote the page — the worker fixes that by CONVERGENCE rather than by a hook per door: whenever its
-queue is idle, it asks the corpus which views diverge and regenerates those, bounded by a per-pass
-ceiling that says what it deferred. It is due on its own interval AND on the first idle tick after
-the worker took a queued item to a terminal state, so a rollup never outlives the pages a removal
-just deleted.
+**There is one pipe, and every capture rides it.** A note, a document and a meeting transcript are
+the same journey: the material is archived verbatim under `sources/`, always, and the agent then
+declares the `wiki/` pages that material establishes — one, or several, each with its own anchor and
+its own links. `kind` chooses the prose and the `sources/` folder, never a code path. Only removal
+leaves the pipe, because a removal is not material.
+
+**Nothing is derived on top.** A per-entity rollup — "what do we know about X" — is a read-time
+answer, not a stored page: `describe_entity` assembles it per reader and ACL-scoped, and `ask`
+writes the prose from that. A stored copy could not be either of those things. It had to be one
+file for everybody, so it carried no audience and could only summarise the open subset, and it
+needed a convergence sweep to keep it from rotting — the most-run loop in the system, whose entire
+job was that a duplicate stayed fresh.
 
 ### The read path
 
@@ -221,13 +225,12 @@ build their own throwaway one and tell you what each step proved.
 
 ```bash
 make db-up
-.venv/bin/python scripts/walk_meeting_distiller.py   # a transcript becomes a page SET, and a second one INTRODUCES
-.venv/bin/python scripts/walk_views.py               # the filing regenerates the entity's view, then the honest no-op
+.venv/bin/python scripts/walk_transcript.py          # a transcript rides the one pipe, and a second one INTRODUCES
 .venv/bin/python scripts/walk_navigation.py          # links/backlinks, and the existence rule shown live on two identities
 ```
 
-Run the meeting-distiller one first: its second transcript names two entities the registry does not
-know, so it introduces them and files the whole set in ONE commit — with the entity pages read back
+Run the transcript one first: its second transcript names two entities the registry does not
+know, so it introduces them and files everything in ONE commit — with the entity pages read back
 out of a clone of the remote it just pushed to, each already confirmed by the person who captured.
 
 ### Point it at your own knowledge repo
@@ -274,15 +277,13 @@ beside it in the source; the bare module at the top is small enough to be its ow
 | `index/` | the hybrid derived index: postgres+pgvector, reciprocal rank fusion, contract ranking |
 | `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook and entity navigation. It writes nothing to the knowledge repo: even a person's own page removal is queued here and performed by the librarian |
 | `answer/` | the answering agent + deterministic verifier: powers the `ask` tool |
-| `capture/` | the durable capture queue: submit, claim, the evidence plane, retention — ONE vocabulary of four kinds (`raw`, `page`, `meeting`, `document`) for every door; and `stigmergy-queue`, the operator's view of the write path without a SQL client |
-| `librarian/` | the filing engine: the worker, the agent, the nine gates, the commit; the identities it writes into the same commit as the page, the meeting flow, and the **night shift** — the view sweep, the repair pass, the gardener and the retention purge, all on the idle branch, none of them ever while a capture is waiting |
+| `capture/` | the durable capture queue: submit, claim, the evidence plane, retention — ONE vocabulary of four kinds (`raw`, `page`, `meeting`, `document`) for every door, each of which rides the same filing flow and differs only in what it requires at the door and how big it may be; and `stigmergy-queue`, the operator's view of the write path without a SQL client |
+| `librarian/` | the filing engine, ONE pipe wide: the worker, the agent, the nine gates, the verbatim `sources/` archive every capture writes, the commit; the identities it writes into the same commit as the pages, the removals a person asked for, and the **night shift** — the gardener and the retention purge, both on the idle branch, neither ever while a capture is waiting |
 | `entities/` | a LIBRARY, and nothing else: the rules of entity birth (the name gate, the collision fold, the page render the librarian runs) and the registry generator that derives `ops/entity-registry.json` from `wiki/entities/`. It has no CLI and no decision door — an entity is introduced by a capture, and the librarian is the one caller |
 | `slack/` | the Slack transport: 🧠 capture, `@brain` Q&A, and the push-channel poller that files what a channel publishes |
-| `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis. A LIBRARY with no CLI and no entry point — the librarian worker is its only caller, on the idle branch and right after a meeting files |
-| `gardener/` | corpus health on demand: eleven deterministic checks + three bounded model passes (an editorial sweep over changed-plus-sampled pages, every entity page judged for a body that says nothing, and every registered entity judged against the others for a second identity of the same thing), findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
-| `repair/` | the repair loop, unattended: for a gardener finding an agent DECLARES a repair — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and the worker applies it on its idle branch, one commit per repair, having validated it twice and put the resulting diff through the same nine gates. Nobody approves it: what bounds it is a permanent memory of what has already been repaired, two ceilings per pass, and the gates; what replaces the reading is the stored diff. A person REMOVES pages at `brain_delete` — the one repair a human decides, queued there and performed by the same worker, with the pages that referred to them rewritten by a model and the diff carried on the capture |
-| `digest/` | the week's activity in one Slack post |
-| `admin/` | the ops console: `/admin` on the same app process group — ten pages: the dashboard, the read-only capture queue, the entities desk where the registry is browsed and an entity can be registered by saying what it is (the name checked against the registry as you type), the repair ledger and page removal, the night shift's own page, gardener/digest/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |
+| `gardener/` | corpus health on demand: ten deterministic checks over `pages_index`, the queue, the registry and the repo checkout, findings persisted and reported — fixes nothing, writes nothing, vetoes nothing, and asks no model, so it needs no provider key at all |
+| `repair/` | removing pages, which is the one write to the corpus a HUMAN decides: a person names them at `brain_delete` or on the console, and this package works out what that costs — which paths this lane may delete at all, which pages in the corpus refer to them, and the exact bytes each of those must end up carrying so no reference survives as a dead link. Structure is code's, prose is a model's: code drops the frontmatter entries that named a removed page, a model rewrites the bodies that mentioned it, and every bound on what it wrote is proved on the bytes. The worker performs it, and nobody read that prose first — so the diff is carried on the capture and kept in the ledger |
+| `admin/` | the ops console: `/admin` on the same app process group — nine pages: the dashboard, the read-only capture queue, the entities desk where the registry is browsed and an entity can be registered by saying what it is (the name checked against the registry as you type), the removal ledger and page removal, the night shift's own page, gardener/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |
 
 #### Around it
 
@@ -314,7 +315,7 @@ Scope discipline, not a roadmap. These are ruled out rather than pending:
   human clicking afterwards is confirming what code already decided — a backlog with a person's name
   on it. The undo is `git revert` in a repository they own.
 - **A second human in the write path, anywhere.** Not for an entity, not for a spelling, not for a
-  repair. The person who captured already read the material and decided the brain should hold it;
+  removal. The person who captured already read the material and decided the brain should hold it;
   asking a second one to confirm it moves the decision away from the only person who had the
   context, and turns a working system into a queue.
 - **A scheduler outside the deployment.** Every unattended pass runs on the librarian worker's idle

@@ -5,7 +5,7 @@ from counting as "anchored"/"declared company-wide".
 """
 import os
 
-from stigmergy.gardener import checks, sweep
+from stigmergy.gardener import checks
 from stigmergy.kernel.registry import load_registry
 from tests.gardener import support
 
@@ -33,6 +33,18 @@ def _file_page(conn, repo, relpath: str, *, entity: list, page_type: str = "note
                                           "status": "developing", "updated": "2026-07-01"},
                               body=body)
     return path
+
+
+def _archive_page(conn, repo, relpath: str, *, body: str = "") -> str:
+    """One PROVENANCE page — the verbatim archive every capture files, which is the population
+    every check below has to exclude. `type: source` is what makes it provenance
+    (`page.PROVENANCE_PAGE_TYPES`), and `sources/` is the zone it lives in; a page in `wiki/` with
+    that type would be neither."""
+    return support.write_page(repo, "sources", relpath,
+                              frontmatter={"type": "source", "title": relpath, "entity": [],
+                                          "status": "developing", "updated": "2026-07-01",
+                                          "source_kind": "upload", "content_hash": "sha256:abc"},
+                              body=body)
 
 
 # ── anchor concentration ────────────────────────────────────────────────────────────────────────
@@ -84,19 +96,21 @@ def test_anchor_concentration_threshold_override_changes_the_outcome(conn, repo)
 
 
 def test_anchor_concentration_excludes_provenance_pages_from_the_population(conn, repo):
-    """The load-bearing exclusion: 3 acme notes + 2 meeting pages in a window of 5 — WITHOUT
-    excluding the meetings the share would sit exactly at 60% (not above it, no finding); WITH the
-    exclusion the denominator drops to 3 and the same numerator reads 100%."""
+    """The load-bearing exclusion: 3 acme notes + 2 verbatim archive pages in a window of 5 —
+    WITHOUT excluding the archive the share would sit exactly at 60% (not above it, no finding);
+    WITH the exclusion the denominator drops to 3 and the same numerator reads 100%.
+
+    It matters more than it used to: EVERY capture files an archive page now, so a population that
+    counted them would be half provenance by construction."""
     registry = _registry(repo)
     for i in range(3):
         p = _file_page(conn, repo, f"notes/acme-note-{i}.md", entity=["acme-corp"])
         support.rebuild_index(conn, repo)
         support.seed_filed_capture(conn, result_ref=f"{p}@sha{i}")
     for i in range(2):
-        p = _file_page(conn, repo, f"meetings/standup-{i}.md", entity=["beta-robotics"],
-                       page_type="meeting")
+        p = _archive_page(conn, repo, f"notes/standup-{i}.md")
         support.rebuild_index(conn, repo)
-        support.seed_filed_capture(conn, result_ref=f"{p}@shameeting{i}")
+        support.seed_filed_capture(conn, result_ref=f"{p}@shaarchive{i}")
 
     findings = checks.check_anchor_concentration(conn, registry, window=5, share_threshold=0.6)
 
@@ -198,12 +212,12 @@ def test_company_wide_fraction_excludes_provenance_pages(conn, repo):
     p1 = _file_page(conn, repo, "notes/anchored.md", entity=["acme-corp"])
     support.rebuild_index(conn, repo)
     support.seed_filed_capture(conn, result_ref=f"{p1}@sha0")
-    p2 = _file_page(conn, repo, "meetings/standup.md", entity=[], page_type="meeting")
+    p2 = _archive_page(conn, repo, "notes/standup.md")
     support.rebuild_index(conn, repo)
     support.seed_filed_capture(conn, result_ref=f"{p2}@sha1")
 
     # Without the exclusion this window would read 1 anchored + 1 "company-wide" = 50%, above a
-    # 30% threshold. With it, the meeting page never enters the population at all: 0/1 = 0%.
+    # 30% threshold. With it, the archive page never enters the population at all: 0/1 = 0%.
     assert checks.check_company_wide_fraction(conn, window=2, share_threshold=0.3) == []
 
 
@@ -243,11 +257,11 @@ def test_company_page_names_entity_ignores_anchored_pages(conn, repo):
 
 
 def test_company_page_names_entity_excludes_provenance_pages(conn, repo):
-    """A `meeting` page's `entity: []` never means "declared company-wide" — it must not be
+    """An archive page's `entity: []` never means "declared company-wide" — it must not be
     checked for a verbatim entity mention either."""
     registry = _registry(repo)
-    _file_page(conn, repo, "meetings/standup.md", entity=[], page_type="meeting",
-              body="Discussed Acme Corp renewal today.")
+    _archive_page(conn, repo, "notes/standup.md",
+                  body="Discussed Acme Corp renewal today.")
     support.rebuild_index(conn, repo)
 
     assert checks.check_company_page_names_entity(conn, registry) == []
@@ -336,30 +350,3 @@ def test_company_page_names_entity_suggested_action_names_the_real_routes(conn, 
     assert "supersed" in lowered
     # (c) leaving a genuinely company-wide page alone is a legitimate outcome, not an oversight.
     assert "leav" in lowered or "legitimate" in lowered
-
-
-def test_both_reanchor_suggested_actions_drop_the_capture_claim_and_name_the_real_routes(
-        conn, repo):
-    """Both call sites of the same broken promise, walked TOGETHER, so a fix that
-    corrects one and forgets its sibling fails loudly rather than passing on the half that got
-    fixed: `checks.py`'s own emitted finding, AND `sweep.py`'s static `MODEL_SUGGESTED_ACTIONS`
-    dict entry for `CHECK_MODEL_ANCHOR_FIT` (`sweep.py`'s own docstring: `suggested_action` for a
-    model finding is NEVER model-generated — it is this fixed dict, looked up by slug alone)."""
-    registry = _registry(repo)
-    _file_page(conn, repo, "product/renewal-terms.md", entity=[], page_type="note",
-              body="This applies to Acme Corp specifically.")
-    support.rebuild_index(conn, repo)
-    checks_action = checks.check_company_page_names_entity(conn, registry)[0]["suggested_action"]
-    sweep_action = sweep.MODEL_SUGGESTED_ACTIONS[sweep.CHECK_MODEL_ANCHOR_FIT]
-
-    sites = {"checks.check_company_page_names_entity": checks_action,
-             "sweep.MODEL_SUGGESTED_ACTIONS[CHECK_MODEL_ANCHOR_FIT]": sweep_action}
-    for label, action in sites.items():
-        lowered = action.lower()
-        assert "filed the same way" not in action, label
-        assert "MCP capture" not in action, label
-        assert "entity:" in action, label
-        assert "edit" in lowered, label
-        assert "commit" in lowered, label
-        assert "supersed" in lowered, label
-        assert "leav" in lowered or "legitimate" in lowered, label

@@ -1,12 +1,13 @@
 // The gardener: corpus health on a nightly walk. Findings filter by severity and by check; the
-// history strip shows each run's outcome; Run now dispatches the workflow (real model spend).
+// history strip shows each run's outcome. Every check is deterministic — the run has no model
+// half, so there is no spend to show and no pass that can half-fail.
 
 import { api } from "../api.js";
 import { chartCard, hbars, runStrip, stackedColumns } from "../charts.js";
 import { check as checkCopy, severity as severityCopy } from "../copy.js";
 import { getMeta, windowDays } from "../state.js";
 import {
-  banner, chips, el, fmtDay, fmtWhen, icon, kv, mono, pill, relTime, render, severityPill, table,
+  chips, el, fmtDay, fmtWhen, icon, kv, mono, pill, relTime, render, severityPill, table,
 } from "../ui.js";
 import { loading, runShape, runTable } from "./common.js";
 
@@ -26,7 +27,6 @@ export async function gardenerView(host) {
     const filtered = data.findings.filter((f) =>
       (!filter.severity || f.severity === filter.severity) && (!filter.check || f.check === filter.check));
     const stats = (data.run && data.run.stats) || {};
-    const passErrors = ["sweep", "empty_body", "duplicate_entity"].filter((k) => stats[k] && stats[k].error).map((k) => `${k.replaceAll("_", " ")}: ${stats[k].error}`);
     // the workflow row comes from the server's own table; no button when it is not listed there
     const history = metrics.job_history.gardener || [];
     const runs = history.map((r) => runShape(r, (run) => `${run.status}${(run.stats || {}).findings_total !== undefined ? ` · ${run.stats.findings_total} findings` : ""}`));
@@ -48,24 +48,22 @@ export async function gardenerView(host) {
           el("div", { class: "sub" }, "Runs nightly inside the librarian worker, on its idle branch. To run one now: ", mono("stigmergy-gardener"), " from a terminal."),
           data.run ? kv([
             ["findings", el("div", { class: "row" }, ...Object.entries(severities).map(([s, n]) => el("span", { class: "row" }, severityPill(s), String(n))), !Object.keys(severities).length ? "none — a healthy corpus" : null)],
-            ["pages walked", stats.pages !== undefined ? String(stats.pages) : (stats.sampled !== undefined ? `${stats.changed || 0} changed + ${stats.sampled} sampled` : null)],
-            ["model spend", stats.cost_usd !== undefined ? `$${Number(stats.cost_usd).toFixed(3)}` : null],
+            ["pages walked", stats.pages_checked !== undefined ? String(stats.pages_checked) : null],
+            ["entities walked", stats.entities_checked !== undefined ? String(stats.entities_checked) : null],
           ]) : null,
-          passErrors.length ? banner("warn", el("p", {}, el("strong", {}, "partial run"), " — the deterministic findings are complete and trustworthy; a model pass failed and produced zero findings this run:"), el("ul", { class: "names" }, passErrors.map((e) => el("li", {}, e)))) : null,
           el("div", { class: "hr" }),
           chartCard({ title: "Run history", sub: "height is duration, colour the outcome", chart: runStrip({ runs, height: 44 }), tableSpec: runTable(runs), cls: "tight" }))),
       el("div", { class: "grid halves" },
         chartCard({
           title: "Findings by check", sub: "what the latest run found most of — click a bar to filter the table",
-          chart: hbars({ rows: Object.entries(byCheck).sort((a, b) => b[1] - a[1]).map(([c, n]) => ({ label: c, value: n, color: c.startsWith("model-") ? "model" : "code", sub: checkCopy(c) || "findings",
+          chart: hbars({ rows: Object.entries(byCheck).sort((a, b) => b[1] - a[1]).map(([c, n]) => ({ label: c, value: n, color: "code", sub: checkCopy(c) || "findings",
             onclick: () => { filter.check = filter.check === c ? "" : c; gardenerView(host); } })), labelWidth: 210 }),
           tableSpec: { headers: ["check", "findings", "meaning"], rows: Object.entries(byCheck).map(([c, n]) => ({ cells: [c, String(n), checkCopy(c)] })) },
         }),
         el("section", { class: "card" },
-          el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "What the checks mean"), el("div", { class: "sub" }, "the deterministic checks first, then what the model passes judged; the gardener fixes nothing"))),
+          el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "What the checks mean"), el("div", { class: "sub" }, "every check is deterministic; the gardener reports and fixes nothing"))),
           table(["", "check", "looks for"],
-            [...Object.keys(byCheck).filter((c) => !c.startsWith("model-")).sort().map((c) => ({ cells: [pill("code", "code", { small: true }), mono(c), checkCopy(c) || "—"] })),
-             ...Object.keys(byCheck).filter((c) => c.startsWith("model-")).sort().map((c) => ({ cells: [pill("model", "model", { small: true }), mono(c), checkCopy(c) || "—"] }))],
+            Object.keys(byCheck).sort().map((c) => ({ cells: [pill("code", "code", { small: true }), mono(c), checkCopy(c) || "—"] })),
             { dense: true, empty: "no findings to explain yet" }))),
       el("section", { class: "card" },
         el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, `${filtered.length} finding(s)`), el("div", { class: "sub" }, "each names a subject page or entity, what is off, and the suggested action"))),

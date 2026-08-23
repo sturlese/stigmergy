@@ -123,15 +123,17 @@ else
        "entity-first resolution until one exists (not a failure)" >&2
 fi
 
-# The digest's audience-scoping map, for the admin console's in-process digest. Same
-# always-written posture as the registry above so the Dockerfile COPY never fails; `{}` is a
-# valid empty mapping — every audience then falls back to the safe empty default.
+# The Slack transport's channel->audience map. Same always-written posture as the registry above
+# so the Dockerfile COPY never fails; `{}` is a valid empty mapping — every audience then falls
+# back to the safe empty default. NOTE: `fly.toml`'s slack command passes no `--channels`, so the
+# deployed transport does not read the baked file yet; it is validated and baked so that wiring it
+# up is a one-flag change rather than a new deploy step.
 if [ -f "$STIGMERGY_REPO/ops/slack-channels.json" ]; then
   cp "$STIGMERGY_REPO/ops/slack-channels.json" "$DEPLOY_DIR/slack-channels.json"
   echo "deploy: baked $STIGMERGY_REPO/ops/slack-channels.json -> deploy/slack-channels.json"
 else
   echo '{}' > "$DEPLOY_DIR/slack-channels.json"
-  echo "deploy: no $STIGMERGY_REPO/ops/slack-channels.json yet — digest audiences fall back to" \
+  echo "deploy: no $STIGMERGY_REPO/ops/slack-channels.json yet — channel audiences fall back to" \
        "the safe empty default (not a failure)" >&2
 fi
 

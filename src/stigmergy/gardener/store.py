@@ -62,14 +62,16 @@ ORDER BY started_at DESC LIMIT 1
 
 
 def latest_completed_run(conn) -> dict | None:
-    """The most recent completed run, or `None`. Public for `stigmergy.digest`'s corpus-health
+    """The most recent completed run, or `None`. Public for the console's corpus-health
     read.
 
-    `status IN ('ok', 'partial')`, not `'ok'` alone: a `'partial'` run's FINDINGS are exactly as
-    trustworthy — they committed before the sweep ever ran. The SAME status pair
-    `sweep.previous_run_watermark` accepts, which then narrows further on `stats.sweep.error`: the
-    status is an aggregate over three passes, so it is the wrong question for a baseline and the
-    right one for "did this run commit findings"."""
+    `status IN ('ok', 'partial')`, not `'ok'` alone, and `'partial'` is now purely HISTORICAL: it
+    meant a model pass had failed while the deterministic findings committed anyway, and the model
+    passes are retired, so no run written from here can be `'partial'` again. It stays in the
+    predicate because a deployed `job_runs` holds such rows — narrowing to `'ok'` would blank the
+    admin console's gardener page on any deployment whose last completed run
+    predates this change, until the next nightly pass. Those runs' findings are as trustworthy as
+    they ever were: they were the deterministic ones."""
     with conn.cursor() as cur:
         cur.execute(_LATEST_COMPLETED_RUN, (JOB_NAME,))
         row = cur.fetchone()

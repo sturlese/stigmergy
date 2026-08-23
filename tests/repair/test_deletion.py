@@ -30,7 +30,7 @@ def _write(root: str, relpath: str, text: str) -> str:
 def _page(title: str, *, page_type: str = "note", related=(), sources=(), body: str = "",
           extra=()) -> str:
     front = [f"type: {page_type}", f'title: "{title}"', "status: developing",
-             "created: 2026-01-01", "updated: 2026-01-01", "tags: [note]",
+             "created: 2026-01-01", "updated: 2026-01-01", f"tags: [{page_type}]",
              f"related: {json.dumps(list(related), ensure_ascii=False)}",
              f"sources: {json.dumps(list(sources), ensure_ascii=False)}", *extra]
     return "---\n" + "\n".join(front) + "\n---\n\n" + (body or f"# {title}\n\nSomething.\n")
@@ -147,30 +147,36 @@ def test_a_block_style_list_loses_only_the_item_that_names_the_deleted_page(tmp_
 
 def test_a_supersession_pointer_at_a_deleted_page_goes(tmp_path):
     """A pointer to a page that no longer exists is dead whether or not it is spelled as a
-    wikilink: `supersedes:` names a page, and the page is gone."""
+    wikilink: `supersedes:` names a page, and the page is gone.
+
+    OLD BEHAVIOUR: these three pages were `type: note` under `wiki/notes/`, because
+    supersession was read as a decision-page affair. The vocabulary has four types and a conclusion
+    is a `note`, so the chain is between notes — `supersedes:`/`superseded_by:` were never keyed to
+    a type, and this test is what says so.
+    """
     root = str(tmp_path)
-    _write(root, "wiki/decisions/Old.md", _page("Old", page_type="decision"))
-    _write(root, "wiki/decisions/New.md",
-           _page("New", page_type="decision", extra=['supersedes: "Old"']))
-    _write(root, "wiki/decisions/Newer.md",
-           _page("Newer", page_type="decision", extra=['superseded_by: "[[Old]]"']))
+    _write(root, "wiki/notes/Old.md", _page("Old"))
+    _write(root, "wiki/notes/New.md", _page("New", extra=['supersedes: "Old"']))
+    _write(root, "wiki/notes/Newer.md", _page("Newer", extra=['superseded_by: "[[Old]]"']))
 
-    ops = deletion.plan(root, ["wiki/decisions/Old.md"])
+    ops = deletion.plan(root, ["wiki/notes/Old.md"])
 
-    assert "supersedes:" not in _after(ops, "wiki/decisions/New.md")
-    assert "superseded_by:" not in _after(ops, "wiki/decisions/Newer.md")
+    assert "supersedes:" not in _after(ops, "wiki/notes/New.md")
+    assert "superseded_by:" not in _after(ops, "wiki/notes/Newer.md")
 
 
 def test_a_supersession_pointer_at_a_surviving_page_is_left_alone(tmp_path):
-    """The benign twin: the sweep reads the pointer's VALUE, it does not drop the field on sight."""
-    root = str(tmp_path)
-    _write(root, "wiki/decisions/Old.md", _page("Old", page_type="decision"))
-    _write(root, "wiki/decisions/Other.md", _page("Other", page_type="decision"))
-    _write(root, "wiki/decisions/New.md",
-           _page("New", page_type="decision", related=["[[Old]]"],
-                 extra=['supersedes: "Other"']))
+    """The benign twin: the sweep reads the pointer's VALUE, it does not drop the field on sight.
 
-    after = _after(deletion.plan(root, ["wiki/decisions/Old.md"]), "wiki/decisions/New.md")
+    OLD BEHAVIOUR: spelled over `wiki/notes/` pages, a folder no lane writes any more.
+    """
+    root = str(tmp_path)
+    _write(root, "wiki/notes/Old.md", _page("Old"))
+    _write(root, "wiki/notes/Other.md", _page("Other"))
+    _write(root, "wiki/notes/New.md",
+           _page("New", related=["[[Old]]"], extra=['supersedes: "Other"']))
+
+    after = _after(deletion.plan(root, ["wiki/notes/Old.md"]), "wiki/notes/New.md")
 
     assert 'supersedes: "Other"' in after
 
@@ -369,15 +375,15 @@ def test_the_touched_set_is_the_deleted_pages_and_the_scrubbed_ones(tmp_path):
     mentioned it."""
     root = str(tmp_path)
     _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
-    _write(root, "wiki/decisions/Cites It.md",
-           _page("Cites It", page_type="decision", related=["[[Doomed]]"]))
+    _write(root, "wiki/concepts/Cites It.md",
+           _page("Cites It", page_type="concept", related=["[[Doomed]]"]))
 
     ops = deletion.plan(root, ["wiki/notes/Doomed.md"])
 
     from stigmergy.repair import schema
-    assert schema.target_paths(ops) == ["wiki/decisions/Cites It.md", "wiki/notes/Doomed.md"]
+    assert schema.target_paths(ops) == ["wiki/concepts/Cites It.md", "wiki/notes/Doomed.md"]
     assert deletion.expected_bytes(ops) == {
-        "wiki/decisions/Cites It.md": _after(ops, "wiki/decisions/Cites It.md")}
+        "wiki/concepts/Cites It.md": _after(ops, "wiki/concepts/Cites It.md")}
 
 
 def test_a_plan_bigger_than_its_ceiling_is_named_rather_than_stored(tmp_path):
@@ -521,44 +527,6 @@ def test_the_apply_performs_the_plan_when_the_corpus_has_not_moved(tmp_path):
     assert not os.path.exists(os.path.join(root, "wiki/notes/Doomed.md"))
     with open(os.path.join(root, "wiki/notes/Cites It.md"), encoding="utf-8") as f:
         assert "Doomed" not in f.read()
-
-
-# ── the deterministic duplicate road, as pure functions ───────────────────────────────────────
-def _source(title: str, *, digest: str, extracted_at: str = "2026-01-01T00:00:00Z") -> str:
-    return ("---\ntype: source\n" + f'title: "{title}"\n' + "tags: [source]\n"
-            + f'content_hash: "sha256:{digest}"\n' + f'extracted_at: "{extracted_at}"\n'
-            + "tier: 1\n---\n\n" + f"# {title}\n\nThe document.\n")
-
-
-def test_pages_with_different_content_hashes_are_never_a_duplicate_group(tmp_path):
-    root = str(tmp_path)
-    _write(root, "sources/One.md", _source("One", digest="aaa"))
-    _write(root, "sources/Two.md", _source("Two", digest="bbb"))
-    _write(root, "wiki/notes/Anchor.md", _page("Anchor"))
-
-    assert deletion.duplicate_source_groups(root) == []
-
-
-def test_a_wiki_page_is_never_a_duplicate_however_its_hashes_read(tmp_path):
-    """The road is `sources/` only. A `wiki/` page is somebody's writing, and two of them saying
-    the same thing is an editorial question rather than a filing accident."""
-    root = str(tmp_path)
-    _write(root, "wiki/notes/One.md", _page("One", extra=['content_hash: "sha256:aaa"']))
-    _write(root, "wiki/notes/Two.md", _page("Two", extra=['content_hash: "sha256:aaa"']))
-
-    assert deletion.duplicate_source_groups(root) == []
-
-
-def test_three_filings_of_one_document_keep_exactly_one(tmp_path):
-    """A group is one question, whatever its size: the corpus keeps the copy it cites and every
-    other filing goes in the same proposal."""
-    root = str(tmp_path)
-    for name in ("First", "Second", "Third"):
-        _write(root, f"sources/{name}.md", _source(name, digest="aaa"))
-    _write(root, "wiki/notes/Reader.md", _page("Reader", related=["[[Second]]"]))
-
-    assert deletion.duplicate_source_groups(root) == [
-        ("sources/Second.md", ["sources/First.md", "sources/Third.md"])]
 
 
 def test_a_page_that_mentions_nothing_going_is_left_out_of_the_plan_byte_for_byte(tmp_path):

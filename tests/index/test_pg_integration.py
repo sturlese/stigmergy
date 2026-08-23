@@ -22,11 +22,11 @@ from stigmergy.index.backends.embedder import build_embedder
 from tests import testdb
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "repo")
-# 4 wiki + 6 source + 1 view — asserted against the fixture repo. The 4th wiki page,
+# 4 wiki + 6 source — asserted against the fixture repo. The 4th wiki page,
 # `globex-initech-partnership.md`, carries `entity: [globex, initech]`: the fixture's only
 # multi-element `entity:` page, and so the plural `entity:` contract's only witness at the
 # Postgres level.
-FIXTURE_PAGES = 11
+FIXTURE_PAGES = 10
 
 
 def _connect_or_skip():
@@ -47,7 +47,7 @@ def test_rebuild_populates_exactly_the_included_zones(conn):
     assert store.page_count(conn) == FIXTURE_PAGES
     with conn.cursor() as cur:
         cur.execute("SELECT zone, count(*) FROM pages_index GROUP BY zone ORDER BY zone")
-        assert dict(cur.fetchall()) == {"views": 1, "sources": 6, "wiki": 4}
+        assert dict(cur.fetchall()) == {"sources": 6, "wiki": 4}
         cur.execute("SELECT count(*) FROM pages_index WHERE path LIKE '%excluded%'")
         assert cur.fetchone()[0] == 0
 
@@ -55,14 +55,15 @@ def test_rebuild_populates_exactly_the_included_zones(conn):
 def test_filter_and_acl_columns_land_in_the_schema(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT status, owner, acl, inlinks, content_hash FROM pages_index"
-                    " WHERE path = 'wiki/decisions/refund-policy.md'")
+                    " WHERE path = 'wiki/notes/refund-policy.md'")
         status, owner, acl, inlinks, content_hash = cur.fetchone()
     assert status == "canonical" and owner == "steward"
     assert acl is None                      # no acl -> NULL (open); stored here, enforced on read
     assert inlinks == 2
     assert content_hash.startswith("sha256:")
     with conn.cursor() as cur:
-        cur.execute("SELECT acl FROM pages_index WHERE path = 'views/globex.md'")
+        cur.execute("SELECT acl FROM pages_index"
+                    " WHERE path = 'sources/general/legacy-pricing-2023-ffffff.md'")
         assert cur.fetchone()[0] == ["sales"]    # text[] — labels survive verbatim, no CSV
 
 
@@ -71,7 +72,7 @@ def test_links_column_and_its_gin_index_land_in_the_schema(conn):
     `read_page`'s backlinks query is a containment lookup, never a scan."""
     with conn.cursor() as cur:
         cur.execute("SELECT links FROM pages_index"
-                    " WHERE path = 'wiki/decisions/refund-policy.md'")
+                    " WHERE path = 'wiki/notes/refund-policy.md'")
         assert cur.fetchone()[0] == ["wiki/playbooks/support-playbook.md"]
         cur.execute("SELECT indexdef FROM pg_indexes"
                     " WHERE tablename = 'pages_index' AND indexname = 'pages_index_links_gin'")
@@ -178,7 +179,7 @@ def test_the_plural_entity_page_is_found_by_either_of_its_two_entities(conn):
     """The structural witness the plural `entity:` contract needs at the Postgres level — every
     OTHER exercise of the `entity` filter in this suite uses a single-element page, where
     membership is indistinguishable from equality."""
-    page = "wiki/decisions/globex-initech-partnership.md"
+    page = "wiki/notes/globex-initech-partnership.md"
     for entity_filter in ("globex", "initech"):
         hits = search.search(conn, "cross-account renewal coordination", k=10,
                              filters={"entity": entity_filter})
@@ -190,7 +191,7 @@ def test_an_fts_query_naming_only_the_second_entity_finds_the_plural_page(conn):
     page's title, body or tags — only in its `entity:` frontmatter — so finding it by that word
     alone proves the second array element reached the `tsv` column."""
     hits = search.search(conn, "initech", k=10)
-    assert "wiki/decisions/globex-initech-partnership.md" in [h["path"] for h in hits]
+    assert "wiki/notes/globex-initech-partnership.md" in [h["path"] for h in hits]
 
 
 def test_url_bearing_query_does_not_crash_the_lexical_arm(conn):

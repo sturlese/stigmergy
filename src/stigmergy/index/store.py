@@ -47,11 +47,6 @@ CREATE TABLE pages_index (
   --                                          the INBOUND view (backlinks) into a containment
   --                                          lookup (`links @> ARRAY[path]`), never a scan —
   --                                          `read_page` serves both directions.
-  generated_at text NOT NULL DEFAULT '',   -- a view's own `generated_at` frontmatter
-  --                                          (ISO-8601) — the one view-only field
-  --                                          `describe_entity`'s view layer needs that no
-  --                                          existing column carries (views set neither
-  --                                          `updated` nor `as_of`); empty for every other page.
   content_hash text NOT NULL,
   tsv tsvector,
   -- halfvec, not vector — and the reason is a hard ceiling, not a preference.
@@ -438,8 +433,7 @@ def store_embeddings(conn: psycopg.Connection, model: str, by_hash: dict[str, li
 # diverge silently.
 PAGE_COLUMNS = ("path", "page_id", "zone", "title", "body", "type", "status", "entity",
                 "owner", "tier", "as_of", "updated",
-                "superseded_by", "supersedes", "acl", "inlinks", "links",
-                "generated_at", "content_hash")
+                "superseded_by", "supersedes", "acl", "inlinks", "links", "content_hash")
 
 _INSERT_SQL = (
     "INSERT INTO pages_index (" + ", ".join(PAGE_COLUMNS) + ", tsv, embedding)"
@@ -457,7 +451,6 @@ def _page_params(r, *, fts_config: str, embeddings: dict[str, list[float]]) -> d
         "owner": r.owner, "tier": r.tier, "as_of": r.as_of,
         "updated": r.updated, "superseded_by": r.superseded_by,
         "supersedes": r.supersedes, "acl": r.acl, "inlinks": r.inlinks, "links": r.links,
-        "generated_at": r.generated_at,
         "content_hash": r.content_hash, "tags": r.tags, "mentions": r.mentions,
         "entity_meta": r.entity_meta,
         "fts_config": fts_config,

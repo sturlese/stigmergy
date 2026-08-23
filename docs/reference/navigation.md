@@ -21,13 +21,6 @@ wikilink targets, never stems. A stem resolving to several pages stores every ma
 own outbound list. A GIN index (`pages_index_links_gin`) turns the INBOUND view (backlinks) into a
 containment lookup (`links @> ARRAY[path]`), never a table scan.
 
-**`views/` paths are never link TARGETS**, and the exclusion is in `by_stem_index` itself. A view
-is derived — nobody authors it, nobody wikilinks it, `describe_entity` serves it by path — and its
-filename IS the entity id, which for any single-word entity collides case-insensitively with the
-Title-Case entity page's stem (`views/vantage.md` vs `wiki/entities/Vantage.md`, found on the first
-real regeneration). Dropping the zone here is what keeps `[[Entity]]` resolving to exactly the
-entity page; the knowledge repo's own linter states the same rule from its end.
-
 **One resolution algorithm, two snapshots.** `index.corpus.resolve_links`/`by_stem_index` is the
 one place stems become paths. The full rebuild (`corpus.load_pages`) builds its `stem -> [paths]`
 index from its own in-memory whole-corpus walk; the incremental webhook
@@ -86,7 +79,7 @@ never a silent cap:
   "entity": ["acme"], "as_of": "2026-07",
   "type": "entity", "status": "",
   "supersedes": "", "superseded_by": "",
-  "links": [{"path": "wiki/decisions/acme-renewal.md", "title": "Acme Renewal Decision"}],
+  "links": [{"path": "wiki/notes/acme-renewal.md", "title": "Acme Renewal"}],
   "links_note": "1 page(s) linked from this page — showing all 1.",
   "backlinks": [],
   "backlinks_note": "No pages link to this page.",
@@ -141,14 +134,19 @@ consults, not a second resolver.
    across rebuilds instead of whatever Postgres's scan order happened to be), when that page is
    visible; `null` otherwise. The lookup itself is UNSCOPED on purpose: the path is needed to
    exclude that page from the timeline structurally, whether or not THIS caller can see it.
-2. **`view`** — `{path, title, generated_at}` when `views/<id>.md` exists and
-   is visible (the path is deterministic, computed inline rather than imported);
-   `null` otherwise. The view BODY is read via `read_page` as a second hop, never inlined here.
-3. **`timeline`** — every OTHER page anchored to the entity (excluding its own page and its
-   view): `{path, title, type, status, as_of}`, dated entries first (newest `as_of` first),
-   then undated entries by path — `views.skeleton.timeline_order`'s semantics, expressed
-   in SQL (`ORDER BY (as_of = ''), as_of DESC, path ASC`). Existence-scoped per member, capped at
-   the same `NAV_CAP` (20) `read_page` uses, with the truncation stated the same way.
+2. **`timeline`** — every OTHER page anchored to the entity (excluding its own page):
+   `{path, title, type, status, as_of}`, dated entries first (newest `as_of` first),
+   then undated entries by path (`ORDER BY (as_of = ''), as_of DESC, path ASC`). Existence-scoped
+   per member, capped at the same `NAV_CAP` (20) `read_page` uses, with the truncation stated the
+   same way.
+
+**This IS the per-entity rollup — there is no stored one.** "What do we know about X" is answered
+at READ time: `describe_entity` assembles the territory above per caller, and `ask` writes the
+prose from it, under that caller's own identity. There used to be a `views/<id>.md` page holding a
+skeleton and an agent-written synthesis, kept fresh by a convergence sweep. Both are gone, and what
+replaced them is strictly better scoped: one stored page has to be true for everybody at once, so
+it carried no `acl:` at all and could only ever summarise the OPEN subset — a finance reader's own
+material was named nowhere in it. The timeline below is that reader's own.
 
 **Absence is existence-scoped, not merely "not found."** An unregistered AND unanchored input, a
 registered id resolved but never anchored anywhere visible, and a registered id anchored ONLY

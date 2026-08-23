@@ -41,19 +41,16 @@ EVALS_INDEX = ROOT / "evals" / "index.md"
 # below is a genuine agreement between them. Importing the runner's number would make every
 # assertion in this file a tautology the day somebody edits it to match a broken set.
 #
-# `edits` sits at 1 rather than 2 because F01 stopped naming the facet, and that is a CONTRACT
-# CHANGE with evidence behind it rather than a pin relaxed to make something pass: the first
-# Sonnet-5 baseline — run before any number was recorded — declared a reciprocal link on the page
-# F01's material openly continues, which is correct filing, and the `edits: []` it was scored
-# against asserted an assumption about how one backend would file. Under the containment rule that
-# replaced list equality, an empty list is true for every backend anyway, so the honest spelling of
-# "this capture owes no edit" is silence. `expected/expectations.json`'s F01 `why` note is the
-# source of truth; `test_no_expectation_names_an_empty_edits_list` keeps the trap from returning.
+# MOVED when the `edits` facet RETIRED. It scored which other pages a commit changed from the
+# account's declared `edits`, and a capture no longer declares an additive edit at all — a page
+# that already exists is brought up to date instead, and the facets that score a filing's own page
+# say nothing about that. One number left the table (`edits: 1`) and no other moved: F03 kept every
+# other facet it named. Scores recorded before and after remain comparable per FACET.
 #
 # MOVED for issue #77, and counted by hand off the expectations file again rather than copied from
 # the runner: F11-F14 are four ordinary single-phase filings, each naming status/type/folder/anchor
-# plus the two cost axes, so exactly those six facets gain four apiece and the meeting, edits and
-# reason denominators do not move at all. Scores recorded before and after remain comparable per
+# plus the two cost axes, so exactly those six facets gain four apiece and the page-set and reason
+# denominators do not move at all. Scores recorded before and after remain comparable per
 # FACET and are not comparable per run.
 #
 # MOVED again for the file-first write path, counted by hand a third time. Four numbers changed and each is a fact
@@ -66,8 +63,15 @@ EVALS_INDEX = ROOT / "evals" / "index.md"
 #     score the spelling. `proposals` scores the judgment instead, and loosely.
 #   * `park_question` and `reuse` are GONE with the states they measured, and `proposals` inherits
 #     the former's denominator of 2 from the same two captures.
-DENOMINATORS = {"status": 14, "reason": 1, "type": 13, "folder": 13, "anchor": 10, "edits": 1,
-                "proposals": 2, "decisions": 2, "attempts": 12, "bounces": 12}
+#
+# MOVED a fourth time for the one pipe, and this time NO number moved: `decisions: 2` became
+# `pages: 2` over the same two transcripts. The old facet counted the `decision` pages a meeting
+# flow wrote into `wiki/decisions/`; there is no `decision` type and no meeting flow, so the same
+# two captures are scored on the page SET the ordinary pipe declares — same count, same one-to-one
+# anchoring. `type` and `folder` keep their 13 and three captures changed the VALUE they name
+# (F05, F08, F09), which is a per-capture comparability break rather than a denominator one.
+DENOMINATORS = {"status": 14, "reason": 1, "type": 13, "folder": 13, "anchor": 10,
+                "proposals": 2, "pages": 2, "attempts": 12, "bounces": 12}
 CAPTURES, PHASES = 14, 14
 
 
@@ -79,26 +83,28 @@ def entries():
 def _perfect(expect: dict) -> dict:
     """The observation a flawless backend would leave for `expect`.
 
-    A translation into the OBSERVED shape — paths for titles, a `preserved` flag for
-    `decisions_preserved` — and deliberately not a copy of `score_phase`'s comparisons: where the
-    scorer is allowed to be generous (word order, list order) this builds the awkward spelling on
-    purpose, so a scorer that quietly became literal fails here.
+    A translation into the OBSERVED shape — paths for titles, a page list for the `pages` facet —
+    and deliberately not a copy of `score_phase`'s comparisons: where the scorer is allowed to be
+    generous (word order, list order) this builds the awkward spelling on purpose, so a scorer that
+    quietly became literal fails here.
     """
     observed = {facet: expect[facet] for facet in
                 ("status", "reason", "type", "folder", "anchor", "attempts", "bounces")
                 if facet in expect}
-    if "edits" in expect:
-        observed["edits"] = list(reversed(expect["edits"]))
     if "proposals" in expect:
         # Padded on purpose, the way a real proposal legitimately differs from the expectation:
         # the agent proposes `the Halcyon Grid programme` and the yardstick names `Halcyon Grid`.
         # A scorer that quietly became literal fails right here rather than on a paid run.
         observed["proposals"] = [f"the {name} programme" for name in expect["proposals"]]
-    if "decisions" in expect:
-        observed["decisions"] = [
-            {"path": f"wiki/decisions/{decision['title']} agreed on the call.md",
-             "anchor": decision.get("anchor", {"kind": "company", "ids": []})}
-            for decision in reversed(expect["decisions"])]
+    if "pages" in expect:
+        # REVERSED, and a title-less entry gets a path naming nothing the expectation asserts: it
+        # pairs on its anchor alone, so a `_perfect` that handed it a title-shaped path would be
+        # quietly re-adding the assertion F08 dropped on purpose.
+        observed["pages"] = [
+            {"path": (f"wiki/notes/{filed['title']} agreed on the call.md" if "title" in filed
+                      else "wiki/notes/Something the call settled.md"),
+             "anchor": filed.get("anchor", {"kind": "company", "ids": []})}
+            for filed in reversed(expect["pages"])]
     return observed
 
 
@@ -138,13 +144,13 @@ def test_aggregating_the_same_phases_twice_is_byte_identical(entries):
 
 
 def test_the_score_of_a_facet_does_not_depend_on_the_order_of_its_lists(entries):
-    """Anchor ids, declared edits and a meeting's decision pages are SETS in everything but their
-    spelling. A scorer that compared them positionally would report misses for correct filings —
-    the dangerous direction for a number a release decision reads."""
+    """Anchor ids and the pages a capture established are SETS in everything but their spelling. A
+    scorer that compared them positionally would report misses for correct filings — the dangerous
+    direction for a number a release decision reads."""
     assert run_filing.score_phase(
-        {"anchor": {"kind": "entity", "ids": ["a", "b"]}, "edits": ["p.md", "q.md"]},
-        {"anchor": {"kind": "entity", "ids": ["b", "a"]}, "edits": ["q.md", "p.md"]},
-    ) == {"anchor": True, "edits": True}
+        {"anchor": {"kind": "entity", "ids": ["a", "b"]}},
+        {"anchor": {"kind": "entity", "ids": ["b", "a"]}},
+    ) == {"anchor": True}
 
 
 # ── AC4: every capture names its facets, and each facet keeps its own denominator ──────────────
@@ -162,9 +168,9 @@ def test_a_facet_an_expectation_is_silent_about_is_absent_rather_than_false(entr
     added to probe one facet dilutes every other one."""
     _, block = _block_naming(entries, "reason")
     observed = dict(_perfect(block), anchor={"kind": "entity", "ids": ["marlowe-publishing"]},
-                    decisions=[{"path": "wiki/decisions/Something.md"}], edits=["wiki/notes/X.md"])
+                    pages=[{"path": "wiki/notes/Something.md"}])
     scored = run_filing.score_phase(block, observed)
-    assert "anchor" not in scored and "decisions" not in scored and "edits" not in scored
+    assert "anchor" not in scored and "pages" not in scored
     assert scored["reason"] is True
 
 
@@ -231,27 +237,26 @@ MUTATIONS = {
     # The set's sharpest probe, mutated the way a real backend gets it wrong: a plausible
     # neighbour from the same registry, not a nonsense id.
     "anchor": lambda o: dict(o, anchor={"kind": "entity", "ids": ["quillon-labs"]}),
-    # The owed page untouched and a DIFFERENT one edited instead. Adding a path beside the owed
-    # one is forgiven by design now (containment — `_edits_match`), so the mutation that proves
-    # this facet still discriminates has to remove the one edit the material actually owed.
-    "edits": lambda o: dict(o, edits=["wiki/decisions/Warehouse Slotting Policy.md"]),
     # The proposal a backend makes when it did not recognise the unregistered name for what it is:
     # a plausible identity, taken from the corpus's own registry, rather than nonsense.
     "proposals": lambda o: dict(o, proposals=["Northwind Freight"]),
-    "decisions": lambda o: dict(o, decisions=[*o["decisions"],
-                                              {"path": "wiki/decisions/A third decision.md",
-                                               "anchor": {"kind": "company", "ids": []}}]),
+    # One page too many: the transcript's two conclusions fragmented into three pages, which is a
+    # granularity failure rather than over-delivery.
+    "pages": lambda o: dict(o, pages=[*o["pages"],
+                                      {"path": "wiki/notes/A third conclusion.md",
+                                       "anchor": {"kind": "company", "ids": []}}]),
     "attempts": lambda o: dict(o, attempts=o["attempts"] + 1),
     "bounces": lambda o: dict(o, bounces=o["bounces"] + 1),
 }
 
 
-# A mutation is only meaningful against the block it was written for. `edits` is the case that
-# needs saying: the mutation above names a page that is NOT the one F03's material owes, and a
-# capture added later that also names `edits` would silently become `_block_naming`'s first hit —
-# mutated with a path its own expectation might legitimately contain, and the test would pass
-# while proving nothing.
-SENSITIVITY_TARGETS = {"edits": "F03-declared-edit-related-growth"}
+# A mutation is only meaningful against the block it was written for, so a facet whose mutation was
+# written against ONE capture pins that capture by name here: `_block_naming` returns the first
+# expectation naming the facet, and a capture added later would silently take its place — mutated
+# with a value its own expectation might legitimately carry, and the test would pass while proving
+# nothing. Empty since the `edits` facet retired, and kept because the next facet whose mutation is
+# capture-specific needs this and would otherwise have to rediscover why.
+SENSITIVITY_TARGETS: dict[str, str] = {}
 
 
 @pytest.mark.parametrize("facet", sorted(MUTATIONS))
@@ -265,9 +270,9 @@ def test_every_facet_reports_a_deliberate_error_as_its_own_miss(facet, entries):
     evidence that the thing was measured. A permanently-green instrument is worse than no
     instrument, because nobody goes looking for the measurement it already appears to have.
 
-    It earned its keep on `edits`: when that facet moved from list equality to containment, the
-    old mutation (add a path) stopped failing and this test said so, instead of the facet quietly
-    becoming unfalsifiable.
+    It earned its keep on the retired `edits` facet: when that facet moved from list equality to
+    containment, the old mutation (add a path) stopped failing and this test said so, instead of
+    the facet quietly becoming unfalsifiable.
 
     The benign twin is the test below: the same fixtures, unmutated, score every facet True.
     """
@@ -294,45 +299,13 @@ def test_the_unmutated_observation_scores_every_facet_of_every_phase_true(entrie
            dict.fromkeys(DENOMINATORS, 1.0)
 
 
-def test_a_reciprocal_link_the_backend_never_declared_is_a_miss(entries):
-    """The other direction of the same facet, and the one the golden set exists to catch: the
-    material continues an account an existing page already holds, and the backend filed a new page
-    without recognising that the old one was owed a link back. Nothing bounces — the capture files
-    perfectly well — so only this facet can see it."""
-    owed = [(e["id"], e["expect"]) for e in entries if e["expect"].get("edits")]
-    assert owed, "the golden set has stopped measuring declared edits"
-    for capture_id, block in owed:
-        assert run_filing.score_phase(block, dict(_perfect(block), edits=[]))["edits"] is False, \
-            capture_id
-
-
-def test_an_edit_the_expectation_never_named_does_not_fail_the_facet():
-    """The containment rule itself, and the reason it is not a relaxation of standards.
-
-    An extra declared edit is an additive `related:` link or a callout on an existing in-lane page
-    (`edits.validate` refuses anything else: a path outside the fast lane's folders, a page this
-    capture created, a symlink, a dead link), judged by `gate_zone` and `gate_body_rewrite` like
-    any other diff. So a backend that cross-links more generously than the yardstick anticipated
-    has done something already proved harmless, and list equality was scoring the yardstick's
-    imagination — which is exactly what the first Sonnet-5 baseline caught, twice.
-    """
-    assert run_filing.score_phase({"edits": ["a.md"]}, {"edits": ["a.md", "b.md"]})["edits"] is True
-
-
-def test_an_owed_edit_missing_from_a_pile_of_others_is_still_a_miss():
-    """Containment forgives extras, never a substitution. A backend that edited two OTHER pages and
-    left the one its material owed untouched has not been generous — it missed the debt, and a
-    facet that counted edits rather than checking for the named one would call that a pass."""
-    assert run_filing.score_phase({"edits": ["a.md"]},
-                                  {"edits": ["b.md", "c.md"]})["edits"] is False
-
-
-def test_the_same_page_edited_twice_still_satisfies_the_expectation_once():
-    """`report["pages_edited"]` is a list, not a set: two declared edits to one page (a `related:`
-    link and an overlap callout) arrive as two entries. The facet asks whether the page was
-    touched, so a duplicate must not read as a different page — and must not fail."""
-    assert run_filing.score_phase({"edits": ["a.md"]},
-                                  {"edits": ["a.md", "a.md"]})["edits"] is True
+# **DELETED with the facet they guarded:** `test_a_reciprocal_link_the_backend_never_declared_is_a_
+# miss`, `test_an_edit_the_expectation_never_named_does_not_fail_the_facet`,
+# `test_an_owed_edit_missing_from_a_pile_of_others_is_still_a_miss` and
+# `test_the_same_page_edited_twice_still_satisfies_the_expectation_once` were the four halves of
+# the `edits` facet's containment rule. A capture no longer declares an additive edit to a page
+# that already exists, `report["pages_edited"]` is gone, and the facet retired with them — so the
+# rule has nothing left to be a rule about. Nothing else in this file changed behaviour.
 
 
 # **DELETED with the phase it guarded:**
@@ -373,25 +346,25 @@ def test_a_missing_anchor_is_a_miss_rather_than_a_crash():
 # ── the two loose matchers, loose in ONE direction only ───────────────────────────────────────
 
 @pytest.mark.parametrize("expected, path", [
-    ("Northwind second wave", "wiki/decisions/Second wave sequencing for Northwind.md"),
-    ("Northwind second wave", "wiki/decisions/Northwind second wave goes depot by depot.md"),
-    ("review checklist", "wiki/decisions/A shared checklist of what every review covers.md"),
+    ("Northwind second wave", "wiki/notes/Second wave sequencing for Northwind.md"),
+    ("Northwind second wave", "wiki/notes/Northwind second wave goes depot by depot.md"),
+    ("review checklist", "wiki/notes/A shared checklist of what every review covers.md"),
 ])
 def test_a_title_matches_however_the_backend_ordered_or_padded_its_words(expected, path):
     """`evals/README.md` records what a literal expectation cost the QA golden
     (`globex-meeting-budget`, a question demanding a word an answer was free to paraphrase
-    around). A decision titled "Second wave sequencing for Northwind" is the same decision as
+    around). A page titled "Second wave sequencing for Northwind" records the same conclusion as
     "Northwind second wave", and an instrument that scored the first a miss would be measuring
     word order."""
     assert run_filing.title_matches(expected, path) is True
 
 
 @pytest.mark.parametrize("expected, path", [
-    ("Northwind second wave", "wiki/decisions/Northwind rollout continues.md"),
-    ("Northwind second wave", "wiki/decisions/Second wave for Quillon.md"),
-    ("Northwind second wave depots", "wiki/decisions/Northwind second wave.md"),
-    ("", "wiki/decisions/Anything at all.md"),
-    ("the decisions of the meeting", "wiki/decisions/Something unrelated entirely.md"),
+    ("Northwind second wave", "wiki/notes/Northwind rollout continues.md"),
+    ("Northwind second wave", "wiki/notes/Second wave for Quillon.md"),
+    ("Northwind second wave depots", "wiki/notes/Northwind second wave.md"),
+    ("", "wiki/notes/Anything at all.md"),
+    ("the decisions of the meeting", "wiki/notes/Something unrelated entirely.md"),
 ])
 def test_a_title_that_is_missing_a_significant_word_is_still_a_miss(expected, path):
     """Generous one way only: a page may say MORE than the expectation and never less. The last
@@ -459,9 +432,9 @@ def test_the_number_fold_is_reachable_through_the_matcher_that_uses_it():
     `_same_word` beside a matcher that compares tokens with `==` would be exactly the shape of a
     fix that never shipped. Driven through the real scorer, on the real F08 shape."""
     assert run_filing.title_matches(
-        "review", "wiki/decisions/A shared checklist of what every review covers.md") is True
+        "review", "wiki/notes/A shared checklist of what every review covers.md") is True
     assert run_filing.title_matches(
-        "review", "wiki/decisions/A shared checklist of what the reviews cover.md") is True
+        "review", "wiki/notes/A shared checklist of what the reviews cover.md") is True
 
 
 def test_a_proposal_is_matched_on_the_name_however_the_agent_qualified_it():
@@ -503,78 +476,104 @@ def test_a_second_proposal_beside_the_expected_one_does_not_fail_the_facet():
         {"proposals": ["Halcyon Grid", "Halcyon Grid Scheduling"]})["proposals"] is True
 
 
-# ── a meeting's decision pages: count, anchors, and one-to-one ────────────────────────────────
+# ── the page SET a capture established: count, anchors, and one-to-one ────────────────────────
+# RENAMED from `decisions` with the flow that wrote them. The predicate is the same function under
+# a new name, so every case below survived the rename unchanged in substance: what moved is what it
+# pairs — `report['pages_filed']`, every page a capture declares, rather than a meeting flow's own
+# `decision` list. The two transcripts in the golden set are still where it is exercised, because
+# they are the only captures whose material establishes more than one thing.
 
-TWO_DECISIONS = [{"title": "Northwind second wave",
-                  "anchor": {"kind": "entity", "ids": ["northwind-freight"]}},
-                 {"title": "review checklist", "anchor": {"kind": "company", "ids": []}}]
+TWO_PAGES = [{"title": "Northwind second wave",
+              "anchor": {"kind": "entity", "ids": ["northwind-freight"]}},
+             {"title": "review checklist", "anchor": {"kind": "company", "ids": []}}]
 
 
 def _page(title, anchor):
-    return {"path": f"wiki/decisions/{title}.md", "anchor": anchor}
+    return {"path": f"wiki/notes/{title}.md", "anchor": anchor}
 
 
-def test_a_meeting_that_split_two_decisions_into_three_pages_is_a_miss():
-    """Five pages where two were expected has not over-delivered — it has fragmented one decision
-    into pieces that each anchor separately, which is the granularity failure the meeting brief
-    spends a section on."""
+def test_a_capture_that_split_two_conclusions_into_three_pages_is_a_miss():
+    """Three pages where two were expected has not over-delivered — it has fragmented one
+    conclusion into pieces that each anchor separately, and a reader of the corpus now has two
+    half-answers where the transcript settled one thing."""
     observed = [_page("Northwind second wave", {"kind": "entity", "ids": ["northwind-freight"]}),
                 _page("review checklist", {"kind": "company", "ids": []}),
                 _page("Northwind second wave timing", {"kind": "company", "ids": []})]
-    assert run_filing.score_phase({"decisions": TWO_DECISIONS},
-                                  {"decisions": observed})["decisions"] is False
+    assert run_filing.score_phase({"pages": TWO_PAGES},
+                                  {"pages": observed})["pages"] is False
 
 
-def test_two_expected_decisions_cannot_both_be_satisfied_by_one_page():
+def test_two_expected_pages_cannot_both_be_satisfied_by_one_page():
     """Matching is greedy and one-to-one. Without that, a single page titled to cover both
-    expectations would score two hits — and a backend that merged two decisions into one page
-    would read as the correct answer."""
+    expectations would score two hits — and a backend that merged two conclusions into one page
+    would read as the correct answer. That is the direction that matters: lumping is the cheap
+    failure, and it is the one a count alone would miss."""
     both = _page("Northwind second wave and the review checklist",
                  {"kind": "entity", "ids": ["northwind-freight"]})
     observed = [both, _page("Something else entirely", {"kind": "company", "ids": []})]
-    assert run_filing.score_phase({"decisions": TWO_DECISIONS},
-                                  {"decisions": observed})["decisions"] is False
+    assert run_filing.score_phase({"pages": TWO_PAGES},
+                                  {"pages": observed})["pages"] is False
 
 
-def test_each_decision_page_is_matched_against_its_OWN_anchor():
+def test_each_page_is_matched_against_its_OWN_anchor():
     """One of these two belongs to an entity and the other to nobody. A single-anchor
     implementation cannot express that, and a scorer that checked only titles could not see it."""
     swapped = [_page("Northwind second wave", {"kind": "company", "ids": []}),
                _page("review checklist", {"kind": "entity", "ids": ["northwind-freight"]})]
-    assert run_filing.score_phase({"decisions": TWO_DECISIONS},
-                                  {"decisions": swapped})["decisions"] is False
+    assert run_filing.score_phase({"pages": TWO_PAGES},
+                                  {"pages": swapped})["pages"] is False
 
 
-def test_the_order_the_decision_pages_were_written_in_does_not_matter():
+def test_the_order_the_pages_were_written_in_does_not_matter():
     right = [_page("review checklist", {"kind": "company", "ids": []}),
              _page("Northwind second wave", {"kind": "entity", "ids": ["northwind-freight"]})]
-    assert run_filing.score_phase({"decisions": TWO_DECISIONS},
-                                  {"decisions": right})["decisions"] is True
+    assert run_filing.score_phase({"pages": TWO_PAGES},
+                                  {"pages": right})["pages"] is True
 
 
-def test_a_decision_expectation_that_names_no_anchor_scores_the_title_alone():
-    """The shape F09 ships since the file-first write path: its decisions anchor either to an identity PROPOSED in the
-    same commit — whose id is slugified from a name the agent chose — or company-wide, so pinning
-    an anchor there would pin the yardstick to one sample of the agent's own vocabulary."""
+def test_a_page_expectation_that_names_no_anchor_scores_the_title_alone():
+    """The shape F09 ships: its pages anchor either to an identity PROPOSED in the same commit —
+    whose id is slugified from a name the agent chose — or company-wide, so pinning an anchor there
+    would pin the yardstick to one sample of the agent's own vocabulary."""
     loose = [{"title": "Wren tracked formally"}, {"title": "summary joins the shared"}]
     observed = [_page("Wren tracked formally in the registry", {"kind": "company", "ids": []}),
                 _page("Wren summary joins the shared digest",
                       {"kind": "entity", "ids": ["quillon-labs"]})]
-    assert run_filing.score_phase({"decisions": loose},
-                                  {"decisions": observed})["decisions"] is True
+    assert run_filing.score_phase({"pages": loose},
+                                  {"pages": observed})["pages"] is True
+
+
+def test_the_verbatim_archive_is_not_one_of_the_pages_a_capture_established():
+    """`sources/` never enters this facet, and that is a property of the REPORT rather than of the
+    scorer: `report.filed` carries the archive under `source_pages` and the declared pages under
+    `pages_filed`, and `_observe` reads the second one only.
+
+    Pinned from the scorer's side too, because the failure is silent and one-directional: an
+    archive folded in makes a CORRECT two-page filing observe three and score a granularity miss,
+    which reads as a backend that fragments. The observation half is
+    `test_filing_observation_contract.test_the_verbatim_archive_is_observed_beside_the_page_set…`.
+    """
+    with_archive = [
+        _page("Northwind second wave", {"kind": "entity", "ids": ["northwind-freight"]}),
+        _page("review checklist", {"kind": "company", "ids": []}),
+        {"path": "sources/meetings/rollout-and-review-sync-transcript.md",
+         "anchor": {"kind": "company", "ids": []}}]
+    assert run_filing.score_phase({"pages": TWO_PAGES},
+                                  {"pages": with_archive})["pages"] is False
 
 
 # ── an entry that omits `title` entirely: paired on its ANCHOR alone ───────────────────────────
-# The third shape of one lesson. F08's review decision flipped on grammatical number (closed by
-# `_same_word`); F09's re-filed phase put the word "summary" on the OTHER decision's title than the
-# yardstick assumed — and a SEVEN-RUN re-score settled which dimension to keep: summary-title was
-# 7/7 stable, summary-anchor 6/7 UNstable. So the entry that keeps a title keeps it, and the one
-# whose title was the model's prose drops to its anchor.
+# The third shape of one lesson. F08's review conclusion flipped on grammatical number (closed by
+# `_same_word`); F09's re-filed phase put the word "summary" on the OTHER conclusion's title than
+# the yardstick assumed — and a SEVEN-RUN re-score settled which dimension to keep: summary-title
+# was 7/7 stable, summary-anchor 6/7 UNstable. So the entry that keeps a title keeps it, and the
+# one whose title was the model's prose drops to its anchor.
 #
-# The CAPABILITY is what is tested below; no shipped expectation uses it. F09 was its natural home
-# and stopped being one under the file-first write path: with the stored reply gone, neither of its decisions has an
-# anchor a yardstick can name, so both assert titles alone. See
-# `test_whether_the_shipped_set_uses_the_title_less_shape_at_all` in the fixture suite.
+# The capability is LIVE in the shipped set as of the one pipe: F08's second entry omits its title
+# and pairs on its company-wide anchor, which discriminates it from its `northwind-freight` sibling
+# with no vocabulary in it at all. F09 is not its home and never became one — with the stored reply
+# gone, neither of its pages has an anchor a yardstick can name, so both assert titles alone. See
+# `test_the_shipped_set_uses_the_title_less_shape_where_it_says_it_does` in the fixture suite.
 #
 # An omitted `title` is NOT an empty one, and the two must not be confusable: `title_matches("")`
 # is False by design, so an entry that NAMED a title and got it wrong still misses. That asymmetry
@@ -584,7 +583,7 @@ _ANCHOR_ONLY = [{"title": "Wren", "anchor": {"kind": "entity", "ids": ["quillon-
 
 
 def test_an_entry_that_omits_its_title_pairs_on_the_anchor_alone():
-    """The anchor is the load-bearing pair-er: a decision's aboutness is a fact with one spelling
+    """The anchor is the load-bearing pair-er: what a page is about is a fact with one spelling
     (a resolved registry id, or the company-wide empty list), where its title is a sentence
     somebody wrote. The second page's title here is nothing the expectation ever mentions, and the
     set still scores."""
@@ -592,8 +591,8 @@ def test_an_entry_that_omits_its_title_pairs_on_the_anchor_alone():
                       {"kind": "entity", "ids": ["quillon-labs"]}),
                 _page("weekly summaries consolidated into the shared summary",
                       {"kind": "company", "ids": []})]
-    assert run_filing.score_phase({"decisions": _ANCHOR_ONLY},
-                                  {"decisions": observed})["decisions"] is True
+    assert run_filing.score_phase({"pages": _ANCHOR_ONLY},
+                                  {"pages": observed})["pages"] is True
 
 
 def test_a_title_less_entry_still_holds_its_anchor_to_account():
@@ -604,8 +603,8 @@ def test_a_title_less_entry_still_holds_its_anchor_to_account():
                      {"kind": "company", "ids": []}),
                _page("weekly summaries consolidated into the shared summary",
                      {"kind": "entity", "ids": ["quillon-labs"]})]
-    assert run_filing.score_phase({"decisions": _ANCHOR_ONLY},
-                                  {"decisions": swapped})["decisions"] is False
+    assert run_filing.score_phase({"pages": _ANCHOR_ONLY},
+                                  {"pages": swapped})["pages"] is False
 
 
 def test_an_EMPTY_title_is_not_an_absent_one_and_matches_nothing():
@@ -614,8 +613,8 @@ def test_an_EMPTY_title_is_not_an_absent_one_and_matches_nothing():
     stop asserting the title it was written to assert."""
     empty_titled = [{"title": "", "anchor": {"kind": "entity", "ids": ["quillon-labs"]}}]
     observed = [_page("Anything at all", {"kind": "entity", "ids": ["quillon-labs"]})]
-    assert run_filing.score_phase({"decisions": empty_titled},
-                                  {"decisions": observed})["decisions"] is False
+    assert run_filing.score_phase({"pages": empty_titled},
+                                  {"pages": observed})["pages"] is False
 
 
 # The greedy interaction, staged as a clean A/B: ONE page set, two expectation ORDERS, and the
@@ -632,15 +631,16 @@ _BOTH_COMPANY_PAGES = [_page("Project Wren tracked formally", _COMPANY),
 
 
 def test_a_title_less_entry_written_LAST_leaves_its_titled_sibling_the_page_it_needs():
-    """**The greedy interaction in the safe order** — the order `_check_set` enforces.
+    """**The greedy interaction in the safe order** — the order `_check_set` enforces, and the
+    order F08 ships in.
 
     Both pages anchor company-wide, so the anchor-only entry matches EITHER. Written last it takes
     what the titled entry left, and the correct page set scores.
     """
     titled_first = [{"title": "Wren", "anchor": _COMPANY}, {"anchor": _COMPANY}]
 
-    assert run_filing.score_phase({"decisions": titled_first},
-                                  {"decisions": _BOTH_COMPANY_PAGES})["decisions"] is True
+    assert run_filing.score_phase({"pages": titled_first},
+                                  {"pages": _BOTH_COMPANY_PAGES})["pages"] is True
 
 
 def test_a_title_less_entry_written_FIRST_starves_its_titled_sibling_and_fails_a_correct_set():
@@ -651,15 +651,16 @@ def test_a_title_less_entry_written_FIRST_starves_its_titled_sibling_and_fails_a
     the one its titled sibling needed); the titled entry is then left with "weekly summaries
     consolidated", which it cannot match. A page set that was exactly right scores a MISS.
 
-    That failure points at nothing: the table shows a decisions cell gone red and the cause is the
+    That failure points at nothing: the table shows a `pages` cell gone red and the cause is the
     order of two lines in a JSON file. Which is why the ordering is a REFUSAL in `_check_set`
     rather than a rule in a comment — and this pair is what shows the refusal protects something
-    reachable rather than a hypothesis.
+    reachable rather than a hypothesis. It stopped being a hypothesis for good when F08 acquired a
+    title-less entry.
     """
     titleless_first = [{"anchor": _COMPANY}, {"title": "Wren", "anchor": _COMPANY}]
 
-    assert run_filing.score_phase({"decisions": titleless_first},
-                                  {"decisions": _BOTH_COMPANY_PAGES})["decisions"] is False, (
+    assert run_filing.score_phase({"pages": titleless_first},
+                                  {"pages": _BOTH_COMPANY_PAGES})["pages"] is False, (
         "the hazard `_check_set`'s ordering refusal exists for has stopped being reachable — if "
         "greedy pairing became order-independent, that refusal can retire with this test")
 
@@ -669,7 +670,7 @@ def test_a_title_less_entry_written_FIRST_starves_its_titled_sibling_and_fails_a
 # `test_a_re_file_that_reported_no_reuse_block_at_all_is_a_miss_when_preservation_was_expected`.
 # The facet asked whether a meeting re-filed after a park had LOST a decision on the way back; a
 # meeting is never re-filed, so nothing makes the round trip and there is nothing to lose. The
-# granularity question that facet shared with `decisions` — did the right number of decision pages
+# granularity question that facet shared with what is now `pages` — did the right number of pages
 # land, each anchoring on its own — is unchanged and is still measured there.
 
 
@@ -706,25 +707,48 @@ def test_the_two_cost_facets_carry_no_bar_even_once_the_quality_bars_are_calibra
         assert report["facets"][facet]["pass"] is None
 
 
-def test_the_facet_ADR_041_created_ships_with_no_bar_and_the_table_says_so(entries):
-    """`proposals` is the one shipped facet whose bar is `None`, and that is a claim about the
-    series rather than an oversight: no recorded run has ever scored it, and `evals/README.md`'s own
-    rule is that a bar is a recorded baseline's own score — never a number invented to be met.
+# The facets shipping UNCALIBRATED, and the reason each one is — enumerated so a bar cannot be
+# invented for one of them quietly, and so a THIRD cannot join them without a sentence.
+#
+#   `proposals` — created by the file-first write path. No recorded run has ever scored it.
+#   `pages`     — created by the one pipe, out of `decisions`. It carries that facet's property
+#                 (the right number of pages, each anchored on its own) and NOT its recorded 1.00,
+#                 because that number came from runs of a meeting flow that no longer exists.
+#                 Inheriting it would be a bar the first run has to clear on a behaviour nothing
+#                 has observed, which `evals/README.md` forbids in exactly those words.
+UNCALIBRATED = ["proposals", "pages"]
 
-    Pinned in both directions. The verdict is `None` (REPORT, DO NOT JUDGE) and the rendered row
-    says why, while every other quality facet still carries a real number — so a future editor who
-    fills this in from the first run under the re-frozen brief has to come here and delete the
-    exception rather than quietly widen it, and one who guesses a bar breaks this test.
+
+def test_the_facets_no_run_has_scored_ship_with_no_bar_and_the_table_says_so(entries):
+    """A bar is a recorded baseline's own score — never a number invented to be met — so a facet
+    whose baseline does not exist yet ships at `None`, and that is a claim about the series rather
+    than an oversight.
+
+    OLD BEHAVIOUR: this asserted `proposals` was the ONLY such facet, which stopped being true when
+    the one pipe replaced `decisions` with `pages` over a flow no run has measured. It is a LIST
+    rather than a membership test for the same reason it was an equality before: an editor who
+    fills one in from a real baseline has to come here and shorten the list, and one who lets a
+    third facet arrive uncalibrated has to say why beside the other two.
+
+    Pinned in both directions: the verdict is `None` (REPORT, DO NOT JUDGE), the rendered row says
+    why, and every other quality facet still carries a real number.
     """
-    assert bars.FILING_BARS["proposals"] is None
     assert [name for name in run_filing.QUALITY_FACETS
-            if bars.FILING_BARS[name] is None] == ["proposals"]
+            if bars.FILING_BARS[name] is None] == UNCALIBRATED
 
     report = run_filing.aggregate(_phases(entries), backend="double", model="m", wall_s=1.0)
-    assert report["facets"]["proposals"]["score"] == 1.0
-    assert report["facets"]["proposals"]["pass"] is None
-    rendered = run_filing.render(report)
-    assert "proposals  1.00  [2/2]  (no bar — baseline not yet fixed)" in rendered
+    # Matched on the ROW rather than on a padded substring: `render` pads every facet name to the
+    # width of the longest one, so a literal that happens to line up today silently stops asserting
+    # anything the day a longer facet name arrives.
+    rows = {line.split()[0]: line for line in run_filing.render(report).splitlines()
+            if line.strip() and line.split()[0] in run_filing.QUALITY_FACETS}
+    for name in UNCALIBRATED:
+        assert report["facets"][name]["score"] == 1.0, name
+        assert report["facets"][name]["pass"] is None, name
+        assert f"1.00  [{DENOMINATORS[name]}/{DENOMINATORS[name]}]  " \
+               f"(no bar — baseline not yet fixed)" in rows[name], rows[name]
+    for name in set(run_filing.QUALITY_FACETS) - set(UNCALIBRATED):
+        assert "no bar" not in rows[name], rows[name]
 
 
 def test_a_calibrated_bar_judges_in_both_directions(entries, monkeypatch):

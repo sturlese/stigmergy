@@ -5,18 +5,18 @@ is the interface consumed by the brain server and by MCP clients — treat it as
 derived index ([`hybrid-index.md`](hybrid-index.md)) is a consumer too, with its own tolerant parser (the packages
 share no code); it reads a **subset** of what follows into the queryable columns of `pages_index` —
 `type`, `title`, `id`, `status`, `entity`, `owner`, `tier`, `as_of`, `acl`, `tags`, `mentions`,
-`supersedes`, `superseded_by`, `generated_at`, and `extracted_at` as a fallback for `updated`
+`supersedes`, `superseded_by`, and `extracted_at` as a fallback for `updated`
 (`index.corpus`). Everything else below is read by humans and by clients, not by the index.
 
 **Read this as the READ contract.** The live writers mint a narrower subset, but real pages
 already committed under `sources/` carry the full dialect, and `stigmergy.index`'s tolerant
-parser, `stigmergy.views`'s skeleton reader and the librarian's stamping code all read it. Treat
+parser and the librarian's stamping code all read it. Treat
 every field below as "what this page means," not "what gets written next."
 
 **What actually writes a `sources/` page today** is one function,
-`librarian.processing._build_source_parts`, called from three places: the meeting flow's transcript
-(`sources/meetings/`), the fast lane's attached Slack thread (`sources/slack/`) and a document
-submitted as text (`sources/documents/`).
+`librarian.processing._build_source_parts`, called once per capture from one place: every capture
+archives its material verbatim, and the door and the kind choose only the folder —
+`sources/slack/`, `sources/documents/`, `sources/meetings/` or `sources/notes/`.
 It drafts `type`, `title`, `source_kind`, `url`, `tags`, `related`, `sources`, and
 `page.stamp_source_fields` then overwrites `status`, `as_of`, `submitted_by`, `content_hash`,
 `extracted_at`, `tier` and `id` on top of whatever the draft said. That fourteen-field shape is the
@@ -34,11 +34,11 @@ the frontmatter example below and the `pages_index` mechanics table; that one is
 
 **`type:` below is a free-form vocabulary, and it is not the live one.** The old writer let the
 model choose a kebab-case doc type per document, which is why `meeting-notes` appears
-in the example. Today the vocabulary is a closed table of seven — `note`, `decision`, `concept`,
-`entity`, `source`, `meeting`, `view` (`librarian.page.PAGE_TYPES`, mirrored by the knowledge repo's
-contract linter) — of which the fast lane may CREATE only the first three. An older page carrying a
+in the example. Today the vocabulary is a closed table of four — `note`, `concept`,
+`entity`, `source` (`librarian.page.PAGE_TYPES`, mirrored by the knowledge repo's
+contract linter) — of which the fast lane may CREATE only the first two. An older page carrying a
 free-form type is read exactly as written; nothing mints one any more. See
-[`librarian.md`](./librarian.md#three-types-the-fast-lane-may-create-seven-it-knows).
+[`librarian.md`](./librarian.md#two-types-the-fast-lane-may-create-four-it-knows).
 
 ```yaml
 ---
@@ -104,7 +104,7 @@ tags: [source, meeting-transcript]
 related: []
 sources: []
 status: developing                   # ── everything below this line is server-stamped
-as_of: 2026-03-14                    # the MEETING's own date on the meeting flow; today's elsewhere
+as_of: 2026-03-14                    # the day this capture was filed
 submitted_by: ana@example.com
 content_hash: "sha256:..."           # of the archived material bytes, recomputed from what this run read
 extracted_at: "2026-04-01T12:00:00Z"
@@ -119,8 +119,8 @@ corpus.
 ## How a client should read it
 
 `as_of` and `acl` are stamped by the librarian on every page it files — `acl` from the audience
-the DOOR decided for that capture, so a note, the verbatim `sources/` page beside it and every
-page of a meeting set carry the same one. An entity page is the exception and carries none: the
+the DOOR decided for that capture, so every page one capture writes and the verbatim `sources/`
+page beside them carry the same one. An entity page is the exception and carries none: the
 registry is the brain's shared vocabulary. `supersedes`/
 `superseded_by` are written by a human editing a page (the gardener flags a candidate pair and
 names no command, deliberately). The rest of the table is how to read a page that already carries
@@ -150,7 +150,7 @@ the field — no writer produces one now.
 - **Wikilinks in a body are ordinary and expected.** They are how the graph is built here; there is
   no separate linking stage that owns them. What holds them honest is `gate_contract`, which runs
   the knowledge repo's own contract linter over the diff at the item's base commit and vetoes a dead
-  `[[target]]`, and `edits.py`, which writes the reciprocal `related:` entry on the other page from
+  `[[target]]`, and the librarian, which writes the `related:` entries on a page it files from
   a declaration rather than letting the agent edit it.
 - **Nothing rewrites a body for safety.** No code strips a second `# H1` and none neutralizes a
   stray `---`; the frontmatter is protected instead by `gate_frontmatter`, which re-parses what was
@@ -179,8 +179,8 @@ whatever its `representation`, and the split preserves all content:
 and the librarian imports them rather than re-declaring them, because a splitter and the contract
 linter that judges its output must agree or the split is pointless — the two literals had already
 been found drifting as independent copies. `librarian.processing._build_source_parts` is the live
-splitter: it writes the meeting flow's `sources/meetings/` transcript, the fast lane's attached
-`sources/slack/` thread and a submitted document's `sources/documents/` text as N ≥ 1
+splitter: it writes every capture's archived material — a transcript, a Slack thread, a submitted
+document, a pasted note — as N ≥ 1
 cross-linked parts under exactly this contract, preferring a blank-line boundary up to 30 lines
 back and never breaking inside a fenced code block.
 
@@ -195,23 +195,10 @@ The RANK side of the chain matters too: `index.rank.chain_base` groups the parts
 `index.corpus.load_pages` propagates the primary's `superseded_by` onto every sibling at BUILD
 time (see [navigation.md](./navigation.md)), because only part 1 ever carries the field.
 
-## View pages
-
-Pages under `views/<entity-id>.md` are held to the page standard by `stigmergy.views`, the only view
-generator in this codebase — documented in full at [views.md](./views.md). They carry
-`type: view`, `tags: [view]`, `tier: 3`, `content_hash` (sha256 of the rendered **body** — a
-derived page has no single raw source), `generated_at`, the two staleness signals `member_hash`
-and `backlink_hash` (the member set, and the backlinks the page actually renders — a view missing
-the second is regenerated on the next convergence pass). They carry **no `acl:` at all**:
-a view is the open rollup, and both of
-its feeds are filtered to what may appear on an open page rather than the page being labelled to
-match them. They carry no `verification` field either — nothing computes a verdict, so nothing
-stamps one.
-
 ## Field notes worth knowing
 
 - `content_hash` is **server-stamped, never drafted**: `page.stamp_source_fields` writes it on a
-  source page and `views.render` on a view page, and `gates.gate_frontmatter`'s
+  source page, and `gates.gate_frontmatter`'s
   `FORBIDDEN_PAGE_KEYS` (`owner`, `id`, `content_hash`, `tier`, `extracted_at`) refuses it on every
   other page. A page declaring its own `content_hash:` is forged.
 - The entity pipeline-status field (`won`/`lost`/`active`… from the folder name) is
@@ -224,5 +211,6 @@ stamps one.
   `canonical` is not a value on the axis at all: it is a name the fast lane recognises only in order
   to refuse it (`declare-canonical` is one of the three injection categories the librarian records).
 - `source_kind` honors the contract enum — `google-drive`, `slack`, `meeting`, `github`, `upload`,
-  `distilled`. The three live writers emit `meeting`, `slack` and `upload`; the rest belong to
-  pages already in the corpus.
+  `distilled`. The archive emits three of them — `slack` for the Slack door, `meeting` for a
+  transcript, `upload` for a document and for every other capture; the rest belong to pages already
+  in the corpus.

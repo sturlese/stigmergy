@@ -36,8 +36,6 @@ _DESCRIBED = {
     "entity": {"id": "vantage", "name": "Vantage", "type": "organization",
                "aliases": ["vantage.com"],
                "page": {"path": "wiki/entities/Vantage.md", "title": "Vantage"}},
-    "view": {"path": "views/vantage.md", "title": "Vantage — view",
-             "generated_at": "2026-08-02T09:00:00Z"},
     "timeline": [
         {"path": "wiki/notes/Vantage June 2026 Investor Update.md",
          "title": "Vantage June 2026 Investor Update", "type": "note",
@@ -63,14 +61,13 @@ class _FakeDescribeService:
         return self.result
 
 
-def test_entity_text_lays_out_identity_page_view_and_dated_timeline():
+def test_entity_text_lays_out_identity_page_and_dated_timeline():
     text = AnswerBrain(_FakeDescribeService(_DESCRIBED)).entity_text("Vantage")
 
     assert "entity: vantage" in text
     assert "name: Vantage" in text
     assert "aliases: vantage.com" in text
     assert "page: wiki/entities/Vantage.md — Vantage" in text
-    assert "view: views/vantage.md — Vantage — view (generated 2026-08-02T09:00:00Z)" in text
     assert "timeline: 2 page(s) anchored to this entity — showing all 2." in text
     assert "2026-06-30 · wiki/notes/Vantage June 2026 Investor Update.md" in text
     assert "(undated) · wiki/notes/Vantage Hiring.md" in text
@@ -84,7 +81,7 @@ def test_entity_text_records_the_lookup_and_every_shown_page_as_surfaced():
     AnswerBrain(_FakeDescribeService(_DESCRIBED)).entity_text("Vantage", ctx)
 
     assert ctx.searched == ["Vantage"]
-    assert ctx.read_paths == {"wiki/entities/Vantage.md", "views/vantage.md",
+    assert ctx.read_paths == {"wiki/entities/Vantage.md",
                               "wiki/notes/Vantage June 2026 Investor Update.md",
                               "wiki/notes/Vantage Hiring.md"}
     assert ctx.read_paths_order[0] == "wiki/entities/Vantage.md"
@@ -104,12 +101,11 @@ def test_entity_text_absence_is_one_line_and_surfaces_nothing():
 
 def test_entity_text_renders_registry_gaps_honestly():
     bare = {"entity": {"id": "acme", "name": "", "type": "", "aliases": [], "page": None},
-            "view": None, "timeline": [], "timeline_note": "No anchored pages."}
+            "timeline": [], "timeline_note": "No anchored pages."}
     text = AnswerBrain(_FakeDescribeService(bare)).entity_text("acme")
 
     assert "name: (unregistered)" in text
     assert "page: (none)" in text
-    assert "view: (none)" in text
     assert "timeline: No anchored pages." in text
 
 

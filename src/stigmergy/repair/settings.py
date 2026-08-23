@@ -1,13 +1,12 @@
-"""Runtime configuration for the repair pass — env-tunable, read in ONE place.
+"""Runtime configuration for a page removal — env-tunable, read in ONE place.
 
 `RepairSettings.from_env` is the only function in this package that consults the environment, and
 modules never read it at import time (`tests/test_architecture.py`). `dsn` is deliberately not
 here: a connection argument, not tunable behaviour.
 
-The bounds below are the loop's blast radius, and they belong to code rather than to the skill: a
-brief can be argued with and a constant cannot. They carry more weight than they used to, because
-nobody reads a repair before it lands — `MAX_OPS_PER_PROPOSAL` is what keeps ONE repair
-from being a corpus-wide rewrite, and the two ceilings below keep one PASS from being one.
+The bound below is the removal's blast radius, and it belongs to code rather than to the skill: a
+brief can be argued with and a constant cannot. It carries weight because nobody reads the prose
+the sweep writes before it lands.
 """
 import os
 from dataclasses import dataclass
@@ -17,64 +16,28 @@ from stigmergy.server.errors import StartupError
 
 MODEL_ENV = "STIGMERGY_REPAIR_MODEL"
 
-# The librarian's own default, deliberately: the proposer reads pages and writes an edit
-# declaration in exactly the vocabulary the filing agent already uses, so a deployment that has
-# settled on a model for one has settled on it for the other. `$STIGMERGY_REPAIR_MODEL` is how an
-# operator disagrees.
+# The librarian's own default, deliberately: the sweep writer reads pages and rewrites the ones
+# that pointed at a page that is going, in the same prose the filing agent writes, so a deployment
+# that has settled on a model for one has settled on it for the other. `$STIGMERGY_REPAIR_MODEL`
+# is how an operator disagrees.
 DEFAULT_REPAIR_MODEL = librarian_config.DEFAULT_MODEL
 
-MAX_OPS_ENV = "STIGMERGY_REPAIR_MAX_OPS"
-DEFAULT_MAX_OPS_PER_PROPOSAL = 6
-
-# How many findings go to the model in ONE call. A batch is the unit of LOSS: a call that spends
-# its usage budget mid-work is skipped whole, so every finding in it waits for the next night. At 8
-# that cost eight findings a lapse, and on the first real corpus it cost the additive road every
-# proposal it had (issue #75). The proposer's budget scales with this number
-# (`proposer.batch_limits`), so raising it buys the model more room rather than starving it — what
-# it also buys is a bigger crater when one call lapses.
-BATCH_SIZE_ENV = "STIGMERGY_REPAIR_BATCH"
-DEFAULT_BATCH_SIZE = 3
-# The hard ceiling on that knob, because it MULTIPLIES a per-call model budget by six
-# (`proposer.batch_limits`): of every count setting in the two packages, this is the one whose
-# blast radius is a bill rather than a prompt, and it was the one with no maximum. Sized far above
-# any sane batch — a lapse at 32 costs 32 findings their night — and far below what a typo'd
-# extra digit would buy.
-MAX_BATCH_SIZE = 32
-
-# What ONE pass may LAND. `MAX_OPS_PER_PROPOSAL` bounds one repair; this bounds how many commits a
-# pass may push, which is the other half of the same argument: a gardener run that suddenly reports
-# four hundred findings would otherwise cost four hundred model calls and four hundred commits in
-# an afternoon. The surplus is not lost — the next pass sees it, and what this one deferred is
-# counted in its `job_runs` stats rather than dropped in silence.
-MAX_REPAIRS_ENV = "STIGMERGY_REPAIR_CEILING"
-DEFAULT_MAX_REPAIRS_PER_RUN = 20
-
-# The same bound for the ONE kind that retires an identity. A merge is the least reversible repair
-# this loop can make — a page marked superseded and every mention re-anchored — so a pass that went
-# wrong about what is a duplicate should be wrong about three entities, not twenty. Deliberately a
-# second number rather than a fraction of the first: what makes a merge different is not its size.
-MAX_MERGES_ENV = "STIGMERGY_REPAIR_MERGE_CEILING"
-DEFAULT_MAX_MERGES_PER_RUN = 3
-
-# How much ONE approval may be, measured in the bytes its stored plan carries. Shared by the TWO
-# kinds whose ops hold whole PAGES — a `delete` sweep carries every page it would rewrite, and an
-# `entity-alias` merge carries every page it would re-anchor, both in full so the apply can
-# recompute the plan and byte-compare it — so the natural bound for either is a size rather than a
-# count of ops. Around thirty average pages at the default, which is already more of a corpus
-# change than one Approve button should stand for.
+# How much ONE removal may be, measured in the bytes its plan carries — a sweep holds every page it
+# would rewrite in full, so the apply can recompute the plan and byte-compare it, which makes a
+# size the natural bound rather than a count of ops. Around thirty average pages at the default,
+# which is already more of a corpus change than one Remove button should stand for.
 MAX_PLAN_BYTES_ENV = "STIGMERGY_REPAIR_MAX_PLAN_BYTES"
 DEFAULT_MAX_PLAN_BYTES = 100_000
 
 # What a zero or negative value would do to THIS package's arithmetic — the sentence
-# `gardener.settings.int_setting` interpolates, written for the bounds it guards here.
-_POSITIVE_COUNT_WHY = ("a zero or negative bound would either refuse every repair or send an "
-                       "empty batch to the model.")
+# `gardener.settings.int_setting` interpolates, written for the bound it guards here.
+_POSITIVE_COUNT_WHY = "a zero or negative bound would refuse every removal."
 
 
 def _int_setting(env_name: str, default: int, *, maximum: int | None = None) -> int:
     """`gardener.settings.int_setting`'s rules, spelled here rather than imported: importing it
     would put a `stigmergy.gardener.settings` edge on this package for one validator, and this
-    package already reaches the gardener for findings only. Two callers, one shape — the parity
+    package reaches the gardener for nothing at all. Two callers, one shape — the parity
     test in `tests/repair/test_settings_parity.py` is what keeps a rule from landing on one copy
     only, which is exactly how this one's `maximum` arrived late."""
     raw = os.environ.get(env_name)
@@ -99,31 +62,15 @@ def _int_setting(env_name: str, default: int, *, maximum: int | None = None) -> 
 
 @dataclass(frozen=True)
 class RepairSettings:
-    """`repo` is WHERE the proposer reads from — the same checkout every other tool here is
-    pointed at, resolved through the shared `librarian_config.repo_path`. It is paired with
-    `is_repo_checkout` because the proposer reads the entity registry, the pages and the skill at
-    a real clone's HEAD, and a bare directory of markdown would silently answer every question
-    with a different corpus than the one the apply will commit against."""
+    """The two knobs a removal has: which model writes the pages that stay, and how large a plan
+    one removal may be."""
 
-    repo: str = ""
     model: str = DEFAULT_REPAIR_MODEL
-    max_ops_per_proposal: int = DEFAULT_MAX_OPS_PER_PROPOSAL
-    batch_size: int = DEFAULT_BATCH_SIZE
-    max_repairs_per_run: int = DEFAULT_MAX_REPAIRS_PER_RUN
-    max_merges_per_run: int = DEFAULT_MAX_MERGES_PER_RUN
     max_plan_bytes: int = DEFAULT_MAX_PLAN_BYTES
 
     @classmethod
-    def from_env(cls, args=None) -> "RepairSettings":
-        """`args` supplies `--repo` only; everything else is env-tunable, the convention
-        `GardenerSettings.from_args` already sets."""
+    def from_env(cls) -> "RepairSettings":
         return cls(
-            repo=librarian_config.repo_path(getattr(args, "repo", None) or ""),
             model=os.environ.get(MODEL_ENV) or DEFAULT_REPAIR_MODEL,
-            max_ops_per_proposal=_int_setting(MAX_OPS_ENV, DEFAULT_MAX_OPS_PER_PROPOSAL),
-            batch_size=_int_setting(BATCH_SIZE_ENV, DEFAULT_BATCH_SIZE,
-                                    maximum=MAX_BATCH_SIZE),
-            max_repairs_per_run=_int_setting(MAX_REPAIRS_ENV, DEFAULT_MAX_REPAIRS_PER_RUN),
-            max_merges_per_run=_int_setting(MAX_MERGES_ENV, DEFAULT_MAX_MERGES_PER_RUN),
             max_plan_bytes=_int_setting(MAX_PLAN_BYTES_ENV, DEFAULT_MAX_PLAN_BYTES),
         )

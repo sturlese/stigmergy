@@ -499,7 +499,7 @@ def test_the_audit_column_gets_a_citation_COUNT_not_the_model_authored_paths():
     value is a path the run actually READ — an unresolvable citation is a citation *problem*, not a
     dropped citation, so it is logged either way — and a steered model needs no attacker's help to
     fill the field with prose. A count closes it and costs nothing that is read:
-    `pilot_report.answer_shape` tests `r.get("citations")` for TRUTH ("did this answer cite
+    `admin.measurements.answer_shape` tests `r.get("citations")` for TRUTH ("did this answer cite
     anything"), which `0`/`n` answers exactly as `[]`/`[…]` did. The same reduction
     `_verdict_shape` already makes one field over, for the same reason."""
     from stigmergy.answer.service import audit_summary
@@ -513,7 +513,7 @@ def test_the_audit_column_gets_a_citation_COUNT_not_the_model_authored_paths():
 
     assert smuggled not in str(summary)
     assert summary["citations"] == 2
-    # The benign twin, and the property `pilot_report` actually depends on: the truthiness that
-    # separates "answered with a citation" from "answered with none" is unchanged.
+    # The benign twin, and the property `admin.measurements` actually depends on: the truthiness
+    # that separates "answered with a citation" from "answered with none" is unchanged.
     assert bool(summary["citations"]) is True
     assert bool(audit_summary({**result, "citations": []})["citations"]) is False

@@ -34,7 +34,7 @@ import pytest
 
 from stigmergy.index import corpus
 from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import config, edits, gather
+from stigmergy.librarian import config, gather
 from stigmergy.librarian.pydantic_backend import (
     _FENCED_KEY,
     MAX_TOOL_NAMES,
@@ -69,7 +69,6 @@ ACCENTED_PAGE = "wiki/notes/Café Zürich Renewal.md"
 EXTRA_TEMPLATES = ("note", "concept")
 OPS_MARKDOWN = "ops/secret.md"
 SOURCES_PAGE = "sources/meetings/A Transcript.md"
-VIEWS_PAGE = "views/entities/Acme Corp.md"
 SYMLINKED_LEAF = "wiki/notes/Linked.md"
 ESCAPING_DIR = "wiki/escape"
 INSIDE_DIR_SYMLINK = "wiki/mirror"
@@ -90,10 +89,6 @@ def _seed_extra(repo: str, outside: pathlib.Path) -> None:
     (root / SOURCES_PAGE).parent.mkdir(parents=True, exist_ok=True)
     (root / SOURCES_PAGE).write_text(
         "---\ntype: source\ntitle: \"A Transcript\"\n---\n\n# A Transcript\n\nverbatim.\n",
-        encoding="utf-8")
-    (root / VIEWS_PAGE).parent.mkdir(parents=True, exist_ok=True)
-    (root / VIEWS_PAGE).write_text(
-        "---\ntype: view\ntitle: \"Acme Corp\"\n---\n\n# Acme Corp\n\nregenerated.\n",
         encoding="utf-8")
 
     outside.mkdir(parents=True, exist_ok=True)
@@ -326,19 +321,19 @@ def test_the_NFD_respelling_of_that_page_resolves_or_refuses_but_never_leaks(too
             "refusal that tells the model to look the name up instead")
 
 
-@pytest.mark.parametrize("path", [EXISTING_PAGE, SOURCES_PAGE, VIEWS_PAGE],
-                         ids=["wiki", "sources", "views"])
+@pytest.mark.parametrize("path", [EXISTING_PAGE, SOURCES_PAGE],
+                         ids=["wiki", "sources"])
 def test_every_content_zone_is_readable(toolbox, path):
     """One case per zone, and the zones come from `corpus.ZONES` below rather than from this list —
-    a fourth zone added to the index's own tuple must not silently stay unread here."""
+    a third zone added to the index's own tuple must not silently stay unread here."""
     assert "refused" not in toolbox.read_page(path)
 
 
 def test_the_zone_list_this_file_covers_is_the_index_parsers_own():
     """The blindness guard for the parametrize above: `confined_page` reads `corpus.ZONES`, so a
     zone added there and not here would leave this file claiming to cover "every content zone"
-    while covering three of four."""
-    covered = {path.split("/", 1)[0] for path in (EXISTING_PAGE, SOURCES_PAGE, VIEWS_PAGE)}
+    while covering fewer."""
+    covered = {path.split("/", 1)[0] for path in (EXISTING_PAGE, SOURCES_PAGE)}
     assert covered == set(corpus.ZONES)
 
 
@@ -629,17 +624,18 @@ def test_an_empty_query_says_so_rather_than_matching_everything(toolbox):
     assert "empty query" in payload["note"]
 
 
-def test_list_page_names_is_the_reading_the_edit_validator_answers_with(toolbox, read_env):
-    """A name offered here cannot be one `edits.validate` then refuses as a dead link — that is why
-    the body is `edits.page_names(confined=True)` and not a walk of its own. The symlinked leaf is
-    the case that proves the `confined` half is really passed: it is a `.md` file in the lane and it
-    is not in the vocabulary."""
+def test_list_page_names_is_the_reading_the_scoped_corpus_answers_with(toolbox, read_env):
+    """A name offered here resolves to a page in this checkout — the same confined, ACL-scoped
+    corpus every other tool reads from (`toolbox.corpus()` -> `gather.load_corpus`). The symlinked
+    leaf is the case that proves containment is really applied: it is a `.md` file in the lane and
+    it is not in the vocabulary."""
     payload = toolbox.list_page_names()
+    confined_names = set(gather.load_corpus(read_env.repo).link_names)
 
-    assert set(payload["names"]) <= edits.page_names(read_env.repo, confined=True)
-    assert payload["total"] == len(edits.page_names(read_env.repo, confined=True))
+    assert set(payload["names"]) <= confined_names
+    assert payload["total"] == len(confined_names)
     assert "Linked" not in payload["names"], (
-        "a symlinked page reached the wikilink vocabulary — `confined=True` is not being passed")
+        "a symlinked page reached the wikilink vocabulary — containment is not being applied")
     assert "Existing Note" in payload["names"]
 
 

@@ -231,8 +231,9 @@ def _expectation_met(case: dict, answer: str) -> bool:
 def _citation_hit(case: dict, citations: list[dict]) -> bool:
     """`cites` is one page path or a CHAIN of them — any one is a hit.
 
-    A view-backed answer may legitimately cite the view or the page it summarizes; both are correct
-    provenance for the same claim. Substring matching runs in both directions.
+    A claim that several documents establish may legitimately be cited to any one of them — a
+    chain is "these are all correct provenance for this claim", not "cite all of these". Substring
+    matching runs in both directions.
     """
     chain = case.get("cites") or []
     if isinstance(chain, str):
