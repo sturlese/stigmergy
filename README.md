@@ -291,7 +291,7 @@ beside it in the source; the bare module at the top is small enough to be its ow
 |---|---|
 | `tests/` | the behavioural invariant + the architecture tests that make the seams rules |
 | `evals/` | three real instruments, one per model surface — golden retrieval, golden QA and golden filing (the only one that WRITES) — each over a frozen fixture, plus the git-resident score series |
-| `docs/` | `decisions/` (why) · `reference/` (what) |
+| `docs/` | [`DESIGN.md`](./docs/DESIGN.md) (what this system is) · `decisions/` (why) · `reference/` (what) |
 | `scripts/` | the end-to-end harnesses, plus the three keyless `walk_*.py` narrations the quick start runs |
 | `deploy/` | **tracked, not gitignored**: the empty `ops/` defaults a deploy bakes your real ones over. Nothing else — every unattended pass runs inside the deployment now (ADR 044), so there is no scheduled job to ship a template for |
 | `docker-compose.yml` · `Dockerfile` · `fly.toml` | the local test stack (postgres+pgvector, minio, a bare git remote), the one image all three process groups run, and the staging deployment that splits them |
@@ -329,6 +329,7 @@ Scope discipline, not a roadmap. These are ruled out rather than pending:
 | Question | Document |
 |---|---|
 | How do I contribute? | [`CONTRIBUTING.md`](./CONTRIBUTING.md) |
+| What is this system, and what earns a place in it? | [`docs/DESIGN.md`](./docs/DESIGN.md) — the definition: the closed list of what multi-user forces, the page vocabulary, the rules |
 | What does each subsystem do? | [`docs/reference/`](./docs/reference) — one per package, plus `src/stigmergy/*/index.md` code maps |
 | Why is it built this way? | [`docs/decisions/`](./docs/decisions) — the architecture decision records |
 | How do I operate it? | [`docs/reference/operator-runbook.md`](./docs/reference/operator-runbook.md) |

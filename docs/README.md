@@ -4,6 +4,7 @@ Four kinds of document, answering different questions:
 
 | Where | Answers |
 |---|---|
+| [`DESIGN.md`](./DESIGN.md) | **what this system is** — the shape, the closed list of what multi-user forces, the page vocabulary and the rules. Read it before adding a subsystem, and before defending one from removal |
 | [`decisions/`](./decisions) | **why** a mechanism is built the way it is — the ADRs |
 | [`reference/`](./reference) | **what** each stage does, in prose, for someone operating or reading it |
 | `src/stigmergy/*/index.md` | **where** things live: module by module, one map per package |

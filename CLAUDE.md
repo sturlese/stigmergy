@@ -17,7 +17,9 @@ Human-facing setup, workflow and PR expectations are in
 
 Read [`README.md`](./README.md) first for the annotated tree, then the `index.md` code map inside
 whichever package you are about to touch — each one lists what its modules are for, what to reuse
-and what to avoid. [`docs/reference/`](./docs/reference) is what each subsystem does;
+and what to avoid. [`docs/DESIGN.md`](./docs/DESIGN.md) is what the system IS — the closed list of what multi-user
+forces, the page vocabulary and the rules; read it before adding a subsystem, and before defending
+one from removal. [`docs/reference/`](./docs/reference) is what each subsystem does;
 [`docs/decisions/`](./docs/decisions) is why it is built that way.
 
 **Two skills live in `.claude/skills/` here and are worth loading before you start.**
