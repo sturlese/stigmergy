@@ -177,6 +177,13 @@ def main() -> int:
         filed = [r for label, r in rows.items()
                 if label != "meeting" and r["status"] == schema.FILED and r["result_ref"]]
         pages = {r["result_ref"] for r in filed}
+        # EVERY page this batch filed, transcript included — what the final no-double-file tally is
+        # counted against. Kept separate from `pages` on purpose: that one is scoped to the raw
+        # batch because the number beside it is `FIRST_BATCH`.
+        # OLD BEHAVIOUR: the final check reused `pages`, so the transcript's commit was counted in
+        # the numerator and its page was not, and the tally came out one short the moment a
+        # transcript started filing through the same pipe as everything else.
+        first_refs = {r["result_ref"] for r in rows.values() if r["result_ref"]}
 
         check("every ordinary capture was filed by the container",
               len(filed) == FIRST_BATCH,
@@ -297,7 +304,7 @@ def main() -> int:
         librarian_commits = [sha for sha in commits_after
                              if "Filed by the librarian from capture #" in gitcmd.run(
                                  "log", "-1", "--format=%B", sha, cwd=str(after)).stdout]
-        distinct = {r["result_ref"] for r in rows.values()} | pages
+        distinct = {r["result_ref"] for r in rows.values()} | first_refs
         check("one commit per filed page across BOTH workers — the kill filed nothing twice",
               len(librarian_commits) == len(distinct),
               f"{len(librarian_commits)} librarian commits for {len(distinct)} pages")
