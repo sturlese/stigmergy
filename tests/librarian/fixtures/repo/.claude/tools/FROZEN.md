@@ -6,7 +6,7 @@
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/tools/stigmergy_lint.py` |
-| **Copied at commit** | `8a19fbd052b7f0d3d7a31d498babb0206131a662` |
+| **Copied at commit** | `153849293b5876fb39868306f08a57c7e0ff4ade` |
 | **Drift guard** | `tests/librarian/test_frozen_linter.py` |
 
 

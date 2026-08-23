@@ -8,14 +8,14 @@ carries: `../meeting-distiller/` was its sibling until the meeting flow was dele
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/librarian/SKILL.md` |
-| **Copied at commit** | `8a19fbd052b7f0d3d7a31d498babb0206131a662` |
+| **Copied at commit** | `153849293b5876fb39868306f08a57c7e0ff4ade` |
 | **Drift guard** | `tests/librarian/test_librarian_brief_contract.py` — the rule table runs against THIS copy in CI, and a separate test asserts the copy is byte-identical to the knowledge repo's own whenever that checkout is present |
 
 > **The `edits` declaration RETIRED, and this row moved with it.** Three additive shapes
 > (`backlink`, `overlap`, `contradiction`) an account named against a page that already existed,
 > performed by a module of the librarian's own — removed from the code along with the elective
 > repair loop that was its only other caller. A page that already exists is now changed only by a
-> `rewrites` entry. Knowledge-repo commit `8a19fbd052b7f0d3d7a31d498babb0206131a662`.
+> `rewrites` entry. Knowledge-repo commit `153849293b5876fb39868306f08a57c7e0ff4ade`.
 
 > **The row above always names the CURRENT bytes.** The brief has been rewritten several times
 > (tool-neutral under ADR 033, environment-conditional under ADR 034, the symmetric page-authorship
