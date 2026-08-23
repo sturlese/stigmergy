@@ -377,51 +377,51 @@ def test_admin_console_docs_do_not_promise_an_unreachable_hover_reason():
 # rewritten, which stopped being true the day `entity-body` landed.
 
 
-def test_the_repair_detail_wires_in_the_drafted_body_itself():
-    """For an `entity-body` proposal the DRAFT is the whole of what a steward judges. A detail
-    view that rendered only `op`/`path`/`link`/`note` would show an empty row where the page's
-    new prose should be, and an empty cell reads as "nothing to see"."""
+def test_the_repair_detail_renders_a_retired_kinds_op_field_by_field():
+    """**OLD BEHAVIOUR: this pinned the string `body_markdown`** — the one field an `entity-body`
+    repair existed to show a reader, dropped by a four-field reshape that rendered an empty cell
+    where the page's new prose should have been. That kind is retired and no renderer is
+    maintained for it, so the guarantee moved: an op whose NAME the console does not know is
+    rendered field by field, which cannot drop anything by construction."""
     js = REPAIRS_VIEW.read_text(encoding="utf-8")
-    assert "body_markdown" in js, (
-        "the console's repair detail never mentions `body_markdown` — the one field an "
-        "`entity-body` proposal exists to show a steward")
+    assert "Object.entries(o)" in js, (
+        "the console's repair detail no longer walks an unknown op's own fields — a row of a "
+        "retired kind would render as a path with everything it stored dropped in silence")
 
 
 def test_the_repair_detail_no_longer_promises_that_nothing_is_ever_rewritten():
-    """The false sentence, pinned as absent. `entity-body` REPLACES a page's body below its H1,
-    so a panel telling a steward "Nothing is rewritten or deleted" beside an Approve button is
-    telling them the opposite of what they are authorizing."""
+    """The false sentence, pinned as absent. A removal REWRITES every page that referred to a page
+    that is going, so a panel telling a reader "Nothing is rewritten or deleted" is telling them
+    the opposite of what happened."""
     js = REPAIRS_VIEW.read_text(encoding="utf-8")
     assert "Nothing is rewritten or deleted." not in js, (
-        "the repairs detail still claims nothing is ever rewritten — true of the additive kinds "
-        "and false of `entity-body`; say it per kind or not at all")
+        "the repairs detail still claims nothing is ever rewritten")
 
 
-def test_the_repair_detail_renders_a_deletion_as_the_pages_that_would_go():
-    """A `delete` proposal's ops are two DIFFERENT shapes — a page removed and a page rewritten —
-    and the additive table would render both as edits with an empty "links to" column. The one
-    consequence no other kind has is that a page STOPS EXISTING, and it has to be legible as that
-    before anybody presses Approve."""
+def test_the_repair_detail_renders_a_removal_as_the_pages_that_went():
+    """A removal's ops are two DIFFERENT shapes — a page removed and a page rewritten — and one
+    table would render both as the same thing. The consequence nothing else in this system has is
+    that a page STOPPED EXISTING, and it has to be legible as that."""
     js = REPAIRS_VIEW.read_text(encoding="utf-8")
     assert "deletionPlan" in js, (
-        "the console's repair detail has no renderer for a deletion — the third kind would be "
-        "shown as a table of additive edits with two empty columns")
+        "the console's repair detail has no renderer for a removal — its ops would be shown as a "
+        "flat list with the model's own prose dropped")
     assert "KIND_DELETE" in js
 
 
-def test_the_additive_summary_still_says_nothing_is_deleted_only_for_the_additive_kinds():
-    """The same defect as the `entity-body` sentence, one kind later: the per-kind consequence
-    line is the last thing a steward reads before Approve, and a deletion falling through to the
-    additive branch would tell them nothing is deleted while deleting a page."""
+def test_the_summary_line_branches_on_the_removal_before_it_falls_through():
+    """The per-kind consequence line is what a reader has above the ops, and a removal falling
+    through to the retired-kinds fallback would tell them the loop that wrote the row is gone —
+    while showing them pages that really did stop existing."""
     js = REPAIRS_VIEW.read_text(encoding="utf-8")
     start = js.index("function changeSummary")
     summary = js[start:js.index("\n}\n", start)]
     assert "KIND_DELETE" in summary, (
-        "`changeSummary` does not branch on the delete kind, so a deletion is described by "
-        "whichever sentence happens to be the fallback")
-    assert summary.index("KIND_DELETE") < summary.index("Nothing is rewritten or deleted here"), (
-        "the additive sentence is reached before the delete branch, so a deletion would be "
-        "described as a change that deletes nothing")
+        "`changeSummary` does not branch on the removal, so it is described by whichever sentence "
+        "happens to be the fallback")
+    assert summary.index("KIND_DELETE") < summary.index("elective repair loop"), (
+        "the retired-kinds sentence is reached before the removal branch, so a removal would be "
+        "described as something nothing will attempt again")
 
 
 # ── the theme: three states, stamped before the first paint ────────────────────────────────────

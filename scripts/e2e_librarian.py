@@ -9,6 +9,9 @@ Runs against real Postgres, real MinIO, and a real **bare git remote** in a cont
       * one with a seeded secret  -> rejected whole, no commit, the value never in the report
       * one naming an unregistered entity -> filed, with the entity PROPOSED in the same commit,
                                     then CONFIRMED through `stigmergy-entities approve`
+      * one `kind="meeting"` transcript -> filed by the SAME pipe, its material archived verbatim
+                                    under `sources/meetings/` and what it established filed as
+                                    ordinary `wiki/` pages
     -> the expected pages COMMITTED TO THE BARE REMOTE
     -> parallel submits produce serialized commits with zero conflicts
     -> `stigmergy-librarian status` reports a real capture->filed p50/p95
@@ -87,8 +90,8 @@ PROPOSED_PAGE = f"{generator.ENTITIES_RELDIR}/{PROPOSED_NAME}.md"
 # Who confirms it in phase 5c. A second identity from the submitter on purpose: `approved_by` on
 # the page must name the person who DECIDED, never the person who captured the material.
 
-# The meeting flow, folded into the SAME drain — `worker.process_next` dispatches by `kind`, so
-# this needs no second worker and no second phase.
+# A transcript, folded into the SAME drain and the SAME pipe. `kind` chooses the prose and the
+# `sources/` folder; it chooses no flow, so this needs no second worker and no second phase.
 MEETING_TITLE = "Acme Q3 renewal sync"
 MEETING_DATE = "2026-07-29"
 MEETING_MATERIAL = (
@@ -118,8 +121,11 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 
 def assert_parts_carry_no_verdict(source_pages, *, meeting_sha: str, cwd: str, check) -> None:
-    """Every part of a split meeting transcript, on the bare remote, carries NO `verification:` —
+    """Every part of the archived transcript, on the bare remote, carries NO `verification:` —
     nothing computes one, so a verdict here would be a page asserting a check that no longer runs.
+
+    `source_pages` is `report['source_pages']` — the verbatim archive code writes for EVERY
+    capture, read from the report rather than from a retired `filed_meeting` block.
 
     SHARED with `e2e_librarian_container.py`, which imports it: one function called twice, so the
     next change to this assertion cannot land on only one driver. `check` is passed in rather than
@@ -418,22 +424,37 @@ def main() -> int:
               and "github-pat" in json.dumps(secret["report"]))
         check("...and it created no page", secret["result_ref"] == "")
 
+        # OLD BEHAVIOUR: a transcript was filed by its own flow and reported through a
+        # `filed_meeting` block — a `meeting_page` in `wiki/meetings/`, a `decisions` list beside
+        # it, and its own commit subject. There is ONE pipe: a transcript declares its pages in
+        # `pages_filed` like every other capture, and `kind` decides only that its verbatim
+        # material is archived under `sources/meetings/` rather than `sources/notes/`.
         meeting = rows["meeting"]
-        check("the meeting drop was filed as a page SET", meeting["status"] == schema.FILED,
+        check("the transcript was filed by the ordinary pipe", meeting["status"] == schema.FILED,
               meeting["report"].get("summary", "")[:120])
-        filed_meeting = meeting["report"].get("filed_meeting") or {}
+        meeting_pages = meeting["report"].get("pages_filed") or []
         # `source_pages` is a LIST: a long transcript splits into cross-linked parts, so the arity
         # is N>=1, never exactly one.
-        source_pages = filed_meeting.get("source_pages") or []
-        check("...naming at least one source page part, one meeting page and its decisions",
-              source_pages
-              and all(p.startswith("sources/meetings/") for p in source_pages)
-              and filed_meeting.get("meeting_page", "").startswith("wiki/meetings/")
-              and isinstance(filed_meeting.get("decisions"), list),
-              json.dumps(filed_meeting)[:200])
-        check("...and result_ref names the meeting page, per commit",
-              meeting["result_ref"].startswith(filed_meeting.get("meeting_page", "\0"))
-              and "@" in meeting["result_ref"], meeting["result_ref"])
+        source_pages = meeting["report"].get("source_pages") or []
+        check("...archiving its material verbatim under sources/meetings/, which is the ONLY thing "
+              "its kind decides",
+              bool(source_pages) and all(p.startswith("sources/meetings/") for p in source_pages),
+              json.dumps(source_pages)[:200])
+        check("...and declaring the pages it established as ordinary wiki/ pages, the archive NOT "
+              "among them",
+              bool(meeting_pages)
+              and all(p.startswith("wiki/") for p in meeting_pages)
+              and not set(meeting_pages) & set(source_pages),
+              json.dumps(meeting_pages)[:200])
+        # `result_ref` names the FIRST declared page and no other, which is what every read path
+        # resolves against. Asserted as two facts so a divergence names which half moved. `first`
+        # falls back to a string no path can be rather than indexing an empty list: a report shape
+        # that lost `pages_filed` must record a FAIL here, not crash the driver before phase 5.
+        first_page = meeting_pages[0] if meeting_pages else "\0"
+        check("...and result_ref names the first page it declared, per commit",
+              meeting["report"].get("page_path") == first_page
+              and meeting["result_ref"].startswith(f"{first_page}@"),
+              f'{meeting["result_ref"]} vs {first_page!r}')
 
         # OLD BEHAVIOUR: this capture parked on a question to its submitter and produced no page
         # and no commit; then it filed with the identity waiting on a steward. It files now and the
@@ -458,22 +479,26 @@ def main() -> int:
         librarian_commits = [sha for sha in commits
                              if "Filed by the librarian from capture #" in gitcmd.run(
                                  "log", "-1", "--format=%B", sha, cwd=str(verify)).stdout]
-        # "meeting" is EXCLUDED from the ordinary-flow accounting: its commit carries a different
-        # subject phrase and adds multiple files, so it matches neither the phrase filter above nor
-        # the "one page, one commit, one added file" shape below. Phase 5b covers it.
-        filed = [r for label, r in rows.items()
-                if label != "meeting" and r["status"] == schema.FILED and r["result_ref"]]
-        distinct_pages = {r["result_ref"] for r in filed}
-        # The note the proposing capture filed — its commit carries the newborn entity page and the
-        # regenerated registry beside it, which the per-page loop below has to expect.
-        proposed_note_path = proposes["result_ref"].rsplit("@", 1)[0]
+        # OLD BEHAVIOUR: "meeting" was EXCLUDED from this accounting, because its commit carried
+        # its own subject phrase (`feat(meeting):`, "the librarian's meeting distiller") and added a
+        # page SET where every other capture added exactly one file. One pipe, one commit shape:
+        # every filed capture's body says "Filed by the librarian from capture #", so the transcript
+        # is counted here like everything else and phase 5b is left with the one thing its kind
+        # really decides — which `sources/` folder its material was archived in.
+        committing = [r for r in rows.values()
+                      if r["status"] == schema.FILED and r["result_ref"]
+                      and not r["report"].get("retry_of")]
+        distinct_pages = {r["result_ref"] for r in committing}
 
         check("the remote's main advanced", head != seeded and len(head) == 40, head[:12])
         # ONE capture, ONE commit — against the librarian's own commits only, since the human landed
-        # others on purpose. DISTINCT `result_ref`s, since the retry row contributes no commit.
-        check("one librarian commit per filed page, and no more",
-              len(librarian_commits) == len(distinct_pages),
-              f"{len(librarian_commits)} librarian commits for {len(distinct_pages)} pages "
+        # others on purpose. Counted per COMMITTING capture rather than per page: a capture may
+        # establish several pages and archives its material beside them, and all of that lands in
+        # the one commit. The retry row is excluded because it contributes none.
+        check("one librarian commit per committing capture, and no more",
+              len(librarian_commits) == len(committing) == len(distinct_pages),
+              f"{len(librarian_commits)} librarian commits for {len(committing)} captures at "
+              f"{len(distinct_pages)} distinct refs "
               f"({len(commits)} commits total, the human's included)")
         check("zero conflicts: no capture failed on the push path",
               not any("conflict" in json.dumps(r).lower() for r in rows.values()),
@@ -482,8 +507,9 @@ def main() -> int:
               all(len(gitcmd.run("rev-list", "--parents", "-n", "1", sha,
                                  cwd=str(verify)).stdout.split()) <= 2 for sha in commits))
 
-        for ref in sorted(distinct_pages):
-            page_path, sha = ref.rsplit("@", 1)
+        for row in sorted(committing, key=lambda r: r["result_ref"]):
+            page_path, sha = row["result_ref"].rsplit("@", 1)
+            report = row["report"]
             # Run against a clone that only ever saw the remote: this is what proves the sha in a
             # submitter's report is real.
             present = sha in commits
@@ -494,45 +520,55 @@ def main() -> int:
                   "status: developing" in body and f"submitted_by: {SUBMITTER}" in body)
             trailer = gitcmd.run("log", "-1", "--format=%B", sha, cwd=str(verify),
                                  check=False).stdout
-            # One page, one commit, one added file — EXCEPT the capture that proposed an identity:
-            # the entity page and the regenerated registry ride in the same commit as the note, or
-            # the note would be anchored to an id the registry does not carry yet.
-            expected_files = {page_path}
-            if page_path == proposed_note_path:
+            # OLD BEHAVIOUR: `expected_files = {page_path}` — one page, one commit, one added file.
+            # EVERY capture archives its material verbatim now, whatever its kind, so the archive
+            # rides in the same commit as the page that cites it; and a capture may establish more
+            # than one page, which is why the set is built from the report's own `pages_filed`
+            # rather than from `result_ref` alone. The capture that proposed an identity still adds
+            # two more: the entity page and the regenerated registry, or the page would be anchored
+            # to an id the registry does not carry yet.
+            expected_files = {*(report.get("pages_filed") or [page_path]),
+                              *(report.get("source_pages") or [])}
+            if report.get("entities_born"):
                 expected_files |= {PROPOSED_PAGE, generator.REGISTRY_RELPATH}
             committed = set(gitcmd.run("show", "--name-only", "--format=", sha, cwd=str(verify),
                                        check=False).stdout.split("\n"))
             check("...with the submitter in the commit trailer, and exactly the files it filed",
                   f"Submitted-by: {SUBMITTER}" in trailer
                   and {p for p in committed if p.strip()} == expected_files,
-                  f"{sorted(p for p in committed if p.strip())}")
+                  f"committed={sorted(p for p in committed if p.strip())} "
+                  f"expected={sorted(expected_files)}")
 
-        print("\n-- phase 5b: the meeting page SET, read off the BARE REMOTE --", flush=True)
-        meeting_page_path, meeting_sha = meeting["result_ref"].rsplit("@", 1)
-        check("the meeting distiller's commit is on the remote", meeting_sha in commits,
-              meeting_sha[:12])
+        print("\n-- phase 5b: the transcript's own archive, read off the BARE REMOTE --",
+              flush=True)
+        # OLD BEHAVIOUR: this phase read a `filed_meeting` block for a `meeting_page` and a
+        # `decisions` list, and asserted a `feat(meeting):` subject naming "the librarian's meeting
+        # distiller". None of that exists — the transcript's commit is shaped like every other
+        # capture's and was already checked in the loop above. What is left here is the ONE thing
+        # its kind still decides, and the one thing no other capture in this run exercises: the
+        # folder its verbatim material is archived in, and that the archive carries no verdict.
+        meeting_sha = meeting["result_ref"].rsplit("@", 1)[1]
+        check("the transcript's commit is on the remote", meeting_sha in commits, meeting_sha[:12])
         meeting_subject = gitcmd.run("log", "-1", "--format=%B", meeting_sha, cwd=str(verify),
                                      check=False).stdout
-        check("...as one App-bot commit, feat(meeting), naming the meeting distiller and the "
-              "submitter",
-              meeting_subject.startswith("feat(meeting):")
-              and "Filed by the librarian's meeting distiller from capture #" in meeting_subject
+        check("...as one App-bot commit shaped like every other filing, naming the submitter",
+              meeting_subject.startswith("feat(")
+              and "Filed by the librarian from capture #" in meeting_subject
               and f"Submitted-by: {SUBMITTER}" in meeting_subject,
               meeting_subject.splitlines()[0] if meeting_subject else "(empty)")
-        decision_paths = [d.get("path", "") for d in filed_meeting.get("decisions", [])]
-        expected_paths = {*source_pages, meeting_page_path, *decision_paths}
-        committed_paths = set(gitcmd.run("show", "--name-only", "--format=", meeting_sha,
-                                         cwd=str(verify), check=False).stdout.split())
-        check("...containing exactly the page SET: every source page part, one meeting page, its "
-              "decisions, no more",
-              committed_paths == expected_paths,
-              f"committed={sorted(committed_paths)} expected={sorted(expected_paths)}")
+        # An ordinary capture archives under `sources/notes/`; a transcript under
+        # `sources/meetings/`. That difference is the whole of what `kind` buys, so it is asserted
+        # against a raw capture from the same run rather than on its own.
+        ordinary_sources = rows["ordinary-0"]["report"].get("source_pages") or []
+        check("...archived under sources/meetings/ where a raw capture archives under "
+              "sources/notes/ — the only thing the kind decides",
+              all(p.startswith("sources/meetings/") for p in source_pages)
+              and bool(ordinary_sources)
+              and all(p.startswith("sources/notes/") for p in ordinary_sources),
+              f"meeting={source_pages} raw={ordinary_sources}")
         # EVERY part, not just the first: each is a page in its own right.
         assert_parts_carry_no_verdict(source_pages, meeting_sha=meeting_sha, cwd=str(verify),
                                       check=check)
-        check("...and the meeting page itself is present too",
-              gitcmd.run("show", f"{meeting_sha}:{meeting_page_path}", cwd=str(verify),
-                        check=False).stdout.startswith("---"))
 
         print("\n-- phase 5c: the identity the librarian proposed, and a steward confirming it --",
               flush=True)

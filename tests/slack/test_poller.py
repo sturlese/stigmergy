@@ -188,3 +188,86 @@ def test_a_submission_with_no_slack_origin_produces_no_slack_traffic(indexed, cl
 
     assert reported == 0
     assert gw.posted == []
+
+
+# ── the rewrite notice: telling the person whose page changed ──────────────────────────────────
+# A capture may bring an existing page up to date, and NOTHING proves the new text is right: the
+# bytes are the ones the agent just wrote, so comparing them to what the agent wrote proves
+# nothing. What stands in place of a proof is that the change is loud and has an owner — the diff
+# is attributed, `git revert` is the undo, and the person who filed the page is told. This pass IS
+# that last clause, which is why it is not a nicety and why these tests exist.
+def _filed_with_a_rewrite(conn, ctx, *, owner: str, submission_id: int) -> None:
+    rep = report.filed(page_path="wiki/notes/New.md", commit="cafe1234",
+                       anchoring={"entities": ["Acme Corp"]}, links=[], overlaps=[], findings=[],
+                       pages_rewritten=[{"path": "wiki/notes/Renewal Terms.md",
+                                         "submitted_by": owner,
+                                         "why": "the 30-day window was superseded in August"}])
+    _claim_and_finish(conn, submission_id, status=capture_schema.FILED, report_dict=rep,
+                      result_ref="wiki/notes/New.md@cafe1234")
+
+
+def test_the_person_who_filed_a_rewritten_page_is_told_what_changed_and_why(indexed, clean_tables):
+    """The DM goes to the page's OWN submitter — not to whoever captured — and carries the reason
+    the account gave. Without this, a rewrite is a silent overwrite of somebody else's work."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    gw.users["UANA"] = "ana@acme.com"
+    ctx = build_context(fixture, conn, gateway=gw)
+    submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="9.1")
+    _filed_with_a_rewrite(conn, ctx, owner="ana@acme.com", submission_id=submission_id)
+
+    sent = _run(poller.notify_rewrites_once(ctx))
+
+    assert sent == 1
+    dm = gw.posted[-1]
+    assert dm.channel_id == "UANA"          # her, not the capture's thread
+    assert "wiki/notes/Renewal Terms.md" in dm.text
+    assert "superseded in August" in dm.text
+    assert "git revert" in dm.text          # the undo is named, and nothing is asked of her
+
+
+def test_a_rewrite_notice_is_sent_exactly_once_across_passes(indexed, clean_tables):
+    """At-least-once with a record, exactly like the outcome report next door: the row is written
+    after the DM, so a pass that dies between them repeats one notice rather than losing it."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    gw.users["UANA"] = "ana@acme.com"
+    ctx = build_context(fixture, conn, gateway=gw)
+    submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="9.2")
+    _filed_with_a_rewrite(conn, ctx, owner="ana@acme.com", submission_id=submission_id)
+
+    assert _run(poller.notify_rewrites_once(ctx)) == 1
+    assert _run(poller.notify_rewrites_once(ctx)) == 0
+    assert len([p for p in gw.posted if p.channel_id == "UANA"]) == 1
+
+
+def test_an_owner_this_workspace_does_not_have_is_recorded_rather_than_retried_forever(
+        indexed, clean_tables):
+    """The brain's identities are not all Slack members: a page filed by somebody who has left has
+    nowhere for its notice to go. That is a fact to record, not a failure to retry — otherwise the
+    pass looks them up again every five seconds for the life of the deployment."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()                  # nobody at that address
+    ctx = build_context(fixture, conn, gateway=gw)
+    submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="9.3")
+    _filed_with_a_rewrite(conn, ctx, owner="gone@acme.com", submission_id=submission_id)
+
+    assert _run(poller.notify_rewrites_once(ctx)) == 0
+    assert not [p for p in gw.posted if p.channel_id.startswith("U")]
+    assert _run(poller.notify_rewrites_once(ctx)) == 0     # ...and not asked again
+
+
+def test_an_ordinary_filing_notifies_nobody(indexed, clean_tables):
+    """**The benign twin.** A capture that rewrote nothing must produce no DM at all: a notice
+    people learn to ignore is worse than no notice, and this pass runs on every poll."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    ctx = build_context(fixture, conn, gateway=gw)
+    submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="9.4")
+    rep = report.filed(page_path="wiki/notes/New.md", commit="cafe1234",
+                       anchoring={"entities": ["Acme Corp"]}, links=[], overlaps=[], findings=[])
+    _claim_and_finish(conn, submission_id, status=capture_schema.FILED, report_dict=rep,
+                      result_ref="wiki/notes/New.md@cafe1234")
+
+    assert _run(poller.notify_rewrites_once(ctx)) == 0
+    assert gw.posted == []

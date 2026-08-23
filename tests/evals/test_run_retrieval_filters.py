@@ -71,5 +71,8 @@ def test_evaluate_drives_the_callback_with_the_shipped_golden_sets_filters(recor
 
     sent = [c["filters"] for c in recording.calls]
     assert len(sent) == len(questions)
-    assert sum(1 for f in sent if f) >= 10
+    # The same floor `tests/index/test_golden.py` states, for the same reason and moved in the
+    # same commit: `benchmark: aurora dossier` retired with the stored per-entity rollup it
+    # expected, so nine filtered questions ship rather than ten.
+    assert sum(1 for f in sent if f) >= 9
     assert {tuple(f) for f in sent if f} == {("entity",)}

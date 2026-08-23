@@ -5,7 +5,7 @@ Enforces the page contract and the two-zone repository layout — the same
 contract `docs/reference/page-contract.md` states in prose for readers, stated
 here as the check a commit has to survive.
 
-Scans the content zones (wiki/, sources/, views/) and reports contract
+Scans the content zones (wiki/, sources/) and reports contract
 violations:
 
   frontmatter  missing block / required field, invalid enum (type, status,
@@ -43,14 +43,17 @@ from pathlib import Path
 # PERSONAL and COMPANY; that axis went with it, because it only earns its keep in a single-user
 # vault and every page here belongs to a team. Three are the fast lane's genre choice, the rest each have
 # exactly one stamper: `entity` the governed door, `meeting` the distiller, `source` provenance
-# (the transcript today, P4's Drive door next), `view` the regenerator.
+# (the transcript today, P4's Drive door next).
 #
 # CUT at R-2 and why, so nobody re-adds one by pattern-matching: `person`/`team`/`product`/
 # `customer` are ENTITY KINDS (the registry carries `type` per entity — one spine, not two
 # taxonomies); `project` is an entity here, which it cannot be without a registry to carry it; `meta`
 # because index/log/schema are Postgres, git history and CLAUDE.md; `dataset`/`metric` died with
 # the facts store at P1; `playbook`/`postmortem`/`policy` appear in no reference and no code.
-VALID_TYPES = {"note", "decision", "concept", "entity", "meeting", "source", "view"}
+# Four types a page may BE. A conclusion is a `note`:
+# splitting conclusions into two folders by their grammatical mood bought nothing. A meeting
+# is an EVENT, so its transcript is a `source` and what it established is a `note`.
+VALID_TYPES = {"note", "concept", "entity", "source"}
 
 # `canonical` died with the canon lane (R-1/P1): status is a maturity axis, never a court.
 # `evergreen` is its successor as the top of the axis — it says "kept current", not "approved".
@@ -59,15 +62,13 @@ VALID_SOURCE_KIND = {"google-drive", "slack", "meeting", "github", "upload", "di
 VALID_TIER = {"1", "2", "3"}
 
 REQUIRED_FIELDS = ["type", "title", "created", "updated", "tags", "status"]
-# Machine-owned pages (sources/, views/) are validated against their
+# Machine-owned pages (sources/) are validated against their
 # provenance/trust field group, not the authored-page conventions:
 # no created/updated/status —
 # they carry `extracted_at` and the D8 lifecycle (supersedes) instead. Some of
 # that machine vocabulary is still the pipeline's own dialect awaiting M1b's
 # mapping to the contract enum (kit SI-02, resolution A) — `sources/`'s
-# `type: contract` and friends — but `view` itself is NOT one of those: it
-# is in VALID_TYPES (COMPANY_TYPES) as the contract's own T6 artifact, so a
-# views/ page's type is checked like any other, not warned-and-passed.
+# `type: contract` and friends.
 MACHINE_REQUIRED_FIELDS = ["type", "title", "tags"]
 RECOMMENDED_FIELDS = ["related", "sources"]
 LIST_FIELDS = ("tags", "related", "sources", "aliases", "acl")
@@ -79,24 +80,19 @@ TYPE_REQUIRED = {
     "source": ["source_kind", "content_hash"],
 }
 
-# Content zones and the page types each accepts. `ingested`/`views` are
-# machine-owned and provenance-checked rather than type-locked.
+# Content zones and the page types each accepts. `sources/` is machine-owned
+# and provenance-checked rather than type-locked.
 #
-# `wiki/notes` and `wiki/postmortems` are folded in here (previously
-# absent) alongside the `view` type addition above: with `view` now a
-# VALID_TYPES member, the generic "invalid type" check (which used to be the
-# only thing refusing `type: view` on an unmapped wiki/ zone) no
-# longer fires for it, so every wiki/ zone that authors can actually
-# write to needs its own entry here or a hand-authored page in it could
-# declare `type: view` and pass with zero findings.
+# Every wiki/ zone an author can actually write to needs its own entry here.
+# The generic "invalid type" check only refuses a type outside VALID_TYPES, so
+# an unmapped zone would accept any valid type — a note filed under
+# wiki/concepts would pass with zero findings.
 ZONE_TYPES = {
-    "wiki/decisions": {"decision"},
-    "wiki/meetings": {"meeting"},
     "wiki/entities": {"entity"},
     "wiki/concepts": {"concept"},
     "wiki/notes": {"note"},
 }
-CONTENT_ROOTS = ("wiki", "sources", "views")
+CONTENT_ROOTS = ("wiki", "sources")
 
 # Fields that make a page an sources/source page (provenance required).
 PROVENANCE_REQUIRED = ["content_hash", "tier"]
@@ -869,16 +865,9 @@ def scan(root):
 
     texts = {p: p.read_text(encoding="utf-8", errors="replace") for p in pages}
 
-    # duplicate basenames (case-insensitive: macOS + Obsidian resolution). views/ lives OUTSIDE
-    # the wikilink namespace (P2): a view is derived — nobody authors it, nobody wikilinks it,
-    # `describe_entity` serves it by path — and its filename is the entity ID, which for any
-    # single-word entity equals the Title-Case entity page's stem lowercased (the first real
-    # regeneration proved it: views/globex.md vs wiki/entities/Globex.md). Excluding the zone
-    # makes that collision structurally impossible instead of renaming every view.
+    # duplicate basenames (case-insensitive: macOS + Obsidian resolution).
     lower_names = defaultdict(list)
     for p in pages:
-        if p.relative_to(root).parts[0] == "views":
-            continue
         lower_names[p.stem.lower()].append(p)
     for name, paths in sorted(lower_names.items()):
         if len(paths) > 1:
@@ -895,7 +884,7 @@ def scan(root):
         text = texts[p]
         rel = p.relative_to(root).parts
         zone = zone_key(rel)
-        in_sources = rel and rel[0] in ("sources", "views")
+        in_sources = rel and rel[0] == "sources"
 
         fm, err = parse_frontmatter(text)
         if err:
@@ -971,7 +960,7 @@ def scan(root):
 
             # M8a findings cycle 1, group 3: provenance SHAPE — see MACHINE_ONLY_FIELDS's own
             # comment for why this is not the authorship rule removed above. A `wiki/**` page
-            # has no legitimate way to carry machine provenance; `sources/`/`views/` are exempt
+            # has no legitimate way to carry machine provenance; `sources/` is exempt
             # as MACHINE_REQUIRED_FIELDS pages. (The v1 `datasets/`/`meta/` half of this check
             # died with those zones at P2 — findings cycle 2 A7's reasoning is at the tag.)
             if rel and rel[0] == "wiki":
@@ -979,15 +968,15 @@ def scan(root):
                     if field in fm:
                         add("error", "zones", p,
                             f"{field!r} is machine provenance the librarian stamps "
-                            f"onto sources/views pages — a {rel[0]}/ page has no legitimate "
+                            f"onto sources/ pages — a {rel[0]}/ page has no legitimate "
                             f"way to declare it, by hand or otherwise; remove it")
 
-            # sources/view pages need provenance
+            # sources/ pages need provenance
             if in_sources:
                 for field in PROVENANCE_REQUIRED:
                     if field not in fm or fm[field] in ("", []):
                         add("error", "zones", p,
-                            f"sources/views page missing provenance field: {field}")
+                            f"sources/ page missing provenance field: {field}")
 
             if isinstance(fm.get("aliases"), list):
                 for alias in fm["aliases"]:
@@ -1003,11 +992,16 @@ def scan(root):
         n = body_line_count(text)
         if n > SIZE_MAX:
             add("error", "size", p, f"body is {n} lines (max {SIZE_MAX}); split and cross-link")
-        elif n < SIZE_MIN and fm.get("type") != "entity":
+        elif n < SIZE_MIN and fm.get("type") not in ("entity", "source"):
             # M8a (spec §4.4, criterion 12): an entity page is a SPINE, not an essay — a
             # deliberately short stub should not warn. Not padded to satisfy the floor either
             # (the template stays unpadded): trading one warning (thin page) for another (an
             # empty section) would be worse than exempting the type outright.
+            #
+            # A `source` page is exempt for a stronger reason: its body is the captured material,
+            # VERBATIM, and its length is the submitter's rather than an author's. Every capture
+            # archives one now, so a short note would warn on every filing — and the only way to
+            # answer such a warning would be to pad evidence, which is falsifying it.
             add("warn", "size", p, f"body is {n} lines (min {SIZE_MIN}); thin page")
 
         for section in find_empty_sections(text):
@@ -1045,12 +1039,6 @@ def scan(root):
 
     # orphans (generated meta pages are exempt)
     for p in pages:
-        rel = p.relative_to(root).parts
-        # views/ is outside the wikilink namespace (see the duplicates check above), so a view
-        # can never earn an inbound link — warning about it would be permanent noise. (`meta`
-        # was the previous exclusion here; the zone died at the P2 wipe.)
-        if rel and rel[0] == "views":
-            continue
         if not inbound.get(p):
             add("warn", "orphans", p, "no inbound links from any content page")
 

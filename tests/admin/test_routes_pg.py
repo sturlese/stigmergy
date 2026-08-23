@@ -16,7 +16,7 @@ from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     ADMIN_TOKEN,
     finish_one,
-    landed_repair,
+    landed_delete,
     submit_one,
 )
 
@@ -256,7 +256,7 @@ def test_an_unexpected_failure_names_the_class_only(conn, app, monkeypatch):
 def test_repairs_list_and_show_over_http(conn, app):
     """The two routes that survive, and there are no others: nothing on this page decides anything
     any more, so the console reads what the worker already did."""
-    repair_id = landed_repair(conn)
+    repair_id = landed_delete(conn)
 
     listed = _request(app, "GET", "/admin/api/repairs")
     shown = _request(app, "GET", f"/admin/api/repairs/{repair_id}")
@@ -264,7 +264,7 @@ def test_repairs_list_and_show_over_http(conn, app):
     assert listed.status_code == 200
     assert [row["id"] for row in listed.json()["recent"]] == [repair_id]
     assert shown.status_code == 200
-    assert shown.json()["ops"][0]["path"] == "wiki/notes/Renewals.md"
+    assert shown.json()["ops"][0]["path"] == "wiki/notes/Old Memo.md"
     assert shown.json()["diff"].startswith("diff --git"), (
         "the diff is the whole reason this route exists — nobody read the change before it landed")
     assert _request(app, "GET", "/admin/api/repairs/999999").status_code == 404
@@ -275,11 +275,11 @@ def test_repairs_list_and_show_over_http(conn, app):
     ("POST", "/admin/api/repairs/{id}/reject"),
 ])
 def test_the_doors_that_decided_a_repair_are_gone_from_the_router(conn, app, verb, path):
-    """Asked of the ROUTER rather than of the code that used to be behind it. A repair is applied
-    by the worker without anybody being asked, so a console still offering Approve and
-    Decline would be offering a decision that changes nothing — and a route left mapped to a
-    handler nobody calls is how one comes back."""
-    repair_id = landed_repair(conn)
+    """Asked of the ROUTER rather than of the code that used to be behind it. Nothing on this page
+    is a decision — a removal is performed by the worker and the ledger records what happened — so a
+    console still offering Approve and Decline would be offering a decision that changes nothing,
+    and a route left mapped to a handler nobody calls is how one comes back."""
+    repair_id = landed_delete(conn)
 
     response = _request(app, verb, path.format(id=repair_id),
                         json_body={"actor": "steward@example.com", "reason": "no"})

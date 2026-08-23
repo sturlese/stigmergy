@@ -10,7 +10,6 @@ import {
 import { activityView } from "./views/activity.js";
 import { captureDetailView, capturesView } from "./views/captures.js";
 import { dashboardView } from "./views/dashboard.js";
-import { digestView } from "./views/digest.js";
 import { entitiesView } from "./views/entities.js";
 import { gardenerView } from "./views/gardener.js";
 import { indexView } from "./views/index.js";
@@ -35,7 +34,6 @@ const GROUPS = [
   ] },
   { label: "operate", routes: [
     { hash: "jobs", icon: "jobs", render: jobsView },
-    { hash: "digest", icon: "digest", render: digestView },
     { hash: "activity", icon: "activity", render: activityView, window: true },
   ] },
 ];

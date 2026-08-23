@@ -78,8 +78,8 @@ def latest_run(conn, job: str) -> dict | None:
 
     WHATEVER its status, deliberately: this answers "when did this job last run", which is the
     question a watermark asks, and a job that ERRORED did run. Reading only successful runs would
-    make a failing pass re-attempt on every tick — the shape a repair pass cannot have, since each
-    attempt costs model calls.
+    make a failing pass re-attempt on every tick, and a pass that costs model calls must never
+    have that shape.
     """
     with conn.cursor() as cur:
         cur.execute(_LATEST_RUN, (job,))

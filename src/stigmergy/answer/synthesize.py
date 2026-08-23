@@ -104,9 +104,10 @@ Method:
 1. search() for the relevant pages; read_page() the ones you rely on.
 2. For a question about a specific entity: the index resolves known entity names automatically,
    so a plain search() often already lands on the right material. describe_entity(<name or id>)
-   maps the territory in one call — the entity's own page, its view, and a dated timeline of
-   everything anchored to it; prefer it over repeated searches for a broad question ("what do
-   we know about X", timelines, latest state). search(filters={"entity": <id>}) ENUMERATES one
+   maps the territory in one call — the entity's own page and a dated timeline of everything
+   anchored to it; prefer it over repeated searches for a broad question ("what do we know about
+   X", timelines, latest state), which it answers by giving you the material to write the rollup
+   from. search(filters={"entity": <id>}) ENUMERATES one
    entity's own material — reach for it when the question is "everything we have on X", not as
    the default for a question that merely names X: the filter EXCLUDES company-wide pages
    (entity: []) — a policy, a process, a cross-cutting decision — which are often the best
@@ -181,9 +182,9 @@ def build_synthesizer(settings):
     @agent.tool
     async def describe_entity(rc: RunContext[SynthesisContext], entity: str) -> str:
         """One entity's whole territory in one call: registry identity (name, type, aliases),
-        its own page, its view, and a dated timeline of every page anchored to it. `entity`
-        accepts an id, a name or an alias. An unknown entity returns an absence line to repair
-        from, never a crash."""
+        its own page, and a dated timeline of every page anchored to it. `entity` accepts an id,
+        a name or an alias. An unknown entity returns an absence line to repair from, never a
+        crash."""
         return rc.deps.record(rc.deps.service.entity_text(entity, rc.deps))
 
     return agent

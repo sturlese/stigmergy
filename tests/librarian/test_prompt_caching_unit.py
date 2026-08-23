@@ -217,46 +217,15 @@ def test_run_wires_the_pure_helpers_result_into_its_own_agent_as_model_settings(
         f"— prompt caching wires the pure helper's result here, and this pins that wiring")
 
 
-# ── the meeting flow's exclusion is a DECISION, and decisions get a pin ────────────────────────
-def test_run_meeting_builds_its_agent_with_no_model_settings_at_all(tmp_path):
-    """`_run_meeting` is untouched by prompt caching on purpose: one request per capture means a cache
-    WRITE with no read ever — a pure surcharge (Anthropic charges 1.25x base input to write a
-    cache entry) — so caching this flow would only ever cost money. Pinned on the actual
-    construction call, not on reading the source, the same way any other backend decision here
-    earns a test rather than a comment nothing runs.
-
-    `pydantic_ai.Agent` is monkeypatched at its OWN module attribute: `_run_meeting`'s
-    `from pydantic_ai import Agent` re-reads that attribute at call time, so patching it there is
-    equivalent to patching the call site without touching `pydantic_backend.py` itself.
-    """
-    import pydantic_ai
-
-    captured = {}
-
-    class _RecordingAgent:
-        def __init__(self, model, **kwargs):
-            captured.update(kwargs)
-            raise RuntimeError("stop after recording the construction kwargs")
-
-    import_patch_target = pydantic_ai
-    original_agent = import_patch_target.Agent
-    import_patch_target.Agent = _RecordingAgent
-    try:
-        env = support.build_repo(str(tmp_path / "git"))
-        settings = support.build_settings(env, worktree_root=str(tmp_path / "worktrees"),
-                                          backend="pydantic", model=ANTHROPIC_MODEL,
-                                          prompt_cache="5m")
-        deps = support.build_deps(env, settings)
-        agent = pydantic_backend.PydanticFilingAgent(settings, model_factory=lambda: object())
-
-        with pytest.raises(AgentError):
-            agent.run_meeting(worktree=env.repo, material="a transcript, padded past nothing",
-                              meeting_meta={"title": "Q3 sync", "meeting_date": "2026-07-29"},
-                              registry=deps.registry,
-                              source_page_path="sources/meetings/q3-sync.md")
-    finally:
-        import_patch_target.Agent = original_agent
-
-    assert "model_settings" not in captured, (
-        f"the meeting flow's Agent(...) call carried model_settings={captured.get('model_settings')!r} "
-        f"— prompt caching excludes this flow deliberately, and this pins that exclusion")
+# ── the meeting flow's exclusion retired with the flow ─────────────────────────────────────────
+# OLD BEHAVIOUR: `test_run_meeting_builds_its_agent_with_no_model_settings_at_all` pinned that
+# `_run_meeting` constructed its `Agent(...)` with NO `model_settings`, because one request per
+# capture means a cache WRITE with no read ever — a pure surcharge (Anthropic charges 1.25x base
+# input to write an entry), so caching that flow could only cost money.
+#
+# There is one call now and it ITERATES, which is the shape caching pays for; the test above pins
+# that its `Agent(...)` really receives the helper's dict. The exclusion has no flow to exclude, so
+# it is deleted rather than re-aimed: keeping it against `run` would assert the opposite of the
+# test above it. The "when does caching apply at all" half is not lost — it is the helper's own
+# cases at the top of this file (`off`, a non-Anthropic model, an unrecognized setting), each of
+# which reaches the same `Agent(...)` call with `None`.

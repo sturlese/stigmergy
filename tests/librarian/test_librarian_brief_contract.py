@@ -1,10 +1,14 @@
-"""The librarian brief and the ordinary flow's code are ONE CONTRACT, edited on both sides.
+"""The librarian brief and the code are ONE CONTRACT, edited on both sides.
 
-`test_meeting_brief_contract.py`'s twin, for the brief the ORDINARY flow reads — and it exists for
-the reason that file's own history gives: dropping a rule from one side while the other keeps
-promising it is invisible to 3,000 green tests. the structured filing flow made the exposure worse rather than better.
+**This is the only brief there is, and this file is the only contract table.** OLD BEHAVIOUR: it
+had a twin, `test_meeting_brief_contract.py`, for the meeting-distiller brief a `kind="meeting"`
+capture was filed against; both the second brief and the second flow are gone, and every capture —
+a note, a document, a transcript — is filed against this one. The reason the table exists is that
+file's own history: dropping a rule from one side while the other keeps promising it is invisible
+to 3,000 green tests.
+
 The brief is backend-NEUTRAL — it documents a worker that hands the agent its context and
-writes the page from a structured account — and any backend that departs from it says so in an
+writes the pages from a structured account — and any backend that departs from it says so in an
 ENVIRONMENT preamble on the platform side. One shape answers it today; when a second one existed
 the two differed only in that preamble, and nothing but a table like this one notices when the
 brief starts describing neither.
@@ -21,14 +25,14 @@ asserted in BOTH directions:
   check stops enforcing something, or is renamed, while the brief still promises it).
 
 **A marker that survives only inside a comment or a docstring proves nothing** and is the defect
-the meeting version of this file has had twice. Every marker below names live code: a module
+the retired meeting version of this file had twice. Every marker below names live code: a module
 constant something reads, a function something calls, or a finding string something raises.
 
 **The skeleton the developer landed has been GROWN, and the two declared gaps are closed.** The
 brief's three-outcome anchoring rule now has three rows instead of one — they are three different
 decisions with three different code paths, and a single row went green while two of them were
-unenforced. An OVERRIDE note was pinned here too, on the same argument the meeting flow's still is:
-it is the one place the platform tells an agent that part of the brief below does not describe its
+unenforced. An OVERRIDE note was pinned here too, on the same argument: it is the one place the
+platform tells an agent that part of the brief below does not describe its
 run, and an override that stopped matching the brief it corrects would be worse than no override.
 That row retired with the backend that carried the note — see the table's own tombstone, which also
 names the paragraph the knowledge repo still owes.
@@ -45,7 +49,6 @@ import pytest
 from stigmergy.librarian import (
     agent,
     config,
-    edits,
     gates,
     gather,
     processing,
@@ -54,10 +57,11 @@ from stigmergy.librarian import (
 )
 
 # ── this contract runs in CI ────────────────────────────────────────────────────────────────────
-# The same two-halves arrangement `test_meeting_brief_contract.py` argues for at length: the RULE
-# TABLE reads a frozen copy that is always present, so every code-side marker is checked on every
-# push; a DRIFT TEST asserts that copy is byte-identical to the real brief, skipping only when the
-# sibling repo is absent. Neither half is sufficient alone.
+# Two halves, and neither is sufficient alone: the RULE TABLE reads a frozen copy that is always
+# present, so every code-side marker is checked on every push; a DRIFT TEST asserts that copy is
+# byte-identical to the real brief, skipping only when the sibling repo is absent. Reading the
+# brief out of the knowledge repo instead would make the whole table SKIP on every CI push —
+# exactly where the drift it catches actually lands.
 _BRIEF_RELPATH = agent.SKILL_RELPATH
 _FROZEN_BRIEF = (pathlib.Path(__file__).parent / "fixtures" / "repo" / ".claude" / "skills"
                  / "librarian" / "SKILL.md")
@@ -71,8 +75,7 @@ _PENDING_SHA = "PENDING-KNOWLEDGE-REPO-SHA"
 
 
 def _knowledge_repo() -> pathlib.Path:
-    """The same resolution the librarian itself uses (`config.Settings.repo`). Lifted verbatim from
-    `test_meeting_brief_contract.py`, which asks the same question about the same repo."""
+    """The same resolution the librarian itself uses (`config.Settings.repo`)."""
     configured = os.environ.get(config.REPO_ENV)
     return (pathlib.Path(configured) if configured
             else (_PLATFORM_ROOT / config.REPO_DEFAULT)).resolve()
@@ -201,9 +204,10 @@ def test_the_contract_table_is_not_vacuous():
 def _code_text() -> str:
     """The six modules the ordinary flow's contract actually lives in.
 
-    Wider than the meeting version's two, because the structured filing flow spread the flow: `gather` builds the
-    context the brief promises, `edits` validates the declarations it documents, and `agent` owns
-    the outcome boundary that decides which half of the account is well-formed.
+    Wider than the two the retired meeting table read, because the structured filing flow spread
+    the flow: `gather` builds the context the brief promises, `processing` performs the
+    declarations it documents, and `agent` owns the outcome boundary that decides which half of the
+    account is well-formed.
 
     `report` joined them for issue #77. The brief now makes a promise about what the SUBMITTER
     SEES — an entity anchor states WHY it resolved, and that sentence is printed back beside the
@@ -219,7 +223,7 @@ def _code_text() -> str:
     """
     import inspect
     return "".join(inspect.getsource(module)
-                   for module in (gates, processing, agent, edits, gather, pydantic_backend, report))
+                   for module in (gates, processing, agent, gather, pydantic_backend, report))
 
 
 # (brief phrase, code marker) — see the module docstring for what each direction proves. Every
@@ -288,21 +292,46 @@ RULE_TABLE = [
     # bookkeeping, and `_build_ordinary_page` is where that is true.
     ("- **`links_created`** — the bare page names you linked from this page. The worker builds the",
      "_build_ordinary_page"),
-    # The wikilink vocabulary the brief hands over is the SAME set `edits.validate` later answers
-    # "does this link resolve" with — one reading, so the gatherer cannot offer a name the edit
-    # validator refuses. Since the audience-from-the-door change the names come off the SCOPED corpus rather than a
+    # The wikilink vocabulary the brief hands over is every name that really resolves to a page in
+    # this checkout — one reading, so the gatherer cannot offer a name that would be a dead link.
+    # Since the audience-from-the-door change the names come off the SCOPED corpus rather than a
     # filesystem walk, which is a strictly smaller set (still contained, and now also within this
     # capture's audience) — so the promise the brief makes holds a fortiori. The marker is the
     # derivation itself: pinned to `parsed.link_names`, it goes red the day the vocabulary stops
     # being derived from the rows the model is actually allowed to see.
     ("- **`link_names`** — every page name in this repo, which is the whole wikilink vocabulary. "
      "It is", "names = list(parsed.link_names)"),
-    # Exactly one page per ordinary capture, unchanged by the restructure.
-    ("One capture yields **one** page.", "multiple-pages"),
-    # Edits are DECLARED and performed by code — the split the agent/gate split made and this flow kept.
-    ("You never write to them. You declare the edit and the worker performs it.", "apply_declared"),
-    # ...and an entity page is not editable, whatever it was anchored to.
-    ("declare an edit on the entity page you anchored to, nor on one you are introducing.", "outside-lane"),
+    # As many pages as the material establishes, and the DECLARATION is what the diff answers to.
+    ("One capture yields **as many pages as its material establishes**", "undeclared-page"),
+    # ...and the OTHER direction of that same diff, which is a separate finding and was a separate
+    # defect: the brief promises the check runs both ways, so a declaration the worker never wrote
+    # is refused too. One row per direction, because a single row went green while `pages` was a
+    # count rather than a list and only the surplus half was enforced.
+    ("  and so is a page declared and not written. The FIRST one is the page every surface names",
+     "declared-page-missing"),
+    # A page that is about something of its own carries its OWN anchor. The marker is the per-page
+    # map the gates read; without it every page of a multi-page filing is judged against the
+    # capture's anchor, and a second customer's conclusion lands against the first one's entity.
+    ("    own carries its own anchor, in the same shape as the capture-level one below. Leave it "
+     "out and", "def _declared_anchorings("),
+    # The EXPLORING shape's own plural declaration — the field a run that writes its own pages
+    # answers with. The marker is the entry field the fold produces, which is what makes a path a
+    # spelling of the same declaration rather than a second contract.
+    ("each entry in `pages` carries the `path` you wrote it to instead of a `body`",
+     'raw_pages = [{"path": path} for path in declared_paths]'),
+    # A page that stopped being true is brought UP TO DATE, and the reason travels to its author.
+    ("**A page that has stopped being true is brought up to date, not annotated.**",
+     "rewrites_allowed"),
+    # ...and the sentence the page's own submitter reads is required, not decoration.
+    ("**one sentence for the person who FILED that page.**", "declares a rewrite with no `why`"),
+    # A page that already exists is changed by CODE, from the account's declaration, and by nothing
+    # else. The two rows that stood here pinned the retired `edits` vocabulary — an additive
+    # backlink or callout the agent declared and `edits.apply_declared` performed. That declaration
+    # is gone; the property it stood for is not, so each was REPLACED by the row that says what
+    # took its place rather than deleted into silence.
+    ("**You never write to them.**", "_apply_declared_rewrites"),
+    # ...and an entity page is not one of them, whatever this capture anchored to.
+    ("`wiki/entities/` is written by code and by nothing else", "ENTITY_ZONE_PREFIX"),
     # ── the ONE decision, and the shape of a proposal ─────────────────────────────────────────
     # The park rows that stood here (`TRIAGE_UNRESOLVED_ENTITY`, `def _ask_or_park(`, the two
     # park kinds, `_unresolved_names`, the legacy `name` fold) are GONE with the parks: the brief

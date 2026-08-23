@@ -44,15 +44,12 @@ def test_an_agent_that_declares_no_shape_is_REFUSED_before_a_single_pass_is_spen
     banks nothing — a fault raised after a paid run and one raised instead of it must not be
     confusable on the row.
 
-    The stub is deliberately conforming in every OTHER way: both port methods, a priced envelope.
+    The stub is deliberately conforming in every OTHER way: the port's call, a priced envelope.
     The one thing missing is the declaration.
     """
     class NoDeclaration:
         def run(self, **kwargs):    # pragma: no cover — the refusal fires before this
             return AgentRun(outcome=None, cost_usd=0.99)
-
-        def run_meeting(self, **kwargs):    # pragma: no cover — the ordinary flow never calls it
-            return AgentRun()
 
     deps = types.SimpleNamespace(settings=types.SimpleNamespace(), agent=NoDeclaration())
     item = {"id": 3, "kind": "raw", "payload": {}, "hints": {}, "submitted_by": "a@b", "reply": ""}

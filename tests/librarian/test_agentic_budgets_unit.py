@@ -48,7 +48,7 @@ ACCOUNT = {
     "page_type": "note",
     "title": "Acme Corp Renewal Window",
     "anchoring": {"kind": "entity", "entities": ["Acme Corp"], "reason": ""},
-    "links_created": [], "overlaps": [], "edits": [], "findings": [],
+    "links_created": [], "overlaps": [], "findings": [],
     "summary": "filed the renewal note",
 }
 
@@ -468,7 +468,13 @@ def test_the_account_read_off_the_file_channel_is_the_one_that_travels(tmp_path)
     final message is ignored by design and the account comes back from `.librarian-outcome.json`,
     already through `agent.parse_outcome`'s bounds. A model that says "I filed it" in prose and
     wrote no file has filed nothing — and the channel is DRAINED on the way out, so the account can
-    never reach the diff `processing` takes a moment later."""
+    never reach the diff `processing` takes a moment later.
+
+    OLD BEHAVIOUR: an account declaring `page_path` produced `pages == ()`, and this test read that
+    absence as "carries no page text". `Outcome.pages` is now the ONE declaration and `page_path`
+    FOLDS into it as a path-only entry, so the absence is gone and the property has to be asserted
+    where it actually lives: the folded entry names a path and its `body` is empty, because on this
+    road the agent wrote the page itself and code writes nothing."""
     repo = _repo(tmp_path)
     backend = PydanticFilingAgent(_settings(), model_factory=lambda: _writing_model(searches=1))
 
@@ -476,5 +482,8 @@ def test_the_account_read_off_the_file_channel_is_the_one_that_travels(tmp_path)
                       gathered="")
 
     assert run.outcome.page_path == ACCOUNT["page_path"]
-    assert run.outcome.page is None, "the legacy envelope carries no page TEXT — the agent wrote it"
+    assert run.outcome.page_paths == (ACCOUNT["page_path"],)
+    assert run.outcome.page == agent_module.OutcomePage(path=ACCOUNT["page_path"]), (
+        "the path-declaring envelope carries a path and NOTHING else — a `body` here would mean "
+        "code is about to write a page the agent already wrote")
     assert not pathlib.Path(repo, agent_module.OUTCOME_FILENAME).exists()

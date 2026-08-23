@@ -1,16 +1,20 @@
-"""Manual walk of the meeting distiller, driven end to end against the real local stack.
+"""Manual walk of a TRANSCRIPT through the one pipe, end to end against the real local stack.
 
-Not a test: a narrated walk the way an operator meets it — drop a transcript, watch the meeting
-flow claim it, read the filed page-set report, then drop a transcript naming two entities the
-registry has never heard of and watch the librarian INTRODUCE them and file the set anyway. Real
+Not a test: a narrated walk the way an operator meets it — drop a transcript, watch the librarian
+claim it like any other capture, read the filed report, then drop a transcript naming two entities
+the registry has never heard of and watch the librarian INTRODUCE them and file anyway. Real
 Postgres, real git, real gates, the offline double for the agent.
 
-Nothing parks and nobody is asked a question, before or after. An unknown name becomes an
-entity page born CONFIRMED by the person whose capture introduced it, written into the SAME commit
-as the meeting's pages, and the capture ends `filed`. The last step reads the identities and their
-approver out of a clone of the remote the walk just pushed to.
+**A transcript takes the same road as a note.** `kind="meeting"` chooses the brief, the 1 MB cap
+and the `sources/meetings/` folder its material is archived to — never a different flow. What is
+distilled out of it is ordinary `wiki/` pages, each citing that archive.
 
-Run: `.venv/bin/python scripts/walk_meeting_distiller.py` from the repo root, after `make db-up`.
+Nothing parks and nobody is asked a question, before or after. An unknown name becomes an entity
+page born CONFIRMED by the person whose capture introduced it, written into the SAME commit as the
+pages, and the capture ends `filed`. The last step reads the identities and their approver out of a
+clone of the remote the walk just pushed to.
+
+Run: `.venv/bin/python scripts/walk_transcript.py` from the repo root, after `make db-up`.
 """
 import json
 import os
@@ -48,14 +52,14 @@ just Acme.
 # The offline double has no NLP: it reads only the explicit `DOUBLE:` directive, never the prose.
 # A real agent reaches the same proposal from the transcript alone — the fixture registry knows
 # only Acme Corp, and each decision this call took is about one of the two names below.
-UNREGISTERED_TRANSCRIPT = """DOUBLE:meeting-propose=Nebula Systems,Project Kestrel
+UNREGISTERED_TRANSCRIPT = """DOUBLE:propose=Nebula Systems|organization,Project Kestrel|project
 [00:00] Dana: We reviewed the Nebula Systems opportunity and the new internal codename,
 Project Kestrel, needs its own tracking going forward.
 """
 
 
 def main() -> int:
-    conn = testdb.connect_or_skip("walk_meeting_distiller")
+    conn = testdb.connect_or_skip("walk_transcript")
     schema.ensure_capture_schema(conn)
     with conn.cursor() as cur:
         cur.execute("DELETE FROM capture_queue")
@@ -70,13 +74,13 @@ def main() -> int:
                                      meeting_date="2026-07-29", attendees="Dana, Alice")
         show("queued", f"#{ack['id']} (kind={schema.MEETING!r})")
 
-        step("the librarian's meeting flow claims it")
+        step("the librarian claims it — the same flow every capture takes")
         item, result = worker.process_next(conn, deps)
         show("status", result.status)
         print(result.report["summary"])
         assert result.status == schema.FILED, f"expected filed, got {result.status}"
 
-        step("the filed page set, read back from git")
+        step("what it filed, read back from git — the archive and the pages that cite it")
         sha = result.result_ref.rsplit("@", 1)[1]
         for path in support.changed_paths(env.repo, sha):
             print(f"  {path}")
@@ -89,7 +93,7 @@ def main() -> int:
         print(result2.report["summary"])
         assert result2.status == schema.FILED, f"expected filed, got {result2.status}"
 
-        step("ONE commit: the meeting's pages AND the identities it introduced to carry them")
+        step("ONE commit: the pages AND the identities introduced to carry them")
         sha2 = result2.result_ref.rsplit("@", 1)[1]
         for path in support.changed_paths(env.repo, sha2):
             print(f"  {path}")
@@ -114,8 +118,9 @@ def main() -> int:
             f"expected both identities born, got {[e.canonical_id for e in born]}")
         assert all(e.approved_by for e in born), "an identity was born confirmed by nobody"
 
-        print(f"\n{'=' * 78}\nMeeting-distiller walk complete — {STEP} step(s): both sets filed, "
-              f"{len(born)} identities introduced, nothing waiting on anybody.\n{'=' * 78}")
+        print(f"\n{'=' * 78}\nTranscript walk complete — {STEP} step(s): both captures filed "
+              f"through the one pipe, {len(born)} identities introduced, nothing waiting on "
+              f"anybody.\n{'=' * 78}")
     return 0
 
 

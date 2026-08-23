@@ -123,48 +123,48 @@ def test_scoped_entities_hides_both_ids_from_an_identity_that_cannot_see_the_pag
     assert "quill-industries" not in ana
 
 
-# ── a view gets no special-cased ACL enforcement — the SAME server seam every other page goes
-# through, asserted at that seam rather than against the generator. `fx.VIEW_PAGE` carries
-# `acl: ['finance']`, exactly like `fx.ACME_PAGE`; these tests prove `server/acl.py::visible`
-# needs no view-specific code at all — a derived page is indistinguishable from an authored one
-# at this seam.
-def test_view_is_readable_and_searchable_for_a_scoped_identity(indexed):
+# ── the per-entity rollup is a READ-TIME answer, and it is ACL-scoped per reader ──────────────
+# Three tests stood here while the rollup was a stored `views/<id>.md` page. Two of them —
+# `test_view_is_readable_and_searchable_for_a_scoped_identity` and
+# `test_view_out_of_scope_is_absent_from_search_and_byte_identical_to_nonexistent_in_read_page` —
+# are DELETED rather than re-aimed: their subject was that a DERIVED page needs no special-cased
+# ACL enforcement, and with no derived pages left they would only re-prove, on a fourth page
+# shape, what the authored-page tests above already prove about `visible()`.
+#
+# What survives is the property the stored rollup existed to serve, and it moved somewhere it can
+# actually be kept. `describe_entity` assembles the rollup per CALLER, so it can be scoped — which
+# the stored page never could be: one file cannot be true for two readers at once, so it carried
+# no `acl:` at all and summarised only the open subset. These two tests hold that at the seam.
+def test_the_entity_filter_is_acl_scoped_absent_rather_than_merely_unranked(indexed):
+    """A real `entity` filter roundtrip (`search_arms`'s own filter) crossed with the audience
+    rule: the restricted page is a HIT for the identity that may read it and ABSENT for the one
+    that may not — never merely ranked lower, which would leak its existence through the count."""
     conn, fx = indexed
     ana = make_service(fx, conn, fx.ANA)                             # scoped to ["finance"]
-    page = ana.read_page(fx.VIEW_PAGE)
-    assert "error" not in page and page["path"] == fx.VIEW_PAGE
-    hits = ana.search("acme view synthesis")
-    assert any(h["path"] == fx.VIEW_PAGE for h in hits["hits"])
-
-
-def test_the_entity_filter_returns_the_view_for_a_scoped_identity(indexed):
-    """The entity filter returns a view too (`entity: [<id>]` on its frontmatter) — a real
-    `entity` filter roundtrip (`search_arms`'s own filter, the same one
-    `test_search_filters_roundtrip_and_unknown_filter_errors` proves for an authored page), never
-    only the free-text query `test_view_is_readable_and_searchable...` above already covers."""
-    conn, fx = indexed
-    ana = make_service(fx, conn, fx.ANA)                             # scoped to ["finance"]
-    out = ana.search("view", filters={"entity": "acme-corp"})
-    assert any(h["path"] == fx.VIEW_PAGE for h in out["hits"])
+    out = ana.search("payroll", filters={"entity": "acme-corp"})
+    assert any(h["path"] == fx.ACME_PAGE for h in out["hits"])
     assert all("acme-corp" in h["entity"] for h in out["hits"])
 
-    # the SAME filter, for an identity that cannot read the view: absent, not merely unranked.
     eng = make_service(fx, conn, fx.ENG)                             # scoped to ["eng"] only
-    eng_out = eng.search("view", filters={"entity": "acme-corp"})
-    assert not any(h["path"] == fx.VIEW_PAGE for h in eng_out["hits"])
+    eng_out = eng.search("payroll", filters={"entity": "acme-corp"})
+    assert not any(h["path"] == fx.ACME_PAGE for h in eng_out["hits"])
 
 
-def test_view_out_of_scope_is_absent_from_search_and_byte_identical_to_nonexistent_in_read_page(indexed):
-    """An identity lacking audience `finance` gets ABSENCE for this view — not in search, not in
-    `read_page` — the same existence rule, on a fourth page shape."""
+def test_describe_entity_is_the_rollup_and_it_is_scoped_to_the_reader(indexed):
+    """The read-time rollup, at the seam that decides who sees it.
+
+    For the identity that may read Acme's only anchored page, the timeline names it. For the one
+    that may not, the entity does not exist at all — and the absence is BYTE-IDENTICAL to an
+    entity nobody ever registered, so the answer cannot be read as "there is something here you
+    may not see". This is the guarantee a stored rollup could not offer: it had to be one page for
+    everybody, so it was open, and its timeline named every member's path to every reader."""
     conn, fx = indexed
-    eng = make_service(fx, conn, fx.ENG)                             # scoped to ["eng"] only
-    hits = eng.search("acme view synthesis")
-    assert not any(h["path"] == fx.VIEW_PAGE for h in hits["hits"])
+    ana = make_service(fx, conn, fx.ANA)                             # scoped to ["finance"]
+    seen = ana.describe_entity("acme-corp")
+    assert "error" not in seen
+    assert any(item["path"] == fx.ACME_PAGE for item in seen["timeline"])
 
-    denied = eng.read_page(fx.VIEW_PAGE)
-    ghost = eng.read_page("views/does-not-exist.md")
-    # same shape as `test_read_page_out_of_scope_is_byte_identical_to_nonexistent` above: the
-    # response TEMPLATE is identical (one key, "error") — the message legitimately echoes back
-    # the path each call asked for, which names nothing the caller didn't already type.
+    eng = make_service(fx, conn, fx.ENG)                             # scoped to ["eng"] only
+    denied = eng.describe_entity("acme-corp")
+    ghost = eng.describe_entity("no-such-entity-ever")
     assert set(denied) == set(ghost) == {"error"}

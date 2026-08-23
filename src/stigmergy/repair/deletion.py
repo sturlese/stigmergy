@@ -1,6 +1,6 @@
-"""The `delete` kind: a page leaves the corpus, and every page that referred to it is rewritten.
+"""A page leaves the corpus, and every page that referred to it is rewritten.
 
-Deletion is the one repair whose blast radius is not the page it names. Removing a file is trivial;
+A removal's blast radius is not the page it names. Removing a file is trivial;
 what is not trivial is that the corpus afterwards still has to be a graph — the knowledge repo's
 contract linter treats an unresolvable `[[wikilink]]` as an ERROR, and `gate_contract` turns that
 into a veto — and still has to READ: a sentence that cited the page, a callout that announced an
@@ -13,15 +13,14 @@ of the plan — which pages go, which pages refer to them, and their FRONTMATTER
 that named a going page dropped — and every bound the written half has to satisfy. The bodies of
 the referring pages are written by `repair.sweep`, one model call over the whole referring set,
 and land here as the same `planned_after` bytes. Which pages go is never a model's: a person names
-them, or `duplicate_source_groups` derives them for exact-duplicate `sources/` pages, where the
-decision is a lookup.
+them at `brain_delete` or on the console, and nothing here may widen that list.
 
-Three properties buy this kind its safety, and each is asked of a different thing:
+Three properties buy a removal its safety, and each is asked of a different thing:
 
   · **The zone is a whitelist.** `wiki/entities/` is absent by construction — an identity is
     retired through governance, not deletion — and so is everything outside the corpus.
-  · **The plan proves its own bounds, at both ends.** `validate` — run when a plan is stored and
-    again against the clone it lands on — proves every scrubbed page's frontmatter is code's own
+  · **The plan proves its own bounds, at both ends.** `validate` — run when a plan is written and
+    again against the tree it lands on — proves every scrubbed page's frontmatter is code's own
     scrub of the page as it stands, and that no planned page still names a going one. A base hash
     per page says whether the corpus moved under a stored plan; the apply refuses on either.
   · **Nothing outside the plan refers to a going page.** Asked of the whole corpus at apply time,
@@ -30,8 +29,8 @@ Three properties buy this kind its safety, and each is asked of a different thin
 
 Every link question is asked EXACTLY as the frozen contract linter asks it — code fences and inline
 code blanked first, alias and anchor split off, the last path segment minus `.md` — and the regexes
-are hand-mirrored from it rather than imported, the posture `entity_body` states for the same
-reason: this package talks to the linter through FILES. A scanner that sees fewer links than the
+are hand-mirrored from it rather than imported, and deliberately: this package talks to the linter
+through FILES. A scanner that sees fewer links than the
 linter leaves a dead link and a veto at apply time. It sees one MORE shape than the linter does —
 a markdown link at a going page's path — because a writer reconciles prose, and a path in prose is
 a reference whether or not the linter counts it.
@@ -50,29 +49,29 @@ from stigmergy.librarian import page as page_policy
 from stigmergy.repair import schema
 from stigmergy.repair.errors import RepairError
 
-# The two op names, from the vocabulary module that also has to tell them apart (`content_key`
-# keys a deletion on its removals alone). Unlike the other two kinds, the KIND is not the op name:
-# one repair performs two different actions, and a reader of `ops_preview` has to be able
-# to tell "three pages removed" from "eleven pages rewritten" without opening the row.
+# The two op names, from the vocabulary module at the bottom of this package. The KIND is not the
+# op name, because one removal performs two different actions: a reader of a ledger row has to be
+# able to tell "three pages removed" from "eleven pages rewritten" without opening the diff.
 OP_DELETE = schema.DELETE_OP_NAME
 OP_SCRUB = schema.SCRUB_OP_NAME
 OP_NAMES = schema.DELETE_OP_NAMES
 
-# What may be deleted: the fast lane's own folders plus the two machine zones. `wiki/entities/` is
+# What may be deleted: the fast lane's own folders plus the machine zone. `wiki/entities/` is
 # absent BY CONSTRUCTION rather than by exclusion — an entity page's type carries no folder in
 # `page.FOLDER_BY_TYPE`, so it is not in `gates.ALLOWED_WRITE_PREFIXES` and could only be added
 # here deliberately.
-PROVENANCE_ZONE_PREFIXES = ("sources/", "views/")
+PROVENANCE_ZONE_PREFIXES = ("sources/",)
 DELETABLE_PREFIXES = (*gates.ALLOWED_WRITE_PREFIXES, *PROVENANCE_ZONE_PREFIXES)
 
-# The zone an identity page lives in, spelled here so the refusal can name it. `entity_body` owns
-# the same string one module over and states why it is not imported from `entities.generator`.
+# The zone an identity page lives in, spelled here so the refusal can name it. Not imported from
+# `entities.generator`: `tests/test_architecture.py` closes this package's reach there, and what
+# governs here is which paths this lane refuses rather than how an identity page is generated.
 ENTITY_ZONE_PREFIX = "wiki/entities/"
 
 # The wikilink namespace — the frozen linter's `CONTENT_ROOTS`, hand-mirrored. Not
 # `index.corpus.ZONES`: `tests/test_architecture.py` closes this package's reach at
 # `stigmergy.index`, and the definition that governs here is the LINTER's anyway.
-CONTENT_ZONES = ("wiki", "sources", "views")
+CONTENT_ZONES = ("wiki", "sources")
 CONTENT_ZONE_PREFIXES = tuple(f"{zone}/" for zone in CONTENT_ZONES)
 
 # The frozen linter's own three, verbatim (`stigmergy_lint.WIKILINK_RE`, `FENCE_RE`,
@@ -101,8 +100,8 @@ def link_stem(target: str) -> str:
     `stigmergy_lint.link_targets` + its `link_stem`, in one function: the last path segment, minus
     a trailing `.md`, with every dot a title has kept. The linter once answered this with
     `Path(target).stem`, which amputated a dotted name (`[[Booking.com]]` resolved to `Booking`),
-    and this mirror amputated with it on purpose — a plan that disagrees with the gate passes
-    propose time and fails apply. The linter stopped amputating (a live `[[Acme Inc. Invoice …]]`
+    and this mirror amputated with it on purpose — a plan that disagrees with the gate is written
+    and then vetoed. The linter stopped amputating (a live `[[Acme Inc. Invoice …]]`
     was vetoed as dead), so this answers the same question the same new way.
     """
     text = str(target or "").split("|", 1)[0].split("#", 1)[0].strip()
@@ -241,10 +240,9 @@ def scrubbed(text: str, stems: set[str], *, machine_written: bool = False) -> st
     page dropped, and the body VERBATIM — the body is the writer's (`repair.sweep`), and this is
     the page it is handed and the frontmatter `validate` holds its answer to.
 
-    `machine_written` scrubs the BODY too, deterministically, and it is how the machine zones are
-    treated: a `views/` page is REGENERATED wholesale by the view sweep, and a `sources/` page is a
-    filed document's provenance. Neither is prose anybody reconciles, so handing one to a writer
-    asks a model to argue with a generated file and produce bytes the next regeneration overwrites.
+    `machine_written` scrubs the BODY too, deterministically, and it is how the machine zone is
+    treated: a `sources/` page is a filed document's provenance, not prose anybody reconciles, so
+    handing one to a writer asks a model to argue with a document somebody actually sent.
     There, unlinking IS the right answer — the older rule, kept exactly where it was right.
 
     Pure, and byte-exact about the parts it does not touch: the frontmatter block is reassembled
@@ -547,8 +545,8 @@ def corpus_pages(worktree: str) -> list[str]:
 
 def read_text(worktree: str, rel: str) -> str | None:
     """One repo-relative file as text, `None` when it cannot be read as text at all. PUBLIC:
-    `entity_alias` reads the same checkout through this one, so the two non-additive kinds cannot
-    come to disagree about which files exist."""
+    `sweep` reads the same checkout through this one, so the writer and the validator cannot come
+    to disagree about which files exist."""
     try:
         with open(os.path.join(worktree, *rel.split("/")), encoding="utf-8") as f:
             return f.read()
@@ -557,9 +555,8 @@ def read_text(worktree: str, rel: str) -> str | None:
 
 
 def sha256(text: str) -> str:
-    """The propose-to-apply drift proof for both non-additive kinds: the bytes an op was computed
-    FROM, so "the corpus moved" is a fact rather than a guess. PUBLIC for the same reason
-    `read_text` is."""
+    """The plan-to-apply drift proof: the bytes an op was computed FROM, so "the corpus moved" is a
+    fact rather than a guess. PUBLIC for the same reason `read_text` is."""
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
@@ -575,9 +572,9 @@ def scrubbed_paths(ops) -> list[str]:
 
 
 def provenance_scrubs(ops) -> frozenset[str]:
-    """The scrubbed pages whose provenance frontmatter is LEGITIMATE — the machine zones.
+    """The scrubbed pages whose provenance frontmatter is LEGITIMATE — the machine zone.
 
-    A sweep is the first thing in this system that modifies a `sources/` or `views/` page at all,
+    A sweep is the first thing in this system that modifies a `sources/` page at all,
     and `gate_frontmatter` refuses `content_hash`/`tier`/`extracted_at` on any modified in-lane page
     the caller has not declared a provenance page. Those fields are the librarian's own stamps from
     when it filed the page; a scrub only ever REMOVES, so it cannot be the thing that asserted one.
@@ -606,8 +603,8 @@ def zone_prefix(path: str) -> str:
 def lane_for(ops) -> tuple[str, ...]:
     """The write lane THIS plan owns: the zone of every page it touches, and no other.
 
-    Derived rather than fixed, unlike `entity_body`'s one-zone lane, because a sweep legitimately
-    spans several — a note goes and a decision page, a source page and an entity page each stop
+    Derived rather than fixed, because a sweep legitimately spans several zones — a note
+    goes and a decision page, a source page and an entity page each stop
     pointing at it. So the lane cannot be what proves the plan is confined; `validate` is (a
     deletion may only name `DELETABLE_PREFIXES`, a scrub only a corpus page). What the narrowed
     lane still buys is everything OUTSIDE this plan: a write the sweep did not plan, in a zone this
@@ -618,22 +615,19 @@ def lane_for(ops) -> tuple[str, ...]:
 
 
 def plan_bytes(ops) -> int:
-    """How big this plan is, measured in the bytes it stores — the bound one repair may be."""
+    """How big this plan is, measured in the bytes it stores — the bound one removal may be."""
     return sum(len(str(o.get("planned_after", "")).encode("utf-8")) for o in (ops or ()))
 
 
 OVERSIZE_REASON = (
     "delete-plan-too-large({size}>{ceiling}): this deletion would rewrite {pages} page(s), and the "
-    "stored plan carries every one of them in full. One approval is one decision a person can "
+    "stored plan carries every one of them in full. One removal is one decision a person can "
     "actually have read — delete fewer pages at a time, or raise the ceiling deliberately")
 
 
 def oversize_reason(ops, ceiling: int) -> str:
-    """`""` when the plan fits its ceiling, the named reason when it does not.
-
-    A string rather than a raise, because the two doors need it differently: the CLI turns it into
-    a refusal a person reads, and the nightly duplicate road records it as a skip.
-    """
+    """`""` when the plan fits its ceiling, the named reason when it does not — a string rather than
+    a raise, because the caller turns it into the refusal the person who asked reads back."""
     size = plan_bytes(ops)
     if size <= int(ceiling):
         return ""
@@ -661,13 +655,13 @@ def validate(worktree: str, ops) -> list[gates.Finding]:
     may touch in this tree — and the two bounds a written sweep has to satisfy: every
     scrubbed page's frontmatter is code's own scrub of the page as it stands here, byte for byte,
     and no planned page still refers to a page that is going. Both are asked of the stored bytes
-    against THIS tree, which is what lets the same function prove a plan at propose time and again
-    against the clone it lands on. Whether the corpus moved under the plan is `apply_declared`'s
+    against THIS tree, which is what lets the same function prove a plan when it is written and
+    again against the tree it lands on. Whether the corpus moved under the plan is `apply_declared`'s
     question, asked of the base hashes.
     """
     ops = list(ops or ())
     if not ops:
-        return [_finding("no-ops", "a delete proposal carries at least one page to delete")]
+        return [_finding("no-ops", "a removal carries at least one page to delete")]
     out: list[gates.Finding] = []
     seen: set[str] = set()
     for op in ops:
@@ -675,7 +669,7 @@ def validate(worktree: str, ops) -> list[gates.Finding]:
         path = str(op.get("path", ""))
         if name not in OP_NAMES:
             out.append(_finding("unknown-kind",
-                                f"declared a {name!r} op in a {schema.KIND_DELETE} proposal, which "
+                                f"declared a {name!r} op in a {schema.KIND_DELETE} plan, which "
                                 f"performs {' and '.join(OP_NAMES)} and nothing else", path))
             continue
         if path in seen:
@@ -718,118 +712,9 @@ def validate(worktree: str, ops) -> list[gates.Finding]:
                                 f"is written — the reference would survive as a dead link", path))
     if not deleted_paths(ops):
         out.append(_finding("no-deletion",
-                            f"a {schema.KIND_DELETE} proposal that removes no page is a rewrite of "
+                            f"a {schema.KIND_DELETE} plan that removes no page is a rewrite of "
                             f"other people's pages wearing a deletion's name"))
     return out
-
-
-# ── the one automatic road, and it asks no model ──────────────────────────────────────────────
-# Two `sources/` pages declaring the same `content_hash:` are the same captured document filed
-# twice. Which one goes is not a judgment — it is a lookup — so it is CODE's, and this is the one
-# deliberate exception to "a model proposes". A model asked "are these
-# duplicates?" would be asked to re-derive a fact the frontmatter already states, and would
-# sometimes get it wrong.
-SOURCES_ZONE_PREFIX = "sources/"
-CONTENT_HASH_KEY = "content_hash"
-
-# The fields that answer "which of these was captured later", in the order a `sources/` page is
-# likely to carry them. `extracted_at` is what the librarian stamps on one; the other two are the
-# authored-page convention, read as a fallback rather than assumed absent.
-AGE_FIELDS = ("extracted_at", "created", "updated")
-
-DUPLICATE_RATIONALE = (
-    "{doomed} and {survivor} declare the same content_hash, so they are one captured document "
-    "filed twice. This removes {doomed_short} — {why} — and keeps {survivor_short}.")
-_FEWER_LINKS_WHY = "{n} page(s) link to it against {m}"
-_NEWER_WHY = "the same number of pages link to each, so the older filing stays"
-
-
-def duplicate_source_groups(worktree: str) -> list[tuple[str, list[str]]]:
-    """`[(survivor, [pages to delete]), ...]` for every set of `sources/` pages that declare the
-    same `content_hash:`.
-
-    BOTH tie-breaks are deterministic, which is the whole reason this road needs no model:
-
-      1. the page with MORE inbound links survives — the corpus has already voted on which copy it
-         cites, and deleting that one would scrub the citations off every page that made them;
-      2. on a tie the OLDER filing survives — the later one is the accident, and the earlier one is
-         the copy any external reference to this document is likelier to have been made against;
-      3. on a tie in both, the lexicographically first path survives, so the answer never depends
-         on the order a directory happened to be walked in.
-    """
-    hashes: dict[str, list[str]] = {}
-    for rel in corpus_pages(worktree):
-        if not rel.startswith(SOURCES_ZONE_PREFIX):
-            continue
-        text = read_text(worktree, rel)
-        digest = _content_hash(text) if text is not None else ""
-        if digest:
-            hashes.setdefault(digest, []).append(rel)
-
-    inbound = _inbound_counts(worktree)
-    out = []
-    for _digest, group in sorted(hashes.items()):
-        if len(group) < 2:
-            continue
-        ranked = sorted(group, key=lambda p: (-inbound.get(p, 0), _age_key(worktree, p), p))
-        out.append((ranked[0], sorted(ranked[1:])))
-    return sorted(out, key=lambda pair: pair[1])
-
-
-def duplicate_rationale(worktree: str, survivor: str, doomed: str) -> str:
-    """The repair's own explanation — composed by CODE from the two facts that decided it,
-    because no model was asked and a sentence claiming otherwise would be a lie about provenance."""
-    inbound = _inbound_counts(worktree)
-    doomed_links, survivor_links = inbound.get(doomed, 0), inbound.get(survivor, 0)
-    why = (_FEWER_LINKS_WHY.format(n=doomed_links, m=survivor_links)
-           if doomed_links != survivor_links else _NEWER_WHY)
-    return DUPLICATE_RATIONALE.format(doomed=doomed, survivor=survivor, why=why,
-                                      doomed_short=page_stem(doomed),
-                                      survivor_short=page_stem(survivor))
-
-
-def _content_hash(text: str) -> str:
-    front, _rest = page_policy.split_frontmatter(text or "")
-    if not front.strip():
-        return ""
-    try:
-        parsed = yaml.safe_load(front)
-    except yaml.YAMLError:
-        return ""
-    if not isinstance(parsed, dict):
-        return ""
-    return str(parsed.get(CONTENT_HASH_KEY) or "").strip()
-
-
-def _age_key(worktree: str, rel: str) -> str:
-    """One comparable spelling of "when was this captured", `""` when the page says nothing —
-    which sorts FIRST, so a page carrying no date is treated as the older filing and survives."""
-    text = read_text(worktree, rel)
-    front, _rest = page_policy.split_frontmatter(text or "")
-    try:
-        parsed = yaml.safe_load(front) if front.strip() else {}
-    except yaml.YAMLError:
-        return ""
-    if not isinstance(parsed, dict):
-        return ""
-    return next((str(parsed[field]) for field in AGE_FIELDS if parsed.get(field)), "")
-
-
-def _inbound_counts(worktree: str) -> dict[str, int]:
-    """How many OTHER pages link to each page, by the linter's own resolution rule."""
-    by_stem: dict[str, list[str]] = {}
-    for rel in corpus_pages(worktree):
-        by_stem.setdefault(page_stem(rel), []).append(rel)
-    counts: dict[str, int] = {}
-    for rel in corpus_pages(worktree):
-        text = read_text(worktree, rel)
-        if text is None:
-            continue
-        for stem in {stem for _match, stem in _live_links(text)}:
-            for target in by_stem.get(stem, ()):
-                if target != rel:
-                    counts[target] = counts.get(target, 0) + 1
-    return counts
 
 
 PLAN_DRIFT_CODE = "plan-drift"

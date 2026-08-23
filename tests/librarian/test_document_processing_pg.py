@@ -128,10 +128,11 @@ def test_a_document_capture_tells_the_agent_the_source_half_is_handled(rig, clea
     assert "SYSTEM NOTE" in recording.agent.flow_notes[0]
     assert "SYNTHESIS" in recording.agent.flow_notes[0]
 
+    # The note is an INVARIANT, not a parameter: an ordinary capture archives too, and is told so.
     support.submit(clean_queue, recording, "An ordinary capture about the Acme renewal.")
     _, result = worker.process_next(clean_queue, recording)
     assert result.status == schema.FILED
-    assert recording.agent.flow_notes[-1] == ""
+    assert "SYNTHESIS" in recording.agent.flow_notes[-1]
 
 
 # ── births and the outcome contract compose unchanged: it IS the fast lane ─────────────────────

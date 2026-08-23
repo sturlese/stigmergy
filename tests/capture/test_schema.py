@@ -315,8 +315,8 @@ def test_source_provenance_hint_keys_is_exactly_the_trio_the_writer_acts_on():
 
 # ── normalize_hints: the client-hints allowlist + the frontmatter recording ─────────────────────
 def test_normalize_hints_accepts_the_allowed_keys():
-    out = schema.normalize_hints({"type": "decision", "title": "t"}, "plain material")
-    assert out["client"] == {"type": "decision", "title": "t"}
+    out = schema.normalize_hints({"type": "note", "title": "t"}, "plain material")
+    assert out["client"] == {"type": "note", "title": "t"}
     assert out["declared_frontmatter"] == {}
     assert out["flagged"] == []
 
@@ -356,14 +356,14 @@ def test_normalize_hints_accepts_a_value_at_exactly_the_boundary():
 
 
 def test_normalize_hints_drops_a_none_valued_key_silently():
-    out = schema.normalize_hints({"title": None, "type": "decision"}, "m")
-    assert out["client"] == {"type": "decision"}
+    out = schema.normalize_hints({"title": None, "type": "note"}, "m")
+    assert out["client"] == {"type": "note"}
 
 
 def test_normalize_hints_records_declared_frontmatter_and_flags_the_server_owned_subset():
-    material = "---\nsubmitted_by: ceo@example.com\ntype: decision\n---\n\nbody\n"
+    material = "---\nsubmitted_by: ceo@example.com\ntype: note\n---\n\nbody\n"
     out = schema.normalize_hints(None, material)
-    assert out["declared_frontmatter"] == {"submitted_by": "ceo@example.com", "type": "decision"}
+    assert out["declared_frontmatter"] == {"submitted_by": "ceo@example.com", "type": "note"}
     assert out["flagged"] == ["submitted_by"]                 # only the server-owned subset
     assert out["client"] == {}                                # client hints untouched by the scan
 
@@ -409,9 +409,9 @@ def test_declared_frontmatter_returns_empty_without_a_leading_delimiter():
 
 
 def test_declared_frontmatter_parses_flat_top_level_pairs():
-    material = "---\nsubmitted_by: ceo@example.com\nverification: verified\ntype: decision\n---\n\nbody\n"
+    material = "---\nsubmitted_by: ceo@example.com\nverification: verified\ntype: note\n---\n\nbody\n"
     assert schema.declared_frontmatter(material) == {
-        "submitted_by": "ceo@example.com", "verification": "verified", "type": "decision"}
+        "submitted_by": "ceo@example.com", "verification": "verified", "type": "note"}
 
 
 def test_declared_frontmatter_ignores_indented_and_list_and_comment_lines():
@@ -419,9 +419,9 @@ def test_declared_frontmatter_ignores_indented_and_list_and_comment_lines():
                 "acl:\n"
                 "  - leadership\n"
                 "# a comment line\n"
-                "type: decision\n"
+                "type: note\n"
                 "---\n\nbody\n")
-    assert schema.declared_frontmatter(material) == {"acl": "", "type": "decision"}
+    assert schema.declared_frontmatter(material) == {"acl": "", "type": "note"}
 
 
 def test_declared_frontmatter_truncates_an_oversized_value():
@@ -431,8 +431,8 @@ def test_declared_frontmatter_truncates_an_oversized_value():
 
 
 def test_declared_frontmatter_ignores_a_line_with_no_colon():
-    material = "---\nnot a key value line\ntype: decision\n---\n\nbody\n"
-    assert schema.declared_frontmatter(material) == {"type": "decision"}
+    material = "---\nnot a key value line\ntype: note\n---\n\nbody\n"
+    assert schema.declared_frontmatter(material) == {"type": "note"}
 
 
 # ── prepare_submission: the whole contract wired together ───────────────────────────────────────

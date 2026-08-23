@@ -1,5 +1,5 @@
 ---
-type: decision
+type: note
 title: Cross-Account Renewal Coordination
 status: developing
 owner: steward

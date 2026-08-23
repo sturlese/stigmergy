@@ -106,9 +106,12 @@ def test_every_package_that_exists_is_listed_in_the_readme(readme):
 def test_the_fast_lane_vocabulary_is_small_and_stated_once():
     """Not a README claim — a guard on the count that drifted the most widely in prose (eleven
     sites said "six fast-lane types" while there were three). Pinning it here means the next change
-    has one obvious place that turns red. (The review lane's item kinds stood beside it until
-    The capture-is-the-approval change retired the lane whole.)"""
-    assert len(FAST_LANE_TYPES) == 3
+    has one obvious place that turns red.
+
+    OLD BEHAVIOUR: three, while `decision` was a type of its own. A conclusion is a `note` now —
+    splitting conclusions by their grammatical mood forced a placement question at every filing
+    that no reader ever benefited from."""
+    assert len(FAST_LANE_TYPES) == 2
 
 
 # ── the architecture diagrams ─────────────────────────────────────────────────────────────────

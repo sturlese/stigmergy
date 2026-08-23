@@ -80,12 +80,6 @@ kill_timeout = "300s"
   # Not a secret; comma-separated if the app is ever reachable at more than one hostname.
   # MUST match the deployed hostname — if it drifts from `app` above, every real client 421s.
   STIGMERGY_PUBLIC_HOST = "CHANGEME-your-fly-app.fly.dev"
-  # Where the deploy bakes the digest's audience-scoping map (always written — `{}`
-  # stub when the sibling repo has none). A path, not a secret. The console itself stays INERT
-  # until STIGMERGY_ADMIN_TOKEN_HASH is set as a Fly secret (docs/reference/admin-console.md);
-  # nothing here turns it on.
-  STIGMERGY_ADMIN_CHANNELS_PATH = "/app/slack-channels.json"
-
   # ── the worker group's configuration ─────────────────────────────────────────────────────────
   # `[env]` is app-wide, so every process group sees these — and the server group
   # READS none of them. It holds no git credential and writes nothing to the corpus: a removal is
@@ -108,15 +102,6 @@ kill_timeout = "300s"
   # precedence over `[env]` — plus that provider's own key (for example `openrouter:z-ai/glm-5.2`
   # with OPENROUTER_API_KEY), leaving this template pristine.
   STIGMERGY_LIBRARIAN_MODEL = "anthropic:claude-sonnet-5"
-  # The gardener's model, and it MUST be set here rather than left to its own default. Its default
-  # is a bare id, which resolves through the OpenAI Responses API — and `stigmergy-librarian-boot`
-  # strips OPENAI_API_KEY from the worker before exec'ing it, on purpose (it belongs to the READ
-  # path's embedder, and Fly secrets are app-wide). Since the night shift moved into the worker
-  # the gardener runs THERE, so the only provider key it can reach is the app-wide
-  # ANTHROPIC one. An unset value fails the nightly pass by name, with the reason in its
-  # `job_runs` row — rather than recording a `partial` run every night for a model half that
-  # never ran, or stopping a worker that has captures to file.
-  STIGMERGY_GARDENER_MODEL = "anthropic:claude-sonnet-5"
   # Tuned BY MEASUREMENT: the default 300s was calibrated for paste-sized captures; a
   # real figure-dense Drive deck (7.7 KB extracted, overlapping an entity with existing coverage)
   # exceeded it twice while a simpler deck filed just under it. Deck-sized documents earn a

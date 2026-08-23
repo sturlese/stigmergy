@@ -9,10 +9,7 @@ import json
 import os
 import pathlib
 
-from pydantic_ai.exceptions import AgentRunError
-
-from stigmergy.digest import cli as digest_cli
-from stigmergy.gardener import cli, sweep
+from stigmergy.gardener import cli
 from tests.gardener import support
 
 
@@ -62,13 +59,14 @@ def test_connect_ensures_every_schema_a_fresh_database_is_missing(conn, capsys, 
         assert cur.fetchone()[0] == "gardener_findings"
 
 
-# ── the twin both CLIs declare in prose (`gardener/cli.py::_connect`: "Same shape and order as
-# `digest/cli.py`", restated in both `index.md`s). Read off the AST rather than by running either
-# command, because the failure this guards is a schema added to ONE `_connect`: invisible against
-# every mature database, and an `UndefinedTable` the first time the sibling meets a fresh one. ────
+# ── what `_connect` provisions, read off the AST rather than by running the command. The failure
+# this guards is a schema this CLI reads but never ensures: invisible against every mature
+# database, and an `UndefinedTable` the first time it meets a fresh one. It was a two-CLI parity
+# check until the weekly digest — the sibling `_connect` it was pinned against — was deleted; the
+# pin on THIS command's own set is the half that never depended on the twin. ──────────────────────
 def _ensure_calls(module) -> set[str]:
-    """Every `ensure_*` function `module._connect` calls, by bare name — the two files import them
-    differently, so `capture_schema.ensure_x` and a plain `ensure_x` must count as one fact."""
+    """Every `ensure_*` function `module._connect` calls, by bare name — imported forms differ, so
+    `capture_schema.ensure_x` and a plain `ensure_x` must count as one fact."""
     tree = ast.parse(pathlib.Path(module.__file__).read_text(encoding="utf-8"))
     connect = next(node for node in ast.walk(tree)
                    if isinstance(node, ast.FunctionDef) and node.name == "_connect")
@@ -78,12 +76,11 @@ def _ensure_calls(module) -> set[str]:
     return {name for name in called if name.startswith("ensure_")}
 
 
-def test_the_two_cli_connect_twins_ensure_the_same_schemas():
-    ensured = _ensure_calls(cli)
-    # Pinned before it is compared: two empty sets are equal, so an extractor that silently stopped
-    # seeing calls would otherwise read as agreement.
-    assert ensured == {"ensure_capture_schema", "ensure_gardener_schema"}
-    assert ensured == _ensure_calls(digest_cli)
+def test_connect_ensures_every_schema_this_cli_reads():
+    # An exact set, never a superset: an extractor that silently stopped seeing calls would read
+    # as agreement against `>=`, and a schema dropped from `_connect` is exactly the regression
+    # this exists to catch.
+    assert _ensure_calls(cli) == {"ensure_capture_schema", "ensure_gardener_schema"}
 
 
 def test_connect_interrupted_exits_130_with_the_generic_message(capsys, monkeypatch):
@@ -152,7 +149,7 @@ def test_happy_path_prints_the_severity_grouped_report_and_exits_zero(conn, caps
     out = capsys.readouterr().out
     assert rc == 0
     assert out.startswith("# Gardener report — run #")
-    assert "checked 1 pages, 0 entities — 11 deterministic checks" in out
+    assert "checked 1 pages, 0 entities — 10 deterministic checks" in out
     assert "1 finding(s): 0 warn, 1 info" in out
     assert "## WARN (0)" in out
     assert "orphan-page" in out
@@ -161,8 +158,8 @@ def test_happy_path_prints_the_severity_grouped_report_and_exits_zero(conn, caps
 
 def test_clean_run_prints_the_honest_no_findings_line_and_exits_zero(conn, capsys, repo):
     support.write_registry(repo, {})
-    # A written body — an entity page that says nothing about itself is itself a finding now
-    # (`model-empty-entity-body`), so a clean run needs a page with something on it.
+    # A written body — an entity page still carrying its template, or blank below its title, is
+    # itself a finding (`entity-placeholder-body`), so a clean run needs a page with prose on it.
     support.write_page(repo, "wiki", "entities/acme-corp.md",
                        frontmatter={"type": "entity", "title": "Acme Corp",
                                    "entity": ["acme-corp"], "status": "developing",
@@ -175,25 +172,6 @@ def test_clean_run_prints_the_honest_no_findings_line_and_exits_zero(conn, capsy
     out = capsys.readouterr().out
     assert rc == 0
     assert "no findings — every check came back clean this run" in out
-
-
-def test_the_report_says_how_many_entity_pages_the_second_model_pass_judged(conn, capsys, repo):
-    """End of the wire an operator reads: the corpus line names the body sweep and its count, so a
-    pass that judged nothing (a corpus with no entity pages, a ceiling of zero pages left) is
-    visible as such instead of hiding inside the sampled numbers."""
-    support.write_registry(repo, {})
-    support.write_page(repo, "wiki", "entities/acme-corp.md",
-                       frontmatter={"type": "entity", "title": "Acme Corp",
-                                   "entity": ["acme-corp"], "status": "developing",
-                                   "updated": _days_ago(1)},
-                       body=support.written_entity_body("Acme Corp"))
-    support.rebuild_index(conn, repo)
-
-    rc = cli.main(["--repo", repo])
-
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "and a body sweep over 1 entity page(s)" in out
 
 
 def test_json_flag_emits_machine_readable_findings(conn, capsys, repo):
@@ -213,129 +191,3 @@ def test_json_flag_emits_machine_readable_findings(conn, capsys, repo):
     assert payload[0]["check"] == "orphan-page"
     assert payload[0]["subject"] == "wiki/notes/orphan.md"
     assert payload[0]["id"] is not None
-
-
-# ── end to end: both sources persist and the REPORT renders both, labeled ───────────────────────
-def test_a_model_sourced_finding_is_labeled_inline_in_the_human_readable_report(conn, capsys, repo):
-    """Both labels are printed inline, in the human-readable report, not only in `--json`: a label
-    that exists only in the machine format is not rendered at all in the surface a human actually
-    reads. Proven through the real CLI, not only `report.py`'s own synthetic-finding unit test
-    (`test_source_tag_deterministic_vs_model`)."""
-    support.write_registry(repo, {})
-    p = support.write_page(repo, "wiki", "notes/changed.md",
-                           frontmatter={"type": "note", "title": "t", "entity": [],
-                                       "status": "developing", "updated": _days_ago(1)})
-    support.rebuild_index(conn, repo)
-    support.seed_filed_capture(conn, result_ref=f"{p}@sha0")
-
-    rc = cli.main(["--repo", repo])
-
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "[deterministic]" in out
-    from stigmergy.gardener.settings import DEFAULT_GARDENER_MODEL
-    assert f"[model: {DEFAULT_GARDENER_MODEL}]" in out
-
-
-def test_json_flag_carries_model_id_for_a_model_sourced_finding(conn, capsys, repo):
-    support.write_registry(repo, {})
-    p = support.write_page(repo, "wiki", "notes/changed.md",
-                           frontmatter={"type": "note", "title": "t", "entity": [],
-                                       "status": "developing", "updated": _days_ago(1)})
-    support.rebuild_index(conn, repo)
-    support.seed_filed_capture(conn, result_ref=f"{p}@sha0")
-
-    rc = cli.main(["--repo", repo, "--json"])
-
-    out = capsys.readouterr().out
-    assert rc == 0
-    payload = json.loads(out)
-    model_rows = [row for row in payload if row["source"] == "model"]
-    assert len(model_rows) == 1
-    from stigmergy.gardener.settings import DEFAULT_GARDENER_MODEL
-    assert model_rows[0]["model_id"] == DEFAULT_GARDENER_MODEL
-
-
-
-# ── a sweep outage: the deterministic findings survive ──────────────────────────────────────────
-def test_sweep_outage_still_prints_deterministic_findings_then_exits_error(
-        conn, capsys, repo, monkeypatch):
-    """The run overall exits nonzero, but the deterministic checks are complete, correct and
-    already persisted — the report shows them in full, labeled as sweep-incomplete, never
-    withheld because a DIFFERENT, independent pass failed."""
-    class _FlakyJudge:
-        async def run(self, prompt, *, deps=None, usage_limits=None):
-            raise AgentRunError("simulated model outage")
-
-    monkeypatch.setattr(sweep, "build_judge", lambda model_name=None: _FlakyJudge())
-    support.write_registry(repo, {})
-    p = support.write_page(repo, "wiki", "notes/orphan.md",
-                           frontmatter={"type": "note", "title": "Orphan", "entity": [],
-                                       "status": "developing", "updated": _days_ago(1)})
-    support.rebuild_index(conn, repo)
-    support.seed_filed_capture(conn, result_ref=f"{p}@sha0")   # a `changed` page, so the sweep
-                                                                # is actually attempted this run
-
-    rc = cli.main(["--repo", repo])
-
-    captured = capsys.readouterr()
-    assert rc == cli.EXIT_ERROR
-    assert "the model sweep did NOT complete this run (see below)" in captured.out
-    assert "deterministic checks only" in captured.out
-    assert "orphan-page" in captured.out
-    assert "wiki/notes/orphan.md" in captured.out
-    assert "stigmergy-gardener: the model sweep failed (AgentRunError)" in captured.err
-    assert "already saved" in captured.err
-    assert "job_runs" in captured.err
-
-
-def test_an_empty_body_pass_failure_is_reported_on_stderr_and_exits_error(conn, capsys, repo,
-                                                                            monkeypatch):
-    """The SECOND model pass has its own failure message and its own exit path, and nothing
-    exercised either. The contract is the one the editorial sweep already keeps: the findings that
-    DID complete are printed and already saved, the failure is named on stderr with the pass that
-    had it, and the process exits non-zero so a scheduler notices."""
-    class _FlakyJudge:
-        async def run(self, prompt, *, deps=None, usage_limits=None):
-            raise AgentRunError("simulated model outage")
-
-    monkeypatch.setattr(sweep, "build_empty_body_judge", lambda model_name=None: _FlakyJudge())
-    support.write_registry(repo, {})
-    support.write_page(repo, "wiki", "entities/acme-corp.md",
-                       frontmatter={"type": "entity", "title": "Acme Corp",
-                                   "entity": ["acme-corp"], "status": "developing",
-                                   "updated": _days_ago(1)},
-                       body=support.empty_entity_body("Acme Corp"))
-    support.rebuild_index(conn, repo)
-
-    rc = cli.main(["--repo", repo])
-
-    captured = capsys.readouterr()
-    assert rc == cli.EXIT_ERROR
-    assert "stigmergy-gardener: the entity-body sweep failed (AgentRunError)" in captured.err
-    assert "already saved" in captured.err
-    assert "job_runs" in captured.err
-    assert captured.out.startswith("# Gardener report — run #"), (
-        "the deterministic report is printed whatever the second model pass did")
-
-
-def test_sweep_success_with_no_changed_pages_prints_a_normal_report_and_exits_zero(
-        conn, capsys, repo, monkeypatch):
-    """No `capture_queue` row at all -> `changed` is empty, but `sampled` is NOT (the corpus has
-    one page) -> `run_sweep` DOES call the judge (its short-circuit only skips a batch that is
-    EMPTY OVERALL, `test_sweep.py::test_an_empty_batch_never_calls_the_judge_at_all` proves that
-    narrower case) -> the SHIPPED offline double still contributes zero findings, by its own
-    documented restraint (`FakeGardenerSweep` never fires on a sampled-only batch) -> a normal,
-    successful run."""
-    support.write_registry(repo, {})
-    support.write_page(repo, "wiki", "notes/orphan.md",
-                       frontmatter={"type": "note", "title": "Orphan", "entity": [],
-                                   "status": "developing", "updated": _days_ago(1)})
-    support.rebuild_index(conn, repo)
-
-    rc = cli.main(["--repo", repo])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert "did NOT complete" not in captured.out
-    assert captured.err == ""

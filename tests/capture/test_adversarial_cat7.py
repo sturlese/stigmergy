@@ -66,7 +66,7 @@ def test_adversarial_cat7_boundary_a_quoted_top_level_key_evades_the_flat_scan()
     This is a MISS IN THE ANNOTATION, not a security bypass: `flagged` never feeds attribution or
     any other server-owned column, so a missed flag loses a note to the submitter/steward, never
     the structural property that keeps a client from setting a server-owned field."""
-    material = '---\n"submitted_by": ceo@example.com\ntype: decision\n---\n\nbody\n'
+    material = '---\n"submitted_by": ceo@example.com\ntype: note\n---\n\nbody\n'
     declared = schema.declared_frontmatter(material)
     assert "submitted_by" not in declared          # the scan never saw it as a key
     submission = schema.prepare_submission("page", material)
@@ -78,10 +78,10 @@ def test_adversarial_cat7_boundary_a_flow_mapping_nests_the_forged_key_out_of_fl
     """`submitted_by` here is only ever a NESTED key inside a YAML flow mapping (`meta: {...}`) —
     a real YAML parser can still reach it by walking the structure; the flat top-level scan
     records only the outer key `meta` and misses `submitted_by` entirely."""
-    material = "---\nmeta: {submitted_by: ceo@example.com, type: decision}\n---\n\nbody\n"
+    material = "---\nmeta: {submitted_by: ceo@example.com, type: note}\n---\n\nbody\n"
     declared = schema.declared_frontmatter(material)
     assert "submitted_by" not in declared
-    assert declared["meta"] == "{submitted_by: ceo@example.com, type: decision}"
+    assert declared["meta"] == "{submitted_by: ceo@example.com, type: note}"
     submission = schema.prepare_submission("page", material)
     assert submission.hints["flagged"] == []
 
@@ -93,7 +93,7 @@ def test_adversarial_cat7_a_multiline_plain_scalar_still_gets_flagged_though_the
     and is correctly skipped as a nested/continuation line, never double-recorded as its own
     field). The recorded VALUE is truncated relative to full YAML semantics, but the ANNOTATION
     fires — which is the only thing the annotation is required to do."""
-    material = "---\nsubmitted_by: ceo\n  @example.com\ntype: decision\n---\n\nbody\n"
+    material = "---\nsubmitted_by: ceo\n  @example.com\ntype: note\n---\n\nbody\n"
     declared = schema.declared_frontmatter(material)
     assert declared["submitted_by"] == "ceo"        # partial, but present — flagged, not missed
     submission = schema.prepare_submission("page", material)

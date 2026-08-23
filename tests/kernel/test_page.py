@@ -2,10 +2,10 @@
 the frontmatter scalar emitter.
 
 The `build_page`/`build_pages` suite that used to live here went with its subject, the ingest
-pipeline. The properties worth keeping are the ones every surviving frontmatter writer
-still depends on — `views.render` composes a whole frontmatter block through `_yaml`, and the
-knowledge repo's own linter parses it back as YAML — so they are tested directly here rather than
-through a builder that no longer exists.
+pipeline. The properties worth keeping are `_yaml`'s own: `kernel/index.md` names it the one
+scalar emitter any frontmatter writer should reuse rather than re-derive, and the knowledge repo's
+own linter parses its output back as YAML — so they are tested directly here rather than through a
+builder that no longer exists.
 """
 import yaml
 
@@ -57,10 +57,10 @@ def test_control_characters_still_yield_parseable_frontmatter():
 
     Only `\\n`, `\\t` and `\\r` were escaped, so every other C0/C1 control was emitted RAW inside a
     double-quoted scalar — which YAML forbids. That breaks the "quote (which always round-trips)"
-    promise the plain/quoted decision above is written on. It matters beyond hygiene: `views/render`
-    builds a whole frontmatter block through `_yaml`, `acl:` included, so one control character in
-    an entity title produced a view page no consumer could parse — and an unparseable page is
-    exactly what `corpus.page_row` now has to fail closed on.
+    promise the plain/quoted decision above is written on. It matters beyond hygiene: any
+    frontmatter writer built through `_yaml`, `acl:` included, could otherwise emit a whole block
+    no consumer could parse from a single control character in a title — and an unparseable page
+    is exactly what `corpus.page_row` now has to fail closed on.
     """
     for hostile in ["x\x1by", "a\x00b", "d\x7fe", "\x9bcsi"]:
         assert _round_trip(hostile) == hostile, hostile

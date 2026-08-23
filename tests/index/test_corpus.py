@@ -72,10 +72,10 @@ def test_entity_list_drops_a_nested_list_element_rather_than_stringifying_its_re
     assert corpus.entity_list(["initech", {"a": 1}]) == ["initech"]
 
 
-def test_loads_exactly_the_three_included_zones():
+def test_loads_exactly_the_two_included_zones():
     rows = corpus.load_pages(FIXTURE)
-    assert len(rows) == 11
-    assert {r.zone for r in rows} == {"wiki", "sources", "views"}
+    assert len(rows) == 10
+    assert {r.zone for r in rows} == {"wiki", "sources"}
     # the excluded-zone markers must never surface (ops/, meta/, datasets/)
     assert not [r for r in rows if "excluded" in r.path]
 
@@ -88,14 +88,13 @@ def test_zone_counts_match_the_fixture():
     # the 4th `wiki` page (`globex-initech-partnership.md`) is anchored to TWO entities — the
     # fixture's only multi-element `entity:` page, and so the structural witness the plural
     # `entity:` contract needs.
-    assert zones == {"wiki": 4, "sources": 6, "views": 1}
+    assert zones == {"wiki": 4, "sources": 6}
 
 
 def test_page_id_prefers_frontmatter_id_and_falls_back_to_stem():
     rows = _by_path()
     assert rows["sources/entities/globex/quarterly-report-q1-2026-draft-aaaaaa.md"].page_id == "drive:G1"
-    assert rows["views/globex.md"].page_id == "globex"           # no id -> file stem
-    assert rows["wiki/decisions/refund-policy.md"].page_id == "refund-policy"
+    assert rows["wiki/notes/refund-policy.md"].page_id == "refund-policy"   # no id -> file stem
 
 
 def test_contract_columns_are_parsed():
@@ -107,7 +106,7 @@ def test_contract_columns_are_parsed():
     assert draft.entity == ["globex"] and draft.as_of == "2026-Q1" and draft.tier == 1
     final = rows["sources/entities/globex/quarterly-report-q1-2026-final-bbbbbb.md"]
     assert final.supersedes == "drive:G1" and final.superseded_by == ""
-    policy = rows["wiki/decisions/refund-policy.md"]
+    policy = rows["wiki/notes/refund-policy.md"]
     assert policy.status == "canonical" and policy.owner == "steward"
     assert policy.updated == "2026-07-01"
     # the purge: `verification` is not a contract column — not parsed, not stored, not filtered
@@ -132,8 +131,8 @@ def test_machine_pages_take_updated_from_extracted_at():
 
 def test_acl_distinguishes_absent_from_present():
     rows = _by_path()
-    assert rows["views/globex.md"].acl == ["sales"]
-    assert rows["wiki/decisions/refund-policy.md"].acl is None   # no acl = open
+    assert rows["sources/general/legacy-pricing-2023-ffffff.md"].acl == ["sales"]
+    assert rows["wiki/notes/refund-policy.md"].acl is None   # no acl = open
 
 
 def test_acl_empty_list_is_nobody_not_open():
@@ -163,10 +162,10 @@ def test_acl_malformed_shapes_fail_closed():
 def test_inlinks_count_distinct_linking_pages():
     rows = _by_path()
     # refund-policy is linked from support-playbook and git-canonical-store
-    assert rows["wiki/decisions/refund-policy.md"].inlinks == 2
+    assert rows["wiki/notes/refund-policy.md"].inlinks == 2
     # support-playbook only from refund-policy (related + body count once)
     assert rows["wiki/playbooks/support-playbook.md"].inlinks == 1
-    assert rows["views/globex.md"].inlinks == 0
+    assert rows["wiki/notes/globex-initech-partnership.md"].inlinks == 0
 
 
 def test_wikilinks_inside_code_are_not_links():
@@ -180,13 +179,14 @@ def test_load_pages_resolves_outbound_links_to_paths():
     # refund-policy <-> support-playbook link each other; git-canonical-store links refund-policy
     # only (one direction) — mirrors the inlinks pairing `test_inlinks_count_distinct_linking_
     # pages` already pins, now checked from the OUTBOUND side.
-    assert rows["wiki/decisions/refund-policy.md"].links == \
+    assert rows["wiki/notes/refund-policy.md"].links == \
         ["wiki/playbooks/support-playbook.md"]
     assert rows["wiki/playbooks/support-playbook.md"].links == \
-        ["wiki/decisions/refund-policy.md"]
+        ["wiki/notes/refund-policy.md"]
     assert rows["wiki/concepts/git-canonical-store.md"].links == \
-        ["wiki/decisions/refund-policy.md"]
-    assert rows["views/globex.md"].links == []          # no outbound wikilinks at all
+        ["wiki/notes/refund-policy.md"]
+    assert rows["wiki/notes/globex-initech-partnership.md"].links == \
+        []          # no outbound wikilinks at all
 
 
 def test_by_stem_index_groups_by_lowercased_stem():
@@ -196,15 +196,6 @@ def test_by_stem_index_groups_by_lowercased_stem():
 
 def test_by_stem_index_of_no_paths_is_empty():
     assert corpus.by_stem_index([]) == {}
-
-
-def test_by_stem_index_excludes_views_as_link_targets():
-    """A view's filename is the entity ID, which for a single-word entity equals the entity
-    page's stem lowercased (views/vantage.md vs wiki/entities/Vantage.md — the first real
-    regeneration collided). views/ is outside the wikilink namespace, so `[[Entity]]` resolves
-    to exactly the entity page and never the derived rollup."""
-    index = corpus.by_stem_index(["wiki/entities/Vantage.md", "views/vantage.md"])
-    assert index == {"vantage": ["wiki/entities/Vantage.md"]}
 
 
 def test_resolve_links_ambiguous_stem_stores_every_match():
@@ -287,14 +278,14 @@ def test_load_pages_does_not_cross_stamp_unrelated_pages_sharing_a_stem(tmp_path
     real continuation marker (`^{base}#p\\d+$`). Only a genuine `#p<n>` id may RECEIVE; only the
     row whose `page_id` equals the base EXACTLY may DONATE."""
     (tmp_path / "wiki" / "entities").mkdir(parents=True)
-    (tmp_path / "views").mkdir()
+    (tmp_path / "sources").mkdir()
     (tmp_path / "wiki" / "entities" / "acme.md").write_text(
         "---\ntitle: Acme Entity\nsuperseded_by: some-new-acme-page\n---\nentity page body")
-    (tmp_path / "views" / "acme.md").write_text(
-        "---\ntitle: Acme View\n---\nview body, unrelated to the entity page's supersession")
+    (tmp_path / "sources" / "acme.md").write_text(
+        "---\ntitle: Acme Source\n---\nsource body, unrelated to the entity page's supersession")
     rows = {r.path: r for r in corpus.load_pages(str(tmp_path))}
     assert rows["wiki/entities/acme.md"].superseded_by == "some-new-acme-page"
-    assert rows["views/acme.md"].superseded_by == ""          # must stay untouched
+    assert rows["sources/acme.md"].superseded_by == ""          # must stay untouched
 
 
 def test_load_pages_a_real_part_still_receives_even_with_an_unrelated_same_stem_page_present(
@@ -367,7 +358,7 @@ def test_page_row_is_the_public_seam_load_pages_itself_calls():
     for that path, field for field except `inlinks` and `links` — both are whole-corpus facts
     `page_row` alone cannot compute (see its own docstring, and `resolve_links`'s)."""
     from pathlib import Path as _Path
-    rel = "wiki/decisions/refund-policy.md"
+    rel = "wiki/notes/refund-policy.md"
     text = (_Path(FIXTURE) / rel).read_text(encoding="utf-8")
 
     direct = corpus.page_row(rel, "wiki", text)

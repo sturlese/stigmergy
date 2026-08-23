@@ -121,27 +121,38 @@ def test_a_slack_capture_survives_every_gate_with_only_the_thin_page_note(rig, c
 
 
 # ── the OFF position: an ordinary capture is byte-identical to before the parameter ─────────────
-def test_an_ordinary_capture_files_no_source_page_and_reports_none(rig, clean_queue):
+def test_a_capture_with_no_door_provenance_still_archives_its_material_under_notes(
+        rig, clean_queue):
+    """OLD BEHAVIOUR: this capture filed a page and archived nothing, so the page cited nothing
+    and no reader could walk it back to what actually arrived.
+
+    Every capture archives now — that is the invariant the whole pipe rests on. What the door
+    still decides is WHERE: with no provenance asserted, the material is a note, and it lands
+    under `sources/notes/` rather than under the Slack door's own folder.
+    """
     env, deps = rig
     _, result = _file(clean_queue, deps, THREAD_MATERIAL)     # same material, no slack hints
 
     assert result.status == schema.FILED
     _, sha = result.result_ref.rsplit("@", 1)
-    assert "source_pages" not in result.report
-    assert not any(p.startswith("sources/") for p in support.changed_paths(env.bare, sha))
+    archived = [p for p in support.changed_paths(env.bare, sha) if p.startswith("sources/")]
+    assert archived and all(p.startswith("sources/notes/") for p in archived), archived
+    assert result.report["source_pages"] == archived
 
 
-def test_an_mcp_style_capture_with_only_untrusted_source_hints_stays_ordinary(rig, clean_queue):
-    """The trigger is `source_client` alone — the five untrusted source hints (channel, ts,
-    participants) may arrive from anywhere and must not switch the attachment on."""
+def test_an_mcp_style_capture_with_only_untrusted_source_hints_is_not_filed_as_a_slack_thread(
+        rig, clean_queue):
+    """The Slack door's own folder is chosen by `source_client` ALONE — the five untrusted source
+    hints (channel, ts, participants) may arrive from anywhere and must not buy a capture the
+    provenance of a transport it did not come through. It is still archived, under notes."""
     env, deps = rig
     hints = {k: v for k, v in SLACK_HINTS.items()
              if k not in ("source_client", "source_permalink")}
     _, result = _file(clean_queue, deps, THREAD_MATERIAL, hints=hints)
     assert result.status == schema.FILED
     _, sha = result.result_ref.rsplit("@", 1)
-    assert "source_pages" not in result.report
-    assert not any(p.startswith("sources/") for p in support.changed_paths(env.bare, sha))
+    archived = [p for p in support.changed_paths(env.bare, sha) if p.startswith("sources/")]
+    assert archived and all(p.startswith("sources/notes/") for p in archived), archived
 
 
 # ── rule 9, the red proof: per-page mode did not lose the anchoring question ────────────────────

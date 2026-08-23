@@ -145,10 +145,11 @@ comma-joined by the caller before it reaches `capture.schema`, never a structure
 to parse).
 
 **Two of those keys decide something, and those two are unforgeable by a client.**
-`source_client`/`source_permalink` decide whether the librarian attaches a verbatim `sources/`
-page beside the synthesis (`processing._source_attachment` — see
-[`librarian.md`](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow)), so
-a client that could assert them could choose a flow. It cannot:
+Every capture is archived verbatim under `sources/`, so `source_client`/`source_permalink` decide
+not WHETHER but WHERE — the `sources/slack/` folder, the `slack` provenance kind, and the thread
+permalink that lands as the archived page's `url:` (`processing._source_attachment` — see
+[`librarian.md`](./librarian.md#the-source-archive-every-capture-always)), so
+a client that could assert them could dress its own text up as a thread somebody posted. It cannot:
 `capture.schema.reject_source_provenance_hints` REFUSES those keys for every door but Slack's own,
 and which door a service is is a constructor fact, not an argument — `context.build_service` passes
 `door=SLACK_DOOR`, and every client-facing `BrainService` (stdio, HTTP) is built with `door=""`. The
@@ -229,6 +230,36 @@ never rewritten into "friendlier" prose.
 
 **Nothing is ever asked of a submitter.** A threaded message is ordinary conversation to this bot;
 the only thing a submitter hears back is this report of what the librarian did.
+
+## Telling somebody their page changed
+
+**A capture may bring an existing `wiki/` page up to date, and this pass is what makes that
+acceptable.** Nothing proves the new text is right — the bytes are the ones the filing agent just
+wrote — so what stands in place of a proof is that the change is loud and has an owner: it is
+attributed, it is a diff, `git revert` is the undo, and the person who filed the page is TOLD.
+
+The work is split because the credentials are: the librarian worker holds the git checkout and no
+Slack token, this process holds the token and no checkout. So the worker records what it rewrote on
+the capture's own report (`pages_rewritten`, each entry naming the path, the reason the account
+gave, and the `submitted_by` read off the page *before* the rewrite landed), and
+`poller.notify_rewrites_once` drains it:
+
+1. `store.due_rewrite_notices` — every rewrite a `filed` capture recorded whose owner has not been
+   told. Read-only against `capture_queue`, exactly like the outcome report beside it: this process
+   never claims, leases or mutates a capture.
+2. `gateway.users_lookup_by_email` — the one call that goes from an identity the brain knows to a
+   person Slack can reach. A miss is `""`, not an error: the brain's identities are not all Slack
+   members, and a page filed by somebody who has left has nowhere for its notice to go. That is
+   recorded as told rather than retried, or the pass would look them up again every five seconds
+   for the life of the deployment.
+3. A DM — the page, the reason, who caused it, and the fact that nothing is being asked. There is
+   no verdict to give and no button: telling somebody is not the same as asking them.
+4. `store.mark_notice_sent` — written AFTER the DM, so a pass that dies between them repeats one
+   notice rather than losing it. At-least-once, the same posture `last_status` takes next door:
+   a notice sent twice is noise, and a notice never sent is the property the whole design rests on.
+
+`page_rewrite_notices` is keyed `(submission_id, path)`, so a page rewritten by two captures earns
+two notices and the same capture never notifies twice.
 
 ## The offline double
 

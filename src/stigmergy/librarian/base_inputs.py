@@ -136,15 +136,6 @@ def linter_at(repo: str, base: gitcmd.BaseRef):
         yield path
 
 
-# The meeting distiller's brief, sibling to `agent.SKILL_RELPATH`. Hand-mirrored rather than
-# imported: this module sits below `agent` in the import graph. If one changes, change the other.
-#
-# There is deliberately NO `load_meeting_brief` reader here: the brief is read off the detached
-# worktree at `base.sha` by `agent.read_meeting_brief`, and a second reader would build the
-# agent's prompt from one read while the file it is TOLD to open is another.
-MEETING_BRIEF_RELPATH = ".claude/skills/meeting-distiller/SKILL.md"
-
-
 def _missing_linter(base: gitcmd.BaseRef) -> str:
     """One sentence, two callers, so a linter that vanishes between the startup check and the
     per-item materialization cannot be described two different ways."""

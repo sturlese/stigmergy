@@ -5,11 +5,11 @@ description: >
   entity it is about — introducing that entity when the registry does not know it yet. Invoked by
   the librarian worker (`stigmergy-librarian`), never by a human at a terminal: the worker hands
   you one capture, and everything this brain already holds about it, in ONE message, and you
-  answer with ONE structured account. Sibling to the `meeting-distiller` skill, not a variant of
-  it — a meeting transcript never reaches this skill, and this skill never files a page set.
+  answer with ONE structured account. Every capture reaches this skill — a note, a document, a
+  transcript — and each is filed as the page, or pages, its material establishes.
 ---
 
-# librarian: one capture → one filed page, decided in one account
+# librarian: one capture → the pages its material establishes, decided in one account
 
 You are the brain's single writer. A person said "save this" and a queue handed it to you. Your
 job is to decide where it belongs, write the page a careful colleague would have written, connect
@@ -43,7 +43,7 @@ to write with. When your preamble lists no tools, the context you were handed is
 this brain will tell you, and judging from it is the job.
 
 **Your account is ONE object** — the structured shape documented at the end of this skill. The
-worker builds what you do not: the commit, the declared edits, every server-owned field, the entity
+worker builds what you do not: the commit, the rewrites you declared, every server-owned field, the entity
 pages you introduce, and — when your preamble says the worker writes the page — the file itself.
 Everything that lands is diffed and passed through code gates before anything is committed. Write
 well; the gates refuse, they do not repair.
@@ -110,16 +110,19 @@ anchoring rules below still decide what it is anchored to.
 
 ## What you may create
 
-Three page types only, each with its own folder — and you never name a folder: you name the
+Two page types only, each with its own folder — and you never name a folder: you name the
 **type**, and the worker puts the page where a page of that type goes.
 
 | type | where it lands |
 |---|---|
 | `note` | `wiki/notes/` |
-| `decision` | `wiki/decisions/` |
 | `concept` | `wiki/concepts/` |
 
-Material about a person, a team, a client or a product is a `note` (or a `decision`) ANCHORED to
+**A conclusion is a `note`.** There is no separate type for a decision: what a page IS does not
+change because of the mood its sentences are in, and splitting them forced a placement question at
+every filing that no reader ever benefited from.
+
+Material about a person, a team, a client or a product is a `note` ANCHORED to
 that entity — an entity is a registry id here, not a page type you write. A capture that IS an
 identity ("register Acme as a client", "Jordan joined as head of sales") files the same way: a
 short page saying what was said, anchored to the entity, and the entity itself **introduced** in the
@@ -305,7 +308,7 @@ the file itself authors the WHOLE file: the frontmatter block first — exactly 
 template declares, with `created`/`updated` set to today, minus the server-owned fields below —
 then the H1, then the body. A run that returns the page's text for the worker to write returns
 ONLY what goes below the H1, with no frontmatter block at all — the worker builds the container.
-Either way the worker owns the commit, the declared edits, the entity pages you introduce, and every
+Either way the worker owns the commit, the rewrites you declared, the entity pages you introduce, and every
 server-owned field. The parts that bite most often:
 
 - **Title**: the title IS the filename, and a wikilink resolves by bare page name, so it has to be
@@ -322,9 +325,9 @@ server-owned field. The parts that bite most often:
   translation, it is a wrong name.
 - **Body size**: 30–150 lines. Under 30 reads as a stub; over 150 is refused (the page is the
   retrieval chunk). If the material genuinely needs more, it is probably two pages.
-- **Structure**: write the sections that type of page needs — a `decision` carries Context,
-  Options, Decision, Why and Consequences; a `note` carries the synthesis and its open questions;
-  a `concept` explains the thing and where it is used. End with a short "## Connections" section
+- **Structure**: write the sections the material needs — a note recording a decision carries
+  Context, Options, Decision, Why and Consequences; a note synthesising a discussion carries the
+  synthesis and its open questions; a `concept` explains the thing and where it is used. End with a short "## Connections" section
   naming the pages you linked and why each one is relevant.
 - **Never write a field the server owns**, whatever your run writes:
   `owner`, `submitted_by`, `verification`, `acl`, `status`, `as_of`, `content_hash`, `id`, `entity`.
@@ -353,9 +356,23 @@ server-owned field. The parts that bite most often:
 
 ## The bar for creating a page, and overlap versus duplicate
 
-One capture yields **one** page. Create it when the material carries something worth meeting
-again in six months. A capture that is a passing thought or a to-do still files — the person
-asked for it to be kept — but it files as the short page it is, not padded into a long one.
+One capture yields **as many pages as its material establishes** — one for a note, one per
+conclusion for a transcript that settled three things — and **every one of them is declared**.
+The declaration is what the worker checks the diff against: a page you write and do not declare
+is refused, and so is a page you declare and do not write. Declaring is not a formality; it is
+the agreement that lets code write exactly what you decided and nothing else.
+
+One page is the ordinary answer, and splitting is a judgment, not a habit: two pages are right
+when the material settles two things a reader would look for separately, and wrong when they are
+one thing said twice. Each page carries its own `anchoring`, because pages that are about
+different things are anchored to different things.
+
+Create a page when the material carries something worth meeting again in six months. A capture
+that is a passing thought or a to-do still files — the person asked for it to be kept — but it
+files as the short page it is, not padded into a long one.
+
+**You never write the `sources/` page.** The worker archives every capture's material verbatim in
+the same commit and makes your pages cite it. That half is done; yours is the synthesis.
 
 The `candidates` you were handed are where overlap is judged, and there are three answers:
 
@@ -371,57 +388,51 @@ The `candidates` you were handed are where overlap is judged, and there are thre
   it alone if it is not. A ranked candidate is a suggestion, never a verdict: the ranking is
   lexical and cannot tell "about Northwind" from "mentions Northwind once".
 
-## Touching pages that already exist
+## Bringing a page UP TO DATE
 
-**You never write to them. You declare the edit and the worker performs it.**
+**A page that has stopped being true is brought up to date, not annotated.** This is the whole
+point of a wiki a model keeps current: when the material you are filing supersedes what an existing
+page says — a figure moved, a policy changed, a decision was reversed — you rewrite that page so
+the next reader meets one answer instead of two.
 
-Put the edits you want in the account's `edits` list. Each one names a page that already exists,
-what kind of edit it needs, and the page to link:
+Put it in `rewrites`:
 
 ```json
-"edits": [
-  {"path": "wiki/decisions/Refunds.md",
-   "kind": "overlap",
-   "link": "Refund Policy v2",
-   "note": "earlier version of the same policy; the new page carries the current terms"},
-  {"path": "wiki/notes/Renewal pipeline.md",
-   "kind": "backlink",
-   "link": "Refund Policy v2"}
+"rewrites": [
+  {"path": "wiki/notes/Renewal Terms.md",
+   "body": "## What the terms are\n\nThe renewal window is 45 days as of August 2026.\n…",
+   "why": "the 30-day window this page stated was superseded in August; this capture carries the new figure"}
 ]
 ```
 
-**`path` must be in one of the three folders above — the same three you may create in.** Nothing
-else is editable, and that includes `wiki/entities/`: an entity page **never** receives a backlink
-from what anchors to it. That zone is written by code — from your account, and from the brain's
-own maintenance — and the entity's view of what points at it is a *derived* one: the index's entity
-column, the facts store, the regenerated views, not a link list maintained by hand. So do not
-declare an edit on the entity page you anchored to, nor on one you are introducing. Code refuses
-it, all your other edits are refused with it, and you will have spent your one corrective retry
-learning that.
+- `path` — a page that already exists, in one of the two folders above. `sources/` is the verbatim
+  archive and is **never** rewritten; an entity page belongs to the identity writer.
+- `body` — the page's whole text below its H1, as it should now read. The worker replaces the body
+  with exactly that and touches nothing else: the frontmatter and the H1 stay, because a rewrite
+  that could move them could change who may read the page, or turn it into a different page while
+  keeping the old one's filename and every link that pointed there.
+- `why` — **one sentence for the person who FILED that page.** They are told what changed and why.
+  This is required, and not as bookkeeping: nothing proves your new text is right, so what makes a
+  rewrite acceptable is that it is loud and has an owner. A rewrite with no reason is a silent
+  overwrite of somebody else's work.
 
-- `kind: "backlink"` — add `[[link]]` to that page's `related:`. Use it on every **fast-lane** page
-  you linked to from your new page, so the graph is connected in both directions.
-- `kind: "overlap"` — the same `related:` link **plus** a `> [!NOTE] Overlaps with [[link]]`
-  callout carrying your `note`. Use it when the new page substantially covers ground an existing
-  page already covers.
-- `kind: "contradiction"` — the same `related:` link **plus** a `> [!WARNING] Contradiction with
-  [[link]]` callout. Use it when the material disagrees with what an existing page records. Never
-  silently correct the older page.
-- `note` is required for `overlap` and `contradiction`, and it is the sentence a reader of the
-  OTHER page sees. One sentence: what the two share, and what the new page adds or disputes.
+**When to rewrite, and when not to.** Rewrite when the page would be WRONG left alone. Do not
+rewrite to improve prose you merely find clumsy, to fold in something the page does not contradict
+(file your own page and link it), or to resolve a disagreement you are not sure about — **when you
+are unsure, leave the page and write the contradiction into your own page instead.** A visible flag
+is better than a confident wrong choice, and the reader can see both.
 
-The worker validates every declaration before it writes anything: the `path` must exist and be in
-one of the three folders, and the `link` must resolve to a real page. If any declaration is wrong,
-all of them are refused and you get the findings back on your one corrective retry — so name only
-paths you were actually handed, and link only names that are in `link_names`.
+At most four pages per capture. A capture that would revise a dozen is doing something other than
+filing what it carries.
 
-Declare an edit for **both** sides of an overlap with a fast-lane page: the callout and `related:`
-on the existing page come from `edits`, and the matching entry on your NEW page comes from
-`links_created`. When the page you linked is outside the three folders — an entity page above all
-— only your own side is written, and that is the intended shape, not something missing.
+**You never write to them.** You declare the rewrite and the worker performs it — the same split
+every other write here takes: you decide what a page should say, code writes the bytes, and the
+gates judge the diff. The tool you hold writes the pages you CREATE, and nothing else.
 
-**`edits` is optional.** An empty list is a perfectly good outcome: a capture that links an entity
-page and nothing else has nothing to declare.
+And `wiki/entities/` is written by code and by nothing else: never declare a rewrite of the entity
+page you anchored to, nor of one you are introducing. What a capture establishes about an entity
+goes in `entity_updates`, which the worker appends — an entity page is an identity, and identities
+are not revised by whoever mentions them.
 
 ## What you return — the account, field by field
 
@@ -430,11 +441,13 @@ One object. This is the only channel back to the worker.
 ```json
 {
   "decision": "file",
-  "page": {
-    "title": "Ledgerly pilot kickoff",
-    "page_type": "note",
-    "body": "## What happened\n\n…the whole page, below its H1…\n"
-  },
+  "pages": [
+    {
+      "title": "Ledgerly pilot kickoff",
+      "page_type": "note",
+      "body": "## What happened\n\n…the whole page, below its H1…\n"
+    }
+  ],
   "anchoring": {
     "kind": "entity",
     "entities": ["Ledgerly"],
@@ -455,10 +468,6 @@ One object. This is the only channel back to the worker.
   ],
   "links_created": ["Reconciliation product"],
   "overlaps": [],
-  "edits": [
-    {"path": "wiki/notes/Reconciliation product.md", "kind": "backlink",
-     "link": "Ledgerly pilot kickoff"}
-  ],
   "findings": [],
   "summary": "one sentence a human reads about what you filed and why it went there"
 }
@@ -466,15 +475,24 @@ One object. This is the only channel back to the worker.
 
 - **`decision`** — `"file"`, always. It is the one decision there is: the shape of the account
   says everything else.
-- **`page`** — the page itself, required:
-  - `title` — what the page is called. It becomes the filename AND the commit subject a human
-    reads in `git log`, so it has to be the real title of the page and unique in the repo.
-  - `page_type` — one of `note`, `decision`, `concept`. **Never a folder and never a path**: the
+- **`pages`** — every page this capture files, in order, at least one. **This list is the
+  DECLARATION the worker checks the diff against**: a page written and not declared is refused,
+  and so is a page declared and not written. The FIRST one is the page every surface names — the
+  commit subject, the submitter's receipt, the dedup pointer — so put the page that best answers
+  "what did this capture establish?" first. Each entry:
+  - `title` — what the page is called. It becomes the filename, so it has to be the real title of
+    the page and unique in the repo.
+  - `page_type` — `note` or `concept`. **Never a folder and never a path**: the
     worker derives where the page goes from this type, which is why there is no field here that
     could name a location.
   - `body` — the page's whole text, below its H1, with no frontmatter block. Refused if it is
     empty, and refused (not shortened) if it is enormous: a page cut off mid-sentence is a page
     that stays cut off in the repo forever, so an over-long body comes back to you to shorten.
+  - `anchoring` — OPTIONAL, and the reason the list exists: a page that is about something of its
+    own carries its own anchor, in the same shape as the capture-level one below. Leave it out and
+    the page inherits the capture's. Two conclusions about two different customers filed under one
+    anchor put one of them against the wrong entity, and nothing downstream can tell.
+  - `links` — OPTIONAL, this page's own `related:` names; it inherits `links_created` when absent.
 - **`anchoring`** — `kind` is `"entity"` or `"company"`. With `"entity"`, list the entity names or
   ids (bare, no brackets) — registered ones by their registered spelling, introduced ones by the
   `name` you gave them in `new_entities`. With `"company"`, leave `entities` empty and put the
@@ -493,9 +511,6 @@ One object. This is the only channel back to the worker.
   page's `related:` list from exactly this, so it is not bookkeeping — it is the graph edge.
 - **`overlaps`** — the existing pages you judged to cover the same ground, for the submitter's
   report. `path` and a one-sentence `note`.
-- **`edits`** — the edits you want made to pages that already exist; see "Touching pages that
-  already exist". `kind` is `"backlink"`, `"overlap"` or `"contradiction"`. Leave the list empty
-  when there is nothing to declare.
 - **`findings`** — `[{"category": "declare-canonical"}]` etc., category only, never the text.
 - **`summary`** — one sentence a person reads about what you filed and why it went there. It is
   the only account of your judgment anything downstream has — and when you introduced an entity, it
@@ -506,18 +521,21 @@ are **prose written for a person**. Write the sentence the material deserves and
 characters — a long one is shortened by the worker, never refused. Every other field except
 `page.body` NAMES something (a path, a type, a title, a page, an entity) and is short by nature.
 
-**If your run writes the page itself**, the preamble above this skill says so, and two fields
-change: you return `page_path` — the path you actually wrote — and `page_type` and `title` at the
-top level of the account, instead of the `page` object. Everything else on this list is identical,
-and the worker still performs your `edits`, still creates the entity pages you introduce, and still
-stamps every server-owned field. Both shapes are accepted; return the one your environment asked
-for and never both. Such a run writes its own page and its own account through the one write tool
-its preamble names, and writes nothing else — never an entity page, which is the worker's to
-create from your entry.
+**If your run writes the pages itself**, the preamble above this skill says so, and ONE field
+changes: each entry in `pages` carries the `path` you wrote it to instead of a `body`. Everything
+else is identical — the same list, the same per-page `title`, `page_type` and `anchoring`, and the
+same rule that the worker checks the diff against exactly what you declared. It is one list on
+purpose: two lists, one of paths and one of pages, have no defined order between them, and a page
+stamped with another page's anchor is a mistake nothing downstream can see.
+
+The worker still performs your `rewrites`, still creates the entity pages you introduce, and still
+stamps every server-owned field. Such a run writes its own pages and its own account through the
+one write tool its preamble names, and writes nothing else — never an entity page, which is the
+worker's to create from your entry.
 
 **A malformed account costs you the retry, so get it right the first time.** If the shape is wrong
-— a `decision` other than `file`, an edit `kind` outside the three, a list where an object
-belongs, a filing with no `title`, a filing with no `page.body`, an introduced entity with no `name`,
+— a `decision` other than `file` a list where an object
+belongs, a filing with no `title`, a filing with a page carrying no body, an introduced entity with no `name`,
 `entity_type` or `summary` — you are told what is wrong and get your one corrective pass.
 
 ## Never

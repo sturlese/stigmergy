@@ -484,9 +484,15 @@ class BrainService:
         return {"count": len(entities), "entities": entities}
 
     def describe_entity(self, entity: str) -> dict:
-        """Everything anchored to one entity: registry metadata, its own page, its view reference
-        and a dated-first timeline. An unknown entity and an out-of-scope one return the
-        byte-identical absence shape — entity existence itself is scoped."""
+        """Everything anchored to one entity: registry metadata, its own page and a dated-first
+        timeline. An unknown entity and an out-of-scope one return the byte-identical absence
+        shape — entity existence itself is scoped.
+
+        **This IS the per-entity rollup.** There is no stored one: the timeline below is assembled
+        per reader and ACL-scoped, which a single page on disk cannot be — the materialised
+        version had to be open to everybody, so it could only ever summarise the open subset. A
+        reader who wants that rollup in prose asks `ask`, which synthesises from this at read time
+        under their own identity."""
         return self._call("describe_entity", {"entity": entity},
                           lambda: self._describe_entity(entity))
 
@@ -514,19 +520,7 @@ class BrainService:
         if own_page is not None and visible(own_page[2], self.audiences):
             page_ref = {"path": own_page[0], "title": _display_title(own_page[1])}
 
-        # views/<id>.md is `views.regenerate.view_relpath`'s contract, recomputed because
-        # `stigmergy.server` has no other reach into `stigmergy.views`.
-        view_path = f"views/{entity_id}.md"
-        view_row = search.fetch_pages(self.conn, [view_path]).get(view_path)
-        view_ref = None
-        if view_row is not None and visible(view_row.get("acl"), self.audiences):
-            view_ref = {
-                "path": view_path,
-                "title": _display_title(view_row.get("title") or ""),
-                "generated_at": neutralize_fence(view_row.get("generated_at", "")),
-            }
-
-        excluded = [p for p in (own_page[0] if own_page else None, view_path) if p]
+        excluded = [p for p in (own_page[0] if own_page else None,) if p]
         timeline_items, timeline_note = self._timeline_section(
             self._entity_timeline_rows(entity_id, excluded))
 
@@ -534,7 +528,6 @@ class BrainService:
             "entity": {"id": record["id"], "name": record["name"], "type": record["type"],
                       "aliases": record["aliases"],
                       "approved_by": record["approved_by"], "page": page_ref},
-            "view": view_ref,
             "timeline": timeline_items, "timeline_note": timeline_note,
         }
 

@@ -22,9 +22,7 @@ import pytest
 
 from stigmergy.capture import queue, schema
 from stigmergy.librarian import double as double_module
-from stigmergy.librarian import page as page_policy
 from stigmergy.librarian import processing, worker
-from stigmergy.librarian import report as report_module
 from tests import adversarial_payloads as payloads
 from tests.librarian import support
 
@@ -604,10 +602,15 @@ def test_already_filed_material_from_a_different_submitter_is_rejected_with_a_po
     assert support.branch_sha(env.bare) == before               # nothing new was committed
 
 
-def test_near_duplicate_overlap_files_and_cross_links_both_pages(rig, clean_queue):
-    """The third level of dedup — a near-duplicate overlap — end to end over real git, and through
-    the DECLARATIVE mechanism: the agent writes only its new page and names the edit; `edits.apply`
-    performs it; every gate, `gate_body_rewrite` included, judges the result."""
+def test_near_duplicate_overlap_is_flagged_and_the_other_page_is_left_alone(rig, clean_queue):
+    """The third level of dedup — a near-duplicate overlap — end to end over real git.
+
+    OLD BEHAVIOUR: an overlap ALSO wrote a callout and a reciprocal `related:` entry onto the other
+    page, through a declared `edits` entry code performed. That mechanism is gone: an overlap is a
+    JUDGMENT the account records, and the page somebody else wrote is not touched at all. What is
+    left is the property that matters — the near-duplicate files rather than being refused, and the
+    overlap it names reaches the submitter's report.
+    """
     env, deps = rig
     existing = "wiki/notes/Existing Note.md"
     before = support.read_filed_page(env.repo, "HEAD", existing)
@@ -621,162 +624,8 @@ def test_near_duplicate_overlap_files_and_cross_links_both_pages(rig, clean_queu
     page_path, sha = result.result_ref.rsplit("@", 1)
     changed = support.changed_paths(env.repo, sha)
     assert page_path in changed
-    assert existing in changed                                  # the OTHER side was also touched
-    existing_after = support.read_filed_page(env.repo, sha, existing)
-    assert "Overlaps with" in existing_after
-    # BOTH halves the page contract asks for on the existing side: the callout AND `related:`
-    title = page_path.rsplit("/", 1)[-1].removesuffix(".md")
-    assert f"[[{title}]]" in page_policy.related_links(existing_after)
-    # additive only — every line the human's page already had is still there, byte for byte
-    for line in before.splitlines():
-        assert line in existing_after.splitlines() or line.startswith("related:")
-    assert page_policy.related_links(before)[0] in page_policy.related_links(existing_after)
-
-
-def test_a_declared_backlink_adds_the_reciprocal_related_entry_and_commits_it(rig, clean_queue):
-    env, deps = rig
-    existing = "wiki/notes/Existing Note.md"
-
-    _, result = _file(clean_queue, deps, f"DOUBLE:backlink={existing}\n{ACME_MATERIAL}")
-
-    assert result.status == schema.FILED, result.report.get("summary")
-    page_path, sha = result.result_ref.rsplit("@", 1)
-    title = page_path.rsplit("/", 1)[-1].removesuffix(".md")
-    existing_after = support.read_filed_page(env.repo, sha, existing)
-    assert f"[[{title}]]" in page_policy.related_links(existing_after)
-    assert "[!NOTE]" not in existing_after          # a backlink is not a callout
-
-
-def test_a_declared_contradiction_places_a_warning_callout_on_the_other_page(rig, clean_queue):
-    env, deps = rig
-    existing = "wiki/notes/Existing Note.md"
-
-    _, result = _file(clean_queue, deps, f"DOUBLE:contradict={existing}\n{ACME_MATERIAL}")
-
-    assert result.status == schema.FILED, result.report.get("summary")
-    _, sha = result.result_ref.rsplit("@", 1)
-    existing_after = support.read_filed_page(env.repo, sha, existing)
-    assert "> [!WARNING] Contradiction with" in existing_after
-
-
-def test_the_bodyrewrite_gate_still_judges_codes_own_edits_and_lets_them_through(rig, clean_queue):
-    """The gate that refused the agent twice is unchanged and now guards code. This asserts the
-    specificity half: an edit code performed really does reach a commit, so "provably additive by
-    construction" is a fact about the diff and not a claim in a comment."""
-    env, deps = rig
-    existing = "wiki/notes/Existing Note.md"
-    _, result = _file(clean_queue, deps, f"DOUBLE:overlap={existing}\n{ACME_MATERIAL}")
-    assert result.status == schema.FILED
-    _, sha = result.result_ref.rsplit("@", 1)
-    # the commit's own diff for the existing page removes exactly ONE line: its `related:` field
-    diff = support.diff_of(env.repo, sha, existing)
-    removed = [line for line in diff.splitlines()
-               if line.startswith("-") and not line.startswith("---") and line[1:].strip()]
-    assert len(removed) == 1
-    assert removed[0].startswith("-related:")
-
-
-class _RewritingEdits:
-    """Wraps an agent and replaces the edits it declared. The seam for driving a declaration the
-    double has no directive for, without teaching the double a case only one test wants."""
-
-    def __init__(self, inner, edits):
-        self.inner = inner
-        # The declared port member, copied from what this wraps. Plain attribute
-        # access with NO default: `processing._one_pass` refuses an agent that carries no
-        # `structured_ordinary` rather than defaulting it, so a wrapper that swallowed the
-        # declaration would silently change which shape of the ordinary flow runs behind it.
-        # Reading it here means a wrapper around a non-conforming backend fails at
-        # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
-        self.structured_ordinary = inner.structured_ordinary
-        self.wants_gathered = inner.wants_gathered
-        self.edits = edits
-
-    def run(self, **kwargs):
-        import dataclasses
-        run = self.inner.run(**kwargs)
-        if run.outcome is not None:
-            run.outcome = dataclasses.replace(run.outcome, edits=self.edits)
-        return run
-
-
-
-def test_a_declared_callout_with_no_figures_is_the_benign_twin_and_files(rig, clean_queue):
-    """The specificity half: the gates that judge code's own edits must not refuse an ordinary
-    overlap note. Its prose carries no digits at all, so nothing in it can be mistaken for a claim
-    a gate has an opinion about — the callout reaches the other page and the capture files."""
-    import dataclasses
-    env, base_deps = rig
-    existing = "wiki/notes/Existing Note.md"
-    edits = ({"path": existing, "kind": "overlap", "link": ACME_TITLE,
-              "note": "both describe the same renewal, from different angles"},)
-    deps = dataclasses.replace(base_deps, agent=_RewritingEdits(base_deps.agent, edits))
-
-    _, result = _file(clean_queue, deps, ACME_MATERIAL)
-
-    assert result.status == schema.FILED, result.report.get("summary")
-    _, sha = result.result_ref.rsplit("@", 1)
-    assert "different angles" in support.read_filed_page(env.repo, sha, existing)
-
-
-@pytest.mark.parametrize("bad_target,label", [
-    ("ops/acl.json", "outside the creatable folders"),
-    ("wiki/notes/Does Not Exist.md", "a page that is not there"),
-])
-def test_a_declared_edit_code_refuses_produces_no_commit(rig, clean_queue, bad_target, label):
-    """The adversarial twin. A declaration is untrusted input: the target has to exist and be in
-    the lane, and a bad one refuses the whole capture rather than being silently skipped."""
-    env, deps = rig
-    before = support.branch_sha(env.bare)
-
-    _, result = _file(clean_queue, deps, f"DOUBLE:bad-edit={bad_target}\n{ACME_MATERIAL}")
-
-    assert result.status in (schema.REJECTED, schema.FAILED), label
-    assert result.result_ref == ""
-    assert support.branch_sha(env.bare) == before
-
-
-def test_a_declared_edit_never_reaches_a_page_this_capture_created(rig, clean_queue):
-    """`own-page`: an edit declared against the page the agent just wrote is a confusion, not an
-    edit — the link belongs in the new page itself, which the agent may write freely."""
-    env, deps = rig
-    before = support.branch_sha(env.bare)
-    _, result = _file(clean_queue, deps, f"DOUBLE:bad-edit={ACME_PAGE}\n{ACME_MATERIAL}")
-    assert result.status in (schema.REJECTED, schema.FAILED)
-    assert support.branch_sha(env.bare) == before
-
-
-def test_the_report_names_every_OTHER_page_the_commit_changed(rig, clean_queue):
-    """`processing` used to compute the list of pages `edits.apply` actually changed and drop it on
-    the floor, so the commit touched a colleague's page and no surface a human reads said so — not
-    the submitter's report, not `capture_queue`, not the CLI's prose.
-
-    `pages_edited` is what CODE wrote, which is not `overlaps_flagged` (the agent's judgment about
-    which pages overlap): the two can differ, and the one that describes a write is this one."""
-    env, deps = rig
-    existing = "wiki/notes/Existing Note.md"
-
-    item, result = _file(clean_queue, deps, f"DOUBLE:backlink={existing}\n{ACME_MATERIAL}")
-
-    assert result.status == schema.FILED, result.report.get("summary")
-    assert result.report["pages_edited"] == [existing]
-    # the report and the commit agree about it
-    _, sha = result.result_ref.rsplit("@", 1)
-    assert existing in support.changed_paths(env.repo, sha)
-    # and the CLI's own rendering carries it, since that is where a walk reads outcomes
-    assert existing in report_module.render_prose(result.report)
-    # the queue row too — an operator greps `capture_queue`, not a terminal that has scrolled away
-    assert _row(clean_queue, item["id"])["report"]["pages_edited"] == [existing]
-
-
-def test_a_capture_that_edited_nothing_says_so_rather_than_omitting_the_field(rig, clean_queue):
-    """"Nothing is silently omitted" (`report.py`): an empty list renders as `(none)`, so a reader
-    can tell "this capture changed no other page" from "this report predates the field"."""
-    _, deps = rig
-    _, result = _file(clean_queue, deps, ACME_MATERIAL)
-    assert result.status == schema.FILED
-    assert result.report["pages_edited"] == []
-    assert "pages_edited     (none)" in report_module.render_prose(result.report)
+    assert existing not in changed, "an overlap is a judgment, never a write to somebody's page"
+    assert support.read_filed_page(env.repo, sha, existing) == before
 
 
 class _TwoPageAgent:
@@ -810,17 +659,19 @@ class _TwoPageAgent:
         return run
 
 
-def test_a_capture_that_creates_a_second_page_is_refused_rather_than_filing_it_unreported(
-        rig, clean_queue):
-    """`_file` takes `in_lane_new_pages()[0]` — the alphabetically first entry of `git diff --raw` —
-    for `page_path`, `result_ref`, the commit subject, the dedup pointer and the whole report. A
-    second page would be committed, stamped and pushed while appearing on no surface a human reads,
-    and the anchoring check of the day unioned wikilinks across ALL new pages needing only one to
-    resolve, so an unanchored second page rode in on the first's coat-tails.
+def test_a_capture_that_creates_a_page_it_never_declared_is_refused(rig, clean_queue):
+    """A capture writes as many pages as its material establishes — and every one of them is named
+    in its own account, because the DECLARATION is what the diff is checked against.
 
-    "One capture, one commit" was true of commits and 1:N in pages. Note the alphabetical detail is
-    what makes it worse than a shrug: `A Second Page.md` sorts BEFORE the declared page, so the
-    report would have named the page the agent never claimed to file.
+    OLD BEHAVIOUR: the rule was a count ("a capture files exactly one page"), which refused this
+    diff for the right reason by accident. The reason itself never was the count: a page nobody
+    declared is committed, stamped and pushed while appearing on no surface a human reads —
+    `page_path`, `result_ref`, the commit subject, the dedup pointer and the whole report name the
+    declared pages. The alphabetical detail is what makes it worse than a shrug: `A Second Page.md`
+    sorts BEFORE the declared page, so a report built from the diff's order would have named the
+    page the agent never claimed to file.
+
+    Its benign twin is next door: the same second page, DECLARED, is filed.
     """
     import dataclasses
     env, base_deps = rig
@@ -831,7 +682,7 @@ def test_a_capture_that_creates_a_second_page_is_refused_rather_than_filing_it_u
 
     assert result.status == schema.FAILED
     assert result.result_ref == ""
-    assert "files exactly one page" in result.report["summary"]
+    assert "never declared" in result.report["summary"]
     assert support.branch_sha(env.bare) == before          # neither page reached the remote
     assert _row(clean_queue, item["id"])["result_ref"] == ""
 
@@ -1018,11 +869,11 @@ def test_a_body_rewrite_refuses_after_one_pass_and_the_agent_is_never_asked_to_r
     """The control-flow half, proven against the double: same terminal state, one agent run instead
     of two, and — the part that matters most — the agent is never handed a brief.
 
-    The measured cost of the old behaviour is what makes this worth a test of its own. Since the
-    declarative-edits amendment the agent cannot write to an existing page at all, so *"you rewrote
-    existing content in X"* named work it did not do; the second pass could only reproduce the same
-    refusal, because `edits.apply_declared` applies the same declaration to the same base page. The
-    run paid for an agent pass to arrive at the answer it already had.
+    The measured cost of the old behaviour is what makes this worth a test of its own. The agent
+    cannot write to an existing page at all — code performs every change to one, from the account's
+    declaration — so *"you rewrote existing content in X"* named work it did not do; the second
+    pass could only reproduce the same refusal, because code applies the same declaration to the
+    same base page. The run paid for an agent pass to arrive at the answer it already had.
 
     `DOUBLE:rewrite` is the one directive that still edits a committed page directly (the double's
     module docstring says why: a double that could not would leave this gate untested), which makes

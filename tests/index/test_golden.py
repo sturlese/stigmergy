@@ -63,13 +63,19 @@ def test_evaluate_passes_each_questions_filters_to_the_ranking_fn():
     assert seen == [("one", {"entity": "aurora-systems"}), ("two", {})]
 
 
-def test_retrieval_golden_v0_asks_at_least_ten_entity_filtered_questions():
+def test_retrieval_golden_v0_asks_at_least_nine_entity_filtered_questions():
     """The shipped set exercises the filter: every question whose SUBJECT is a named entity
     carries `filters.entity`, so breaking the membership clause in `index/search.py` moves this
-    run's result."""
+    run's result.
+
+    A FLOOR, not a census — it is here so the filter cannot quietly stop being exercised, and it
+    drops only when a filtered question is deliberately retired. It went from ten to nine when
+    `benchmark: aurora dossier` was retired with the stored per-entity rollup it expected: the
+    question asked retrieval for a page that was the rollup, and no page answers it now.
+    `evals/README.md` records that retirement; lowering this number is the reviewed half of it."""
     questions = golden.load_golden(GOLDEN_V0)
     filtered = [q for q in questions if q["filters"]]
-    assert len(filtered) >= 10
+    assert len(filtered) >= 9
     assert all("entity" in q["filters"] for q in filtered)
 
 

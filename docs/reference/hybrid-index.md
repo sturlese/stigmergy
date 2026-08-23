@@ -11,7 +11,7 @@ ranking. Never a source of truth — wipe it and rebuild it from git whenever co
 
 | Module | Does |
 |---|---|
-| `corpus.py` | repo checkout → `PageRow`s: zone walk over `ZONES = ("wiki", "sources", "views")` — an **include list and nothing else**, which is why `ops/` (the registry, identities, templates) never reaches retrieval. (There is deliberately no `EXCLUDED_ZONES` constant beside it: an include-list needs no exclude-list.) Also: tolerant frontmatter parsing, `entity_list`'s fail-CLOSED normalization of both `entity:` dialects, the wikilink graph → `inlinks` AND resolved outbound `links` (`resolve_links`/`by_stem_index` — the one algorithm the webhook shares), the build-time `superseded_by` propagation onto split-chain siblings, `content_hash` of the embedded text; `page_row` is the public single-file parser both `load_pages` and the incremental webhook call |
+| `corpus.py` | repo checkout → `PageRow`s: zone walk over `ZONES = ("wiki", "sources")` — an **include list and nothing else**, which is why `ops/` (the registry, identities, templates) never reaches retrieval. (There is deliberately no `EXCLUDED_ZONES` constant beside it: an include-list needs no exclude-list.) Also: tolerant frontmatter parsing, `entity_list`'s fail-CLOSED normalization of both `entity:` dialects, the wikilink graph → `inlinks` AND resolved outbound `links` (`resolve_links`/`by_stem_index` — the one algorithm the webhook shares), the build-time `superseded_by` propagation onto split-chain siblings, `content_hash` of the embedded text; `page_row` is the public single-file parser both `load_pages` and the incremental webhook call |
 | `backends/embedder.py` | the OpenAI-dialect embedder — `text-embedding-3-large` on OpenAI by default; any OpenAI-compatible `/embeddings` host via `EMBED_BASE_URL` + `EMBED_API_KEY`, build-time default model via `EMBED_MODEL` — plus `build_embedder`, the one fake/real dispatch (deferred fake import) |
 | `backends/fake_embedder.py` | deterministic hashed bag-of-words double (tests/CI; keyless) |
 | `store.py` | all SQL DDL and writes: `pages_index` (dropped/recreated per rebuild; carries `links` + its GIN index and `generated_at`), `embedding_cache` (survives; keyed by model + content_hash), `index_meta`, `ops_file_snapshot` (survives; the relpath-keyed cache of the knowledge repo's `ops/` control files, read/written/cleared through `read_ops_file`/`write_ops_file`/`clear_ops_file` — see "The ops files ride along" below), `webhook_deliveries` (survives; the applied-delivery ids behind the webhook's replay protection); `upsert_pages`/`delete_pages`/`current_content_hashes` are the webhook's incremental primitives, beside `insert_pages`, never a second row shape; `existing_paths` is the webhook's one-query snapshot for outbound-link resolution; `pages_with_page_id_prefix`/`set_superseded_by` are the webhook's split-chain propagation primitives. `create_search_indexes` runs **after** the bulk load, never before |
@@ -25,7 +25,7 @@ ranking. Never a source of truth — wipe it and rebuild it from git whenever co
 
 `stigmergy.kernel` is a library every package — including this one — may depend on freely.
 `tests/index/test_architecture.py` pins the rule that matters — **the index reaches for no
-writer** (`stigmergy.librarian`, `stigmergy.entities`, `stigmergy.views`, `stigmergy.capture`), checked per
+writer** (`stigmergy.librarian`, `stigmergy.entities`, `stigmergy.capture`), checked per
 module and at ANY nesting depth, so the derived cache can never depend on the thing it is derived
 from — plus the deferred-fake-embedder import rule.
 
@@ -70,11 +70,6 @@ resolving to nothing stores nothing. A GIN index (`pages_index_links_gin`) turns
 into a containment lookup (`links @> ARRAY[path]`), never a scan — `read_page`'s `backlinks` and
 `describe_entity`'s timeline both ride it. See [navigation.md](./navigation.md) for the served
 shape.
-
-**`generated_at` is `text NOT NULL DEFAULT ''`.** A view's own `generated_at`
-frontmatter (ISO-8601), the one view-only field `describe_entity`'s view layer needs that
-no other column carries (views set neither `updated` nor `as_of`) — empty for every other
-page.
 
 **`entity` is `text[] NOT NULL DEFAULT '{}'` — a page's aboutness, plural (see
 [page-contract.md](./page-contract.md) for the field's own contract).** `corpus.entity_list`
@@ -322,9 +317,10 @@ unreachable database FAILS instead of skipping. They reach Postgres only through
 which refuses any database but `stigmergy_test`
 ([operator-runbook.md](./operator-runbook.md#the-two-databases)). `test_architecture.py` pins that
 the index imports no writer package, plus the deferred-fake-embedder import rule. Fixture corpus:
-`tests/index/fixtures/repo` — **11 pages** across the three zones (4 `wiki/`, 6 `sources/`, 1
-`views/`) plus three excluded-zone markers under `ops/`, `meta/` and `datasets/` that must never
-appear in a build. `make e2e` runs against that SAME fixture repo — there is no second one — with
+`tests/index/fixtures/repo` — **10 pages** across the two zones (4 `wiki/`, 6 `sources/`) plus
+three excluded-zone markers under `ops/`, `meta/` and `datasets/` that must never
+appear in a build. That page count is prose and nothing pins it: `tests/index/test_pg_integration.py`
+asserts the fixture's own totals, so a page added there fails a test rather than this sentence. `make e2e` runs against that SAME fixture repo — there is no second one — with
 its own question set at `tests/index/fixtures/e2e-questions.json`.
 
 ## Not built here

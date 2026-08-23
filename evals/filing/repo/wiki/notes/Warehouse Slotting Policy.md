@@ -1,10 +1,10 @@
 ---
-type: decision
+type: note
 title: "Warehouse Slotting Policy"
 status: developing
 created: 2026-01-20
 updated: 2026-01-20
-tags: [decision, operations]
+tags: [note, operations]
 entity: ["northwind-freight"]
 related: ["[[Northwind Freight]]", "[[Northwind Freight Onboarding]]"]
 sources: []

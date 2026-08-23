@@ -1,5 +1,11 @@
-"""`processing._refuse` and `_refuse_meeting`: which terminal state a surviving veto earns, what it
-tells the submitter, and why.
+"""`processing._refuse`: which terminal state a surviving veto earns, what it tells the submitter,
+and why.
+
+OLD BEHAVIOUR: there were TWO routers — `_refuse` and `_refuse_meeting` — and every case below ran
+against both, because the defect each one was written for had been duplicated verbatim across the
+pair and a fix to one site alone would have shipped green. The meeting flow is gone and
+`_route_refusal` is the one road a veto takes, so the parametrization has no second side to
+disagree with; what each case asserts is unchanged.
 
 The routing that turns a set of findings into a terminal state reads gates and codes, and most of it
 is proven end to end in `test_processing_pg.py`, over a real queue, a real git repo and the offline
@@ -21,9 +27,7 @@ The future is simulated with ONE line — a governed type given a folder
 an ordinary, reachable refusal, where the routing decides not just the terminal state but WHERE it
 tells a submitter their credential is. Those tests write real pages and shell out to the real
 gitleaks binary (so this module skips, loudly in CI, without it — see `require_gitleaks`), because a
-finding a test author typed out proves only that the router handles a shape someone imagined. Every
-case there runs against BOTH routers: the defect they were written for was duplicated verbatim
-across the two, and a fix to one site alone would otherwise have shipped green.
+finding a test author typed out proves only that the router handles a shape someone imagined.
 """
 import json
 from types import SimpleNamespace
@@ -36,22 +40,24 @@ from stigmergy.librarian import page as page_policy
 from tests import adversarial_payloads as payloads
 
 ITEM = {"id": 7, "attempts": 1, "submitted_by": "someone@acme.test"}
-OUTCOME = SimpleNamespace(summary="it reads like a meeting, so it went to the meetings folder",
+OUTCOME = SimpleNamespace(summary="it reads like an identity, so it went to the entities folder",
                           findings=[])
-GOVERNED_PAGE = "wiki/meetings/Renewal Sync.md"
+GOVERNED_PAGE = "wiki/entities/Renewal Sync.md"
 
 
 @pytest.fixture()
 def governed_folder(monkeypatch):
-    """A `meeting` type that has a folder but is still not creatable — the disagreement between
+    """An `entity` type that has a folder but is still not creatable — the disagreement between
     `page.PAGE_TYPES`' two derived views that `zone/type-not-creatable` exists to catch.
 
-    `_BY_NAME` is left alone on purpose: `classify_page_type("meeting")` therefore still answers
-    "known, not creatable, meeting pages arrive with the meeting distiller", which is what makes
-    this a simulation of the real future (a governed type that gains a folder) rather than of a
-    typo.
+    `entity` is the type this gate exists for: `wiki/entities/` is a real folder with a real
+    writer, and `FOLDER_BY_TYPE` leaves it out precisely so the fast lane cannot reach it. Patching
+    it IN is therefore the exact disagreement the gate is defensive about — the two derived views
+    of one table disagreeing — and not a typo nothing would ever produce. `_BY_NAME` is left alone,
+    so `classify_page_type("entity")` still answers "known, not creatable" and the refusal the
+    submitter reads still carries the identity writer's own reason.
     """
-    monkeypatch.setitem(page_policy.FOLDER_BY_TYPE, "meeting", "wiki/meetings")
+    monkeypatch.setitem(page_policy.FOLDER_BY_TYPE, "entity", "wiki/entities")
 
 
 def _type_veto(governed_page: str = GOVERNED_PAGE) -> gates.Finding:
@@ -62,7 +68,7 @@ def _type_veto(governed_page: str = GOVERNED_PAGE) -> gates.Finding:
     The helper is where the type half lives and is what a page inside a known folder reaches.
     """
     ctx = gates.GateContext(worktree="", entries=[], added=[], material="",
-                            outcome=SimpleNamespace(page_type="meeting"), registry=None)
+                            outcome=SimpleNamespace(page_type="entity"), registry=None)
     findings = gates._check_created_type(ctx, governed_page)
     assert [f.code for f in findings] == [gates.TYPE_NOT_CREATABLE]
     return findings[0]
@@ -119,10 +125,8 @@ def _dead_link_veto(target: str, path: str = ANCHOR_PAGE) -> gates.Finding:
                          f"{path}: dead link: [[{target}]]", locator=path)
 
 
-@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
-                         ids=["fast-lane", "meeting"])
-def test_an_unresolved_anchor_after_the_retry_fails_as_the_librarians_fault_on_both_roads(refuse):
-    result = refuse(ITEM, [_anchor_veto()], OUTCOME, agent_attempts=2)
+def test_an_unresolved_anchor_after_the_retry_fails_as_the_librarians_fault():
+    result = processing._refuse(ITEM, [_anchor_veto()], OUTCOME, agent_attempts=2)
 
     assert result.status == schema.FAILED
     assert "anchoring" in result.report["summary"]
@@ -240,14 +244,18 @@ def test_a_forged_field_beside_a_veto_from_another_gate_still_fails():
     assert result.status == schema.FAILED
 
 
-# ── `processing._refuse_meeting`'s zone-plus-category branch must not route an UNREPAIRABLE zone
-# finding to `rejected`/steering. `zone/meeting-edit-refused`'s own documented
-# meaning is "no producer inside this flow" — a system fault, never something the material's
-# injected text could have caused — and `zone/body-rewrite` (on the fast lane, always
-# `repairable=False`) shares that class. A coincident declared category must not relabel either
-# as the submitter's doing; both fall through to `failed_system` exactly like a zone veto with no
-# category at all. ──────────────────────────────────────────────────────────────────────────────
-MEETING_ITEM = {"id": 9, "attempts": 1}
+# ── the zone-plus-category branch must not route an UNREPAIRABLE zone finding to
+# `rejected`/steering. `zone/modification-refused`'s own documented meaning is "no producer inside
+# this flow" — a system fault, never something the material's injected text could have caused — and
+# `zone/body-rewrite` (always `repairable=False`) shares that class. A coincident declared category
+# must not relabel either as the submitter's doing; both fall through to `failed_system` exactly
+# like a zone veto with no category at all.
+#
+# OLD BEHAVIOUR: these three ran against `_refuse_meeting`, because the branch was written for the
+# meeting flow's own refusal. There is one router, and the CODE keeps its name
+# (`gates.py` says why: a preserved refused diff on a deployed stack already carries it in its
+# `# refused by:` header). ────────────────────────────────────────────────────────────────────────
+UNREPAIRABLE_ITEM = {"id": 9, "attempts": 1}
 STEERED_CATEGORY = SimpleNamespace(summary="", findings=[{"category": "declare-canonical"}])
 
 
@@ -256,14 +264,14 @@ def test_meeting_edit_refused_beside_a_declared_category_still_fails_as_a_system
     category) coincides with an anomalous `M` in the worktree. Before this fix the refusal landed
     as `rejected`/steering, naming the SUBMITTER's capture as the cause; the honest cause is a
     worker defect or worktree interference, which is what `failed_system` says."""
-    veto = [gates.Finding("zone", "meeting-edit-refused",
-                         "modified wiki/decisions/A.md: no edit mechanism exists here",
-                         locator="wiki/decisions/A.md", repairable=False)]
+    veto = [gates.Finding("zone", "modification-refused",
+                         "modified wiki/notes/A.md: no edit mechanism exists here",
+                         locator="wiki/notes/A.md", repairable=False)]
 
-    result = processing._refuse_meeting(MEETING_ITEM, veto, STEERED_CATEGORY, agent_attempts=1)
+    result = processing._refuse(UNREPAIRABLE_ITEM, veto, STEERED_CATEGORY, agent_attempts=1)
 
     assert result.status == schema.FAILED, (
-        f"an unrepairable zone/meeting-edit-refused finding must route to failed_system even "
+        f"an unrepairable zone/modification-refused finding must route to failed_system even "
         f"beside a declared injection category — got {result.status!r}, "
         f"report={result.report!r}")
     assert schema.REASON_STEERING not in json.dumps(result.report)
@@ -271,13 +279,14 @@ def test_meeting_edit_refused_beside_a_declared_category_still_fails_as_a_system
 
 def test_body_rewrite_beside_a_declared_category_still_fails_as_a_system_fault():
     """Same class, deliberately included (not scope creep): `zone/body-rewrite` diagnoses work
-    `edits.apply_declared` did on the agent's behalf and is always `repairable=False` on the fast
-    lane, so it is exactly as much a system fault as `meeting-edit-refused` is."""
+    `edits.apply_declared` did on the agent's behalf and is always `repairable=False`, so it is
+    exactly as much a system fault as `modification-refused` is — and, unlike that one, a caller
+    can still reach it, which is what makes this the pair's live half."""
     veto = [gates.Finding("zone", "body-rewrite",
-                         "rewrote existing content in wiki/decisions/A.md",
-                         locator="wiki/decisions/A.md", repairable=False)]
+                         "rewrote existing content in wiki/notes/A.md",
+                         locator="wiki/notes/A.md", repairable=False)]
 
-    result = processing._refuse_meeting(MEETING_ITEM, veto, STEERED_CATEGORY, agent_attempts=1)
+    result = processing._refuse(UNREPAIRABLE_ITEM, veto, STEERED_CATEGORY, agent_attempts=1)
 
     assert result.status == schema.FAILED, (
         f"an unrepairable zone/body-rewrite finding must route to failed_system even beside a "
@@ -287,15 +296,14 @@ def test_body_rewrite_beside_a_declared_category_still_fails_as_a_system_fault()
 
 def test_a_repairable_zone_finding_beside_a_declared_category_still_routes_as_steering():
     """The negative space the branch above must not break: a REPAIRABLE zone finding beside a
-    declared category
-    is exactly the case this branch exists for — the agent's own material may really have steered
-    it — so it must still reach `rejected`/steering, in `_refuse_meeting` exactly as in `_refuse`
-    (see `test_a_traceable_steering_attempt_beside_the_type_veto_stays_content_actionable`)."""
+    declared category is exactly the case this branch exists for — the agent's own material may
+    really have steered it — so it must still reach `rejected`/steering (see
+    `test_a_traceable_steering_attempt_beside_the_type_veto_stays_content_actionable`)."""
     veto = [gates.Finding("zone", "outside-lane",
                          "wrote wiki/entities/Rogue.md, which is outside the fast lane's "
                          "folders", locator="wiki/entities/Rogue.md")]
 
-    result = processing._refuse_meeting(MEETING_ITEM, veto, STEERED_CATEGORY, agent_attempts=1)
+    result = processing._refuse(UNREPAIRABLE_ITEM, veto, STEERED_CATEGORY, agent_attempts=1)
 
     assert result.status == schema.REJECTED
     assert result.report[schema.REASON_CODE_KEY] == schema.REASON_STEERING
@@ -365,18 +373,17 @@ def one_line_secret_veto(tmp_path, require_gitleaks):
 @pytest.mark.parametrize("veto_fixture", ["rejoined_secret_veto",
                                           "rejoined_secret_veto_on_an_edited_page"],
                          ids=["new-page", "edited-page"])
-@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
-                         ids=["fast-lane", "meeting"])
 def test_a_secret_split_across_a_line_break_is_not_reported_as_a_line_number(
-        refuse, veto_fixture, request):
-    """OLD BEHAVIOUR: both routers recovered the line with `locator.rsplit(":", 1)[-1]`. For the
+        veto_fixture, request):
+    """OLD BEHAVIOUR: the router recovered the line with `locator.rsplit(":", 1)[-1]`. For the
     rejoined shape the locator IS the page path and holds no line, so that expression returned the
     path — and the submitter was told the credential sat "near line wiki/notes/Renewal Terms.md".
     `rejected_secret`'s "split across a line break" branch, written for precisely this finding,
     was unreachable from here. This reason code purges the person's material immediately, so the
     locator in this sentence is the only thing they have left to act on.
     """
-    result = refuse(ITEM, request.getfixturevalue(veto_fixture), OUTCOME, agent_attempts=2)
+    result = processing._refuse(ITEM, request.getfixturevalue(veto_fixture), OUTCOME,
+                                agent_attempts=2)
 
     summary = result.report["summary"]
     assert result.status == schema.REJECTED
@@ -387,13 +394,11 @@ def test_a_secret_split_across_a_line_break_is_not_reported_as_a_line_number(
     assert "(rule: github-pat)" in summary, summary
 
 
-@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
-                         ids=["fast-lane", "meeting"])
-def test_an_ordinary_secret_still_names_the_line_its_author_wrote(refuse, one_line_secret_veto):
+def test_an_ordinary_secret_still_names_the_line_its_author_wrote(one_line_secret_veto):
     """The benign twin. The fix must not flatten every secret refusal into "somewhere in the page":
     a hit that does sit on one line keeps that line, because the number is most of the message's
     value to whoever has to go and remove the credential."""
-    result = refuse(ITEM, one_line_secret_veto, OUTCOME, agent_attempts=2)
+    result = processing._refuse(ITEM, one_line_secret_veto, OUTCOME, agent_attempts=2)
 
     summary = result.report["summary"]
     assert result.status == schema.REJECTED
@@ -405,9 +410,9 @@ def test_an_ordinary_secret_still_names_the_line_its_author_wrote(refuse, one_li
 
 def test_every_secrets_finding_carries_the_pair_the_routing_unpacks(
         rejoined_secret_veto, one_line_secret_veto, rejoined_secret_veto_on_an_edited_page):
-    """The invariant both routers now depend on, pinned rather than left to inspection.
+    """The invariant the routing depends on, pinned rather than left to inspection.
 
-    They read `line, rule = secret.values`, so a secrets finding that ever reached them without a
+    It reads `line, rule = secret.values`, so a secrets finding that reached it without a
     2-tuple would raise inside the worker — and `worker._finish` keys the immediate purge on the
     reason code, so a crash here turns the one capture that must not linger into a `failed` row
     that keeps its payload. Both shapes are asserted together because the pair is a property of
@@ -432,17 +437,14 @@ def test_a_knowledge_repo_linter_check_named_secret_is_not_read_as_a_gitleaks_hi
     veto = [gates.Finding("contract", "secret", "wiki/notes/A.md: some linter complaint",
                           locator="wiki/notes/A.md")]
 
-    for refuse in (processing._refuse, processing._refuse_meeting):
-        result = refuse(ITEM, veto, OUTCOME, agent_attempts=2)   # selecting on code alone: raises
+    result = processing._refuse(ITEM, veto, OUTCOME, agent_attempts=2)  # on code alone: raises
 
-        assert result.status == schema.FAILED, result.report
-        assert result.report.get(schema.REASON_CODE_KEY) != schema.REASON_SECRET, result.report
-        assert "gitleaks" not in result.report["summary"], result.report
+    assert result.status == schema.FAILED, result.report
+    assert result.report.get(schema.REASON_CODE_KEY) != schema.REASON_SECRET, result.report
+    assert "gitleaks" not in result.report["summary"], result.report
 
 
-@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
-                         ids=["fast-lane", "meeting"])
-def test_a_knowledge_repo_linter_check_named_pii_does_not_purge_the_submitters_material(refuse):
+def test_a_knowledge_repo_linter_check_named_pii_does_not_purge_the_submitters_material():
     """OLD BEHAVIOUR: the submitter's payload and hints were DESTROYED over a lint finding.
 
     The sibling test above pins the same hazard for `secret`; this is the branch two lines below
@@ -459,15 +461,13 @@ def test_a_knowledge_repo_linter_check_named_pii_does_not_purge_the_submitters_m
                           "wiki/notes/A.md: page mentions a person without an entity link",
                           locator="wiki/notes/A.md")]
 
-    result = refuse(ITEM, veto, OUTCOME, agent_attempts=2)
+    result = processing._refuse(ITEM, veto, OUTCOME, agent_attempts=2)
 
     assert result.status == schema.FAILED, result.report
     assert result.report.get(schema.REASON_CODE_KEY) != schema.REASON_PII, result.report
 
 
-@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
-                         ids=["fast-lane", "meeting"])
-def test_an_unrepairable_zone_finding_is_a_system_fault_in_both_routers(refuse):
+def test_an_unrepairable_zone_finding_is_a_system_fault():
     """OLD BEHAVIOUR: `_refuse` blamed the SUBMITTER for work the agent could not have done.
 
     `gate_body_rewrite`'s findings are all `repairable=False`, and its docstring says why: on the
@@ -475,28 +475,27 @@ def test_an_unrepairable_zone_finding_is_a_system_fault_in_both_routers(refuse):
     "describes work the agent did not do and cannot reach". Beside a declared injection category,
     `_refuse` routed it to `rejected_steering` — telling the submitter their material had tried to
     write outside the lane, and naming a colleague's page — for a fault this module's own docstring
-    classifies as a system fault. `_refuse_meeting` already carried the `and f.repairable` clause.
+    classifies as a system fault. The sibling router that already carried the `and f.repairable`
+    clause is gone; this is the one that had to learn it.
     """
     veto = [gates.Finding("zone", "body-rewrite", "rewrote existing content in wiki/notes/V.md",
                           locator="wiki/notes/V.md", repairable=False)]
 
-    result = refuse(MEETING_ITEM, veto, STEERED_CATEGORY, agent_attempts=2)
+    result = processing._refuse(UNREPAIRABLE_ITEM, veto, STEERED_CATEGORY, agent_attempts=2)
 
     assert result.status == schema.FAILED, result.report
     assert schema.REASON_STEERING not in json.dumps(result.report)
 
 
-@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
-                         ids=["fast-lane", "meeting"])
-def test_a_repairable_zone_finding_beside_a_category_still_reaches_the_submitter(refuse):
-    """The benign twin for the clause above, in BOTH routers: a REPAIRABLE zone finding beside a
-    declared category is exactly the case that branch exists for — the material really may have
-    steered the agent — so it must still reach `rejected`/steering."""
+def test_a_repairable_zone_finding_beside_a_category_still_reaches_the_submitter():
+    """The benign twin for the clause above: a REPAIRABLE zone finding beside a declared category
+    is exactly the case that branch exists for — the material really may have steered the agent —
+    so it must still reach `rejected`/steering."""
     veto = [gates.Finding("zone", "outside-lane",
                           "wrote wiki/entities/Rogue.md, outside the fast lane's folders",
                           locator="wiki/entities/Rogue.md")]
 
-    result = refuse(MEETING_ITEM, veto, STEERED_CATEGORY, agent_attempts=2)
+    result = processing._refuse(UNREPAIRABLE_ITEM, veto, STEERED_CATEGORY, agent_attempts=2)
 
     assert result.status == schema.REJECTED
     assert result.report[schema.REASON_CODE_KEY] == schema.REASON_STEERING

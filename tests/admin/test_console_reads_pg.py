@@ -173,9 +173,9 @@ def _audit(conn, *, tool, outcome="ok", result=None, identity="a@example.com", e
              None if result is None else Jsonb(result)))
 
 
-def test_metrics_shapes_asks_with_the_pilot_reports_own_predicates(conn, service):
+def test_metrics_shapes_asks_with_the_activity_tables_own_predicates(conn, service):
     """`refused` truthy is a refusal; otherwise `citations` truthy is an answer with a citation;
-    otherwise an answer without one — `pilot_report.answer_shape` to the letter, per day. An
+    otherwise an answer without one — `measurements.answer_shape` to the letter, per day. An
     errored call and a call with no recorded result are counted apart, never folded into either
     answer shape."""
     _audit(conn, tool="ask", result={"refused": True})
@@ -229,7 +229,7 @@ def test_metrics_clamps_the_window_and_answers_an_empty_world_with_empty_series(
     assert empty["repairs"] == {"applied": 0,
                                 "by_status": {s: 0 for s in repair_schema.STATUSES},
                                 "recent_by_kind": {}, "recent": []}
-    assert set(empty["job_history"]) >= {"gardener", "capture-purge", "digest"}
+    assert set(empty["job_history"]) >= {"gardener", "capture-purge", "webhook-index-upsert"}
 
 
 def test_metrics_captures_by_day_carries_every_status_per_day(conn, service):

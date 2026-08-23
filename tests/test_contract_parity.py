@@ -85,10 +85,11 @@ def test_a_stored_value_that_cannot_be_parsed_fails_closed_for_every_client(malf
 #   * `index.corpus._acl_labels` must READ `acl: []` back as `[]` and not as `None`.
 #
 # If EITHER collapsed empty to open, a page the writer meant for nobody would index as visible to
-# everyone. The producer used to be `views.render` — a view is the one page that could DERIVE an
-# empty audience, from an intersection over members sharing none — and D5 retired both the
-# derivation and the label. Nothing derives `[]` today; the rule is pinned here anyway, because a
-# value that means the opposite of its neighbour is worth holding before something derives it.
+# everyone. Nothing DERIVES `[]` today — the one thing that ever did was a stored per-entity
+# rollup, computing its audience as the intersection over members that shared none, and both the
+# rollup and the derivation are gone. The rule is pinned here anyway: a value that means the
+# opposite of its neighbour is worth holding BEFORE something derives one again, which is exactly
+# the order in which it was got wrong the first time.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 def test_the_retired_acl_symbols_stay_retired():
     """The same posture `test_contract_parity` already takes for `kernel.acl.visible` and
@@ -96,7 +97,7 @@ def test_the_retired_acl_symbols_stay_retired():
     reintroduced, and the reintroduced one would not be wired to anything that tests it.
 
     `resolve_acl`/`load_acl_config` derived a label from a path, before the audience came from the
-    door; `view_acl` collapsed a view to nobody; `all_visible` never had a caller."""
+    door; `view_acl` collapsed a derived rollup to nobody; `all_visible` never had a caller."""
     from stigmergy.kernel import acl as kernel_acl
     from stigmergy.server import acl as server_acl
 
@@ -112,9 +113,8 @@ def test_the_retired_acl_symbols_stay_retired():
 
 def test_the_write_side_writes_an_empty_acl_rather_than_omitting_the_key():
     """The two spellings must stay two values on the WRITE side, or the read side's truth table
-    below is decorative. `views.render` used to be the only producer of `acl: []` and no longer
-    produces a label at all, so the producer this pins is the stamper every filed
-    page goes through."""
+    below is decorative. The producer this pins is the stamper every filed page goes through —
+    the only one left, now that nothing derives an audience from other pages."""
     from stigmergy.librarian.page import stamp_server_fields
 
     page = "---\ntype: note\ntitle: t\n---\n\n# t\n"
@@ -128,8 +128,8 @@ def test_the_write_side_writes_an_empty_acl_rather_than_omitting_the_key():
 def test_the_read_side_reads_an_empty_acl_back_as_nobody_never_as_open():
     from stigmergy.index.corpus import _acl_labels
     assert _acl_labels({"acl": []}) == [], (
-        "`acl: []` read back as anything but `[]` — if this became `None`, a view over "
-        "members sharing no audience would index as OPEN and disclose every restricted backlink")
+        "`acl: []` read back as anything but `[]` — if this became `None`, a page written for "
+        "nobody would index as OPEN and be served to everyone")
     assert _acl_labels({}) is None                  # absent = open, the OTHER value
     assert _acl_labels({"acl": None}) is None       # explicit null = open
 
@@ -155,5 +155,5 @@ def test_the_two_sides_compose_a_page_stamped_at_nobody_is_visible_to_nobody():
     assert visible(stored, set()) is False
     # Unrestricted still sees it — `visible`'s documented truth table, not an accident: an operator
     # with full read is inside the trust boundary, and hiding it from them would hide the fact that
-    # a view came out unshareable at all.
+    # a page came out unshareable at all.
     assert visible(stored, None) is True

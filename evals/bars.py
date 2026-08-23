@@ -21,8 +21,6 @@ BAR_FILING_REASON = 1.00         # a refusal's own reason_code
 BAR_FILING_TYPE = 0.88           # the `type:` of the page that landed (baseline 8/9, floored)
 BAR_FILING_FOLDER = 0.88         # where it landed (baseline 8/9, floored)
 BAR_FILING_ANCHOR = 1.00         # the resolved registry id(s), or company-wide
-BAR_FILING_EDITS = 1.00          # the additive edits code performed from the agent's declaration
-BAR_FILING_DECISIONS = 1.00      # a meeting's decision pages and their independent anchors
 # `proposals` is BORN UNCALIBRATED, and `None` is the honest value rather than an omission: it is
 # a facet the file-first write path created (the identity a filing proposes for a name the
 # registry does not know),
@@ -31,13 +29,22 @@ BAR_FILING_DECISIONS = 1.00      # a meeting's decision pages and their independ
 # re-frozen briefs is its baseline candidate — see evals/README.md's re-freeze rule.
 BAR_FILING_PROPOSALS = None
 
+# `pages` is UNCALIBRATED for the same reason, arrived at from the other side. It carries the
+# property `decisions` carried at 1.00 — the right number of pages, each anchored on its own — but
+# over a different flow: `decisions` counted what a meeting flow wrote into `wiki/decisions/`, and
+# its 1.00 came from runs of that flow. There is no meeting flow and no `decision` type; the two
+# transcripts now file ordinary pages through the one pipe, and no run has ever scored that. So
+# the recorded 1.00 does NOT carry over — it would be a bar the first run had to clear on a
+# behaviour nothing has observed, which is a number invented to be met. REPORT, DO NOT JUDGE until
+# a real run sets the baseline, exactly as evals/README.md's re-freeze rule asks.
+BAR_FILING_PAGES = None
+
 FILING_BARS = {
     "status": BAR_FILING_STATUS,
     "reason": BAR_FILING_REASON,
     "type": BAR_FILING_TYPE,
     "folder": BAR_FILING_FOLDER,
     "anchor": BAR_FILING_ANCHOR,
-    "edits": BAR_FILING_EDITS,
     "proposals": BAR_FILING_PROPOSALS,
-    "decisions": BAR_FILING_DECISIONS,
+    "pages": BAR_FILING_PAGES,
 }

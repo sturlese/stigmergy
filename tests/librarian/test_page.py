@@ -35,7 +35,7 @@ def test_an_unknown_type_is_neither_known_nor_creatable():
 
 def test_classify_page_type_normalizes_case_and_whitespace():
     assert page_policy.classify_page_type("  Note ").creatable is True
-    assert page_policy.classify_page_type("DECISION").folder == "wiki/decisions"
+    assert page_policy.classify_page_type("CONCEPT").folder == "wiki/concepts"
 
 
 def test_classify_page_type_of_empty_or_none_is_unknown():
@@ -294,146 +294,30 @@ def test_an_empty_page_name_is_refused():
     assert page_policy.unnameable_reason("") != ""
 
 
-# ── the additive edits code performs from the agent's declaration ──────────────────────────────
-FLOW_PAGE = """---
-type: note
-title: "Existing"
-related: ["[[Acme Corp]]"]
-tags: [note]
----
-
-# Existing
-
-The body a human wrote, which nothing here may touch.
-"""
-
-BLOCK_PAGE = """---
-type: note
-related:
-  - "[[Acme Corp]]"
-tags: [note]
----
-
-# Existing
-
-Body.
-"""
-
-NO_RELATED_PAGE = """---
-type: note
-tags: [note]
----
-
-# Existing
-
-Body.
-"""
-
-
-def test_related_links_reads_the_flow_spelling_every_real_page_uses():
-    assert page_policy.related_links(FLOW_PAGE) == ["[[Acme Corp]]"]
-
-
-def test_related_links_reads_the_block_spelling_too():
-    assert page_policy.related_links(BLOCK_PAGE) == ["[[Acme Corp]]"]
-
-
-def test_related_links_of_a_page_with_no_related_field_is_empty():
-    assert page_policy.related_links(NO_RELATED_PAGE) == []
-
-
-def test_with_related_link_adds_to_a_flow_list_and_keeps_every_existing_link():
-    out, changed = page_policy.with_related_link(FLOW_PAGE, "New Page")
-    assert changed is True
-    assert page_policy.related_links(out) == ["[[Acme Corp]]", "[[New Page]]"]
-    assert "The body a human wrote" in out
-
-
-def test_with_related_link_inserts_a_block_item_without_touching_the_existing_one():
-    out, changed = page_policy.with_related_link(BLOCK_PAGE, "New Page")
-    assert changed is True
-    assert page_policy.related_links(out) == ["[[Acme Corp]]", "[[New Page]]"]
-    # a pure insertion: every line the page already had survives byte for byte
-    for line in BLOCK_PAGE.splitlines():
-        assert line in out.splitlines()
-
-
-def test_a_non_ascii_stem_lands_in_the_page_verbatim_never_as_an_escape():
+# ── the non-ASCII escaper, on the writers that survived ────────────────────────────────────────
+# OLD BEHAVIOUR: this section covered `related_links`, `with_related_link` and `with_callout` —
+# the ADDITIVE edits code performed from a filing account's `edits` declaration, and the
+# `related_links_from_line` reader `gate_body_rewrite` proved them additive with. The declaration,
+# the writers and the proof are all gone: a capture brings a page up to date by declaring a
+# `rewrites` entry, judged by two structural bounds instead. What survives is the escaper defect
+# below, because every frontmatter LIST this module still writes goes through the same function.
+def test_a_non_ascii_value_lands_in_the_page_verbatim_never_as_an_escape():
     """`_yaml_list` used `json.dumps` with its `ensure_ascii` DEFAULT, so a stem like
     `sesión-de-planificación` was written as `sesi\\u00f3n-…` — valid JSON, but the contract
-    linter resolves `[[…]]` targets literally, so every non-ASCII backlink it wrote was read as a
+    linter resolves `[[…]]` targets literally, so every non-ASCII link it wrote was read as a
     dead link and the whole capture refused. A Spanish corpus hits this on the first accent."""
-    out, changed = page_policy.with_related_link(FLOW_PAGE, "sesión-de-planificación")
-    assert changed is True
-    assert "[[sesión-de-planificación]]" in out
-    assert "\\u" not in out
+    front = page_policy.frontmatter_lines(
+        '---\ntype: note\ntitle: "N"\nrelated: []\n---\n\n# N\n')
+    rewritten = page_policy.with_list_field(front, "related", ["[[sesión-de-planificación]]"])
+    assert "[[sesión-de-planificación]]" in "\n".join(rewritten)
+    assert "\\u" not in "\n".join(rewritten)
 
     stamped = page_policy.stamp_server_fields(
-        FLOW_PAGE, as_of="2026-08-17", submitted_by="marc@example.com",
-        entity=["maría-lópez"], acl=["team:año-fiscal"])
+        '---\ntype: note\ntitle: "N"\n---\n\n# N\n', as_of="2026-08-17",
+        submitted_by="marc@example.com", entity=["maría-lópez"], acl=["team:año-fiscal"])
     assert "maría-lópez" in stamped
     assert "año-fiscal" in stamped
     assert "\\u" not in stamped
-
-
-def test_with_related_link_appends_the_field_when_the_page_declares_none():
-    out, changed = page_policy.with_related_link(NO_RELATED_PAGE, "New Page")
-    assert changed is True
-    assert page_policy.related_links(out) == ["[[New Page]]"]
-    assert "tags: [note]" in out
-
-
-def test_with_related_link_is_idempotent_when_the_link_is_already_there():
-    once, _ = page_policy.with_related_link(FLOW_PAGE, "New Page")
-    twice, changed = page_policy.with_related_link(once, "New Page")
-    assert changed is False
-    assert twice == once
-
-
-def test_with_related_link_never_removes_a_body_line():
-    out, _ = page_policy.with_related_link(FLOW_PAGE, "New Page")
-    body_before = page_policy.split_frontmatter(FLOW_PAGE)[1]
-    assert page_policy.split_frontmatter(out)[1] == body_before
-
-
-@pytest.mark.parametrize("kind,marker", [("overlap", "[!NOTE]"),
-                                         ("contradiction", "[!WARNING]")])
-def test_with_callout_only_appends_and_names_the_other_page(kind, marker):
-    out = page_policy.with_callout(FLOW_PAGE, kind=kind, name="New Page", note="same ground")
-    assert out.startswith(FLOW_PAGE.rstrip("\n"))          # nothing before it changed at all
-    assert marker in out
-    assert "[[New Page]]" in out
-    assert "same ground" in out
-
-
-def test_with_callout_collapses_a_multiline_note_so_the_quote_block_stays_one_line():
-    out = page_policy.with_callout(FLOW_PAGE, kind="overlap", name="New Page",
-                                   note="line one\nline two")
-    callout = [line for line in out.splitlines() if line.startswith("> ") and "[!" not in line]
-    assert callout == ["> line one line two"]
-
-
-# ── related_links_from_line: the input to the gate's additive proof ────────────────────────────
-def test_related_links_from_line_parses_a_flow_value():
-    assert page_policy.related_links_from_line('related: ["[[A]]", "[[B]]"]') == ["[[A]]", "[[B]]"]
-
-
-def test_related_links_from_line_reads_an_empty_list_as_empty_not_as_unknown():
-    assert page_policy.related_links_from_line("related: []") == []
-
-
-@pytest.mark.parametrize("line", [
-    "title: x",                     # a different key
-    "  related: [\"[[A]]\"]",       # indented: not a top-level field
-    "related:",                     # opens a block list; this line alone declares nothing
-    "related: not-a-list",
-])
-def test_related_links_from_line_returns_none_for_anything_it_cannot_establish(line):
-    """`None` and `[]` must not be confused: an unparseable before-value read as an empty one would
-    turn "I cannot tell what was lost" into "nothing was lost", which is the whole question
-    `gate_body_rewrite` is asking."""
-    assert page_policy.related_links_from_line(line) is None
-
 
 
 # ── add_source_citation: the synthesis cites its verbatim source ───────────────────────────────
@@ -476,7 +360,7 @@ def test_add_source_citation_adds_the_line_when_the_draft_has_none():
     assert 'sources: ["[[acme-thread]]"]' in text
 
 
-# ── the shared frontmatter line editors (`repair.entity_alias` and `entities.decide` both write
+# ── the shared frontmatter line editors (`repair.deletion` and `entities.decide` both write
 # through these; one opinion about block sequences, re-cased keys and where a new line lands) ────
 _ENTITY_PAGE = ('---\ntype: entity\ntitle: "Globex"\naliases: []\nrelated:\n  - "[[A]]"\n'
                 'entity: ["globex"]\n---\n\n# Globex\n')

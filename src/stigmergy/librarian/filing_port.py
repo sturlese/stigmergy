@@ -24,15 +24,11 @@ reports `0.0` after paying for a full run.
 
 - **`run`, `structured_ordinary = False`** — the agent may write inside the worktree, bounded by
   `agent.confined_write`: ONE new `.md` page plus its own outcome file, never an existing page.
-  An edit to one is DECLARED in the outcome and PERFORMED by `edits.py`.
+  A page that already exists is DECLARED in the outcome's `rewrites` and written by the worker.
 - **`run`, `structured_ordinary = True`** — the agent writes NO page; code is the sole author and
   the account carries the page's text in `Outcome.page`. Its only legal write is its outcome file.
-- **`run_meeting`** — the agent writes NO page at all; code authors every page in the set. An edit
-  to a page that already exists is DECLARED in the outcome and PERFORMED by `edits.py`, exactly as
-  on the first `run` shape above.
-
-`isinstance(x, FilingAgent)` checks only that the two methods are PRESENT; the signatures below
-are the contract, and the conformance test pins them.
+`isinstance(x, FilingAgent)` checks only that the method is PRESENT; the signature below is the
+contract, and the conformance test pins it.
 """
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -44,9 +40,8 @@ from stigmergy.librarian.errors import AgentError
 class AgentRun:
     """One agent attempt's result — the envelope every backend returns; see the module docstring.
 
-    `outcome` is typed `Any` on purpose: the ordinary flow puts an `agent.Outcome` here and the
-    meeting flow an `agent.MeetingOutcome`, and naming either would import an implementation into
-    its own contract.
+    `outcome` is typed `Any` on purpose: `processing` puts an `agent.Outcome` here, and naming it
+    would import an implementation into its own contract.
     """
     outcome: Any = None
     turns: int = 0
@@ -65,7 +60,7 @@ def priced(run: AgentRun, ex: AgentError) -> AgentError:
 
 @runtime_checkable
 class FilingAgent(Protocol):
-    """The two calls `processing.py` makes, and the only two it may make, plus the two
+    """The one call `processing.py` makes, and the only one it may make, plus the two
     capabilities it may ASK a backend about first.
 
     Keyword-only throughout: the argument lists are long and half of them are strings, so a
@@ -101,17 +96,5 @@ class FilingAgent(Protocol):
         nothing to scope — the worker already scoped `gathered` — and ignores it. `None` is an
         open page, and the narrow default: a caller that forgets it starves a run rather than
         widening one.
-        """
-        ...
-
-    def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", gathered: str = "") -> AgentRun:
-        """The meeting flow: distil ONE transcript into a page SET's worth of content.
-
-        Everything the agent needs is handed over, so a backend needs no filesystem exploration
-        to answer — `gathered` included: it is `run`'s own argument, the gatherer's context ALREADY
-        RENDERED to prompt text by the worker, so both flows share one context builder and one
-        fence discipline. Unconditional here rather than gated on `wants_gathered`: no backend on
-        this flow holds a tool, so there is no second shape for the context to take.
         """
         ...

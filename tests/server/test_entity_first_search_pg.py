@@ -24,7 +24,7 @@ CONTOSO_PAGE = "wiki/entities/contoso/quarterly-update.md"
 # happens to name a registered entity. Under scope-first-then-fallback it was structurally
 # unreachable: the scoped pass returned hits, so the unscoped pass never ran, and this page could
 # not appear for any query naming a company — which is most real questions.
-PIPELINE_PAGE = "wiki/decisions/reporting-extraction-pipeline.md"
+PIPELINE_PAGE = "wiki/notes/reporting-extraction-pipeline.md"
 PIPELINE_BODY = ("The reporting extraction pipeline demo runs the parser over each quarterly "
                 "update before rollout, so extraction defects surface in staging rather than in "
                 "a customer's own report.")

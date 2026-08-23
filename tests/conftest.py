@@ -91,11 +91,9 @@ def no_real_llm_anywhere(monkeypatch):
     investigating a full-suite-only failure in `tests/librarian/test_meeting_processing_pg.py`:
 
     `stigmergy.kernel.settings.resolve_backend` reads `$CLEAN_LLM` (default `"openai"`
-    — the REAL backend) at call time, every time; only `tests/views/conftest.py`'s own
-    package-scoped `_fake_llm` pins it to `"fake"`, and that scope never reaches a test outside
-    `tests/views/`. The meeting-filing hook (`librarian.processing._file_meeting`) gave
-    `tests/librarian/` its first code path that reaches an LLM-backed view synthesis
-    (`stigmergy.views.synthesis.build_view_agent`) — a path no test in that package ever pinned.
+    — the REAL backend) at call time, every time, and a package-scoped fixture that pins it to
+    `"fake"` protects only its own package. A filing hook gave `tests/librarian/` a code path that
+    reached an LLM-backed agent no test in that package had ever pinned.
     With a real `$OPENAI_API_KEY` in the environment (the Makefile's `-include .env` +
     `export`, the SAME mechanism `no_real_github_app_anywhere`'s own docstring names) and real
     network access, that hook made a genuine OpenAI call mid-test-run: reproduced directly —
@@ -113,10 +111,9 @@ def no_real_llm_anywhere(monkeypatch):
     deterministic network call by omission. A test that wants the real backend, the flawed fake,
     or no backend at all overrides this with its own `monkeypatch.setenv`/`.delenv` in the test
     body or a more specific fixture (`tests/kernel/test_settings.py`'s own
-    `monkeypatch.delenv("CLEAN_LLM", ...)` for the true-default case, `tests/views/conftest.py`'s
-    `_fake_llm`, `test_synthesis.py`'s `fake-flawed` overrides) — the same composition
-    `no_real_github_app`/`test_githubapp.py`'s explicit `env` dicts already rely on for the App
-    credential one fixture up.
+    `monkeypatch.delenv("CLEAN_LLM", ...)` for the true-default case, `tests/repair/test_sweep.py`'s
+    `fake-flawed` override) — the same composition `no_real_github_app`/`test_githubapp.py`'s
+    explicit `env` dicts already rely on for the App credential one fixture up.
     """
     monkeypatch.setenv("CLEAN_LLM", "fake")
 

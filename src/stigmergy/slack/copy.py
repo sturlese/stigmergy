@@ -152,6 +152,26 @@ def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
             "up automatically tonight, not right away.")
 
 
+def page_rewritten(*, page_path: str, why: str, by: str) -> str:
+    """What the person who filed a page is told when a later capture brought it up to date.
+
+    **This message is the whole reason a capture may rewrite at all.** There is no proof that the
+    new text is right — the bytes are the ones the agent just wrote, so comparing them to what the
+    agent wrote proves nothing — and what stands in its place is that the change is loud and has an
+    owner. That makes this sentence load-bearing rather than courteous: it names the page, the
+    reason, and who caused it, so the one person who can tell whether the revision is wrong finds
+    out from the brain rather than from a git log they never read.
+
+    No verdict is asked for and there is no button: the undo is `git revert` in a repository they
+    own, and telling them is not the same as asking them.
+    """
+    reason = (why or "").strip() or "no reason was given"
+    return (f"📝 *{page_path}* — a page you filed has been brought up to date.\n"
+            f"> {reason}\n"
+            f"Filed by {by or 'somebody'}. Nothing is being asked of you: the page's history has "
+            f"the previous version, and `git revert` in the knowledge repo is the undo.")
+
+
 def filed_fallback(*, page_path: str) -> str:
     """The `text=` companion of `filed`'s card: the notification line for a filed capture."""
     return f"filed: {page_path}"

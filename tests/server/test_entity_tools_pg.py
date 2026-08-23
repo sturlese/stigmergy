@@ -1,5 +1,5 @@
 """`list_entities` / `describe_entity`: the ACL-scoped entity vocabulary and the layered describe
-view (entity meta + page, view ref, dated timeline). Its own small corpus + registry + three
+view (entity meta + page, dated timeline). Its own small corpus + registry + three
 identities, isolated from `tests/server/conftest.py`'s shared `Fixture` — same posture
 `tests/answer/test_entity_first_pg.py` already takes for the same reason (a registry would change
 what THAT fixture's many other consumers exercise).
@@ -18,11 +18,10 @@ from stigmergy.server.settings import Settings
 from tests.server.conftest import connect_or_skip, write_page
 
 ACME_ENTITY_PAGE = "wiki/entities/acme.md"
-ACME_DECISION_DATED = "wiki/decisions/acme-decision-2026.md"
-ACME_DECISION_DATED_OLDER = "wiki/decisions/acme-decision-2025.md"
-ACME_DECISION_UNDATED = "wiki/decisions/acme-decision-undated.md"
+ACME_DECISION_DATED = "wiki/notes/acme-decision-2026.md"
+ACME_DECISION_DATED_OLDER = "wiki/notes/acme-decision-2025.md"
+ACME_DECISION_UNDATED = "wiki/notes/acme-decision-undated.md"
 ACME_RESTRICTED_MEMBER = "wiki/finance/acme-payroll.md"
-ACME_VIEW = "views/acme.md"
 UNREGISTERED_PAGE = "wiki/notes/ghostco-note.md"        # anchored to "ghostco" — unregistered
 VAULT_RESTRICTED_PAGE = "wiki/finance/vault-corp-note.md"  # "vault-corp" — wholly finance-only
 
@@ -64,10 +63,6 @@ class _EntityDocsFixture:
                   {"type": "report", "title": "Acme Payroll (restricted)", "entity": "['acme']",
                    "as_of": "2026-02", "verification": "verified", "acl": "['finance']"},
                   "Restricted payroll detail for Acme.")
-        write_page(self.repo, ACME_VIEW,
-                  {"type": "view", "title": "Acme Corp — view", "entity": "['acme']",
-                   "verification": "partial", "generated_at": '"2026-07-20T10:00:00+00:00"'},
-                  "## Timeline\n\nView rollup for Acme.")
         write_page(self.repo, UNREGISTERED_PAGE,
                   {"type": "note", "title": "GhostCo Sighting", "entity": "['ghostco']",
                    "verification": "verified"},
@@ -179,6 +174,22 @@ def test_list_entities_registry_malformed_raises_loudly(entity_docs_indexed, tmp
 
 
 # ── describe_entity ────────────────────────────────────────────────────────────────────────────
+def test_describe_entity_serves_exactly_three_layers_and_no_fourth(entity_docs_indexed):
+    """The response SHAPE, pinned as a set rather than probed key by key.
+
+    Every other test in this file reads one layer and would pass unchanged if a fourth appeared or
+    if one it does not read vanished. This is the structural half: `describe_entity` serves the
+    entity, the timeline and the timeline's truncation note — and nothing else.
+
+    It exists because a fourth layer WAS here. `view` served a reference to a stored per-entity
+    rollup, and when that rollup stopped being a page the key had to go from a response shape MCP
+    clients read. A key-set assertion is what makes the next such change arrive as a failure here
+    instead of as a silently-widened contract."""
+    conn, fx = entity_docs_indexed
+    out = _service(conn, fx, fx.STEWARD).describe_entity("acme")
+    assert set(out) == {"entity", "timeline", "timeline_note"}
+
+
 def test_describe_entity_entity_layer_registry_meta_plus_own_page(entity_docs_indexed):
     conn, fx = entity_docs_indexed
     out = _service(conn, fx, fx.STEWARD).describe_entity("acme")
@@ -189,27 +200,13 @@ def test_describe_entity_entity_layer_registry_meta_plus_own_page(entity_docs_in
     }
 
 
-def test_describe_entity_view_layer_ref_or_null(entity_docs_indexed):
-    conn, fx = entity_docs_indexed
-    acme = _service(conn, fx, fx.STEWARD).describe_entity("acme")
-    # no `verification` — nothing computes a verdict, so the ref does not carry one.
-    assert acme["view"] == {
-        "path": ACME_VIEW, "title": "Acme Corp — view",
-        "generated_at": "2026-07-20T10:00:00+00:00",
-    }
-    # an entity with no view at all -> null, never a missing key or a synthesized placeholder
-    vault = _service(conn, fx, fx.ANA).describe_entity("vault-corp")
-    assert vault["view"] is None
-
-
-def test_describe_entity_timeline_dated_first_desc_then_undated_by_path_excludes_self_and_view(
+def test_describe_entity_timeline_dated_first_desc_then_undated_by_path_excludes_self(
         entity_docs_indexed):
     conn, fx = entity_docs_indexed
     out = _service(conn, fx, fx.STEWARD).describe_entity("acme")
     paths = [item["path"] for item in out["timeline"]]
-    # the entity's own page and its view are never timeline members
+    # the entity's own page is never a timeline member
     assert ACME_ENTITY_PAGE not in paths
-    assert ACME_VIEW not in paths
     # dated entries first, newest as_of first (2026-06-01 > 2026-02 > 2025-01-15), undated last
     assert paths.index(ACME_DECISION_DATED) < paths.index(ACME_RESTRICTED_MEMBER)
     assert paths.index(ACME_RESTRICTED_MEMBER) < paths.index(ACME_DECISION_DATED_OLDER)
@@ -271,7 +268,6 @@ def test_describe_entity_an_anchored_but_unregistered_id_now_resolves_for_an_ide
     assert out["entity"] == {"id": "ghostco", "name": "", "type": "", "aliases": [],
                              "approved_by": "",
                              "page": None}
-    assert out["view"] is None
 
 
 def test_describe_entity_scoped_set_fallback_is_verbatim_never_normalized(entity_docs_indexed):

@@ -72,7 +72,7 @@ def test_a_stale_meeting_finish_raises_and_writes_nothing(clean_queue):
 
     real_report = {"status": schema.FILED, "summary": f"{schema.FILED} — the legitimate worker"}
     queue.finish(clean_queue, item["id"], status=schema.FILED, expected_attempts=2,
-                result_ref="wiki/meetings/real.md@deadbeef", report=real_report)
+                result_ref="wiki/notes/real.md@deadbeef", report=real_report)
 
     # the FIRST worker, unaware it was ever redelivered, tries to finish with its STALE token.
     stale_report = {"status": schema.REJECTED, "summary": "a stale worker's report — must not win"}
@@ -86,7 +86,7 @@ def test_a_stale_meeting_finish_raises_and_writes_nothing(clean_queue):
 
     row = queue.get_submission_trace(clean_queue, item["id"])
     assert row["status"] == schema.FILED
-    assert row["result_ref"] == "wiki/meetings/real.md@deadbeef"
+    assert row["result_ref"] == "wiki/notes/real.md@deadbeef"
     assert row["report"] == real_report
 
 
@@ -127,7 +127,7 @@ def test_two_workers_racing_a_stale_lease_on_a_meeting_row_never_double_finishes
             results["fast_attempts"] = item["attempts"]
             queue.finish(conn, item["id"], status=schema.FILED,
                         expected_attempts=item["attempts"],
-                        result_ref="wiki/meetings/x.md@deadbeef")
+                        result_ref="wiki/notes/x.md@deadbeef")
 
     t1 = threading.Thread(target=slow_worker)
     t2 = threading.Thread(target=fast_worker)
@@ -146,5 +146,5 @@ def test_two_workers_racing_a_stale_lease_on_a_meeting_row_never_double_finishes
 
     row = queue.get_submission_trace(clean_queue, ack["id"])
     assert row["status"] == schema.FILED
-    assert row["result_ref"] == "wiki/meetings/x.md@deadbeef"
+    assert row["result_ref"] == "wiki/notes/x.md@deadbeef"
     assert row["attempts"] == results["fast_attempts"]

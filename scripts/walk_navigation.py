@@ -69,10 +69,6 @@ def main() -> int:
     page(repo, "wiki/notes/Acme renewal notes.md",
          ['type: note', 'title: "Acme renewal notes"', 'entity: ["acme-corp"]'],
          "Undated working notes about [[Acme Corp]] and the [[Q3 pricing floor]].")
-    page(repo, "views/acme-corp.md",
-         ['type: view', 'title: "Acme Corp — view"', 'entity: ["acme-corp"]',
-          'generated_at: "2026-07-30T00:00:00+00:00"', 'verification: verified'],
-         "## Timeline\n\nRollup for Acme Corp.")
     os.makedirs(os.path.join(repo, "ops"), exist_ok=True)
     with open(os.path.join(repo, "ops", "entity-registry.json"), "w") as f:
         json.dump({"entities": {"acme-corp": {"name": "Acme Corp", "type": "organization",
@@ -92,7 +88,6 @@ def main() -> int:
     step("describe_entity('Acme') — layered and dated, resolved by ALIAS")
     d = unrestricted.describe_entity("Acme")
     show("entity ", d["entity"])
-    show("view", d["view"])
     for t in d["timeline"]:
         show("timeline", t)
     show("note   ", d["timeline_note"])
@@ -139,10 +134,7 @@ def main() -> int:
     print("""
 THE LIVE HALF (hand steps, real corpus + real model):
   1. make index-rebuild                              # real embedder over ../stigmergy-brain
-  2. let the worker generate the real views: start `make librarian-run` and leave it idle for a
-     sweep interval — the convergence pass builds one per anchored entity and pushes as the App
-     bot. Then make index-rebuild again so describe_entity's view layer sees them.
-  3. ask, through the entity door:
+  2. ask, through the entity door:
        connect a Claude session over MCP and ask "what do we know about Borealis Dynamics?"
      — record whether the trace uses describe_entity / entity-filtered search / read_page+links
      (a model choice: record the outcome either way).""")

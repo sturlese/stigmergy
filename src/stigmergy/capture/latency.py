@@ -1,9 +1,9 @@
 """capture -> filed and capture -> searchable latency, measured rather than claimed.
 
-Lives in `stigmergy.capture`, not `stigmergy.librarian`: `server.pilot_report` needs it and
-`server` may not import `librarian`; pure, so both callers reach it here. The samples come off
-the queue rows' own timestamps — nothing to remember to write, nothing that can disagree with
-the trace `stigmergy-queue show` prints.
+Lives in `stigmergy.capture`, not `stigmergy.librarian`: `admin.measurements` needs it and the
+console may not import `librarian` past `config`; pure, so both callers reach it here. The samples
+come off the queue rows' own timestamps — nothing to remember to write, nothing that can disagree
+with the trace `stigmergy-queue show` prints.
 
 Below `MIN_SAMPLES` the answer is a sentence, not a number: a "p95" of three samples printed to
 one decimal place reads as a measurement nobody should believe.

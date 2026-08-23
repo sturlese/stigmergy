@@ -28,7 +28,7 @@ measures.
 | filing golden (14 captures, 14 scored phases) | `filing/captures/manifest.json` (what is submitted) + `filing/expected/expectations.json` (the yardstick), kept apart on purpose |
 | `make gates` → one verdict, one exit code | `run_gates.py`; the armed thresholds live in `bars.py`. It arms the two READ instruments only |
 | the frozen reference corpus | `corpus/` — committed pages + `PROVENANCE.json` + its own `ops/entity-registry.json`. For `run_qa.py`, `--repo` is also what gives `Settings` an alias map; without it entity-first resolution is inert for the whole measurement. Guarded keylessly by `tests/evals/test_golden_corpus_fixture.py` |
-| the frozen mini knowledge repo | `filing/repo/` — its own `ops/` and `PROVENANCE.json`, plus byte-for-byte frozen copies of the knowledge repo's contract linter and both agent briefs (each with a `FROZEN.md`). Frozen, not drift-guarded — see the gotcha below |
+| the frozen mini knowledge repo | `filing/repo/` — its own `ops/` and `PROVENANCE.json`, plus byte-for-byte frozen copies of the knowledge repo's contract linter and the librarian brief (each with a `FROZEN.md`). Frozen, not drift-guarded — see the gotcha below |
 | durable eval-score series | `eval_history.py` (`append_run`/`read_history`/`resolve_git_sha`/`corpus_provenance`) → `history.ndjson`, appended by a REAL-instrument run only |
 | reports (gitignored) | `out/` |
 

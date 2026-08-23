@@ -1,10 +1,10 @@
 """Fixtures for the admin-console suite.
 
-Real Postgres through `tests.testdb` (never a faked queue — the house rule), with exactly ONE
-network edge faked: where a digest posts (the digest suite's own posture — `gateway=None` plus
-env, since only dry-run runs in this suite). The console reaches no other service at all: the
-GitHub Actions gateway it once drove the crons through is gone with them (the capture-is-the-approval change — the night
-shift runs in the librarian worker), so there is no second fake here to keep honest.
+Real Postgres through `tests.testdb` (never a faked queue — the house rule), and no faked network
+edge at all: the console reaches no other service. The GitHub Actions gateway it once drove the
+crons through is gone with them (the capture-is-the-approval change — the night shift runs in the
+librarian worker), and the weekly digest that was its one Slack caller is gone too, so there is
+nothing here to keep honest with a double.
 
 No console mutation writes to the knowledge repo any more either (registering an entity and
 removing pages both QUEUE, and the worker writes), so the real bare remote
@@ -15,6 +15,7 @@ The composed-branch fixtures drive the REAL `routes.compose` product over `httpx
 — real middleware order, real 404/401/421 paths, no uvicorn needed (nothing here exercises the
 MCP session manager's lifespan).
 """
+import json
 import os
 import subprocess
 
@@ -167,63 +168,53 @@ LANDED_DIFF = ("diff --git a/wiki/notes/Renewals.md b/wiki/notes/Renewals.md\n"
 LANDED_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 
-def landed_repair(conn, *, path="wiki/notes/Renewals.md", link="Existing Note", kind="backlink",
-                  note="", rationale="neither page links the other", key="") -> int:
-    """One APPLIED `repairs` row, through the package's own writer — `target_paths` and
-    `content_key` are DERIVED exactly as `repair.run` derives them, so no fixture here can seed a
-    row whose two stored facts disagree (the disagreement `apply._cross_check` exists to catch is
-    worth reaching by tampering, never by a careless fixture).
+def landed_retired(conn, *, kind="edits", path="wiki/notes/Renewals.md",
+                   ops=None, status="applied", error="", reason="",
+                   rationale="neither page links the other", key="") -> int:
+    """One row of the ELECTIVE repair loop, written by hand because its writer is gone.
 
-    APPLIED rather than pending, because there is no pending any more: the console reads
-    what the worker already did, and every row it lists is an attempt that is over.
+    A deployed `repairs` table still holds these — three kinds and two statuses this version can no
+    longer produce (`repair.schema.RETIRED_KINDS`) — and the console has to keep rendering them, so
+    a fixture that could only build what the current writer produces would let the reading go
+    silently blank.
     """
-    ops = [{"op": kind, "path": path, "link": link, "note": note}]
-    return repair_store.record_applied(
-        conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
-        rationale=rationale, content_key=key or repair_schema.content_key(ops),
-        commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="fake")
-
-
-def landed_entity_body(conn, *, path="wiki/entities/Meridian Partners.md",
-                       body="## What / Who\n\nA freight broker.\n", role="",
-                       rationale="the page's body said nothing about the entity") -> int:
-    """One APPLIED `entity-body` row — the second kind, whose op carries PROSE rather than a link.
-    Written through the same writer for the same reason as its sibling above."""
-    ops = [{"op": repair_schema.KIND_ENTITY_BODY, "path": path, "body_markdown": body,
-            "role": role}]
-    return repair_store.record_applied(
-        conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
-        rationale=rationale, kind=repair_schema.KIND_ENTITY_BODY,
-        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_ENTITY_BODY),
-        commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="fake")
+    ops = [{"op": kind, "path": path, "link": "Existing Note", "note": ""}] if ops is None else ops
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO repairs (kind, status, target_paths, ops, rationale, content_key, "
+            "finding_ids, applied_commit, diff, error, reason, model_id) "
+            "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s, %s, '[1]'::jsonb, %s, %s, %s, %s, 'fake') "
+            "RETURNING id",
+            (kind, status, json.dumps(repair_schema.target_paths(ops)), json.dumps(ops),
+             rationale, key,
+             LANDED_COMMIT if status == "applied" else "",
+             LANDED_DIFF if status == "applied" else "", error, reason))
+        return cur.fetchone()[0]
 
 
 def landed_delete(conn, *, doomed="wiki/notes/Old Memo.md",
-                  scrubbed="wiki/decisions/Refunds.md",
+                  scrubbed="wiki/notes/Refunds.md",
                   rationale="the memo was superseded") -> int:
-    """One APPLIED `delete` row — the third kind, whose ops carry whole PAGES. Written through the
-    same writer for the same reason as its two siblings above."""
+    """One APPLIED `delete` row — the ONE kind anything writes, whose ops carry whole PAGES.
+    Written through the package's own writer, so no fixture here can seed a row whose stored
+    `target_paths` and `ops` disagree."""
     ops = [{"op": repair_schema.DELETE_OP_NAME, "path": doomed},
            {"op": repair_schema.SCRUB_OP_NAME, "path": scrubbed, "expected_before_hash": "0" * 64,
-            "planned_after": "---\ntype: decision\n---\n\n# Refunds\n\nNo link any more.\n"}]
+            "planned_after": "---\ntype: note\n---\n\n# Refunds\n\nNo link any more.\n"}]
     return repair_store.record_applied(
-        conn, run_id=0, finding_ids=[], target_paths=repair_schema.target_paths(ops), ops=ops,
+        conn, target_paths=repair_schema.target_paths(ops), ops=ops,
         rationale=rationale, kind=repair_schema.KIND_DELETE,
-        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE),
         commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="")
 
 
-def refused_repair(conn, *, path="wiki/decisions/Refunds.md", link="Existing Note",
+def refused_repair(conn, *, path="wiki/notes/Refunds.md",
                    error="the gates refused this repair (secrets/generic-api-key). Nothing was "
                          "pushed.") -> int:
-    """One FAILED `repairs` row — the outcome the console's Repairs page exists to make findable.
-    Its `error` is the whole of what anybody will ever know about why that finding stopped being
-    answered, because the row is never retried."""
-    ops = [{"op": "backlink", "path": path, "link": link, "note": ""}]
-    return repair_store.record_failed(
-        conn, run_id=0, finding_ids=[2], target_paths=repair_schema.target_paths(ops), ops=ops,
-        rationale="the two pages cover the same ground", error=error,
-        content_key=repair_schema.content_key(ops), model_id="fake")
+    """One FAILED row of the ELECTIVE repair loop. Nothing writes `failed` any more, and a deployed
+    table still holds them: the console has to keep rendering the sentence that refused one, which
+    is the whole of what anybody will ever know about why that finding stopped being answered."""
+    return landed_retired(conn, kind="edits", path=path, status="failed", error=error,
+                          rationale="the two pages cover the same ground", key="refused-key")
 
 
 @pytest.fixture()

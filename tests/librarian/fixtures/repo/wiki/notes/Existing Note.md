@@ -2,6 +2,7 @@
 type: note
 title: "Existing Note"
 status: developing
+submitted_by: ana@acme.com
 created: 2026-01-01
 updated: 2026-01-01
 tags: [note]

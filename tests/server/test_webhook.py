@@ -166,10 +166,9 @@ def test_changed_paths_from_push_nets_a_path_touched_twice_to_its_last_state():
 def test_in_zone_changes_drops_paths_outside_the_indexed_zones():
     changes = {"wiki/a.md": "added", "ops/acl.json": "modified",
               "meta/notes.md": "added", "datasets/x.csv": "added",
-              "sources/general/b.md": "modified", "views/c.md": "removed"}
+              "sources/general/b.md": "modified"}
     assert webhook.in_zone_changes(changes) == {
-        "wiki/a.md": "added", "sources/general/b.md": "modified",
-        "views/c.md": "removed"}
+        "wiki/a.md": "added", "sources/general/b.md": "modified"}
 
 
 # ── process_push: the indexing behavior, with a faked GitHub Contents fetch ────────────────────
@@ -1013,9 +1012,11 @@ def test_an_ordinary_markdown_push_is_still_in_zone():
     """The benign twin: the whole point of this filter is to let real pages through, and a removal
     carries no file on disk to inspect — it must still reach the delete path."""
     changes = {"wiki/notes/a.md": "added", "sources/meetings/b.md": "modified",
-               "views/acme.md": "removed", "ops/acl.json": "modified", "README.md": "modified"}
+               "wiki/notes/deleted.md": "removed", "ops/acl.json": "modified",
+               "README.md": "modified"}
     assert webhook.in_zone_changes(changes) == {
-        "wiki/notes/a.md": "added", "sources/meetings/b.md": "modified", "views/acme.md": "removed"}
+        "wiki/notes/a.md": "added", "sources/meetings/b.md": "modified",
+        "wiki/notes/deleted.md": "removed"}
 
 
 # ── the entity-registry snapshot the same delivery refreshes (issue #74) ───────────────────────

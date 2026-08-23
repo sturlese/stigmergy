@@ -19,9 +19,11 @@ repo.
 The one bound that behaves differently from its neighbours is `page.body`: REFUSED over
 `MAX_PAGE_BODY_LEN`, never truncated. Prose truncates because nothing downstream re-reads it; a
 page body IS the product, and a clipped one is a page that ends mid-sentence in the repo forever
-with the only evidence in a log line. Its TWIN is the meeting flow, whose page bodies still
-truncate — an asymmetry that is declared rather than accidental, so both sides are pinned here and
-a later convergence has to be a decision.
+with the only evidence in a log line. Its TWIN is `_prose`, which TRUNCATES over `MAX_PROSE_LEN`
+on a field of the very same account — an asymmetry that is declared rather than accidental, so
+both sides are pinned here and a later convergence has to be a decision. OLD BEHAVIOUR: the twin
+was the meeting flow, whose page bodies went through `_prose` and truncated; that flow is gone and
+the asymmetry it demonstrated lives on inside one account.
 
 Keyless and pure: `parse_outcome` and `_require_page_content` take plain data and return plain data.
 """
@@ -65,13 +67,18 @@ def _messages(exc_info) -> str:
 
 # ── the OLD shape still parses, unchanged ──────────────────────────────────────────────────────
 def test_the_exploring_backends_account_parses_exactly_as_it_did_before(before=None):
-    """The expand half's whole promise. `page` absent is `page=None`, and every field the old shape
-    declared arrives where every downstream reader already looks for it — `_commit_message`,
-    `_stamp`, `gate_zone` and `_cross_check_outcome` were not taught about a second declaration
-    site, which is the property that keeps the two shapes from becoming two flows."""
+    """The fold's whole promise: every spelling an account can use arrives in ONE list.
+
+    OLD BEHAVIOUR: `page_path` was its own top-level field and `pages` was a separate list, so an
+    account that used both left two lists with no defined order between them — and the per-page
+    anchor was zipped by index across them, stamping each page with another page's entity while
+    every gate agreed. `page_path` and `page_paths` now fold into `pages` as path-only entries, so
+    there is one declaration, one ceiling, and one place the anchor is read from.
+    """
     outcome = agent_module.parse_outcome(OLD_SHAPE)
 
-    assert outcome.page is None
+    assert outcome.page is not None and outcome.page.body == ""
+    assert outcome.page.path == "wiki/notes/Acme Corp Renewal Window.md"
     assert outcome.title == "Acme Corp Renewal Window"
     assert outcome.page_path == "wiki/notes/Acme Corp Renewal Window.md"
     assert outcome.page_type == "note"
@@ -106,16 +113,21 @@ def test_the_structured_account_mirrors_its_title_and_type_up_to_the_single_fiel
     assert outcome.page.body.startswith("## Context")
 
 
-def test_there_is_no_path_in_the_new_half_and_a_structured_account_declares_none():
-    """**The confinement claim, at the schema.** the structured filing flow's "there is no write to stop" rests on
-    the account having no field that could name a location: the folder is derived from `page_type`
-    through the one placement table and the filename from the title. `page_path` stays empty for a
-    structured account, which is what `_cross_check_outcome` then compares the DIFF against."""
+def test_a_structured_account_names_no_location_at_all():
+    """**The confinement claim, at the schema.** "There is no write to stop" rests on the account
+    having no field that names a location for the pages CODE writes: the folder comes from
+    `page_type` through the one placement table, the filename from the title.
+
+    OLD BEHAVIOUR: `OutcomePage` had no `path` field at all, and the claim was that the type could
+    not name a location. It has one now — the entry a backend that writes its OWN pages fills — so
+    the claim is per-account rather than per-type: a structured account leaves it empty, and
+    `_write_declared_pages` derives every path itself. What still cannot exist is a FOLDER field.
+    """
     outcome = agent_module.parse_outcome(NEW_SHAPE)
 
     assert outcome.page_path == ""
-    assert not hasattr(outcome.page, "page_path")
-    assert not hasattr(outcome.page, "path")
+    assert outcome.page_paths == ()
+    assert all(page.path == "" for page in outcome.pages)
     assert not hasattr(outcome.page, "folder")
 
 
@@ -192,23 +204,27 @@ def test_a_body_exactly_at_the_ceiling_is_accepted(tmp_path=None):
     assert len(outcome.page.body) == agent_module.MAX_PAGE_BODY_LEN
 
 
-def test_the_meeting_flows_page_bodies_still_truncate_and_that_asymmetry_is_deliberate():
+def test_a_prose_field_of_the_same_account_truncates_and_that_asymmetry_is_deliberate():
     """**The twin that makes the asymmetry a decision instead of an accident.**
 
-    The meeting flow's own page bodies pass `MAX_PAGE_BODY_LEN` through `_prose`, which TRUNCATES.
-    Changing that would be a behaviour change to a shipped flow with no measurement behind it, so
-    the structured filing flow declared the difference rather than unifying it. Pinned on both sides here: if somebody
-    later unifies them, this test is the thing that makes it a deliberate act.
+    `summary` rides `_prose`, which TRUNCATES at `MAX_PROSE_LEN` and logs — nothing downstream
+    re-reads a summary, so a long one is a sentence that got long rather than a fault worth
+    spending the corrective pass on. `page.body` refuses instead, on the SAME account, parsed by
+    the same call. Pinned on both sides here: if somebody later unifies them, this test is the
+    thing that makes it a deliberate act.
+
+    OLD BEHAVIOUR: the second side was `parse_meeting_outcome`'s `meeting_notes`, which passed
+    `MAX_PAGE_BODY_LEN` through `_prose`. The meeting parser is gone; the asymmetry is not.
     """
-    long_notes = "z" * (agent_module.MAX_PAGE_BODY_LEN + 500)
+    long_summary = "z" * (agent_module.MAX_PROSE_LEN + 500)
 
-    meeting = agent_module.parse_meeting_outcome({
-        "decision": "file", "meeting_title": "Q3 sync", "meeting_notes": long_notes,
-        "decisions": [], "summary": "distilled"})
+    outcome = agent_module.parse_outcome({**NEW_SHAPE, "summary": long_summary})
 
-    assert len(meeting.meeting_notes) == agent_module.MAX_PAGE_BODY_LEN, (
-        "the meeting flow's notes stopped truncating — if that was deliberate, the structured filing flow's declared "
-        "asymmetry has changed and this test moves with it")
+    assert len(outcome.summary) == agent_module.MAX_PROSE_LEN, (
+        "a prose field stopped truncating — if that was deliberate, the declared asymmetry with "
+        "`page.body`'s refusal has changed and this test moves with it")
+    assert outcome.page.body == NEW_SHAPE["page"]["body"], (
+        "the page body is the control: it must be untouched by whatever bound the prose field met")
 
 
 def test_a_container_where_the_body_belongs_is_a_wrong_type_rather_than_a_stringified_dict():
@@ -235,11 +251,18 @@ def test_a_page_that_is_not_a_mapping_is_a_shape_finding_and_not_a_crash():
     assert "page" in _messages(exc_info)
 
 
-def test_a_page_declared_as_null_is_simply_the_old_shape():
+def test_a_page_declared_as_null_falls_through_to_the_paths_the_account_named():
     """`null` is how a structured schema with a defaulted sub-object says "I am not using this
     half", and it must be indistinguishable from omitting it — otherwise a backend whose framework
-    serializes defaults would take a different road from one that omits them."""
-    assert agent_module.parse_outcome({**OLD_SHAPE, "page": None}).page is None
+    serializes defaults would take a different road from one that omits them.
+
+    OLD BEHAVIOUR: this asserted `page is None`. There is one declaration now, so "not using the
+    content half" means the entry carries a `path` and no `body` — which is exactly what the
+    explicit `null` folds to here."""
+    outcome = agent_module.parse_outcome({**OLD_SHAPE, "page": None})
+
+    assert outcome.page_paths == ("wiki/notes/Acme Corp Renewal Window.md",)
+    assert outcome.page is not None and outcome.page.body == ""
 
 
 def test_a_page_on_a_TRIAGE_decision_is_refused_as_no_decision_at_all():
@@ -270,7 +293,7 @@ def test_the_structured_requirement_names_the_field_and_carries_a_repair_brief()
 
     assert len(findings) == 1
     assert (findings[0].gate, findings[0].code) == ("outcome", "missing-field")
-    assert "`page.body`" in findings[0].message
+    assert "`pages`" in findings[0].message
     assert findings[0].brief and "page_type" in findings[0].brief
     assert "you never name a path" in findings[0].brief, (
         "the repair brief must not invite the agent to declare a path — there is no field for one")
@@ -336,10 +359,10 @@ def test_every_problem_in_one_account_is_collected_rather_than_raised_one_at_a_t
     broken = {"decision": "publish",                      # unknown decision
               "page": {"title": "T", "page_type": "note",
                        "body": "x" * (agent_module.MAX_PAGE_BODY_LEN + 1)},   # over the ceiling
-              "edits": [{"kind": "rewrite", "path": "wiki/notes/X.md"}]}      # unknown edit kind
+              "rewrites": [{"path": "wiki/notes/X.md", "body": "# X\n"}]}   # a rewrite with no why
 
     with pytest.raises(OutcomeShapeError) as exc_info:
         agent_module.parse_outcome(broken)
 
-    assert {"unknown-decision", "too-long", "unknown-edit-kind"} <= {
+    assert {"unknown-decision", "too-long", "missing-field"} <= {
         f.code for f in exc_info.value.findings}

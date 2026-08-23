@@ -150,7 +150,7 @@ def repo_slug(clone: str) -> str:
 
     Both GitHub dialects, because both are real: a deployed clone's `https://` URL and the `git@`
     form an operator's own checkout usually carries. It lives HERE, beside its only consumers, and
-    it is the ONE implementation: the librarian's filing push, the views writer and the repair
+    it is the ONE implementation: the librarian's filing push and the repair
     applier each carried a copy, and three copies of a URL parser is three places for one dialect
     to be forgotten.
     """

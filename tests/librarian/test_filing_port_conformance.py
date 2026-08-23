@@ -6,9 +6,15 @@ signatures and one envelope, and nothing stated it anywhere a THIRD implementati
 The filing port wrote it down; this file is what makes the writing load-bearing — and the port has
 since outlived one of its implementations without `processing.py` changing a line.
 
+**The port is ONE method now.** OLD BEHAVIOUR: it carried `run` and `run_meeting`, and half this
+file ran twice — once per call — because a backend could conform on one and drift on the other.
+The meeting flow is gone: `kind` chooses the prose a capture is filed with and never a code path,
+so `processing.py` makes exactly one call on `Deps.agent` and a backend that answers it is whole.
+`PORT_METHODS` stays a tuple so a second call added later is covered by every check here at once.
+
 **`isinstance` is not the test, it is the cheapest third of it.** A `runtime_checkable` Protocol
-checks that the two methods are PRESENT and nothing else — not their argument names, not that they
-are keyword-only, not their defaults. A backend whose `run_meeting` took `worktree` positionally,
+checks that the method is PRESENT and nothing else — not its argument names, not that they
+are keyword-only, not their defaults. A backend whose `run` took `worktree` positionally,
 or spelled it `work_tree`, or defaulted `corrective` to `None` instead of `""`, passes `isinstance`
 and fails at the one call site in `processing.py`, mid-item, against a real queue row. So the
 signatures are compared to the Protocol's own — the thing the port DOCUMENTS — and the twins below
@@ -16,7 +22,7 @@ prove each half of that comparison can actually fail.
 
 **Keyless throughout.** The signature half constructs every backend and calls none of them (a
 backend's `__init__` stores settings and little else). The envelope-semantics half at the bottom
-does run the two calls — against an offline model, a scratch brief and a real scratch git repo,
+does make the call — against an offline model, a scratch brief and a real scratch git repo,
 because what a backend HANDS BACK cannot be read off a signature. No agent framework is
 loaded by any of it: the `pydantic` backend imports its own inside the method. **Every
 `pydantic` run below is driven through an injected
@@ -58,8 +64,8 @@ from stigmergy.librarian.pydantic_backend import (
 )
 from tests.librarian import support
 
-# The two calls `processing.py` makes on `Deps.agent`, and the only two it may make.
-PORT_METHODS = ("run", "run_meeting")
+# The one call `processing.py` makes on `Deps.agent`, and the only one it may make.
+PORT_METHODS = ("run",)
 
 # The port's non-method members — asserted as part of the protocol's own
 # attribute set below rather than assumed, because `isinstance` behaviour depends on them being
@@ -145,7 +151,7 @@ def test_an_unknown_backend_fails_fast_rather_than_falling_through_to_one_of_the
         assert name in message
 
 
-# ── isinstance: the two methods AND the one declaration are present ────────────────────────────
+# ── isinstance: the method AND the two declarations are present ───────────────────────────────
 def test_every_backend_satisfies_the_runtime_checkable_port(backend):
     assert isinstance(backend, FilingAgent)
 
@@ -235,9 +241,6 @@ def test_a_shipped_wrapper_forwards_the_shape_its_inner_backend_declares(name, d
         def run(self, **kwargs):
             return AgentRun()
 
-        def run_meeting(self, **kwargs):
-            return AgentRun()
-
     wrapped = _wrapped(name, Inner())
     assert wrapped.structured_ordinary is declares
     assert wrapped.wants_gathered is (not declares)
@@ -246,8 +249,8 @@ def test_a_shipped_wrapper_forwards_the_shape_its_inner_backend_declares(name, d
 @pytest.mark.parametrize("name", _WRAPPERS)
 def test_a_shipped_wrapper_around_a_real_backend_is_itself_a_filing_agent(name):
     """The wrapper is what `processing.Deps.agent` actually holds, so the port claim has to be true
-    of the WRAPPER and not only of what it wraps. `isinstance` covers all three members now — two
-    methods and the declaration — which is exactly why this is worth asserting on the object a
+    of the WRAPPER and not only of what it wraps. `isinstance` covers all three members — the call
+    and the two declarations — which is exactly why this is worth asserting on the object a
     rig builds rather than on the class it wraps."""
     wrapped = _wrapped(name, DoubleAgent(_settings()))
 
@@ -269,34 +272,29 @@ def test_a_wrapper_around_a_backend_that_declares_nothing_fails_at_CONSTRUCTION(
         def run(self, **kwargs):
             return AgentRun()
 
-        def run_meeting(self, **kwargs):
-            return AgentRun()
-
     with pytest.raises(AttributeError, match="structured_ordinary"):
         _wrapped(name, Undeclared())
 
 
-def test_a_class_missing_run_meeting_is_not_a_filing_agent():
-    """The benign twin's sharp half: `isinstance` is worth running because it can fail. A backend
-    that only implements the ordinary flow is exactly the half-backend the meeting dispatch would
-    meet with an `AttributeError` mid-item.
+def test_a_class_missing_the_one_call_is_not_a_filing_agent():
+    """The benign twin's sharp half: `isinstance` is worth running because it can fail. OLD
+    BEHAVIOUR: the half-backend this caught was one that implemented `run` and not `run_meeting`,
+    which the meeting dispatch met with an `AttributeError` mid-item. With one call left, the
+    half-backend is one that declares both shapes and answers nothing — and `processing._one_pass`
+    would meet it exactly the same way, mid-item, against a real queue row.
 
-    It declares `structured_ordinary` so the ONE thing missing is the method — a stand-in short of
-    two members would fail this assertion whichever one the port stopped caring about, and prove
+    It declares BOTH shapes so the ONE thing missing is the method — a stand-in short of two
+    members would fail this assertion whichever one the port stopped caring about, and prove
     nothing about either.
     """
-    class OrdinaryOnly:
+    class DeclarationsOnly:
         structured_ordinary = False
         wants_gathered = False
 
-        def run(self, *, worktree, material, hints, submitted_by,
-                corrective="", flow_note="", gathered=""):
-            return AgentRun()
-
-    assert not isinstance(OrdinaryOnly(), FilingAgent)
+    assert not isinstance(DeclarationsOnly(), FilingAgent)
 
 
-def test_a_class_answering_both_calls_but_declaring_no_shape_is_not_one_either():
+def test_a_class_answering_the_call_but_declaring_no_shape_is_not_one_either():
     """The declaration's own sharp half, and the failure it exists to catch: this stand-in answers
     every call `processing.py` makes and would run — taking the exploring branch by default, which
     is a shape it never claimed. The port refuses it at `isinstance` instead."""
@@ -305,17 +303,13 @@ def test_a_class_answering_both_calls_but_declaring_no_shape_is_not_one_either()
                 corrective="", flow_note="", gathered=""):
             return AgentRun()
 
-        def run_meeting(self, *, worktree, material, meeting_meta, registry,
-                        source_page_path, corrective=""):
-            return AgentRun()
-
     assert not isinstance(Undeclared(), FilingAgent)
 
 
-def test_a_class_answering_both_calls_is_a_filing_agent_however_it_was_written():
+def test_a_class_answering_the_call_is_a_filing_agent_however_it_was_written():
     """...and its benign half: conformance is STRUCTURAL. Nothing inherits, nothing registers, and
     a class written by somebody who never read `filing_port.py` conforms the moment it answers the
-    two calls and declares its shape — which is what lets the test doubles this suite is built on
+    call and declares its two shapes — which is what lets the test doubles this suite is built on
     exercise the same contract a live backend does."""
     class HandWritten:
         structured_ordinary = False
@@ -323,10 +317,6 @@ def test_a_class_answering_both_calls_is_a_filing_agent_however_it_was_written()
 
         def run(self, *, worktree, material, hints, submitted_by,
                 corrective="", flow_note="", gathered=""):
-            return AgentRun()
-
-        def run_meeting(self, *, worktree, material, meeting_meta, registry,
-                        source_page_path, corrective="", gathered=""):
             return AgentRun()
 
     assert isinstance(HandWritten(), FilingAgent)
@@ -374,7 +364,7 @@ def test_the_optional_arguments_default_the_same_way_everywhere(backend, method)
 
 def test_the_signature_check_catches_a_positional_worktree_that_isinstance_waves_through():
     """**The sabotage twin, and the whole argument for comparing signatures at all.** This backend
-    answers both calls and declares its shape, so `isinstance` says yes — and its `worktree` is
+    answers the call and declares its shapes, so `isinstance` says yes — and its `worktree` is
     positional, which is precisely the drift a Protocol cannot see. If the comparison above ever
     stops being able to fail, this test goes red first.
 
@@ -393,11 +383,6 @@ def test_the_signature_check_catches_a_positional_worktree_that_isinstance_waves
                 acl: list[str] | None = None) -> AgentRun:
             return AgentRun()
 
-        def run_meeting(self, worktree: str, *, material: str, meeting_meta: dict, registry,
-                        source_page_path: str, corrective: str = "",
-                        gathered: str = "") -> AgentRun:
-            return AgentRun()
-
     assert isinstance(PositionalWorktree(), FilingAgent), (
         "isinstance must still accept it — that is the gap this test exists to cover")
     for method in PORT_METHODS:
@@ -413,47 +398,40 @@ def test_the_signature_check_catches_a_positional_worktree_that_isinstance_waves
 
 def test_the_signature_check_catches_a_renamed_argument_too():
     """The second shape the same gap takes, and the likelier one: a backend written from memory
-    spells `meeting_meta` `meta`. Keyword-only throughout means the call site raises `TypeError` on
-    a real item — this catches it with no key, no queue and no model.
+    spells `submitted_by` `submitter`. Keyword-only throughout means the call site raises
+    `TypeError` on a real item — this catches it with no key, no queue and no model.
 
-    Its `run` mirrors the port exactly, which is the control: one method drifted, one did not, and
-    the assertions below say which is which.
+    OLD BEHAVIOUR: the drift was staged on `run_meeting` and `run` was the control ("one method
+    drifted, one did not"). With one call in the port the control has to come from INSIDE the
+    signature instead, so the assertions below pin that exactly one parameter name differs — a
+    sabotage twin that cannot attribute its own failure is a green light wearing a warning's
+    clothes.
     """
     class Renamed:
         structured_ordinary = False
         wants_gathered = False
 
-        def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
+        def run(self, *, worktree: str, material: str, hints: dict, submitter: str,
                 corrective: str = "", flow_note: str = "", gathered: str = "",
                 acl: list[str] | None = None) -> AgentRun:
             return AgentRun()
 
-        def run_meeting(self, *, worktree: str, material: str, meta: dict, registry,
-                        source_page_path: str, corrective: str = "",
-                        gathered: str = "") -> AgentRun:
-            return AgentRun()
-
     assert isinstance(Renamed(), FilingAgent)
-    assert (inspect.signature(Renamed.run_meeting)
-            != inspect.signature(FilingAgent.run_meeting))
-    assert (inspect.signature(Renamed.run)
-            == inspect.signature(FilingAgent.run)), (
-        "the undrifted method must still match — otherwise this twin proves the comparison is "
-        "noisy rather than that it is sharp")
+    mine = inspect.signature(Renamed.run)
+    port = inspect.signature(FilingAgent.run)
+    assert mine != port
+    assert ([p.name for p in mine.parameters.values() if p.name not in port.parameters]
+            == ["submitter"]), (
+        "the twin differs from the port for more than the renamed argument — it can no longer "
+        "attribute its own failure")
 
 
 def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gathered_context():
-    """the structured filing flow's own drift shape, and the one this milestone made possible: a backend written
-    against the M1 port answers both calls, declares its shape, and has no `gathered` parameter at
-    all. `processing._one_pass` passes `gathered=` on EVERY ordinary call — empty for an exploring
-    backend — so this one raises `TypeError` on the first item it claims, against a real queue row.
-    The equality above is what catches it here instead.
-
-    **BOTH calls now, since the distiller's corpus context.** `_one_meeting_pass` passes `gathered=`
-    on every meeting call
-    too — unconditionally, because no backend on that flow holds a tool — so a backend predating
-    that change is broken on the meeting road exactly as it is on the ordinary one, and asserting
-    only the ordinary half would leave the newer of the two drifts uncovered.
+    """the structured filing flow's own drift shape, and the one this milestone made possible: a
+    backend written against the M1 port answers the call, declares its shapes, and has no
+    `gathered` parameter at all. `processing._one_pass` passes `gathered=` on EVERY call — empty
+    for an exploring backend — so this one raises `TypeError` on the first item it claims, against
+    a real queue row. The equality above is what catches it here instead.
     """
     class PreGatherer:
         structured_ordinary = False
@@ -463,10 +441,6 @@ def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gath
                 corrective: str = "", flow_note: str = "") -> AgentRun:
             return AgentRun()
 
-        def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                        source_page_path: str, corrective: str = "") -> AgentRun:
-            return AgentRun()
-
     assert isinstance(PreGatherer(), FilingAgent)
     for method in PORT_METHODS:
         assert (inspect.signature(getattr(PreGatherer, method))
@@ -474,9 +448,6 @@ def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gath
     with pytest.raises(TypeError):
         PreGatherer().run(worktree="/x", material="m", hints={}, submitted_by="a@b.test",
                           gathered="context")
-    with pytest.raises(TypeError):
-        PreGatherer().run_meeting(worktree="/x", material="m", meeting_meta={}, registry={},
-                                  source_page_path="sources/meetings/x.md", gathered="context")
 
 
 # ── the envelope and the fault contract, which moved with the port ─────────────────────────────
@@ -503,7 +474,7 @@ def test_priced_attaches_the_attempts_spend_to_the_fault_and_hands_the_exception
     the figure off the exception because no `AgentRun` ever returned. Returning the exception is
     what lets a raise site read as one expression."""
     run = AgentRun(cost_usd=0.31)
-    ex = AgentError("the meeting agent exceeded its 900s budget")
+    ex = AgentError("the filing agent exceeded its 900s budget")
 
     returned = filing_port.priced(run, ex)
 
@@ -539,21 +510,13 @@ def _frozen_brief(*parts: str) -> pathlib.Path:
     return pathlib.Path(__file__).parent.joinpath("fixtures", "repo", ".claude", "skills", *parts)
 
 
-def _brief_worktree(tmp_path) -> str:
-    """A directory carrying just the frozen meeting brief — what `read_meeting_brief` needs and
-    nothing else. No git: this file is keyless AND repo-free, and the brief read is an ordinary
-    `open()` at a known relative path."""
-    target = tmp_path / ".claude" / "skills" / "meeting-distiller"
-    target.mkdir(parents=True)
-    (target / "SKILL.md").write_text(
-        _frozen_brief("meeting-distiller", "SKILL.md").read_text(encoding="utf-8"),
-        encoding="utf-8")
-    return str(tmp_path)
-
-
 def _skill_worktree(tmp_path) -> str:
-    """Its ordinary-flow twin: a directory carrying just the frozen librarian brief, which is what
-    `agent.read_skill` reads out of an item's worktree (`agent.SKILL_RELPATH`).
+    """A directory carrying just the frozen librarian brief, which is what `agent.read_skill` reads
+    out of an item's worktree (`agent.SKILL_RELPATH`).
+
+    OLD BEHAVIOUR: it had a `_brief_worktree` sibling planting the frozen meeting brief for
+    `agent.read_meeting_brief`. One pipe, one procedure: every capture is filed against the
+    librarian brief, so this is the only checkout shape a backend is briefed from.
 
     The real file, never a stub string: `build_system_prompt` splits its frontmatter off and the
     backend refuses an empty one, so a placeholder would exercise a shorter path than production's.
@@ -569,11 +532,11 @@ def _filing_account() -> FilingAccount:
     """A well-formed STRUCTURED ordinary account — the shape a `structured_ordinary = True` backend
     returns in its envelope and `processing._write_ordinary_page` writes a page from.
 
-    No shipped backend composes this schema on the ordinary flow any more (the agentic pydantic harness gave that flow
-    tools and an outcome FILE), and it is kept here rather than deleted because the schema and the
-    branch that reads it both survive: `MeetingAccount` below is its twin on a flow that still works
-    exactly this way, and a `structured_ordinary = True` stub is how the content-carrying road is
-    exercised in `test_structured_processing_pg.py`.
+    No shipped backend composes this schema on the ordinary flow any more (the agentic pydantic
+    harness gave that flow tools and an outcome FILE), and it is kept here rather than deleted
+    because the schema and the branch that reads it both survive: `processing._one_pass` still
+    branches on `structured_ordinary`, and a `structured_ordinary = True` stub is how the
+    content-carrying road is exercised in `test_structured_processing_pg.py`.
     """
     return FilingAccount(
         decision="file",
@@ -609,7 +572,6 @@ _AGENTIC_ACCOUNT = {
     "anchoring": {"kind": "entity", "entities": ["Acme Corp"], "reason": ""},
     "links_created": [],
     "overlaps": [],
-    "edits": [],
     "findings": [],
     "summary": "filed the renewal note",
 }
@@ -773,6 +735,11 @@ def test_the_iterating_ordinary_pass_is_priced_and_counted_like_the_loop_it_now_
     The account arrives as the outcome FILE the model wrote with its own confined tool, which is
     the whole channel change: nothing here fills an output schema, and the model's final message is
     ignored by design.
+
+    OLD BEHAVIOUR: `page_path` produced `pages == ()`, so "carries no page text" was asserted as
+    `outcome.page is None`. `Outcome.pages` is the ONE declaration now and the path-only spellings
+    FOLD into it, so what says "the agent wrote this one, code writes nothing" is the folded
+    entry's empty `body` — not the absence of an entry.
     """
     env = support.build_repo(str(tmp_path / "git"))
     backend = PydanticFilingAgent(
@@ -783,9 +750,13 @@ def test_the_iterating_ordinary_pass_is_priced_and_counted_like_the_loop_it_now_
 
     assert isinstance(run, AgentRun)
     assert run.outcome.decision == "file"
-    # the LEGACY half of the envelope: the agent names the path it wrote, and carries no page text
-    assert run.outcome.page_path == "wiki/notes/Acme Corp Renewal Window.md"
-    assert run.outcome.page is None
+    # the path-declaring half of the envelope: the agent names the page it wrote, and the entry
+    # that names it carries no page TEXT for code to write.
+    assert run.outcome.page_path == _AGENTIC_ACCOUNT["page_path"]
+    assert run.outcome.page_paths == (_AGENTIC_ACCOUNT["page_path"],)
+    assert run.outcome.page == agent_module.OutcomePage(path=_AGENTIC_ACCOUNT["page_path"]), (
+        "the path-declaring envelope carries a path and NOTHING else — a `body` here would mean "
+        "code is about to write a page the agent already wrote")
     assert run.outcome.title == "Acme Corp Renewal Window"
     assert _finite_dollars(run.cost_usd) and run.cost_usd > 0, (
         "a real framework run priced at nothing — a silent zero reads as free")
@@ -797,24 +768,36 @@ def test_the_iterating_ordinary_pass_is_priced_and_counted_like_the_loop_it_now_
     assert not pathlib.Path(env.repo, agent_module.OUTCOME_FILENAME).exists()
 
 
-def test_the_ordinary_faults_carry_the_spend_the_same_way(tmp_path):
-    """The other half of the same contract, on the road that raises. A model that cannot be built
-    fails before a token is spent, so `0.0` is the honest figure — and the FIELD has to be there,
-    because `processing` reads `getattr(ex, "run_cost_usd", 0.0)` and cannot otherwise tell "spent
-    nothing" from "nobody attached it".
+@pytest.mark.parametrize("factory, why", [
+    (_raises, "a model that cannot be built"),
+    (lambda: "nosuchprovider:whatever", "a provider pydantic-ai does not know"),
+])
+def test_the_ordinary_faults_carry_the_spend_the_same_way(tmp_path, factory, why):
+    """The other half of the same contract, on the road that raises. Both faults fire before a
+    token is spent, so `0.0` is the honest figure — and the FIELD has to be there, because
+    `processing` reads `getattr(ex, "run_cost_usd", 0.0)` and cannot otherwise tell "spent nothing"
+    from "nobody attached it".
 
-    A bare skill directory is enough here and is the point: this fault fires at model RESOLUTION,
-    before the toolbox is built and before anything reads the checkout, so it is reachable without
-    a git repo at all.
+    **Two factories, because there are two ways model resolution fails** and only one of them is a
+    factory that raises: a provider string the framework does not know raises INSIDE pydantic-ai,
+    on the `Agent(...)` construction line rather than the `model_factory()` one, and it is the
+    shape a real misconfiguration takes. OLD BEHAVIOUR: that second case was pinned on
+    `run_meeting`, the priced flow of the day; it moved here rather than being dropped, because the
+    fault belongs to model resolution and model resolution is now reached on one road only.
+
+    A bare skill directory is enough here and is the point: these faults fire at model RESOLUTION,
+    before the toolbox is built and before anything reads the checkout, so they are reachable
+    without a git repo at all.
     """
-    backend = PydanticFilingAgent(_settings(), model_factory=_raises)
+    backend = PydanticFilingAgent(_settings(), model_factory=factory)
 
     with pytest.raises(AgentError) as exc_info:
         backend.run(worktree=_skill_worktree(tmp_path), material="an ordinary note", hints={},
                     submitted_by="a@b.test")
 
-    assert hasattr(exc_info.value, "run_cost_usd"), (
-        "the ordinary-flow fault carries no run_cost_usd at all")
+    assert _finite_dollars(getattr(exc_info.value, "run_cost_usd", None)), (
+        f"{why}: the fault carried run_cost_usd="
+        f"{getattr(exc_info.value, 'run_cost_usd', None)!r}")
     assert exc_info.value.run_cost_usd == 0.0
     # the configuration fault names the setting an operator would change, never the provider's text
     assert "$STIGMERGY_LIBRARIAN_MODEL" in str(exc_info.value)
@@ -841,39 +824,21 @@ def test_the_ordinary_flow_no_longer_refuses_this_backend_at_all(tmp_path):
     assert "meeting flow only" not in source
 
 
-@pytest.mark.parametrize("factory, why", [
-    (_raises, "a model that cannot be built"),
-    (lambda: "nosuchprovider:whatever", "a provider pydantic-ai does not know"),
-])
-def test_the_priced_backends_meeting_faults_carry_a_usable_spend(tmp_path, factory, why):
-    """The property on the flow that actually costs money, for the one backend that computes its own
-    price — over the two faults that fire before a single token is spent.
-
-    `0.0` is the right figure for both, and the FIELD being present is the point: `processing` reads
-    `getattr(ex, "run_cost_usd", 0.0)`, so an absent field and an honest zero are indistinguishable
-    downstream, and the port's docstring says the field must be there either way.
-    """
-    backend = PydanticFilingAgent(_settings(), model_factory=factory)
-
-    with pytest.raises(AgentError) as exc_info:
-        backend.run_meeting(worktree=_brief_worktree(tmp_path), material="t", meeting_meta={},
-                            registry=None, source_page_path="sources/meetings/x.md")
-
-    assert _finite_dollars(getattr(exc_info.value, "run_cost_usd", None)), (
-        f"{why}: the fault carried run_cost_usd="
-        f"{getattr(exc_info.value, 'run_cost_usd', None)!r}")
-
-
 def test_a_config_fault_stays_off_the_priced_road_deliberately(tmp_path):
-    """The specificity half, and it is a boundary rather than an omission: a missing meeting brief is
-    the WORKER's configuration road (`LibrarianConfigError`, which `process_next` names on its own
-    terms), not an agent attempt that cost something. Pricing it would invent a figure for a fault
-    that pre-dates the model call."""
+    """The specificity half, and it is a boundary rather than an omission: a missing librarian
+    brief is the WORKER's configuration road (`LibrarianConfigError`, which `process_next` names on
+    its own terms), not an agent attempt that cost something. Pricing it would invent a figure for
+    a fault that pre-dates the model call.
+
+    OLD BEHAVIOUR: the missing procedure staged here was the meeting-distiller brief, on
+    `run_meeting`. There is one brief and one call, and the boundary is unchanged — an EMPTY
+    worktree (no `.claude/` at all) is what makes the skill read the first thing that fails, ahead
+    of the deliberately broken `model_factory` below it.
+    """
     backend = PydanticFilingAgent(_settings(), model_factory=_raises)
 
     with pytest.raises(LibrarianConfigError):
-        backend.run_meeting(worktree=str(tmp_path), material="t", meeting_meta={}, registry=None,
-                            source_page_path="sources/meetings/x.md")
+        backend.run(worktree=str(tmp_path), material="t", hints={}, submitted_by="a@b.test")
 
 
 @pytest.mark.parametrize("cost", [float("nan"), float("inf"), -0.01])

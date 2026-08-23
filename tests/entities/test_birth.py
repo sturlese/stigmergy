@@ -343,10 +343,10 @@ def test_render_page_fills_every_declared_field():
 
 # ── a minted entity page anchors to ITSELF ───────────────────────────────────────────────────────
 def test_a_minted_entity_page_anchors_to_its_own_registry_id():
-    """The template ships `entity: []` with a comment promising the page's own id "once minted",
-    and `views.skeleton.entity_own_page`'s docstring states that governed birth mints exactly one
-    such page "self-anchored (`entity: [<id>]`)" — but `render_page`'s field dict used to carry no
-    `entity` key at all, so what landed was the template's literal `[]`.
+    """The template ships `entity: []` with a comment promising the page's own id "once minted" —
+    governed birth mints exactly one such page, self-anchored (`entity: [<id>]`) — but
+    `render_page`'s field dict used to carry no `entity` key at all, so what landed was the
+    template's literal `[]`.
 
     It is not a cosmetic omission. Under the anchor contract, `entity: []` inside `wiki/**` means
     "a checked, explicit company-wide declaration" — so a minted entity page did not merely fail

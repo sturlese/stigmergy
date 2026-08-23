@@ -213,10 +213,10 @@ def test_push_config_carries_the_token_in_a_scoped_git_config_env_triple():
 
 
 # ── repo_slug: the ONE parser, feeding the two functions above ────────────────────────────────
-# It lived in three places at once — `librarian/processing.py`, `views/writer.py` and
-# `repair/remote.py` — and each copy fed `push_url`/`push_config` right beside it. Three copies of
-# a parser is three places for one dialect to be forgotten, which is the failure this consolidation
-# is about: `views/writer.py`'s copy even said in its own docstring that it was a duplicate.
+# It lived in three places at once, each feeding `push_url`/`push_config` right beside it. Three
+# copies of a parser is three places for one dialect to be forgotten, which is the failure this
+# consolidation is about — one of those copies even said in its own docstring that it was a
+# duplicate, and it was still there.
 @pytest.mark.parametrize("origin, expected", [
     ("https://github.com/acme/knowledge.git", "acme/knowledge"),
     ("https://github.com/acme/knowledge", "acme/knowledge"),

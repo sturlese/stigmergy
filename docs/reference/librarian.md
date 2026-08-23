@@ -1,7 +1,9 @@
 # The filing engine — `stigmergy.librarian`
 
-The back half of the fast lane: it drains the capture queue and turns each row into a committed page,
-or into an honest refusal. The agent drafts and the gates veto the diff; the three repo-sourced
+The back half of the fast lane: it drains the capture queue and turns each row into one commit — the
+material archived verbatim, the pages it establishes, the identities they need — or into an honest
+refusal. **There is ONE pipe and every capture rides it**, whatever kind it was submitted as.
+The agent drafts and the gates veto the diff; the three repo-sourced
 inputs are read at the base commit; and the capture is the approval — an identity this flow
 creates is born confirmed by the person who captured, and nobody is asked afterwards.
 The front half — submit, attribution, the evidence plane — is [`capture.md`](./capture.md).
@@ -23,36 +25,40 @@ capture_queue row (claimed, fenced by `attempts`)
        │  EXPLORING — both shipped backends      STRUCTURED — no shipped backend today
        │  ──────────────────────────────────     ─────────────────────────────────────
        │  code gathers the context first         code gathers the context the same way
-       │    (gather.py: entities, candidates       (the meeting flow's shape, one page
-       │     + excerpts, link neighbourhood,        over — and what a fourth backend
-       │     the vocabulary — from the CHECKOUT)    would declare into)
+       │    (gather.py: entities, candidates       (and what a fourth backend would
+       │     + excerpts, link neighbourhood,        declare into)
+       │     the vocabulary — from the CHECKOUT)
        │    `pydantic` wants it; `double`, which
        │    follows a directive, does not
        │  agent SEARCHES and READS further       agent holds NO tool and explores nothing
        │    (`pydantic`: five confined tools)
-       │  agent writes a NEW .md itself          agent returns the page's own TEXT in `page`
-       │  outcome FILE names `page_path`         CODE writes the page: filename from the title,
+       │  agent writes the new .md page(s)       agent returns each page's TEXT in `pages`
+       │  outcome FILE names `page_paths`        CODE writes them: filename from the title,
        │                                           folder from the type, frontmatter, the H1
        │
-       │  code applies the outcome's DECLARED edits to existing pages
-       │  code writes the attached `sources/` page(s), when the door asserted one (see below)
+       │  code rewrites every page the outcome DECLARED it brings up to date
+       │  code writes the verbatim `sources/` page(s) — every capture, always (see below)
        │  code CREATES every identity the account declares (librarian.identity) — born
        │    confirmed by the capture's own submitter — appends the account's facts to
        │    entities the registry already knows, and regenerates the registry: all in the
-       │    same diff as the page
-       │  code stamps the server-owned frontmatter
+       │    same diff as the pages
+       │  code stamps the server-owned frontmatter, per page
        ├─ gates over the diff: zone · binary-page · body-rewrite · secrets · pii · frontmatter · contract · anchoring · identity
        │     └─ vetoed?  one corrective retry with the findings, then a terminal state
        │                 (no retry at all when no veto names a repair the agent can perform)
        └─ commit (librarian GitHub App) -> push (rebase-and-retry) -> filed, page@sha
 ```
 
-Everything below the two columns is shared, byte for byte: one stamp, the same nine gates, the
-same "exactly one new page per capture" cross-check, one commit path.
+Everything below the two columns is shared, byte for byte: one archive, one stamp, the same nine
+gates, the same "the diff carries exactly what the account declared" cross-check, one commit path.
 
-**That diagram is the ORDINARY flow, and two kinds leave it.** A `meeting` transcript becomes a
-page SET in one indivisible commit ([`meeting-distiller.md`](./meeting-distiller.md)), and a
-`delete` row is a person's own removal, performed rather than filed — the third flow, below.
+**That diagram is EVERY capture, whatever its `kind`.** A pasted note, an uploaded document and a
+meeting transcript take the same journey: the material is archived verbatim under `sources/` and the
+agent declares the `wiki/` pages that material establishes — one, or several. `kind` chooses the
+*prose* (what the brief is told it is reading, the byte cap the door enforced, which `sources/`
+folder the archive lands in) and never a code path; `worker.process_next`'s whole dispatch is two
+branches. **One row leaves the pipe**: a `delete` is not material at all but an instruction to
+remove pages, performed rather than filed — the removal lane, below.
 
 **There is one decision, and it is `file`** (`agent.DECISIONS`). Nothing parks, nothing is asked of
 anybody: a capture reaches `filed`, `rejected` or `failed` and nothing else.
@@ -67,9 +73,8 @@ import `stigmergy.server` or `stigmergy.answer`, and the server must never impor
 queue, so a slow agent run can never happen inside an HTTP request. Both edges are asserted by
 `tests/test_architecture.py`.
 
-One further edge is **declared**: `stigmergy.index.corpus`, reached by `edits.py` (the zone list)
-and by `gather.py` (the corpus parse) — a pure repo parser with no database connection and no ACL
-surface, the same reach `stigmergy.views` declares. Nothing here touches `pages_index` itself;
+One further edge is **declared**: `stigmergy.index.corpus`, reached by `gather.py` (the corpus
+parse) — a pure repo parser with no database connection and no ACL surface. Nothing here touches `pages_index` itself;
 `stigmergy.index.store`, the connection, is reached by `cli.py` alone.
 
 A **second** declared edge points at `stigmergy.entities`, and it is one module wide:
@@ -83,21 +88,20 @@ nothing left for anyone to decide about one afterwards.
 | Module | Does |
 |---|---|
 | `cli.py` | `stigmergy-librarian` — `once`, `run`, `status` |
-| `worker.py` | the loop, the fail-closed `startup_checks`, the claim sweep, signal handling, the per-`kind` routing, and the idle branch's maintenance — the view sweep (on its interval, and on the first idle tick after an item reached a terminal state) and the repair pass |
+| `worker.py` | the loop, the fail-closed `startup_checks`, the claim sweep, signal handling, the per-`kind` routing, and the idle branch's daily maintenance — the gardener and the retention purge |
 | `bootstrap.py` | `stigmergy-librarian-boot` — the DEPLOYED worker's entry point (clone, verify, exec) |
 | `gitcredential.py` | `stigmergy-librarian-credential` — the git credential helper the container fetches with |
 | `config.py` | every tunable, resolved once (`Settings.from_args`); the derived lease |
-| `processing.py` | one item, end to end: dedup → worktree → agent → edits → stamp → gates → commit. `process_item` is the ordinary flow; `process_meeting_item` (a page SET) and `process_delete_item` (a removal, and the only flow with no agent in it) are the two kinds routed away from it |
+| `processing.py` | one item, end to end: dedup → worktree → agent → declared rewrites → archive → stamp → gates → commit. `process_item` is the pipe every capture rides, whatever its `kind`; `process_delete_item` (a removal, and the only lane with no agent in it) is the one row routed away from it |
 | `base_inputs.py` | the three repo-sourced inputs, read at the item's own base commit |
-| `filing_port.py` | the PORT — the two calls `processing.py` makes, the `AgentRun` envelope, the fault contract, the per-flow side-effect rules |
+| `filing_port.py` | the PORT — the ONE call `processing.py` makes, the two capabilities it may ask about first, the `AgentRun` envelope, the fault contract, the side-effect rules |
 | `agent.py` | the shared agent seam: the outcome contract, the fence, the prompts, the write-confinement rule, the system-prompt frame the brief is injected under, and the `backend` dispatch. Drives no model itself |
 | `gather.py` | the deterministic gatherer: what the ordinary agent is HANDED before it searches for itself — a pure function of (worktree, registry, material), and the bodies the search and read tools are built from |
 | `double.py` | the offline double: misbehaves on demand, behaves on ordinary material |
-| `pydantic_backend.py` | the pydantic-ai backend, BOTH flows: an iterating ordinary run with five confined tools (`FilingToolbox`), one structured meeting call |
+| `pydantic_backend.py` | the pydantic-ai backend: an iterating run with five confined tools (`FilingToolbox`), writing its own pages and its own outcome file |
 | `pricing.py` | model id → $/MTok, for the backends that report tokens instead of dollars |
 | `gates.py` | the deterministic vetoes over the diff |
 | `identity.py` | the identity WRITER: turns the account's `new_entities`/`new_aliases`/`entity_updates` into real files — an entity page per identity, `approved_by:` naming the capture's submitter; a new spelling on a registered entity's own `aliases:`; appended `## Facts` / `## Connections` lines on the pages the account adds to; and the regenerated registry. The ONE module here that may import `stigmergy.entities` |
-| `edits.py` | code's own additive edits, from the agent's declaration |
 | `page.py` | the page vocabulary — SEVEN known types, of which the fast lane may CREATE three — their folders, the server-owned frontmatter stamp, path identity (case/Unicode-fold), and what a filename may be (`unnameable_reason`, bounded in UTF-8 BYTES) |
 | `gitcmd.py` | worktrees, the diff, the commit, the push |
 | `githubapp.py` | app JWT → installation token → push URL; the commit identity |
@@ -169,25 +173,18 @@ refused-diff line: that path is only on the prose road, on stderr.
 filing into /path/to/stigmergy-brain against origin/main@a1b2c3d4e5f6
   polling every 3s; lease 900s (15 min); Ctrl-C stops after the item in flight
 #42 -> filed
-view sweep: 12 of 12 entity(ies) checked — 1 regenerated, 0 removed, 11 already current
+garden: 40 page(s) and 12 entity(ies) checked — 3 finding(s)
 ^C
 finishing the item in flight, then stopping — no further items will be claimed. Press Ctrl-C again
 for the same thing without waiting to poll.
 stopped after 1 item(s)
 ```
 
-**The `view sweep` line is the loop's one maintenance report**, printed on the idle branch when
-its interval has elapsed AND the pass actually moved something — the same rule the claim-sweep line
-follows, for the same reason: a line printed every interval is a line nobody reads. The pass is
-where a view stops being stale whatever wrote the corpus; [`views.md`](./views.md) is the account,
-and the two knobs are in the table above. A shutdown signal — or a capture arriving in the
-queue — stops it at the next entity boundary, each cause recorded in its own words: one entity is
-one commit, so a stopped sweep leaves a coherent repo, the remainder is deferred, and the next
-idle tick picks it up. Nothing can stop it INSIDE an entity, and nothing needs to: the bound on a
-shutdown, and on a capture's wait, is one entity's regeneration (itself wall-clocked —
-`views.synthesis.SYNTHESIS_TIMEOUT_S` turns a hung provider call into a withheld synthesis rather
-than a hung worker), never a ceiling's worth. A fault is logged and swallowed —
-filing must never depend on a rollup — leaving a `job_runs` error row under `views-sweep`.
+**The `garden:` line is one of the loop's maintenance reports**, printed on the idle branch every
+time the daily gardener pass runs, whether or not it found anything — a daily pass is rare enough
+that a line a day is not noise, and "the garden ran and found nothing" is the sentence an operator
+most wants to be able to see. The daily retention purge follows the same shape but, like the
+claim-sweep line, prints only when it actually moved something.
 
 **Ctrl-C is less than a cooperative cancel**: nothing can abort a running `process_item` — there is
 no cancellation point inside an agent turn, a gitleaks run or a push — so the item in flight always
@@ -251,21 +248,19 @@ time, and model ids are configuration, never constants.
 |---|---|---|
 | `STIGMERGY_REPO` (`--repo`) | `../stigmergy-brain` | the knowledge-repo checkout the worktrees branch from |
 | `STIGMERGY_LIBRARIAN_BRANCH` (`--branch`) | `main` | the branch the fast lane commits to |
-| `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `pydantic` is the real one: an ordinary capture is an ITERATING run with five tools over the checkout, seeded with the gathered context, writing its own page (see below); a meeting transcript is one structured call. `double` is the offline double. Any other value — including `sdk`, which a stale deployment may still carry — is refused at startup by name |
+| `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `pydantic` is the real one: an ITERATING run with five tools over the checkout, seeded with the gathered context, writing its own pages (see below). `double` is the offline double. Any other value — including `sdk`, which a stale deployment may still carry — is refused at startup by name |
 | `STIGMERGY_LIBRARIAN_MODEL` | `anthropic:claude-sonnet-5` | the filing model, and the seam worth MEASURING before moving rather than reasoning about: `make filing-golden` scores a candidate on the bars this flow is actually judged by, and open-weight models have passed all of them. PROVIDER-PREFIXED: pydantic-ai reads a bare name as an OpenAI model, so a worker without a prefix is refused at startup |
 | `STIGMERGY_LIBRARIAN_PRICING` | — | `{"<model>": [input, cached input, cache write, output]}`, dollars per MILLION tokens, merged per id over `librarian/pricing.py`'s own table. Only the backends that report tokens rather than dollars read it. A legacy 3-figure row (`[input, cached input, output]`) is still accepted, with the cache write rate taken equal to the input rate |
-| `STIGMERGY_LIBRARIAN_PROMPT_CACHE` | `5m` | Anthropic prompt caching on the ORDINARY run only: `off` \| `5m` \| `1h`, refused by name for anything else. Has no effect on a non-Anthropic model or on the meeting flow, which makes one call and would only pay the cache-write premium for a read that never happens |
-| `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | the ORDINARY run's iteration budget — how many model requests one capture may spend going round with its tools, handed to pydantic-ai as `UsageLimits(request_limit=…)`. Exceeding it is a refusal that names this variable, never a silent stop. The meeting flow does not read it: it makes one call and derives its own ceiling. A value below **2** is refused by name at startup (an iterating run needs at least two requests — one to call a tool, one to finish — so a `1` would fail every ordinary capture at full model cost); a malformed value still fails the boot with a Python error rather than a named one |
+| `STIGMERGY_LIBRARIAN_PROMPT_CACHE` | `5m` | Anthropic prompt caching on the iterating run: `off` \| `5m` \| `1h`, refused by name for anything else. It has no effect on a non-Anthropic model, and none on a shape that makes ONE call, which would only pay the cache-write premium for a read that never happens |
+| `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | the iterating run's budget — how many model requests one capture may spend going round with its tools, handed to pydantic-ai as `UsageLimits(request_limit=…)`. Exceeding it is a refusal that names this variable, never a silent stop. A value below **2** is refused by name at startup (an iterating run needs at least two requests — one to call a tool, one to finish — so a `1` would fail every capture at full model cost); a malformed value still fails the boot with a Python error rather than a named one |
 | `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` | 120 | **DEPRECATED — read by no shipped backend.** pydantic-ai accumulates tool calls itself and the request ceiling above bounds the loop that makes them, so a second hand-maintained ceiling would need a defect behind it. Still parsed, so a value an operator set is not silently dropped. Removal is a recorded follow-up |
 | `STIGMERGY_LIBRARIAN_GATHER_TOP_K` | 12 | how many existing pages the gatherer offers the model as overlap candidates — and how many a `search_pages` tool call returns. One pair of dials for the seed and the search |
 | `STIGMERGY_LIBRARIAN_GATHER_EXCERPT_LINES` | 20 | how many lines of each candidate either of them shows |
 | `STIGMERGY_LIBRARIAN_TIMEOUT_S` | 300 | per-item wall clock (enforced by us), around the WHOLE run rather than one request — a different bound from the iteration budget above, and not a substitute for it |
 | `STIGMERGY_LIBRARIAN_DEDUP_WINDOW_S` | 600 | the retry-collapse window |
-| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | 900 | how often the idle loop converges `views/` to the corpus (see [`views.md`](./views.md)). It runs on the IDLE branch only — a busy queue is drained first — and the first pass is at the first idle tick, so a restart converges without waiting an interval out. It is ALSO due on the first idle tick after this worker took a queued item to a terminal state, whatever the interval says — a filing, a meeting, a document or a removal has just moved the corpus a rollup is derived from. `0` turns the pass off entirely, leaving the post-meeting hook as the only road; a NEGATIVE value is refused by name, because it would rebuild a worktree and re-parse the corpus on every poll |
 | `STIGMERGY_LIBRARIAN_GARDEN_AT` | `05:07` | when the daily gardener pass runs, UTC `HH:MM`, or `off`. Unlike the intervals above this is a WALL time, and due-ness is answered from the pass's own last `job_runs` row — so a restart at 05:08 does not garden a second time, and a worker that was down all night does not garden at 23:00. An unreadable value falls back to the default with a warning rather than refusing to boot: it decides when maintenance runs, and refusing to start a worker over a scheduling typo would trade a filing outage for it |
 | `STIGMERGY_LIBRARIAN_RETENTION_AT` | `04:42` | when the daily retention purge runs; same shape, same `off`, same ledger-read due-ness |
 | `STIGMERGY_RETENTION_DAYS` | 30 | how long a terminal capture keeps its payload and hints — shared with `stigmergy-queue purge`'s own default, so the nightly pass and the hand-run command cannot disagree about the window ([capture.md](./capture.md)) |
-| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | 10 | how many entities ONE pass may regenerate or remove — each is a model call, and nothing else bounds them. Entities that cost nothing (`unchanged`) do not consume it. What a pass defers is recorded in `job_runs.stats.skip_reasons` and picked up by the next one, since the population is recomputed from state every time. Below `1` is refused by name: every pass would defer everything |
 | (`--poll-interval`) | 3.0 | `run` only; must be > 0 |
 | (`--visibility-timeout`) | 900 | derived: `2 × timeout_s + 120s` gates `+ 180s` headroom — nothing converts before the first agent pass, since every kind arrives as text |
 | (`--max-attempts`) | 3 | deliveries before an item is failed; must be ≥ 1 |
@@ -299,27 +294,27 @@ refused for the same reason, each with its own sentence.
 
 ### Two backends behind one port
 
-The agent step is a named, typed port — `librarian.filing_port.FilingAgent`, two keyword-only calls
-(`run` for an ordinary capture, `run_meeting` for a transcript), one `AgentRun` envelope back, one
-fault contract. Two implementations answer it, and `STIGMERGY_LIBRARIAN_BACKEND` picks one:
+The agent step is a named, typed port — `librarian.filing_port.FilingAgent`, ONE keyword-only call
+(`run`, for a capture of any kind), one `AgentRun` envelope back, one fault contract. Two
+implementations answer it, and `STIGMERGY_LIBRARIAN_BACKEND` picks one:
 
-| Backend | Flows | Ordinary shape | Model string | Cost |
-|---|---|---|---|---|
-| `pydantic` | every flow | **exploring, from a seed** — five tools over the checkout, the gathered context up front, the agent writes the page and its outcome file | provider-prefixed (`anthropic:claude-sonnet-5`) — pydantic-ai resolves it | computed from tokens through `librarian/pricing.py` |
-| `double` | every flow | **exploring** — writes the page through the same confinement rule, from a directive rather than a model | none — no model runs | `0.0`, and it says so |
+| Backend | Shape | Model string | Cost |
+|---|---|---|---|
+| `pydantic` | **exploring, from a seed** — five tools over the checkout, the gathered context up front, the agent writes its pages and its outcome file | provider-prefixed (`anthropic:claude-sonnet-5`) — pydantic-ai resolves it | computed from tokens through `librarian/pricing.py` |
+| `double` | **exploring** — writes its pages through the same confinement rule, from a directive rather than a model | none — no model runs | `0.0`, and it says so |
 
 **The value `sdk` is refused at startup by name** — the message names `pydantic` and the
 provider-prefixed model id as the two edits a stale deployment needs, plus the image rollback
 (`fly releases` → `fly deploy --image`). The queue is durable, so nothing is lost meanwhile.
 
-**A backend DECLARES its ordinary shape; nothing infers one** — two independent class attributes
+**A backend DECLARES its shape; nothing infers one** — two independent class attributes
 `processing._one_pass` reads.
-`FilingAgent.structured_ordinary` decides whether the account CARRIES the page's text
-(`Outcome.page`) or names a path it wrote (`Outcome.page_path`), and therefore whether code writes
-the page; `FilingAgent.wants_gathered` decides whether the gatherer runs before the call at all. An
-absent declaration is REFUSED, never defaulted.
+`FilingAgent.structured_ordinary` decides whether the account CARRIES each page's text
+(`Outcome.pages`) or names the paths it wrote (`Outcome.page_paths`), and therefore whether code
+writes the pages; `FilingAgent.wants_gathered` decides whether the gatherer runs before the call at
+all. An absent declaration is REFUSED, never defaulted.
 
-**The tools an ordinary run holds**, all five over the item's own checkout, all confined inside the
+**The tools a run holds**, all five over the item's own checkout, all confined inside the
 tool itself rather than by a permission hook:
 
 | tool | what it answers |
@@ -328,7 +323,7 @@ tool itself rather than by a permission hook:
 | `read_page(path)` | one page in full — and the per-type page templates (`ops/templates/<type>.md`), which are what a run writing its own file learns the container's shape from. Confined to those two roads: no symlinks, nothing outside the worktree, and nothing else in `ops/` |
 | `list_page_names()` | the wikilink vocabulary, bounded and reporting its own total |
 | `resolve_entities(names)` | the registry's answer per name — resolved (with aliases and the entity's page) or not, and an unresolved name carries `near`: the registered entities that spelling partly names, through `gather.match_registry`. Candidates to judge, never answers |
-| `write_page(path, content)` | the ONE write: a new `.md` page in a fast-lane folder, or the outcome file. An existing page is refused however its name is spelled |
+| `write_page(path, content)` | the only write there is: a NEW `.md` page in a fast-lane folder, or the outcome file. An existing page is refused however its name is spelled |
 
 A refused tool call returns a refusal and changes nothing. What the model wrote is judged by the
 same nine gates and the same cross-check as anything else in the diff. **No tool can write an
@@ -360,10 +355,10 @@ fixes it, and the date the table was last set by a human (`AS_OF`).
 Every `PRICES` row and every
 `STIGMERGY_LIBRARIAN_PRICING` entry is `[input, cached input, cache write, output]` dollars per
 million tokens, and `compute_cost_usd` bills a cache write at its own rate; a legacy three-figure
-override is normalized with the write rate equal to the input rate. The ORDINARY run caches its
+override is normalized with the write rate equal to the input rate. The ITERATING run caches its
 system prompt, tool schemas and growing message list by default
-(`STIGMERGY_LIBRARIAN_PROMPT_CACHE`, `off` the escape hatch). The meeting flow is untouched: one
-call per capture means a cache write with no read to offset its premium.
+(`STIGMERGY_LIBRARIAN_PROMPT_CACHE`, `off` the escape hatch). A one-call shape would gain nothing
+from it: a cache write with no read to offset its premium.
 
 ### The gatherer — what the agent is handed before it searches for itself
 
@@ -386,9 +381,9 @@ and it produces four things:
   is dropped, so no word list is maintained for a corpus that need not be English;
 - **the link neighbourhood**, one hop out from those candidates and the entity pages — the half a
   lexical score cannot find, since a capture may share no vocabulary with the page it belongs beside;
-- **the wikilink vocabulary** — every page name in the repo, read through `edits.page_names`, the
-  SAME function `edits.validate` later answers "does this link resolve" with, so the gatherer cannot
-  offer a name the edit validator would refuse. It is bounded and says so (`link_names_total`).
+- **the wikilink vocabulary** — every page name this capture may cite, derived from the same
+  scoped rows every other tool answers from, so the gatherer cannot offer a name the contract
+  linter would later report as a dead link. It is bounded and says so (`link_names_total`).
 
 **It is a SEED, not a boundary**: the
 starting point of a run that can search and read further, and the block says so in its own text.
@@ -445,34 +440,31 @@ under the system temp dir and deliberately **not** under `gitcmd.WORKTREE_PREFIX
 deletes anything whose name starts with that prefix. The path is operator-facing and never crosses
 to a submitter — it is not part of the report.
 
-## Three types the fast lane may create, seven it knows
+## Two types the fast lane may create, four it knows
 
 `page.PAGE_TYPES` is the one table every placement question reads, and it answers **two** questions:
 `known` is the management scope — what may be read, linked and cross-referenced — and `creatable`
-is the operational scope, what this lane may MINT. Only the first three rows carry a folder:
+is the operational scope, what this lane may MINT. Only the first two rows carry a folder:
 
 | Type | Folder | Fast lane may create |
 |---|---|---|
 | `note` | `wiki/notes` | yes |
-| `decision` | `wiki/decisions` | yes |
 | `concept` | `wiki/concepts` | yes |
 | `entity` | — | no — never DRAFTED. `librarian.identity` creates one from a declared identity (below), and nothing else creates one at all |
 | `source` | — | no — written by code from captured material, never drafted |
-| `meeting` | — | no — arrives with the meeting distiller |
-| `view` | — | no — regenerated from an entity's members, never captured |
 
 A refused type is a **veto with its own reason**, never quietly downgraded to `note`; surviving the
 corrective retry it lands `failed`, naming the type and why the fast lane cannot mint one.
 `gate_zone` derives the type from the FOLDER the page actually landed in (`_type_for_path`) and
 checks it against the run's own `ctx.creatable_types` over the real diff, so the agent's judgment is
 an *input* to the decision and never the decision. It asks the CONTEXT rather than the global
-`page.ensure_creatable` because the creatable set is per-flow: the meeting flow and the fast lane's
-source attachment each widen it for the duration of one item, never for the process.
+`page.ensure_creatable` because the creatable set is per-item: the source archive widens it by
+exactly its own folder for the duration of one item, never for the process.
 
-**One row per WRITER.** Each non-creatable row has exactly one stamper: `entity` the identity
-writer (`librarian.identity` — an existing entity page is later EDITED by a repair, never created
-by one), `meeting` the distiller, `source` the provenance writer
-(`processing._build_source_parts`), `view` the regenerator (`stigmergy.views`, reached from this worker's idle branch and from the post-meeting hook). A person, team,
+**One row per WRITER.** Each non-creatable row has exactly one stamper:
+`entity` the identity writer (`librarian.identity` — an existing entity page is later EDITED by a
+repair, never created by one), `source` the provenance writer
+(`processing._build_source_parts`). A person, team,
 product, customer or project is an ENTITY, and an entity's own kind lives in the registry's `type`
 field (`person`, `organization`, `product`, `tool`, `repository`, `place`, `project` —
 `entities.generator.ENTITY_TYPES`, written on the page as `entity_type`). `project` is an entity
@@ -490,7 +482,7 @@ other required field must already be in the page's own frontmatter block, exactl
 `ops/templates/<type>.md` declares. It travels beside the librarian brief's own "Writing the page"
 guidance, never instead of it.
 
-## The outcome contract, and the shape of a declared edit
+## The outcome contract, and the shape of a declared rewrite
 
 The agent's only channel back is one JSON file it writes in the worktree, consumed and discarded
 before the diff is taken (so it can never reach a commit or trip the zone gate):
@@ -504,9 +496,10 @@ before the diff is taken (so it can never reach a commit or trip the zone gate):
   "anchoring": {"kind": "entity", "entities": ["Acme Corp"], "reason": ""},
   "links_created": ["Acme Corp"],
   "overlaps": [{"path": "wiki/notes/Renewal pipeline.md", "note": "covers the same ground"}],
-  "edits": [
-    {"path": "wiki/notes/Renewal pipeline.md", "kind": "overlap",
-     "link": "Acme renewal moved", "note": "covers the same ground"}
+  "rewrites": [
+    {"path": "wiki/notes/Renewal pipeline.md",
+     "body": "# Renewal pipeline\n\n…the whole page, brought up to date…\n",
+     "why": "the Acme renewal moved to Q3 and this page still said Q2"}
   ],
   "findings": [{"category": "declare-canonical"}],
   "new_entities": [{"name": "Acme Corp", "entity_type": "organization", "role": "a logistics
@@ -523,29 +516,98 @@ schemas spell it as a `Literal` and both parsers refuse anything outside it). Th
 no second outcome: an account that cannot resolve a name declares the identity in `new_entities` and
 anchors to it — see [Writing an identity](#writing-an-identity-what-a-filing-does-to-the-registry).
 
-**`edits` is the one way an existing page changes.** The agent *names* the edit; `edits.apply_declared`
-performs it. Three kinds, and each is an append:
+### The pages a capture DECLARES
 
-| `kind` | What code writes on the OTHER page |
+**A capture writes as many pages as its material establishes, and the account names every one of
+them.** That declaration is the whole bound: there is no count in the code that says "one", and
+`_cross_check_outcome` refuses a diff carrying anything the account did not declare or missing
+anything it did. The plural fields are the declaration, and the singular spellings above are the
+one-page shorthand the boundary folds into them (`agent.parse_outcome`):
+
+| Field | Declared by | Carries |
+|---|---|---|
+| `page_paths` (`page_path`) | a run that WROTE its own pages — both shipped backends | the repo-relative path of each page it created |
+| `pages` (`page`) | a run whose account carries the text — `structured_ordinary`, no shipped backend today | per page: `title`, `page_type`, `body`, and its OWN `anchoring` and `links`. No path, ever: the folder comes from the type and the filename from the title, so an account cannot name a folder at all |
+
+One ceiling, and two rules that follow from the list being ordered:
+
+- `agent.MAX_PAGES_PER_CAPTURE` (12) is the declaration's ceiling, refused correctably — a capture
+  that establishes fifty pages is fifty captures' worth of material.
+- **The FIRST declared page is the capture's page** wherever a surface needs one: `result_ref`, the
+  commit subject, the dedup pointer. First is the order the account chose, never alphabetical —
+  sorting would let a filename decide which page a person is shown.
+- A page's own `anchoring` wins over the capture's top-level one, and an empty one inherits it
+  (`processing._declared_anchorings`). A capture that writes three pages about three things anchors
+  each to its own entity; one anchor for the set would file two of them against the wrong entity
+  silently, and `gate_anchoring` would have nothing to catch, because the declaration it reads
+  would be the same for all three.
+
+`report.filed` names every path in `pages_filed`, and says so in a sentence when there is more than
+one: a report naming only the first would hide the rest from the one person who could tell they are
+wrong.
+
+`_cross_check_outcome` is where the declaration meets the diff, and **the diff decides**. Four
+`outcome`-gate findings, all correctable:
+
+| Finding | What it catches |
 |---|---|
-| `backlink` | adds the new page to that page's `related:` list |
-| `overlap` | the `related:` link plus an overlap callout carrying `note` |
-| `contradiction` | the `related:` link plus a contradiction callout carrying `note` |
+| `no-page-created` | the account reports a filing and the diff carries no new fast-lane page — an edit to an existing page is not a filing |
+| `undeclared-page` | a page in the diff no entry in the account names. A page nobody declared is a page reported on no surface a human reads |
+| `declared-page-missing` | a page the account names and the diff does not carry — an account describing a filing that did not happen |
+| `page-path-mismatch` | the account named a filed page the diff never created |
 
-`path` must be an existing page inside the three fast-lane folders; anything else is a finding, and the
-edit is not attempted. Nothing here is exempt from the gates: code's edits land in the same diff and
-`gate_body_rewrite` judges them exactly as it judged the agent's — proven against the BASE COMMIT's
-own blob, never against a rendered diff, and a `related:` change is admitted only when its link set
-strictly GROWS. (That proof has exactly one caller-declared exception, `GateContext
-.body_rewrite_allowed`, and no flow in this package declares it: it belongs to the governed repair
-loop's `entity-body` kind — see [`repair.md`](./repair.md). For every diff the librarian produces
-the gate is byte-identical to what it has always been.) `findings[].category` is filtered to a fixed set (`declare-canonical`,
-`write-outside-lane`, `reveal-credentials`); a category the agent invented is dropped rather than
-echoed, which is what keeps "the report never quotes the payload back" a property.
+The verbatim `sources/` archive and the entity pages an identity declaration produced are excluded
+from that set on both sides: code wrote them, they are named on surfaces of their own, and counting
+them would veto every capture by construction.
 
-What `edits.apply_declared` changed reaches the submitter as `pages_edited` — every page OTHER than
-the filed one that this commit touched. It is distinct from `overlaps_flagged`, which is the agent's
-JUDGMENT about what overlaps.
+### Per-page anchoring, and the stamp that follows it
+
+One anchoring declaration for a capture that writes several pages cannot say what is true: a
+transcript about two customers yields two conclusions belonging to two different entities. So the
+anchor is asked **per page**, and the mechanism is one field the gates are TOLD about:
+
+- `processing._stamp` builds `{path: the anchoring that page declared}` (`_declared_anchorings`) and
+  puts it on `gates.GateContext.page_declared` as `{path: {"page_type": …, "anchoring": …}}`, one
+  entry per new page.
+- `gate_anchoring` sees a populated `ctx.page_declared` and switches to `gates._per_page_anchoring`,
+  which asks the SAME question it always asked — `entity` (with `entities`, each resolving through
+  the registry the commit will publish) or `company` (with a written, non-empty reason) — **once per
+  page that declares one**. A page whose entry carries no `"anchoring"` key is not asked at all,
+  which is how an archived source stays out of it: provenance has nothing to anchor.
+- `_stamp` writes each page's `entity:` from that page's own anchoring, through the same
+  `gates.resolve_entity_ids` call and with the same defence in depth the single-page case has —
+  stamp `[]` rather than a partial resolution when the anchoring gate is about to veto this pass
+  anyway.
+
+Per-page mode turns on whenever there is more than one declared page, whenever a page declared an
+anchoring of its own, or whenever there is an archive to cite — which is always. A page that
+declared none inherits the capture's top-level `anchoring`, so a one-page filing is the same code
+answering the same question once.
+
+**`rewrites` is the one way an existing page changes.** The agent *names* the page, its whole new
+body and WHY; code writes it. There is no other shape — an account that wants to add a link to
+somebody else's page has to bring that page up to date and say what it got wrong.
+
+> **RETIRED: the `edits` declaration.** Three additive kinds (`backlink`, `overlap`,
+> `contradiction`) used to let an account append a reciprocal `related:` entry and a callout to a
+> page that already existed, performed by a module of its own and admitted by `gate_body_rewrite`
+> when the
+> link set strictly grew. It produced pages that grew footnotes instead of pages that got better,
+> and `rewrites` is the same discipline one step further. A modified page nobody DECLARED is now
+> refused outright, with no shape admitted at all.
+
+`path` must be an existing page inside the fast lane's folders; anything else is a finding, and
+nothing is written. Nothing here is exempt from the gates: code's rewrite lands in the same diff,
+and `gate_body_rewrite` judges it against the BASE COMMIT's own blob — never against a rendered
+diff — by the two structural bounds a rewrite still answers to (below). `findings[].category` is
+filtered to a fixed set (`declare-canonical`, `write-outside-lane`, `reveal-credentials`); a
+category the agent invented is dropped rather than echoed, which is what keeps "the report never
+quotes the payload back" a property.
+
+What code rewrote reaches the submitter as `pages_rewritten` — every page OTHER than the filed one
+that this commit brought up to date, each with the reason the account gave and the name of whoever
+filed it before. It is distinct from `overlaps_flagged`, which is the agent's JUDGMENT about what
+overlaps and touches nothing.
 
 Reports also carry `cost_usd` — the item's WHOLE model spend: its agent passes, a pass that died
 mid-run included (a timeout is the honest `0.0`). A backend priced by its own provider passes its
@@ -587,10 +649,11 @@ every field is bounded at the boundary, and the bound depends on the KIND of fie
 
 | kind | fields | bound | over it |
 |---|---|---|---|
-| identifier (`MAX_IDENTIFIER_LEN`) | `page_path`, `page_type`, `title`, an edit's `path`/`link`, an overlap's `path`, a finding's `category`, a declared entity's `name`/`entity_type`/`aliases[]`, a declared alias's `entity`/`alias`, an update's `entity` and each of its `facts[]`/`connections[]` lines | 400 characters | **refused** — it names something the worker resolves, so a longer one is a defect |
+| identifier (`MAX_IDENTIFIER_LEN`) | `page_path`/`page_paths[]`, `page_type`, `title`, each declared page's own `title`/`page_type`/`links[]`, an edit's `path`/`link`, an overlap's `path`, a finding's `category`, a declared entity's `name`/`entity_type`/`aliases[]`, a declared alias's `entity`/`alias`, an update's `entity` and each of its `facts[]`/`connections[]` lines | 400 characters | **refused** — it names something the worker resolves, so a longer one is a defect |
 | prose (`MAX_PROSE_LEN`) | `summary`, `anchoring.reason`, an edit's or an overlap's `note`, a declared entity's `role`/`summary`/`facts[]`/`connections[]` | 2000 characters | **truncated** — it is a sentence for a person, and `report._clean` clamps it before anyone reads it (200 characters; 400 for `summary` — `report.RATIONALE_WIDTH`, whose content is the whole reason it is carried) |
-| page body (`MAX_PAGE_BODY_LEN`) | the ordinary flow's own `page.body`, and the MEETING flow's drafted bodies — a decision's `body`, the meeting page's `meeting_notes` | 20000 characters | **refused** on the ordinary page body (a clipped body ends mid-sentence in the repo forever) and **truncated** on the meeting flow's — a declared asymmetry, to change deliberately or not at all |
-| list (`MAX_LIST_LEN`) | every list field — `links_created`, `overlaps`, `edits`, `findings`, `anchoring.entities`, and the meeting outcome's `decisions`/`attendees`/`action_items` | 200 entries | **refused, correctably** — the list is emptied and a shape finding is raised |
+| page body (`MAX_PAGE_BODY_LEN`) | each declared page's own `body` | 20000 characters | **refused, correctably** — a clipped body ends mid-sentence, passes every gate because it is still well-formed, and lands in the repo forever |
+| list (`MAX_LIST_LEN`) | every list field — `pages`, `page_paths`, `links_created`, `overlaps`, `rewrites`, `findings`, `anchoring.entities`, a page's own `links` | 200 entries | **refused, correctably** — the list is emptied and a shape finding is raised |
+| page count (`MAX_PAGES_PER_CAPTURE`) | `pages` | 12 entries | **refused, correctably** — the list is emptied and a shape finding says to file what this material establishes |
 | identity count | `new_entities` (`MAX_NEW_ENTITIES`, 10), `new_aliases` (`MAX_NEW_ALIASES`, 20), `entity_updates` (`MAX_ENTITY_UPDATES`, 10) | 10 / 20 / 10 entries | **clipped with a shape finding** — a capture that introduces ten new things is several captures |
 | update lines (`MAX_UPDATE_LINES`) | an `entity_updates` entry's `facts` and `connections` | 20 each, per entity per filing | **clipped silently** — the ceiling bounds how much one filing may bolt onto a page that already exists, and the lines beyond it are the note's to carry |
 
@@ -602,11 +665,13 @@ Prose TRUNCATES rather than refuses; `summary` gets the widest clamp because it 
 Refusals from the boundary split by whether telling the agent could plausibly fix it:
 
 - **shape** — an unrecognized `decision`, an unrecognized edit `kind`, a field of the wrong type, a
-  filing with no `title`, a declared entity missing `name`/`entity_type`/`summary`, a declared alias
+  filing with no `title` (at the top level or on its first page), more pages than
+  `MAX_PAGES_PER_CAPTURE`, a declared page with no body on a backend where code is the author, a
+  declared entity missing `name`/`entity_type`/`summary`, a declared alias
   missing `entity` or `alias`, an `entity_updates` entry naming no entity, an identifier over its
   bound. These come back as `gates.Finding`s on
   `errors.OutcomeShapeError` and go into the **one corrective retry** exactly as a gate veto does;
-  the retry resets the worktree first, so the agent writes the page again from scratch. Every
+  the retry resets the worktree first, so the agent writes its pages again from scratch. Every
   problem in one outcome is reported in one pass.
 - **structural** — no outcome file at all, an unreadable one, one over the 256 KB ceiling, invalid
   JSON, nesting past 8 levels. These stay `AgentError`: the byte and depth ceilings are resource
@@ -631,19 +696,19 @@ refusal one agent run later. Those vetoes are marked `repairable=False` in `gate
 refuses after **one** agent pass; the report's `agent_attempts` then reads `1`.
 
 Ten finding codes, across four gates, and every one of them judges part of the diff the agent
-cannot write — it may create new pages in the three fast-lane folders and nothing else:
+cannot write — it may create new pages in the two fast-lane folders and nothing else:
 
 | veto | why there is no repair |
 |---|---|
 | `identity/unborn-entity-page` | an entity page appeared that this run did not create. The agent holds no tool that can write into `wiki/entities/`, so there is nothing to tell it to undo |
-| `identity/unplanned-entity-edit` | the same for a MODIFIED entity page: an existing identity changes only by the spelling or the facts `librarian.identity` appended and proved byte for byte, or by a repair the worker applied through these same gates |
+| `identity/unplanned-entity-edit` | the same for a MODIFIED entity page: an existing identity changes only by bytes the worker computed and proved byte for byte — the spelling or the facts `librarian.identity` appended, or a link a removal's sweep scrubbed |
 | `identity/not-an-entity-page` | a page code declared as an entity does not declare `type: entity` — code disagreeing with itself |
 | `identity/not-confirmed-by-its-submitter` | a created entity page carries something other than the capture's own submitter in `approved_by`. The capture is the approval, so exactly one name may be on it — an empty field would be an identity nobody stands behind |
-| `zone/body-rewrite` | judges a MODIFIED page, which only `edits.apply_declared` produces. "You rewrote existing content in X" names work the agent did not do; the reachable cause is a target page whose `related:` block cannot be proved to have grown |
-| `zone/unreadable-edit` | same gate, same subject: the version an edit started from could not be decoded, so nothing about the draft is in question |
-| `zone/unparseable` | same gate again: the frontmatter an EDIT would commit is not valid YAML |
-| `zone/meeting-edit-refused` | fires only when `ctx.edits_allowed` is `False` — a caller-level fact about the flow, not a per-diff judgment. **No flow declares it today**: the meeting flow did until it was given the same declared-edit mechanism the fast lane has. The code keeps that flow's name because deployed refused diffs already carry it |
-| `secrets/unscanned-diff` | the scanner could not run over an edit to a page the agent cannot write, for a reason (git's rendering of a diff) it has no access to |
+| `zone/body-rewrite` | judges a MODIFIED page, which only CODE produces. "You modified X without declaring it" names work the agent did not do; the reachable cause is a page changed by something this run never told the gates about |
+| `zone/unreadable-edit` | same gate, same subject: the version a change started from could not be decoded, so nothing about the draft is in question |
+| `zone/unparseable` | same gate again: the frontmatter a modified page would commit is not valid YAML |
+| `zone/modification-refused` | fires only when `ctx.modifications_allowed` is `False` — a caller-level fact about the flow, not a per-diff judgment. **No caller declares it today.** The field stays because granting an edit mechanism is a CALLER's declaration rather than a fact about which flows exist, and the finding keeps the name of the flow that motivated it, because refused diffs preserved on deployed stacks already carry that code in their header. `tests/librarian/test_gates_unit.py` builds the context explicitly, which is where the red proof lives now that no production caller reaches it |
+| `secrets/unscanned-diff` | the scanner could not run over a change to a page the agent cannot write, for a reason (git's rendering of a diff) it has no access to |
 | `pii/unscanned-diff` | the same, for the PII patterns |
 
 **The reason is evidence, not reachability**: `processing.preserve_refused_diff` runs only on this
@@ -687,9 +752,9 @@ checked by `worker._check_skill_at`), and every other input the worker judges wi
 **Two inputs, and no third.** `ops/acl.json` was one of them and is gone with the path resolver:
 a capture's audience is decided at the
 DOOR and carried on its own queue row, so no repo file decides a label and there is nothing here
-to pin to a commit. The meeting distiller's brief takes the OTHER road, the skill's:
-it is read out of the worktree at `base.sha` by `agent.read_meeting_brief`, deliberately not
-through a second `base_inputs` reader — see [meeting-distiller.md](./meeting-distiller.md).
+to pin to a commit. **There is one brief, `agent.SKILL_RELPATH`, and every capture is judged under
+it** — a second injected text would be a design decision, not a patch, and the pair "which brief did
+this run read" would then have to be answered per kind.
 
 The linter is materialized **per item** rather than once per run, because the base commit is
 resolved per item: the script that judges a diff is always the one in the commit the diff was built
@@ -719,7 +784,7 @@ mutual overlap callout. These two are deterministic and run before the agent, ch
   filed, at that page.
 - **already filed**: the hash matches a page already in the repo → `rejected`, pointing at it.
 
-## The removal flow — the third kind, and the only one with no agent in it
+## The removal lane — the one row that leaves the pipe, and the only one with no agent in it
 
 A `delete` row is not material. Its "material" is the REASON a person gave for removing pages, its
 `hints.delete_paths` are the pages themselves (one per line, parsed once by
@@ -780,49 +845,157 @@ the one write in this system a human decided. It writes no `repairs` row: the ca
 report ARE the record, which is why `brain_submissions` and the console's Captures page are where a
 removal is read back.
 
-## The source attachment: a parameter, never a third flow
+## The source archive: every capture, always
 
-Material with independent documentary existence — a Slack thread, the text of a document —
-files a verbatim `sources/` page beside the synthesis; conversational material leaves none. The
-SHAPE of that is a **parameter on the fast lane**, not a flow of its own: the flows are the three
-above — ordinary, meeting, removal — and this is a switch on the first of them.
+**Every capture files its material verbatim to `sources/`, in the same commit as the pages it
+establishes.** That is the invariant the whole write path rests on: a page in `wiki/` is a
+synthesis, and a synthesis nobody can walk back to what actually arrived is a claim with no
+evidence behind it. It used to be a parameter — ON for a document and for the Slack gesture, OFF
+for everything else — which left a plain `raw` capture filing a page that cited nothing.
 
-`processing._source_attachment` is the on/off switch, decided per item; it returns `None` — the OFF
-position, where every `GateContext` the fast lane builds is byte-identical to the unattached one —
-for every ordinary capture. **There are two ON positions**, one keyed on the row's own `kind` and
-one on a fact the Slack transport asserted server-side:
+`processing._source_attachment` no longer answers *whether*; it answers **where**, and it never
+returns `None`. The door decides first, the kind second:
 
-| ON when | Folder | `source_kind` | tags | `url:` |
+| Chosen by | Folder | `source_kind` | tags | `url:` |
 |---|---|---|---|---|
-| the `source_client` hint is Slack's (`SLACK_SOURCE_PREFIX`) | `sources/slack/` | `slack` | `source`, `slack-thread` | the thread permalink |
-| the ROW'S OWN `kind` is `document` (`DOCUMENT_SOURCE_PREFIX`) | `sources/documents/` | `upload` | `source`, `document` | the `source_url` hint, `""` when the submitter sent none |
+| the `source_client` hint is Slack's | `sources/slack/` | `slack` | `source`, `slack-thread` | the thread permalink |
+| the row's `kind` is `document` | `sources/documents/` | `upload` | `source`, `document` | the `source_url` hint, `""` when the submitter sent none |
+| the row's `kind` is `meeting` | `sources/meetings/` | `meeting` | `source`, `meeting` | the `source_url` hint, `""` when none |
+| anything else | `sources/notes/` | `upload` | `source`, `capture` | none |
 
-Keying the Slack position on a hint is sound because
+Keying the Slack row on a hint is sound because
 `capture.schema.reject_source_provenance_hints` refuses `source_client`/`source_permalink` at the
-client seam for every door but Slack's own. The document position keys on the row's own `kind`
-instead, and its `url:` is the submitter's claim rather than a fact the platform checked: a client
-holds the text and says where it came from, which has the standing the material itself has.
+client seam for every door but Slack's own. A document's `url:` is the submitter's claim rather
+than a fact the platform checked: a client holds the text and says where it came from, which has
+the standing the material itself has. `source_kind` stays the knowledge repo's own contract
+vocabulary — "the client sent us this text" is what a `raw` capture and a `document` both are, and
+the folder is what says they arrived differently.
 
-When it is ON, the pieces are the meeting flow's: `_build_source_parts` writes the verbatim part(s),
-`page.stamp_source_fields` stamps the provenance group (`content_hash`, `extracted_at`, `tier: 1`,
-and the part's own `id:`) instead of the fast-lane group, and `GateContext.provenance_pages` TELLS
-`gate_frontmatter` which pages legitimately carry it. The lane widens by exactly the attachment's
-own folder for that one item (`write_prefixes`, `creatable_types`, `extra_folder_types` on the ctx —
-never on the module constant). The synthesis cites the source through `sources:`
+The pieces: `_build_source_parts` writes the verbatim part(s), `page.stamp_source_fields` stamps
+the provenance group (`content_hash`, `extracted_at`, `tier: 1`, and the part's own `id:`) instead
+of the fast-lane group, and `GateContext.provenance_pages` TELLS `gate_frontmatter` which pages
+legitimately carry it. The lane widens by exactly the archive's own folder for that one item
+(`write_prefixes`, `creatable_types`, `extra_folder_types` on the ctx — never on the module
+constant). Every page the capture writes cites the archive through `sources:`
 (`page.add_source_citation`, applied by `_stamp`), and `report.filed` names the parts in
 `source_pages`.
 
-**With the attachment ON the agent is TOLD so**, in a server-composed system note beside the
-corrective brief: without it the brief's genre rules make a whole document read as `type: source` —
-a type the fast lane may not create — and the capture is refused over a source half code had already
-written. The note says the source half is handled and the agent's whole job is the synthesis. It is
-instruction-side and never derived from the material's shape.
+**The agent is TOLD the archive is handled**, in a server-composed system note (`flow_note`, built
+in `processing` and never inside a backend): without it the brief's genre rules make a whole
+document read as `type: source` — a type the fast lane may not create — and the capture is refused
+over a source half code had already written. The note says the source half is done, that the
+agent's whole job is the SYNTHESIS — the page, or pages, one per thing the material establishes —
+and that code will make each of them cite the archive. It is instruction-side and never derived
+from the material's shape.
 
-**`_cross_check_outcome`'s "exactly one page" means one AGENT page.** The attachment's code-written
-parts are excluded from that count — they are named on a surface a human reads and cited from the
-synthesis, so counting them would veto every attached capture by construction. A computed source
-path that already exists is refused (`outcome/existing-page-collision`) rather than suffixed: the
-likely cause is that this thread or document was captured before.
+### The provenance stamp, and why the fast-lane stamp does not write it
+
+A `sources/` page is validated under a different frontmatter group from every `wiki/` page: the
+machine/provenance group. `page.stamp_server_fields` — the function every OTHER new page in this
+system is stamped with — does not write it, on purpose. A `wiki/` page is never itself a piece of
+machine-extracted evidence, so giving it a `content_hash`/`extracted_at` would claim a provenance
+chain that page does not have. An archived source IS exactly that evidence, so it gets a sibling
+function, `page.stamp_source_fields`, which writes:
+
+- `content_hash` — `sha256:<hex>` of the same archived bytes `capture.schema.material_digest`
+  hashed at submit time, recomputed here from the bytes this run verified against, so the page's own
+  claim and the evidence-store key can never disagree;
+- `extracted_at` — this run's timestamp;
+- `tier: "1"`, always — captured material is a direct recording, and the tier is about provenance,
+  not about how noisy a transcription is;
+- the part's own `id:` (see the split below).
+
+`status`/`as_of`/`submitted_by`/`acl` are stamped here too, for the same accountability reason every
+`wiki/` page carries them — the archive is labelled at the audience its capture's door decided, like
+everything else that capture writes. `entity` is deliberately absent from the signature: an archived
+source is provenance for the whole capture, not itself a knowledge destination.
+
+`gates.gate_frontmatter`'s `FORBIDDEN_PAGE_KEYS` (`owner`, `id`, `content_hash`, `tier`,
+`extracted_at`) still refuses every one of these on every OTHER page — a `wiki/` page declaring
+`content_hash:` is forged exactly as one declaring `owner:` always was. The one exemption is
+`ctx.provenance_pages`, a `frozenset` of paths the gate is TOLD carry legitimate provenance fields,
+never inferred from the diff's own shape: a gate is told a fact, it never interprets one. A capture
+that also forged its own `content_hash:` line beside the server's stamped one is caught by the same
+duplicate-key backstop `owner`/`entity` already had (`page.duplicate_top_level_keys`, checked
+against `PROVENANCE_PAGE_KEYS` too).
+
+### Verbatim, and split when it is long
+
+`processing._build_source_parts` emits the archived material byte for byte — **code writes it, never
+the agent.** Having a model copy a 900-line transcript back out was the largest cost and latency item
+the first real walk found, and a correctness risk besides: a model copying material can drop,
+reorder or normalise a line, and the "ground truth" page would then be a lossy copy of the ground
+truth.
+
+A body over `kernel.page.MAX_BODY_LINES` is split into N cross-linked parts
+(`Continues in [[…]]` / `Continued from [[…]]`) under the page-as-chunk contract in
+[brain-page-contract.md](./brain-page-contract.md), with one adaptation: a wikilink target must be a
+filename, so the FILENAME stem carries the `-p<n>` suffix. The part identity is **declared, not
+inferred from that filename** — the builder computes the id itself (`<stem>` for part 1,
+`<stem>#p<n>` after) and `stamp_source_fields` writes it as `id:`, quoted, because an unquoted `#`
+starts a YAML comment. `index.corpus` prefers the declared `id:` over the file stem, so the chain
+collapse keys on a fact; the older `-p<n>` filename inference survives only as belt-and-braces for
+pages filed before the field existed. Every part is then stamped exactly as the one-part case is, so
+whatever the builder drafted for `content_hash`/`tier`/`status`/`as_of`/`submitted_by` is overwritten
+and never trusted, and a drafted `id` is stripped the same way (`page.SERVER_OWNED_KEYS` names it).
+
+This is THE source-page writer in the codebase: `source_kind`/`tags`/`url` are parameters with no
+caller-favouring defaults, so a second archive folder is a call site rather than a second builder.
+
+**The archive is excluded from the cross-check's declaration.** `_cross_check_outcome` holds the
+diff to the pages the ACCOUNT declared; the archive is code's own write, named on a surface a human
+reads and cited from every page beside it, so counting it would veto every capture by construction.
+A computed source path that already exists is refused
+(`outcome/existing-page-collision`) rather than suffixed: the likely cause is that this thread or
+document was captured before.
+
+**The archive is ground truth, not truth.** A misheard figure in a speech-to-text transcript stays
+wrong-with-provenance; nothing checks captured material against the world, and nothing checks a
+figure at write time at all — figures are verified at ANSWER time, against what the tools returned
+([answer.md](./answer.md)). What the archive guarantees is that the permanent, unedited bytes a
+reader can open are the ones that arrived, and the mitigation for everything above that line is the
+same one every figure in this system leans on: the submitter reads the report and the filed pages.
+
+## Bringing a page up to date, and the notice that makes it acceptable
+
+**A capture may replace the body of an existing `wiki/` page.** The agent declares it in
+`Outcome.rewrites` — a path, the page's whole new body, and a `why` — and `_apply_declared_rewrites`
+performs it, exactly the discipline the rest of this flow uses: the model declares, code writes,
+the gates judge the diff.
+
+This is the pattern's central claim, and the thing an append-only system cannot do. A capture
+carrying a superseding figure used to leave the page asserting both numbers with a callout between
+them; the corpus grew footnotes instead of getting better.
+
+**What protects that page is not a proof, and the trade is stated rather than defended.** There is
+no separate approval to compare bytes against — the bytes are the ones the agent just wrote, so
+comparing them to what the agent wrote is vacuous. A rewriting capture is covered by the other
+gates, by the audience check, and by attribution plus the diff plus `git revert` in a repository
+the team owns. By nothing structural. It is the same trade this system made when the capture
+became the approval: approval-before became visibility-after.
+
+**Two structural bounds are cheap, and they are what `gate_body_rewrite` still owns** for a path in
+`ctx.rewrites_allowed`:
+
+| Bound | Why it is not negotiable |
+|---|---|
+| the **H1 survives** | a page whose title moved is a different page wearing the old one's filename and every inbound link that resolved to it |
+| the **frontmatter does not move** except `updated:` | `acl:` is who may read the page, `entity:` is what it is about and `submitted_by:` is whose it is — the page's, not the reviser's. A rewrite that could move `acl:` would let one capture change who may read somebody else's page |
+
+Neither is a judgment: `page.with_body_replaced` is incapable of doing anything else, and the gate
+proves it against the base blob out of the object database rather than a rendered diff.
+
+`sources/**` is refused outright — it is the verbatim archive, and `gate_zone` allows nothing there
+but this run's own archive, a person's removal, or a byte-proven scrub. An entity page is refused
+too: it belongs to the identity writer.
+
+**The notification is not optional, and it is why rewriting is open at all.** `report.filed`
+carries `pages_rewritten` — one entry per page, naming the path, the `why`, and the
+`submitted_by` read off the page *before* the rewrite landed (after it, every notice would be
+addressed to whoever did the rewriting). The librarian holds no Slack credential, so it records;
+`slack.poller.notify_rewrites_once` drains that record and DMs each owner what changed and why.
+Nothing is asked of them — the undo is `git revert` in their own repository — and telling them is
+not the same as asking them.
 
 ## Writing an identity: what a filing does to the registry
 
@@ -846,7 +1019,7 @@ in a ledger.
 approver)` returns either a `Births` record — the registry the commit will PUBLISH, the created and
 edited paths, the byte proofs, and the lists the report needs — or a list of `Finding`s having
 written **nothing**. `approver` is the capture's own submitter, resolved by the server and never
-anything the account said. It is all-or-nothing like `edits.apply_declared`: every declaration is
+anything the account said. It is all-or-nothing: every declaration is
 judged, so one corrective brief names all of the problems at once.
 
 **The agent judges; code writes and vetoes.** Nothing the account says becomes a file without
@@ -881,7 +1054,7 @@ There is no fourth, and no memory of a refusal. Nothing declines an identity, so
 remembered as declined: the same name introduced by a second capture collides with the first through
 the birth fold and anchors there, and a genuine second identity for one thing is found afterwards by
 the gardener's duplicate-identity pass and merged by the repair that follows
-([gardener-digest.md](./gardener-digest.md), [repair.md](./repair.md)).
+([gardener.md](./gardener.md), [repair.md](./repair.md)).
 
 An alias declaration gets the same treatment (`unknown-entity`, `alias-of-new-entity`,
 `alias-collides`, `unnamed-in-material`). Two conditions refuse the whole set unrepairably rather
@@ -921,7 +1094,7 @@ because a registration pins a name and carries no authority. This flow is where 
   page to say `approved_by: <exactly the submitter>` (`not-confirmed-by-its-submitter`),
   `repairable=False`: code disagreeing with itself.
 - **Nothing is written down afterwards.** No ledger row, no notification, no queue: the commit is
-  the record, and the digest's "entities born" count is read off the filings themselves.
+  the record.
 
 **The submitter is told, in the filed report.** `report.births_clause` appends one sentence per
 kind: *"It introduces 1 new entity: Acme Corp (`acme-corp`) — the page is written from the material
@@ -1006,7 +1179,7 @@ refusal that somehow does is withheld rather than echoed.
 - `report.py` — every sentence a person reads about a submission. The CLI never composes its own
   wording; `brain_submissions` and the terminal render the same fact set. `report.births_clause`
   is the ONE sentence saying what a filing did to the identity layer — introduced, spelled or added
-  to — and both filed builders (`filed`, `filed_meeting`) append it.
+  to — and `report.filed` appends it.
 - `identity.write_births` — the ONE way an entity page, a new spelling or an appended fact
   reaches a commit from this package. Never render an entity page here: `entities.birth.render_page` over the
   knowledge repo's own template is the shape, and `entities.generator.regenerate` is the registry.
@@ -1016,7 +1189,7 @@ refusal that somehow does is withheld rather than echoed.
 
 - **Do not add a gate that interprets.** If a check needs judgment it belongs in the skill — the
   versioned, diffable lever for quality — not in more gates.
-- **Do not let the agent write outside the three creatable folders**, and do not widen
+- **Do not let the agent write outside the two creatable folders**, and do not widen
   `confined_write` to a prefix test. Inside the worktree are `.git/` (where a `config` carrying
   `diff.external` is executed by the very next `git diff` this process runs, as the worker, with the
   App key in its environment) and every dotfile.
@@ -1054,6 +1227,8 @@ refusal that somehow does is withheld rather than echoed.
 | Suite | Covers |
 |---|---|
 | `tests/librarian/test_processing_pg.py` | the whole filing path over real Postgres + real git |
+| `tests/librarian/test_source_attachment_pg.py` | the verbatim archive: which folder each door and kind lands in, the provenance stamp, the split |
+| `tests/librarian/test_gates_unit.py` | the flow-scoped `GateContext` fields, per-page anchoring, the provenance-group exemption |
 | `tests/librarian/test_delete_processing_pg.py` | the removal flow end to end over real Postgres + real git: the plan, the written sweep, the gates, the whole-tree dead-link check, the `Approved-by:` trailer, and each refusal beside its benign twin |
 | `tests/librarian/test_identity_unit.py` | `write_births` on a real worktree: what each declaration writes, and every honesty refusal beside its benign twin |
 | `tests/librarian/test_refusal_routing.py` | `_route_refusal`'s two destinations — which causes are the submitter's and which are the librarian's |

@@ -10,10 +10,10 @@ Gate order on the admin side: foreign `Host` -> 421, `/admin/api/*` without the 
 token -> generic 401, security headers on every response, static assets included.
 
 **The handlers that touch the knowledge repo and `metrics` run their service call in a worker
-thread** (`run_in_threadpool`), and they are the only ones that do. A repair approve and a page
-removal clone the repo, run the nine gates — `git` and `gitleaks` subprocesses — and push: seconds
-of blocking work, on the event loop of a process that is also serving the MCP tools; `metrics` is a
-dozen aggregate queries the dashboard polls. The rejects stay inline because each is one
+thread** (`run_in_threadpool`), and they are the only ones that do. Reading the registry and
+resolving a name against it open a checkout: hundreds of milliseconds of blocking work, on the
+event loop of a process that is also serving the MCP tools; `metrics` is a dozen aggregate queries
+the dashboard polls. The rejects stay inline because each is one
 statement. `AdminService`'s "no cursor across an `await`" invariant is untouched: the whole
 synchronous call happens inside the one thread, and the connection is the same autocommit one
 `slack.review` already reaches through `asyncio.to_thread`.
@@ -268,19 +268,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.gardener_state()
 
     @_json_endpoint
-    async def digest(_request):
-        return service.digest_state()
-
-    @_json_endpoint
-    async def digest_preview(_request):
-        return await service.digest_preview()
-
-    @_json_endpoint
-    async def digest_post(request):
-        data = await _body(request)
-        return await service.digest_post(actor=_str(data, "actor"))
-
-    @_json_endpoint
     async def index_state(_request):
         return service.index_state()
 
@@ -357,9 +344,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "queue/purge", queue_purge, methods=["POST"]),
         Route(API_PREFIX + "queue/{id:int}", queue_show, methods=["GET"]),
         Route(API_PREFIX + "gardener", gardener, methods=["GET"]),
-        Route(API_PREFIX + "digest", digest, methods=["GET"]),
-        Route(API_PREFIX + "digest/preview", digest_preview, methods=["POST"]),
-        Route(API_PREFIX + "digest/post", digest_post, methods=["POST"]),
         Route(API_PREFIX + "index", index_state, methods=["GET"]),
         Route(API_PREFIX + "index/check", index_check, methods=["POST"]),
         Route(API_PREFIX + "metrics", metrics, methods=["GET"]),

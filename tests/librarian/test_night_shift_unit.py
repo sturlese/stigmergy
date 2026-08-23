@@ -1,7 +1,7 @@
 """The librarian worker's two DAILY passes — the garden and the retention purge.
 
-Keyless and Postgres-free. The sibling files for the two INTERVAL passes are
-`test_view_sweep_unit.py` and `test_repair_pass_unit.py`; the four are deliberately parallel, and
+Keyless and Postgres-free. The sibling file for the INTERVAL pass is
+`test_repair_pass_unit.py`; the two are deliberately parallel, and
 what this one adds is the half a monotonic interval cannot express:
 
 - **due-ness is a wall time**, so the clock injected here is a `datetime`, not a float;
@@ -17,7 +17,7 @@ import types
 import pytest
 
 from stigmergy.librarian import config, schedule, worker
-from tests.views.conftest import FakeConn
+from tests.librarian.conftest import FakeConn
 
 AT = (5, 7)
 UTC = datetime.UTC
@@ -270,22 +270,22 @@ def test_the_garden_pass_calls_the_gardener_the_way_the_gardener_is_actually_bui
     _env, deps = rig
     seen = {}
 
-    async def fake_run_gardener(conn, *, repo, settings):
+    def fake_run_gardener(conn, *, repo, settings):
         seen.update(repo=repo, settings=settings)
         return types.SimpleNamespace(findings=[{"check": "x"}], pages_checked=7,
                                      entities_checked=2)
 
     monkeypatch.setattr("stigmergy.gardener.run.run_gardener", fake_run_gardener)
-    # A fake key, because `run_garden` checks it before it calls anything — the check's own tests
-    # are above. Nothing here reaches a provider: `run_gardener` itself is the double.
-    monkeypatch.setenv("OPENAI_API_KEY", "not-a-real-key")
+    # No key of any kind. Every gardener check is deterministic, so this is the one night-shift
+    # pass with nothing to authenticate — if that ever stops being true, this line is what fails.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     stats = worker.run_garden(FakeConn(), deps)
 
     assert stats == {"findings": 1, "pages_checked": 7, "entities_checked": 2}
     assert seen["repo"] == deps.repo
     # Built through the gardener's OWN constructor, so a rename there fails here rather than at
     # 05:07 on a deployment.
-    assert seen["settings"].model
+    assert seen["settings"].aging_seed_days
 
 
 def test_the_retention_pass_calls_the_purge_the_way_the_purge_is_actually_built(rig, monkeypatch):
@@ -302,48 +302,6 @@ def test_the_retention_pass_calls_the_purge_the_way_the_purge_is_actually_built(
 
     assert result["purged"] == 2
     assert seen["older_than_days"] == deps.settings.retention_days
-
-
-# ── the second model the night shift brought into this process ────────────────────────────────
-def test_a_garden_pass_whose_model_this_worker_cannot_authenticate_is_refused(rig):
-    """**The trap the capture-is-the-approval change created, and it is invisible to this keyless
-    suite by construction.**
-
-    The gardener's default model is a BARE id, which resolves through the OpenAI Responses API —
-    and `OPENAI_API_KEY` is exactly what `bootstrap.READ_PATH_ONLY_ENV` strips before exec'ing the
-    deployed worker. Left alone, the deterministic checks (which need no model) would keep working
-    and every night would record a `partial` run: a pass that looks alive forever while two of its
-    three model passes have never once run.
-
-    The refusal has to name the DEAD END rather than say "export it", because in that container
-    there is nothing to export — the strip happens after.
-
-    It fails the PASS rather than the worker's startup, which is the same rule every other pass
-    here follows: filing must never depend on maintenance, and refusing to boot over a nightly
-    sweep would take the queue down for the one thing that does not need it."""
-    _env, deps = rig
-    with pytest.raises(Exception) as caught:
-        worker.check_garden_model(deps.settings, environ={"ANTHROPIC_API_KEY": "x"})
-
-    message = str(caught.value)
-    assert "OPENAI_API_KEY" in message
-    assert "strips" in message, "the refusal does not say the key is stripped, so it reads as a typo"
-    assert config.GARDEN_AT_ENV in message and config.DAILY_OFF in message, (
-        "the refusal offers no way out — an operator who does not want a garden pass must be told "
-        "how to say so")
-
-
-@pytest.mark.parametrize("environ, garden_at", [
-    ({"OPENAI_API_KEY": "k"}, "05:07"),        # the key is there: nothing to refuse
-    ({}, config.DAILY_OFF),                    # no pass at all: nothing to authenticate
-])
-def test_the_garden_model_check_does_not_fire_when_it_should_not(rig, environ, garden_at):
-    """The benign twins. A refusal that fired on a correctly configured worker would cost a
-    nightly pass for nothing."""
-    _env, deps = rig
-    settings = dataclasses.replace(deps.settings, garden_at=garden_at)
-
-    worker.check_garden_model(settings, environ=environ)
 
 
 def test_a_garden_pass_that_fails_records_a_row_so_it_is_visible_and_does_not_retry(rig, ledger):

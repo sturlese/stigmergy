@@ -79,7 +79,12 @@
       "q": "How many documents do we have on file about Aurora Systems in total?",
       "kind": "prose",
       "expect_contains": "4",
-      "cites": "views/aurora-systems.md",
+      "cites": [
+        "sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md",
+        "sources/entities/aurora-systems/kpi-metrics-2026-42501c.md",
+        "sources/entities/aurora-systems/quarterly-report-q1-2026-final-2e26a5.md",
+        "sources/entities/aurora-systems/quarterly-report-q1-2026-e34c71.md"
+      ],
       "family": "entity-shaped"
     },
     {
@@ -87,10 +92,7 @@
       "q": "Give me a summary of the state of the Aurora Systems relationship: what has happened, what key figures we have and what is still open.",
       "kind": "prose",
       "expect_contains": "SSO",
-      "cites": [
-        "views/aurora-systems.md",
-        "sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md"
-      ],
+      "cites": "sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md",
       "family": "entity-shaped"
     },
     {
@@ -106,10 +108,7 @@
       "q": "Walk me through the Aurora Systems timeline in Q1 2026: what do we have on record and from what dates?",
       "kind": "prose",
       "expect_contains": "2026-02-10",
-      "cites": [
-        "views/aurora-systems.md",
-        "sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md"
-      ],
+      "cites": "sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md",
       "family": "entity-timeline"
     },
     {

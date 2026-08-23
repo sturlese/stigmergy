@@ -40,7 +40,7 @@ Two calls the flows will not make for you:
 ## The second repository
 
 This platform's changes often have a half that lives in the **knowledge repo** (`$STIGMERGY_REPO`):
-the librarian's and the meeting distiller's skills, the contract linter, the entity registry,
+the librarian's skill, the contract linter, the entity registry,
 the ACL and identity maps. That repo has its own CI — a strict linter, gitleaks, and an
 authorship check over zones and trust fields.
 
@@ -48,7 +48,7 @@ Consequences, both of which have bitten:
 
 - A fix is not done until **both** repos are green. A change to how the agent files pages is a
   knowledge-repo change; the platform test suite will not notice it at all.
-- An operator commit that touches the machine-owned zones (`sources/`, `views/`) makes that
+- An operator commit that touches the machine-owned zone (`sources/`) makes that
   repo's authorship check red **on every later push** until the commit is added to its
   reviewed baseline, with its own test updated. Deleting content in bulk is exactly such a
   commit.

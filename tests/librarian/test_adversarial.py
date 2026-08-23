@@ -576,16 +576,21 @@ def test_adversarial_cat1_a_duplicate_related_key_cannot_lose_its_second_declara
     assert [f.code for f in gates.gate_body_rewrite(ctx)] == ["body-rewrite"]
 
 
-def test_adversarial_cat1_a_real_additive_edit_is_the_benign_twin_and_passes_clean(tmp_path):
-    """The benign twin for the rewritten gate: the ONE shape `edits.py` produces — the `related:`
-    line replaced with a longer list, plus an appended callout — must still pass, or no overlap could
-    ever be cross-linked. The proof got stricter; it did not get wrong."""
+def test_adversarial_cat1_a_declared_rewrite_is_the_benign_twin_and_passes_clean(tmp_path):
+    """The benign twin for the gate the two attacks above drive.
+
+    OLD BEHAVIOUR: the shape that passed here was an ADDITIVE edit — the `related:` line replaced
+    with a longer list plus an appended callout — which a filing account declared and code
+    performed. That mechanism is gone, and with it the shape: a modification nobody declared is now
+    refused with no shape admitted at all. What a capture may still do to a page that exists is
+    DECLARE that it brings it up to date, and this is that road — the same page, the same gate, the
+    caller naming the path in `rewrites_allowed`, and no veto.
+    """
     repo = _seeded_repo(tmp_path, _PAGE_REL, _HUMAN_PAGE)
     ctx = _diff_ctx(repo, _PAGE_REL,
-                    _HUMAN_PAGE.replace('related: ["[[Acme Corp]]", "[[Other Page]]"]\ntags:',
-                                        'related: ["[[Acme Corp]]", "[[Other Page]]", "[[New]]"]'
-                                        '\ntags:', 1).rstrip("\n")
-                    + "\n\n> [!NOTE] Overlaps with [[New]]\n> covers the same ground\n")
+                    _HUMAN_PAGE.replace("A paragraph a human wrote.",
+                                        "A paragraph a later capture brought up to date.", 1))
+    ctx.rewrites_allowed = frozenset({_PAGE_REL})
 
     assert gates.gate_body_rewrite(ctx) == []
 

@@ -114,11 +114,11 @@ def test_a_quoted_owner_satisfies_the_canonical_requires_owner_rule(tmp_path):
     the value is now seen, so the rule reports the truth about the page rather than a punctuation
     artifact.
     """
-    d = tmp_path / "wiki" / "decisions"
+    d = tmp_path / "wiki" / "notes"
     d.mkdir(parents=True)
-    front = ('type: decision\ntitle: "Sample Decision"\nstatus: canonical\n'
+    front = ('type: note\ntitle: "Sample Decision"\nstatus: canonical\n'
             '"owner": "someone@else.com"\ncreated: 2026-07-01\nupdated: 2026-07-01\n'
-            'tags: [decision]\nrelated: []\nsources: []\n')
+            'tags: [note]\nrelated: []\nsources: []\n')
     (d / "Sample Decision.md").write_text(f"---\n{front}---\n\n{GOOD_BODY}", encoding="utf-8")
     result = _run(tmp_path)
     assert not any("requires an `owner`" in f["message"] for f in result["findings"]), (
@@ -133,10 +133,10 @@ def test_the_benign_twin_a_canonical_page_is_now_refused_by_its_status(tmp_path)
     "a canonical page requires an `owner`" — a rule that presumed `canonical` was a legal state
     to be in badly. It is not a legal state at all any more, so the page is refused one step
     earlier, on the status itself. Strictly stronger: an owner cannot rescue it."""
-    d = tmp_path / "wiki" / "decisions"
+    d = tmp_path / "wiki" / "notes"
     d.mkdir(parents=True)
-    front = ('type: decision\ntitle: "No Owner"\nstatus: canonical\ncreated: 2026-07-01\n'
-            'updated: 2026-07-01\ntags: [decision]\nrelated: []\nsources: []\n')
+    front = ('type: note\ntitle: "No Owner"\nstatus: canonical\ncreated: 2026-07-01\n'
+            'updated: 2026-07-01\ntags: [note]\nrelated: []\nsources: []\n')
     (d / "No Owner.md").write_text(f"---\n{front}---\n\n{GOOD_BODY}", encoding="utf-8")
     result = _run(tmp_path)
     assert any("invalid status" in f["message"] for f in result["findings"])

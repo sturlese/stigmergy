@@ -1,31 +1,29 @@
-// Repairs: the LEDGER of what the repair pass did to the corpus, newest first. Nothing
-// on this page decides anything and nothing on it waits — a repair is derived from a gardener
-// finding, validated, gated and applied in ONE pass, and this page is where a person finds out
-// afterwards.
+// Repairs: the LEDGER of what has left the corpus, newest first. Nothing on this page decides
+// anything and nothing on it waits — a person names pages, the worker removes them and rewrites
+// every page that referred to them, and this page is where anyone finds out afterwards.
 //
 // Which is why the diff is here, and why it is rendered UNRENDERED: the reason the ledger stores
 // a diff at all is that nobody read those bytes before they were pushed. A page that summarised
 // them would be showing a summary of prose a model wrote into somebody's corpus. The list is the
-// scan, the row is the read.
+// scan, the row is the read. The capture that asked for the removal carries the same reading per
+// page — and is purged with the retention window, while this row is not.
 //
-// The three outcomes are three different readings, not three colours of one. `applied` has a
-// commit and a diff. `failed` wrote nothing, and what there is to read is the sentence that
-// refused it beside the ops it never got to write — FOUR kinds, four renderers, because a
-// deletion that did not happen is still not an edit. `skipped` never became a repair at all and
-// carries only its reason.
+// **Rows the elective repair loop wrote are still here.** That loop derived repairs from gardener
+// findings and applied them unattended; it was removed, and its rows keep their own kinds
+// (`repair.schema.RETIRED_KINDS`) and their own two outcomes. They render as what they were, with
+// their ops listed generically: an old row still reads whole, and no renderer is maintained for a
+// writer that is gone.
 
 import { api } from "../api.js";
-import { chartCard, partToWhole, runStrip } from "../charts.js";
+import { chartCard, partToWhole } from "../charts.js";
 import { REPAIR_OUTCOME_ORDER, repairKind, word } from "../copy.js";
 import {
   banner, chips, confirmForm, el, emptyState, fmtWhen, icon, kv, link, mono, relTime, render,
   table, wordPill,
 } from "../ui.js";
-import { actorField, go, loading, mutate, runShape, runTable } from "./common.js";
+import { actorField, go, loading, mutate } from "./common.js";
 
-const KIND_ENTITY_BODY = "entity-body";
 const KIND_DELETE = "delete";
-const KIND_ALIAS = "entity-alias";
 const OP_DELETE_PAGE = "delete-page";
 const STATUS_APPLIED = "applied";
 const STATUS_FAILED = "failed";
@@ -40,45 +38,37 @@ export async function repairsView(host) {
     const shown = data.recent.filter((row) => !state.status || row.status === state.status);
     const here = {};
     for (const row of data.recent) here[row.status] = (here[row.status] || 0) + 1;
-    const runs = (data.history || []).map((run) => runShape(run, passDetail));
     render(host,
-      el("div", { class: "grid halves" },
-        chartCard({
-          title: "Repairs by outcome",
-          sub: "every repair this deployment ever ran, and what came of it",
-          chart: partToWhole({ segments: outcomes(counts).map((key) => ({
-            key, label: word(key).label, value: counts[key] || 0, color: word(key).who })) }),
-          tableSpec: { headers: ["outcome", "repairs"],
-            rows: outcomes(counts).map((key) => ({ cells: [word(key).label, String(counts[key] || 0)] })) },
-        }),
-        chartCard({
-          title: runs.length ? `The last ${runs.length} repair pass(es)` : "Repair passes",
-          sub: "each pass the worker ran while the queue was idle — height is duration, colour its outcome",
-          chart: runStrip({ runs }), tableSpec: runTable(runs),
-        })),
+      chartCard({
+        title: "The ledger by outcome",
+        sub: "every row this deployment ever wrote here — removals, and the elective repairs that ran before that loop was removed",
+        chart: partToWhole({ segments: outcomes(counts).map((key) => ({
+          key, label: word(key).label, value: counts[key] || 0, color: word(key).who })) }),
+        tableSpec: { headers: ["outcome", "rows"],
+          rows: outcomes(counts).map((key) => ({ cells: [word(key).label, String(counts[key] || 0)] })) },
+      }),
       el("section", { class: "card" },
         el("div", { class: "card-head" },
           el("div", { class: "card-title" }, el("h2", {}, "The ledger"),
-            el("div", { class: "sub" }, "what the repair pass did, newest first — an applied row is already in the knowledge repo, and its diff is the reading it never got before it went in. Open a row for it.")),
+            el("div", { class: "sub" }, "what left the corpus, newest first — every row is already in the knowledge repo, and its diff is the reading it never got before it went in. Open a row for it.")),
           el("div", { class: "spacer" }),
           el("button", { class: "btn small", type: "button", onclick: () => deleteFlow() }, icon("x", 14), "Remove pages")),
         data.recent.length >= data.recent_limit
-          ? banner("plain", `the newest ${data.recent_limit} rows — the ledger keeps every repair ever run, and the chart above counts them all`)
+          ? banner("plain", `the newest ${data.recent_limit} rows — the ledger keeps every one ever written, and the chart above counts them all`)
           : null,
         chips([{ key: "", label: "everything", count: data.recent.length, on: !state.status },
           ...outcomes(here).map((key) => ({ key, label: word(key).label, count: here[key] || 0,
             on: state.status === key, who: word(key).who }))],
         (key) => { state.status = key; repairsView(host); }),
-        table(["id", "outcome", "kind", "findings", "pages", "when", { text: "what happened", cls: "wrap" }],
+        table(["id", "outcome", "kind", "pages", "when", { text: "what happened", cls: "wrap" }],
           shown.map((row) => ({
             row,
             cells: [mono(`#${row.id}`, "nowrap"), wordPill(row.status), repairKind(row.kind).label,
-              mono((row.finding_ids || []).map((f) => `#${f}`).join(", ") || "—"),
               el("span", { class: "mono" }, row.target_paths.join(" · ") || "—"),
               relTime(row.created_at), outcomeCell(row)],
           })),
-          { empty: state.status ? "no repair with that outcome in this page of the ledger" : "the ledger is empty — no repair has run yet",
-            emptyHint: "the worker runs a repair pass on its own interval whenever the queue is idle, over whatever findings the gardener has left it",
+          { empty: state.status ? "no row with that outcome in this page of the ledger" : "the ledger is empty — nothing has been removed from this brain",
+            emptyHint: "Remove pages queues a removal in your name; the worker performs it within a minute or so and the row lands here",
             onRow: (row) => go(`repairs/${row.id}`) })),
     );
   });
@@ -91,19 +81,8 @@ function outcomes(counted) {
     ...Object.keys(counted).filter((s) => !REPAIR_OUTCOME_ORDER.includes(s))];
 }
 
-// The run strip's one-line detail: the four numbers a pass records, and every finding it saw is
-// in exactly one of them.
-function passDetail(run) {
-  const stats = run.stats || {};
-  const skipped = (stats.skipped_known || 0) + (stats.skipped_invalid || 0);
-  return [stats.findings_seen !== undefined ? `${stats.findings_seen} findings seen` : "",
-    stats.applied !== undefined ? `${stats.applied} applied` : "",
-    stats.failed ? `${stats.failed} failed` : "", skipped ? `${skipped} skipped` : "",
-    run.error || ""].filter(Boolean).join(" · ");
-}
-
-// One row's outcome in a table cell: the commit for an applied repair, and for the other two the
-// sentence the ledger stores about them — never the diff, which no cell can hold.
+// One row's outcome in a table cell: the commit for a row that landed, and for the retired loop's
+// other two outcomes the sentence the ledger stores — never the diff, which no cell can hold.
 function outcomeCell(row) {
   if (row.status === STATUS_APPLIED) {
     return el("span", { class: "row" }, mono(String(row.applied_commit || "").slice(0, 12) || "—"),
@@ -113,101 +92,80 @@ function outcomeCell(row) {
     (row.status === STATUS_FAILED ? row.error : row.reason) || "—");
 }
 
+// A retired kind's ops, listed by name and path with whatever else the row stored — the generic
+// reading, because the writers that gave those ops their shapes are gone.
 function opsList(ops) {
   if (!ops || !ops.length) return emptyState("no ops — nothing would have changed");
   return el("ul", { class: "ops-list" }, ops.map((o) => el("li", {},
-    el("span", { class: "op" }, o.op),
-    el("span", {}, el("span", { class: "diff-add" }, "+ "), `link to ${o.link || "?"} on `, mono(o.path), o.note ? el("div", { class: "sub" }, o.note) : null))));
+    el("span", { class: "op" }, o.op || "op"),
+    el("span", {}, mono(o.path || "—"),
+      ...Object.entries(o).filter(([k, v]) => !["op", "path"].includes(k) && v)
+        .map(([k, v]) => el("div", { class: "sub" }, `${k}: ${v}`))))));
 }
 
-// The drafted body, whole and unrendered — plain text in a <pre>, never markdown turned into DOM:
-// these bytes are what would have become the page, so these bytes are what there is to read.
-function bodyDraft(ops) {
-  return el("div", { class: "stack" },
-    ...(ops || []).map((o) => el("div", {},
-      el("div", { class: "quote-label" }, mono(o.path), o.role ? el("span", {}, ` · role: ${o.role}`) : null),
-      el("pre", { class: "pre" }, o.body_markdown || "(the draft is empty)"))));
-}
-
-// The pages that would have gone, and the pages that would have changed because they went. Two
-// lists rather than one table, because they are two different things: one removes a page and the
-// other rewrites pages a reader may never have opened.
-function deletionPlan(ops) {
+// The pages that went, and the pages that changed because they went. Two lists rather than one
+// table, because they are two different things: one removes a page and the other rewrites pages a
+// reader may never have opened.
+function deletionPlan(ops, landed) {
   const removed = (ops || []).filter((o) => o.op === OP_DELETE_PAGE).map((o) => o.path);
   const scrubbed = (ops || []).filter((o) => o.op !== OP_DELETE_PAGE).map((o) => o.path);
   const list = (paths, cls) => el("ul", { class: "names" }, ...paths.map((p) => el("li", { class: cls }, p)));
   return el("div", {},
-    el("div", { class: "sub" }, `${removed.length} page(s) would have STOPPED EXISTING`),
+    el("div", { class: "sub" }, `${removed.length} page(s) ${landed ? "STOPPED EXISTING" : "would have STOPPED EXISTING"}`),
     list(removed, "diff-del"),
-    el("div", { class: "sub", style: { marginTop: "12px" } }, `${scrubbed.length} page(s) would have been rewritten so they no longer referred to them — a model wrote these bodies, and none of them landed`),
+    el("div", { class: "sub", style: { marginTop: "12px" } }, `${scrubbed.length} page(s) ${landed ? "were" : "would have been"} rewritten so they no longer referred to them — a model wrote these bodies`),
     scrubbed.length
-      // Whole and unrendered, exactly as `bodyDraft` shows a drafted entity body: what would have
-      // landed in the repo is these bytes, so these bytes are what there is to read.
+      // Whole and unrendered: what landed in the repo is these bytes, so these bytes are what
+      // there is to read.
       ? el("div", { class: "stack" }, ...(ops || []).filter((o) => o.op !== OP_DELETE_PAGE).map((o) => el("div", {},
           el("div", { class: "quote-label" }, mono(o.path)),
-          el("pre", { class: "pre" }, o.planned_after || "(no planned bytes — this repair could never have been applied)"))))
+          el("pre", { class: "pre" }, o.planned_after || "(no planned bytes recorded)"))))
       : el("div", { class: "sub" }, "— nothing else referred to them"));
 }
 
-function mergePlan(ops) {
-  const byOp = (name) => (ops || []).filter((o) => o.op === name).map((o) => o.path);
-  return el("div", { class: "stack" },
-    el("div", {}, el("div", { class: "sub" }, "survives, and gains the other's spellings"), el("ul", { class: "names" }, byOp("alias-survivor").map((p) => el("li", { class: "diff-add" }, p)))),
-    el("div", {}, el("div", { class: "sub" }, "retired — marked superseded by the survivor (the page stays)"), el("ul", { class: "names" }, byOp("retire-absorbed").map((p) => el("li", { class: "diff-del" }, p)))),
-    byOp("reanchor-page").length ? el("div", {}, el("div", { class: "sub" }, `${byOp("reanchor-page").length} page(s) re-anchored to the survivor`), el("ul", { class: "names mono" }, byOp("reanchor-page").map((p) => el("li", {}, p)))) : null,
-    el("div", { class: "sub" }, "ops/entity-registry.json is regenerated by the generator, never hand-built"));
-}
-
-// One sentence per kind, above the ops of a repair that never landed: what the pass was going to
-// write. Paired with `repairChange` below on the SAME dispatch, so the renderer and the sentence
-// over it can never describe different kinds.
-function changeSummary(kind) {
-  if (kind === KIND_ENTITY_BODY) {
-    return "this kind replaces the page's body BELOW its own title line. The frontmatter is preserved byte for byte apart from the updated date (and the role, when the page has none), and the title line itself does not change. Nothing was written: the draft below is what the page would have said.";
-  }
+// One sentence per kind, above the ops. Paired with `repairChange` below on the SAME dispatch, so
+// the renderer and the sentence over it can never describe different kinds.
+function changeSummary(kind, landed) {
   if (kind === KIND_DELETE) {
-    return "the pages in the first list would have STOPPED EXISTING, and the pages below them would have been rewritten so they no longer referred to them: their related/sources entries dropped by code, their bodies written by a MODEL. Nothing landed — no page was removed and no body was replaced.";
+    return landed
+      ? "the pages in the first list stopped existing, and the pages below them were rewritten so they no longer referred to them: their related/sources entries dropped by code, their bodies written by a MODEL. A revert in the knowledge repo is the only undo."
+      : "the pages in the first list would have STOPPED EXISTING, and the pages below them would have been rewritten so they no longer referred to them. Nothing landed — no page was removed and no body was replaced.";
   }
-  if (kind === KIND_ALIAS) {
-    return "two registry entries were judged one entity. The survivor's page would have gained the absorbed spellings, the absorbed page would have been marked superseded (it is never deleted), every page anchored to it moved to the survivor, and the registry regenerated. Nothing landed.";
-  }
-  return "every op is additive: a link added to that page's related list, and for overlap and contradiction a one-sentence callout below it. Nothing is rewritten or deleted here.";
+  return "this row was written by the elective repair loop, which has been removed. Its ops are listed as they were stored; nothing here can be derived or applied again.";
 }
 
 // ONE dispatch, so the renderer and the sentence above it can never describe different kinds.
 function repairChange(row) {
-  if (row.kind === KIND_ENTITY_BODY) return bodyDraft(row.ops);
-  if (row.kind === KIND_DELETE) return deletionPlan(row.ops);
-  if (row.kind === KIND_ALIAS) return mergePlan(row.ops);
+  if (row.kind === KIND_DELETE) return deletionPlan(row.ops, row.status === STATUS_APPLIED);
   return opsList(row.ops);
 }
 
-// The diff, unrendered, in the same `<pre>` the removal flow shows its own diffs in: what landed
-// in the repo is these bytes. `_clean` keeps their newlines for exactly this reason — a diff
-// flattened to one line is not a diff anybody can read — and the box scrolls on its own so a
-// thousand-line commit does not bury the rest of the row.
+// The diff, unrendered, in the same `<pre>` the capture shows its own diffs in: what landed in the
+// repo is these bytes. `_clean` keeps their newlines for exactly this reason — a diff flattened to
+// one line is not a diff anybody can read — and the box scrolls on its own so a thousand-line
+// commit does not bury the rest of the row.
 function diffCard(row) {
   return el("section", { class: "card" },
     el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "The diff that landed"),
       el("div", { class: "sub" }, "the commit's own unified diff, as it was pushed — this is the reading nobody gave it first"))),
     row.diff
       ? el("pre", { class: "pre", style: { maxHeight: "560px", overflow: "auto" } }, row.diff)
-      : emptyState("no diff was recorded for this repair",
-          "a repair applied before the diff column existed has none — it was pushed before the column was"));
+      : emptyState("no diff was recorded for this row",
+          "a row written before the diff column existed has none — it was pushed before the column was"));
 }
 
 // What the outcome MEANS for the person reading it. Three sentences and not one, because the
-// three states have nothing in common: one is in git now, one wrote nothing and is never retried,
-// one never became a repair at all.
+// three states have nothing in common: one is in git now, one wrote nothing, one never became
+// anything at all.
 function outcomeBanner(row) {
   if (row.status === STATUS_APPLIED) {
     return banner("plain", el("span", {}, "applied — commit ", mono(String(row.applied_commit || "").slice(0, 12)),
-      " is in the knowledge repo. A revert there is the only undo, and it is permanent: this exact repair is never derived again."));
+      " is in the knowledge repo. A revert there is the only undo, and it is permanent."));
   }
   if (row.status === STATUS_FAILED) {
-    return banner("plain", "a gate or its own validator refused this repair and NOTHING was written. It is not retried either — the finding behind it stops being answered until the corpus moves, which is why the reason above has to be one an operator can act on.");
+    return banner("plain", "a gate or its own validator refused this and NOTHING was written. It belongs to the elective repair loop, which has been removed, so nothing will attempt it again.");
   }
-  return banner("plain", "nothing was derived here — the reason above is the whole of it. A skipped row carries no content key, so nothing remembers it and a later pass is free to try again.");
+  return banner("plain", "nothing was derived here — the reason above is the whole of it. It belongs to the elective repair loop, which has been removed.");
 }
 
 export async function repairDetailView(host, id) {
@@ -217,18 +175,19 @@ export async function repairDetailView(host, id) {
     const applied = row.status === STATUS_APPLIED;
     // `finding_subjects` drops the findings that named nothing, so it is NOT positional against
     // `finding_ids` — the two are shown as two facts, never zipped into a pairing that lies.
+    // Both are empty on a removal: nobody derived it from a finding, a person asked for it.
     const subjects = [...new Set((row.finding_subjects || []).flat())];
     render(host,
-      el("div", { class: "crumbs" }, link("repairs", "Repairs"), icon("chevron"), el("span", {}, `repair #${row.id}`)),
+      el("div", { class: "crumbs" }, link("repairs", "Repairs"), icon("chevron"), el("span", {}, `row #${row.id}`)),
       el("section", { class: "card" },
         el("div", { class: "card-head" },
-          el("div", { class: "card-title" }, el("h2", {}, `Repair #${row.id} — ${kind.label}`), el("div", { class: "sub" }, kind.explain)),
+          el("div", { class: "card-title" }, el("h2", {}, `#${row.id} — ${kind.label}`), el("div", { class: "sub" }, kind.explain)),
           el("div", { class: "spacer" }), wordPill(row.status)),
-        el("p", { class: "lede" }, row.rationale || "(no rationale recorded)"),
+        el("p", { class: "lede" }, row.rationale || "(no reason recorded)"),
         kv([
           [applied ? "pages it changed" : "pages it named",
             row.target_paths.length ? el("ul", { class: "names mono" }, row.target_paths.map((p) => el("li", {}, p))) : null],
-          ["findings it answered", (row.finding_ids || []).map((f) => `#${f}`).join(", ") || "(none)"],
+          ["findings it answered", (row.finding_ids || []).length ? (row.finding_ids).map((f) => `#${f}`).join(", ") : null],
           ["pages those findings named", subjects.length ? el("ul", { class: "names mono" }, subjects.map((p) => el("li", {}, p))) : null],
           ["ran", `${fmtWhen(row.created_at)}${row.model_id ? ` · ${row.model_id}` : ""}`],
           ["commit", row.applied_commit ? mono(row.applied_commit) : null],
@@ -237,12 +196,11 @@ export async function repairDetailView(host, id) {
         ], { wide: true }),
         outcomeBanner(row)),
       applied ? diffCard(row) : null,
-      row.status === STATUS_FAILED
-        ? el("section", { class: "card" },
-            el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "What it would have changed"),
-              el("div", { class: "sub" }, changeSummary(row.kind)))),
-            repairChange(row))
-        : null,
+      el("section", { class: "card" },
+        el("div", { class: "card-head" }, el("div", { class: "card-title" },
+          el("h2", {}, applied ? "What it changed" : "What it would have changed"),
+          el("div", { class: "sub" }, changeSummary(row.kind, applied)))),
+        repairChange(row)),
     );
   });
 }

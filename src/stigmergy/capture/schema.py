@@ -145,7 +145,6 @@ def base_report(*, status: str, summary: str, **facts) -> dict:
         "anchored_to": "",
         "links_created": [],
         "overlaps_flagged": [],
-        "pages_edited": [],
         "agent_rationale": "",
         "findings": [],
     }
@@ -435,7 +434,8 @@ def validate_meeting_date(value: str) -> str:
     if not _MEETING_DATE_RE.match(text):
         raise SubmissionRejected(
             f"a meeting date must be YYYY-MM-DD (got {value!r}) — it becomes `as_of` on every "
-            f"decision page this meeting files")
+            f"page this capture files, which is what makes a transcript read as the date it "
+            f"happened rather than the date it was submitted")
     try:
         datetime.date.fromisoformat(text)
     except ValueError:
@@ -515,7 +515,7 @@ DELETE_REASON_CHARS = 400
 # package may not import the librarian's write path, and this seam answers a narrower question —
 # "is this a corpus page at all" — before anything is queued. The applier asks the full question
 # again in the tree it commits from, which is the one that decides.
-DELETABLE_ZONE_PREFIXES = ("wiki/", "sources/", "views/")
+DELETABLE_ZONE_PREFIXES = ("wiki/", "sources/")
 # The one zone a removal may never name, at every door: an identity is retired by removing what
 # made it one, never by deleting the page out from under the pages anchored to it.
 UNDELETABLE_ZONE_PREFIX = "wiki/entities/"
@@ -565,11 +565,13 @@ def _require_delete_hints(client: dict) -> None:
 
 def _require_meeting_hints(client: dict) -> None:
     """`kind == MEETING` requires both at THIS seam, which every caller of `queue.submit` crosses:
-    a missing `meeting_date` silently degrades every filed page's `as_of` to today."""
+    a missing `meeting_date` silently degrades every filed page's `as_of` to the FILING date, and
+    a transcript from June filed in August then reads as August's decision to every surface that
+    reasons from recency."""
     if not str(client.get("title") or "").strip():
         raise SubmissionRejected(
-            "a meeting submission requires hints['title'] — the meeting's title, used as this "
-            "capture's source and meeting page identity")
+            "a meeting submission requires hints['title'] — the meeting's title, which the "
+            "filing agent reads as the material's own name")
     validate_meeting_date(client.get("meeting_date") or "")
 
 

@@ -46,6 +46,12 @@ def clean_tables(conn):
         cur.execute("DELETE FROM capture_queue")
         cur.execute("DELETE FROM job_runs")
         cur.execute("DELETE FROM ingest_errors")
+        # The rewrite-notice ledger is an operational table like the rest, and it outlived this
+        # fixture once: `capture_queue` was emptied between tests while a notice keyed on
+        # `(submission_id, path)` stayed, so a later submission that reused the id read as already
+        # notified and the pass sent nothing. A ledger that records "told" must be cleaned wherever
+        # the thing it records is.
+        cur.execute("DELETE FROM page_rewrite_notices")
     return conn
 
 

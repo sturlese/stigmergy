@@ -13,7 +13,7 @@ facet names from `run_filing` itself. A yardstick that spells a status, a facet 
 own way does not fail — it scores that facet 0.00 forever and reads as a failing backend, which
 is the most expensive failure this set can have (it is discovered after paying for a real run).
 
-**What this file deliberately does NOT check**: that the three frozen copies under
+**What this file deliberately does NOT check**: that the two frozen copies under
 `filing/repo/.claude/` still match the live knowledge repo. That is the opposite of
 `tests/librarian/test_frozen_linter.py`'s rule and it is intentional — a drift guard keeps a test
 honest about the present, while a yardstick has to stay still or every score already recorded is
@@ -56,10 +56,16 @@ FIXTURE_ENTITIES = 6
 # The `FROZEN.md` beside each frozen copy. Their SHAs are NOT compared with the knowledge repo
 # (see the module docstring); what is checked is that each one still records one, and that all of
 # them record the SAME one as `PROVENANCE.json`.
+#
+# There were THREE. The meeting-distiller copy was deleted when the librarian became one pipe:
+# `agent.read_meeting_brief` read it on a `kind="meeting"` row, that reader is gone with the flow,
+# and a frozen copy nothing reads is a byte pin whose failure would say nothing about any
+# measurement. The deletion moves no score — it touched neither the pages, the registry, the
+# templates, the linter nor the librarian brief — and `PROVENANCE.json` records it in
+# `frozen_copies_removed` rather than letting the list shrink silently.
 FROZEN_MARKERS = (
     REPO / ".claude" / "tools" / "FROZEN.md",
     REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",
-    REPO / ".claude" / "skills" / "meeting-distiller" / "FROZEN.md",
 )
 _SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
 
@@ -134,14 +140,28 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 # copy was taken at" caveat: the meeting brief lost the meeting park and the linter learned the
 # `approved_by:` / `proposed_aliases:` lifecycle a proposal lands in. Before it, one freeze meant one
 # commit and not one freeze, every copy edited — read the four moves above with that in mind.
+# RE-FROZEN AGAIN when the `edits` declaration was removed. The librarian brief's number moved and
+# the linter's did not, and this is a CORRECTION rather than a re-grade for the same reason the one
+# pipe's was: the shipped copy told the agent to declare additive `backlink`/`overlap`/
+# `contradiction` edits against pages that already exist, and there is no such field any more — a
+# brief promising a mechanism the worker does not have is not a yardstick either. The `edits` FACET
+# retired with it (evals/README.md, and `run_filing.QUALITY_FACETS`), so no recorded score loses a
+# comparison it had: that column simply stops existing. The knowledge-repo commit these bytes will
+# carry does not exist yet, which is why both FROZEN.md copies say PENDING-KNOWLEDGE-REPO-SHA.
 FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
-        "d476ed2d5ab145069ec36e25c621e8f1566ccec5f8acc32a04783fd5f0c9394e",
+        "679796fa3e87f3ce984869353d3997428b7f879fa5c0e182e803f78011f69736",
     ".claude/skills/librarian/SKILL.md":
-        "d5d8c2796a69a91baf8075670bb32350e3d762893874224fdae445d1fd10ebba",
-    ".claude/skills/meeting-distiller/SKILL.md":
-        "76d3967ff88766f1463670121711456ce7f79b789a375e87438074138b657e1b",
+        "f1bcdadc53d01d4c0fa3ee657674d85dcc1f8e269fd755f2e7618a655be1e4cc",
 }
+# The meeting-distiller brief's pin — `76d3967f…` — was REMOVED with the copy, not relaxed.
+#
+# Both surviving numbers MOVED at the one pipe, and that re-freeze is a correction rather than a
+# re-grade: the brief this fixture shipped had stopped being able to file at all — it offered a
+# `decision` page type the placement table has no folder for and told the agent "one capture yields
+# one page" — so every capture it briefed would have been refused before any behaviour was
+# measured. A brief that cannot file is not a yardstick. `evals/README.md` records which facets
+# stopped being comparable.
 
 # Vocabulary that belongs to the MEASUREMENT and never to a page inside the fixture repo. The
 # librarian's agent reads this repo while it files, so a page describing the eval it takes part in
@@ -262,46 +282,45 @@ def test_the_shipped_set_carries_neither_retired_key(entries):
     assert not carriers, carriers
 
 
-# ── the fifth refusal: what a DECISION entry has to assert, and in what order ──────────────────
+# ── the fifth refusal: what a `pages` entry has to assert, and in what order ──────────────────
 # Both halves guard one mechanism from opposite ends, and both are SET defects that would otherwise
 # read as a backend result — which is the expensive direction: a red cell on a paid run, caused by
 # two lines of JSON, pointing at nothing.
 #
-# **Both refusals are PRE-EMPTIVE today, and that is recorded rather than glossed.** The title-less
-# capability is live in `_decisions_match`, but no shipped expectation uses it — every decision
-# entry in the set names a `title`. Since the file-first write path removed F09's stored reply, BOTH of its decision
-# entries are titles with NO anchor: the reply is what used to name a registered entity, and a
-# proposed identity's id is slugified from a name the agent chose, so there is no anchor left to
-# assert. That is the older "scores the title alone" shape and a different thing from omitting
-# `title` altogether. So the
-# shipped set is a benign twin in the sense that matters — it PASSES the refusal — and not in the
-# sense of exercising the shape. `test_whether_the_shipped_set_uses_the_title_less_shape_at_all`
-# below is what keeps that distinction honest, and it will say so the day it changes.
+# **The title-less shape is LIVE in the shipped set now, and that is a change worth reading.** Until
+# the one pipe landed, no expectation omitted a `title` and both refusals below were pre-emptive:
+# their shipped-set twin proved only that the set passes them, never that the shape is exercised.
+# F08's second entry omits its title deliberately — the word `review` was stable across three runs
+# of a flow that no longer exists, while its company-wide anchor discriminates it from its sibling
+# with no vocabulary in it at all — so the refusals have a live instance and
+# `test_the_shipped_set_uses_the_title_less_shape_where_it_says_it_does` is what keeps that honest.
 #
-# Guards written WITH the capability rather than after it bit something are the cheap direction,
-# so this is a note about scope, not an objection.
-def _mutated_decisions(expectations, entry_id: str, block: str) -> tuple:
-    """The mutable copy and the decisions list this refusal is about, for one shipped entry."""
+# The mutations below stay staged on **F09**, whose two entries are titles with NO anchor: the
+# stored reply that used to name a registered entity is gone, and a proposed identity's id is
+# slugified from a name the agent chose, so there is no anchor left to assert. That is the older
+# "scores the title alone" shape, and it is the only place in the set where a title can be STRIPPED
+# to produce the assert-nothing case each mutation needs.
+def _mutated_pages(expectations, entry_id: str, block: str) -> tuple:
+    """The mutable copy and the `pages` list this refusal is about, for one shipped entry."""
     mutated = json.loads(json.dumps(expectations))
     entry = next(e for e in mutated["expectations"] if e["id"] == entry_id)
-    return mutated, entry[block]["decisions"]
+    return mutated, entry[block]["pages"]
 
 
-def test_the_consistency_check_refuses_a_decision_asserting_neither_title_nor_anchor(expectations,
-                                                                                     manifest):
+def test_the_consistency_check_refuses_a_page_asserting_neither_title_nor_anchor(expectations,
+                                                                                manifest):
     """An entry that names neither matches whatever page is left on the table — a facet that reads
-    as measured and measures nothing. Exactly the defect `edits: []` has, recorded in
-    `_edits_match`, arrived at from the other side.
+    as measured and measures nothing, arrived at from the other side.
 
-    Staged on F09's first decision, which ships a title and no anchor: stripping its title is the
-    edit somebody would really make (a title that turned out to be the distiller's prose), and it
+    Staged on F09's first page, which ships a title and no anchor: stripping its title is the
+    edit somebody would really make (a title that turned out to be the model's prose), and it
     leaves the entry asserting nothing at all.
     """
-    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-proposes", "expect")
-    assert "anchor" not in decisions[0], (
-        "F09's first decision now carries an anchor — dropping its title no longer produces the "
+    mutated, pages = _mutated_pages(expectations, "F09-meeting-proposes", "expect")
+    assert "anchor" not in pages[0], (
+        "F09's first page now carries an anchor — dropping its title no longer produces the "
         "assert-nothing shape, so this mutation must move to an entry that has none")
-    decisions[0].pop("title")
+    pages[0].pop("title")
 
     with pytest.raises(SystemExit) as ex:
         run_filing._check_set(manifest, mutated)
@@ -310,7 +329,7 @@ def test_the_consistency_check_refuses_a_decision_asserting_neither_title_nor_an
     assert "neither a `title` nor an `anchor`" in str(ex.value)
 
 
-def test_the_consistency_check_refuses_a_title_less_decision_written_before_a_titled_one(
+def test_the_consistency_check_refuses_a_title_less_page_written_before_a_titled_one(
         expectations, manifest):
     """The ordering half. An anchor-only entry is the WEAKEST matcher and greedy pairing walks the
     file's own order, so one written first can take the page a titled sibling needed and score a
@@ -320,13 +339,13 @@ def test_the_consistency_check_refuses_a_title_less_decision_written_before_a_ti
 
     Staged by giving F09's first entry an anchor and dropping its title, so the set carries an
     anchor-only entry BEFORE a titled one — the shape the refusal exists for. The message has to
-    name the repair ("write the titled entries first"), because nothing about a red decisions cell
+    name the repair ("write the titled entries first"), because nothing about a red `pages` cell
     would point at line order.
     """
-    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-proposes", "expect")
-    decisions[0].pop("title")
-    decisions[0]["anchor"] = {"kind": "company", "ids": []}
-    assert "title" in decisions[1], "the mutation needs a TITLED entry after the title-less one"
+    mutated, pages = _mutated_pages(expectations, "F09-meeting-proposes", "expect")
+    pages[0].pop("title")
+    pages[0]["anchor"] = {"kind": "company", "ids": []}
+    assert "title" in pages[1], "the mutation needs a TITLED entry after the title-less one"
 
     with pytest.raises(SystemExit) as ex:
         run_filing._check_set(manifest, mutated)
@@ -339,35 +358,38 @@ def test_the_same_two_entries_in_the_SAFE_order_are_accepted(expectations, manif
     """The ordering refusal's own benign twin, and the one that decides whether it is safe to have:
     a guard that refused the title-less shape outright would make the whole capability unusable.
     Same mutation, anchor-only entry written LAST — accepted."""
-    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-proposes", "expect")
-    decisions[0].pop("title")
-    decisions[0]["anchor"] = {"kind": "company", "ids": []}
-    decisions.reverse()
+    mutated, pages = _mutated_pages(expectations, "F09-meeting-proposes", "expect")
+    pages[0].pop("title")
+    pages[0]["anchor"] = {"kind": "company", "ids": []}
+    pages.reverse()
 
     run_filing._check_set(manifest, mutated)              # must not raise
 
 
-def test_whether_the_shipped_set_uses_the_title_less_shape_at_all(entries):
+def test_the_shipped_set_uses_the_title_less_shape_where_it_says_it_does(entries):
     """**The scope note for both refusals above, asserted rather than assumed.**
 
-    `_decisions_match` lets an entry omit `title` and pair on its anchor alone, and `_check_set`
-    bounds where such an entry may sit. Today NO shipped expectation uses it — every decision entry
-    names a title — so both refusals are pre-emptive and their shipped-set twin proves only that
-    the set passes them, never that the shape is exercised.
+    OLD BEHAVIOUR: this asserted that NO shipped expectation omitted a title, so both refusals were
+    pre-emptive and this test's job was to report the day that changed. That day is this one. F08's
+    second page omits its title and pairs on its company-wide anchor alone, which is what gives the
+    refusals a live instance — and what makes the mutation-driven tests above a second, constructed
+    case rather than the only one.
 
-    Pinned in the direction that is true now, so the day an expectation drops a title this test
-    reports it: at that point the refusals acquire a live instance, and the mutation-driven tests
-    above should be re-pointed at it rather than constructing the shape by hand.
+    Pinned to the ONE entry that is allowed to have the shape, not to a count: a title quietly
+    dropped somewhere else is an expectation that stopped scoring the model's judgment about what a
+    page is called, and it must not be able to arrive unannounced.
     """
-    titleless = [e["id"]
+    titleless = [(e["id"], n)
                  for e in entries
                  for block in _expect_blocks(e)
-                 for d in block.get("decisions") or []
-                 if "title" not in d]
+                 for n, entry in enumerate(block.get("pages") or [])
+                 if "title" not in entry]
 
-    assert titleless == [], (
-        f"the shipped set now omits a decision title in {titleless} — the `_check_set` refusals "
-        f"above are no longer pre-emptive, and this test's own docstring is the thing to update")
+    assert titleless == [("F08-meeting-two-decisions", 1)], (
+        f"the shipped set's title-less entries are {titleless}, and only F08's SECOND page is "
+        f"written that way on purpose — see expected/expectations.json's `why` for F08. A title "
+        f"dropped elsewhere stops scoring a judgment; one added back to F08 re-pins the yardstick "
+        f"to a word measured under the retired meeting flow.")
 
 
 def test_the_consistency_check_refuses_a_set_whose_denominators_moved(expectations, manifest):
@@ -375,11 +397,11 @@ def test_the_consistency_check_refuses_a_set_whose_denominators_moved(expectatio
     capture that quietly stops naming a facet does not fail anything — it raises that facet's
     score by leaving its denominator, and no rendered table shows it."""
     mutated = json.loads(json.dumps(expectations))
-    dropped = next(e for e in mutated["expectations"] if "edits" in e["expect"])
-    dropped["expect"].pop("edits")
+    dropped = next(e for e in mutated["expectations"] if "reason" in e["expect"])
+    dropped["expect"].pop("reason")
     with pytest.raises(SystemExit) as ex:
         run_filing._check_set(manifest, mutated)
-    assert "edits: pinned 1, file has 0" in str(ex.value)
+    assert "reason: pinned 1, file has 0" in str(ex.value)
 
 
 def test_every_capture_material_exists_and_the_duplicate_case_reuses_F01s_bytes(manifest):
@@ -478,8 +500,14 @@ def test_every_expected_reason_is_a_real_rejection_reason_code(entries):
 def test_every_expected_type_is_a_real_page_type_landing_in_that_types_own_folder(entries):
     """Type and folder are two spellings of one decision, and `librarian/page.py` owns the map.
     An expectation pairing `concept` with `wiki/notes` would score both facets against a page no
-    correct backend can produce."""
-    meeting_folder = "wiki/meetings"          # provenance pages have no `PageType.folder`
+    correct backend can produce.
+
+    OLD BEHAVIOUR: the folder came from `FOLDER_BY_TYPE.get(page_type, "wiki/meetings")`, because
+    `meeting` was a type the placement table gave no folder and the meeting flow wrote there
+    anyway. That fallback is gone with the flow, and its absence is what makes this strict: every
+    type an expectation may name is one the fast lane can CREATE, so its folder is the table's own
+    and there is no second source for one.
+    """
     for entry in entries:
         for block in _expect_blocks(entry):
             if "type" not in block:
@@ -488,15 +516,32 @@ def test_every_expected_type_is_a_real_page_type_landing_in_that_types_own_folde
             assert page_type in page.ALL_PAGE_TYPES, entry["id"]
             if "folder" not in block:
                 continue
-            expected_folder = page.FOLDER_BY_TYPE.get(page_type, meeting_folder)
-            assert block["folder"] == expected_folder, entry["id"]
+            assert block["folder"] == page.FOLDER_BY_TYPE[page_type], entry["id"]
 
 
-def test_the_meeting_folder_this_file_pins_is_the_one_processing_writes_into():
-    """The one folder above that `page.FOLDER_BY_TYPE` cannot supply, tied to its real source so
-    the literal cannot outlive it."""
-    from stigmergy.librarian import processing
-    assert processing.MEETING_MEETING_PREFIX == "wiki/meetings/"
+def test_no_expectation_names_a_page_type_the_pipe_cannot_create(entries):
+    """**The literal that outlived its source, and the migration that closed it.**
+
+    It tied `wiki/meetings` — the one folder `page.FOLDER_BY_TYPE` could not supply — to
+    `processing.MEETING_MEETING_PREFIX`, so the fixture's literal could not outlive the code that
+    wrote there. The constant went with the meeting flow while the literal stayed, and this ran
+    strictly XFAILING for exactly as long as F05, F08 and F09 named `decision` and `meeting`: a
+    golden that cannot be met is worse than one nobody runs, because it reports the yardstick's own
+    staleness as the backend's score.
+
+    The three expectations were re-aimed at the one pipe (`note` in `wiki/notes/`, with the page SET
+    scored by `pages`), so the marker came off. Asserted against the live placement table rather
+    than a literal, which is what keeps it from drifting again: `page.PAGE_TYPES` gives `entity`,
+    `source` and `view` no folder because their writers are the birth fold, the door and the view
+    regenerator, and an expectation naming one of them would be scoring a page the fast lane is
+    forbidden to create.
+    """
+    declared = {block["type"] for entry in entries for block in _expect_blocks(entry)
+                if "type" in block}
+    assert declared, "no expectation names a page type — this check has lost its subject"
+    assert declared <= set(page.FOLDER_BY_TYPE), (
+        f"{sorted(declared - set(page.FOLDER_BY_TYPE))} is not a type any flow can create: "
+        f"`page.PAGE_TYPES` gives it no folder, so `gate_zone` refuses the write")
 
 
 def test_every_expected_anchor_resolves_in_the_fixture_registry(entries, registry):
@@ -525,37 +570,15 @@ def test_a_company_wide_expectation_names_no_entity(entries):
 
 def _anchors_of(block: dict) -> list:
     anchors = [block["anchor"]] if "anchor" in block else []
-    return anchors + [d["anchor"] for d in block.get("decisions") or [] if "anchor" in d]
+    return anchors + [p["anchor"] for p in block.get("pages") or [] if "anchor" in p]
 
 
-def test_no_expectation_names_an_empty_edits_list(entries):
-    """`edits: []` is the one spelling this facet must never carry again.
-
-    It is scored by containment (`_edits_match`: expected ⊆ observed), so an empty list is
-    vacuously TRUE for every backend — and still fills the denominator. That is a cell which reads
-    as measured, prints a score, and can never fail: the permanently-green instrument this suite
-    exists to prevent, one facet wide. "This capture owes no edit" is said by naming NO `edits`
-    key, because silence is not scored.
-
-    F01 carried the empty list until the first Sonnet-5 baseline scored it a miss for correct
-    filing. The fix removed the key; this is what stops the next editor from putting it back —
-    the runner has no refusal for it yet.
-    """
-    for entry in entries:
-        for block in _expect_blocks(entry):
-            assert block.get("edits") != [], (
-                f"{entry['id']} names an empty `edits` list: under containment that is true for "
-                f"every backend. Say 'owes no edit' by naming no `edits` key at all.")
-
-
-def test_every_expected_edit_path_is_a_page_that_already_exists_in_the_fixture_repo(entries):
-    """`edits` scores whether the backend recognised that an EXISTING page was owed a reciprocal
-    link. A page invented in the same commit could not prove that, and a path that does not exist
-    at all cannot be edited by anything."""
-    for entry in entries:
-        for block in _expect_blocks(entry):
-            for path in block.get("edits") or []:
-                assert (REPO / path).is_file(), f"{entry['id']} expects an edit to {path}"
+# OLD BEHAVIOUR: two tests stood here, both about the retired `edits` facet — one refusing the
+# permanently-green spelling `edits: []`, one proving every expected edit path was a page the
+# fixture repo already carried. The facet retired with the declaration it scored: a capture no
+# longer declares an additive edit to a page that already exists. The rule they encoded — a cell
+# that reads as measured and can never fail is worse than no cell — is enforced for the surviving
+# facets by `test_the_consistency_check_refuses_a_page_asserting_neither_title_nor_anchor` above.
 
 
 # ── the proposal the two unregistered names measure ────────────────────────────────────────────
@@ -613,22 +636,30 @@ def test_every_proposed_name_is_absent_from_the_registry_and_present_in_its_own_
         assert name.lower() in materials[capture_id].lower(), capture_id
 
 
-def test_the_two_proposing_captures_reach_the_two_flows_that_can_propose(manifest, entries):
-    """One fast-lane capture and one meeting, which is the property the file-first write path is about: the same input
-    used to behave differently per door — a name typed into a capture parked, the same name in a
-    transcript parked the whole page SET. Two captures on one flow would leave the other door
-    unmeasured and the instrument would agree that the doors behave alike without having looked.
+def test_the_two_proposing_captures_arrive_through_the_two_DOORS_the_one_pipe_serves(manifest,
+                                                                                     entries):
+    """One typed note and one transcript, which is the property the one pipe is about: the same
+    input used to behave differently per door — a name typed into a capture parked, the same name
+    in a transcript parked the whole page SET, and then the two were filed by two different flows.
+    There is one flow; `kind` chooses the prose and the `sources/` folder and nothing else. Two
+    proposing captures of the same kind would leave the other door unmeasured and the instrument
+    would agree that the doors behave alike without having looked.
+
+    OLD NAME: `test_the_two_proposing_captures_reach_the_two_flows_that_can_propose`. The
+    ASSERTION is unchanged, because it was always about the kinds on the queue rows rather than
+    about which code path drained them — which is exactly why it survived the flow it was named
+    after.
     """
     kinds = {c["id"]: c["kind"] for c in manifest["captures"]}
     proposing = sorted(kinds[e["id"]] for e in entries if "proposals" in e["expect"])
     assert proposing == ["meeting", "raw"]
 
 
-def test_no_expected_decision_title_can_swallow_a_later_ones_page(entries):
+def test_no_expected_page_title_can_swallow_a_later_ones_page(entries):
     """A trap the loose titles introduced, and one that fails a CORRECT backend — the direction
     that costs the most to diagnose.
 
-    `_decisions_match` walks the expected list in order and takes the FIRST page each title
+    `_pages_match` walks the expected list in order and takes the FIRST page each title
     matches, greedily. So a title whose words are a subset of a later title's ("Wren" before
     "Wren summary") can consume the later one's page, leaving it nothing to match and scoring a
     miss for a page set that was exactly right. The shipped order puts the more specific title
@@ -651,7 +682,7 @@ def test_no_expected_decision_title_can_swallow_a_later_ones_page(entries):
     """
     for entry in entries:
         for block in _expect_blocks(entry):
-            titles = [d["title"] for d in block.get("decisions") or [] if "title" in d]
+            titles = [p["title"] for p in block.get("pages") or [] if "title" in p]
             for i, earlier in enumerate(titles):
                 for later in titles[i + 1:]:
                     assert not run_filing.title_matches(earlier, later), (
@@ -686,12 +717,50 @@ def test_the_registry_sits_where_the_librarian_reads_it(registry):
     assert len(registry.entities) == FIXTURE_ENTITIES
 
 
-def test_the_fixture_repo_carries_both_briefs_the_measured_backend_reads(entries):
+def test_the_fixture_repo_carries_the_brief_the_measured_backend_reads(entries):
     """`agent.read_skill` reads the librarian brief out of the item's own worktree and
-    `worker.startup_checks` refuses an `sdk` run without one; the meeting brief is read on the
-    first meeting row. A mini repo missing either scores config failures as filing quality."""
+    `worker.startup_checks` refuses a brief-reading run without one. A mini repo missing it scores
+    config failures as filing quality.
+
+    OLD BEHAVIOUR: it asserted BOTH briefs, because `agent.read_meeting_brief` read a second one on
+    the first `kind="meeting"` row. There is one brief and one reader: every capture is filed
+    against the librarian brief, whatever its kind. The frozen meeting-distiller copy was deleted
+    with the expectations migration, so the second half of this assertion did not become a weaker
+    check — it lost its subject, and `FROZEN_MARKERS`/`FROZEN_SHA256` lost the copy in the same
+    edit rather than keeping a pin over bytes nothing reads.
+    """
     assert (REPO / librarian_agent.SKILL_RELPATH).is_file()
-    assert (REPO / librarian_agent.MEETING_BRIEF_RELPATH).is_file()
+    assert not (REPO / ".claude" / "skills" / "meeting-distiller").exists(), (
+        "a meeting-distiller brief is back in the fixture. Nothing reads one — every capture is "
+        "filed against the librarian brief whatever its kind — so a copy here is bytes the freeze "
+        "protocol has to carry for no measurement")
+
+
+def test_the_frozen_brief_offers_only_page_types_the_pipe_can_create():
+    """**The other half of the yardstick, and the half that cannot be edited to agree.**
+
+    `test_no_expectation_names_a_page_type_the_pipe_cannot_create` above holds the EXPECTATIONS to
+    the live placement table. This holds the frozen BRIEF to it, and the two together are what make
+    a run a measurement: an expectation naming a type no flow can create scores a backend for the
+    yardstick's staleness, and a brief offering one makes a correct backend declare it.
+
+    Read out of the brief's own placement table — the rows it renders as `| `type` | `folder/` |` —
+    rather than by grepping for the word, so a brief that stops naming a type in prose while still
+    listing it does not read as fixed.
+
+    Left strictly XFAILING rather than deleted or softened, for the reason the module docstring
+    gives: this file is deliberately NOT a drift guard against the live knowledge repo, because a
+    yardstick has to stay still. So the disagreement is RECORDED here and the repair is a re-freeze,
+    which retires the series with it. The day the fixture is re-frozen this goes green and the
+    marker has to come off in the same commit.
+    """
+    brief = (REPO / librarian_agent.SKILL_RELPATH).read_text(encoding="utf-8")
+    offered = set(re.findall(r"^\| `(\w+)` \| `(?:wiki/\w+)/` \|$", brief, re.MULTILINE))
+    assert offered, "the frozen brief no longer renders a placement table this can read"
+    assert offered <= set(page.FOLDER_BY_TYPE), (
+        f"the frozen librarian brief offers {sorted(offered - set(page.FOLDER_BY_TYPE))}, which "
+        f"`page.PAGE_TYPES` gives no folder — a backend that believes it will declare a type "
+        f"`classify_page_type` refuses, and the table will read as a model that cannot file")
 
 
 def test_every_fast_lane_type_has_a_template_to_draft_from():

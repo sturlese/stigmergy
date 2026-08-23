@@ -115,9 +115,6 @@ export function reportPanel(row) {
   if (Array.isArray(report.links_created) && report.links_created.length) {
     facts.push(["links created", el("ul", { class: "names" }, report.links_created.map((l) => el("li", {}, mono(String(l)))))]);
   }
-  if (Array.isArray(report.pages_edited) && report.pages_edited.length) {
-    facts.push(["pages edited", el("ul", { class: "names" }, report.pages_edited.map((l) => el("li", {}, mono(String(l)))))]);
-  }
   if (Array.isArray(report.overlaps_flagged) && report.overlaps_flagged.length) {
     facts.push(["overlaps flagged", el("ul", { class: "names" }, report.overlaps_flagged.map((l) => el("li", {}, String(typeof l === "object" ? (l.path || JSON.stringify(l)) : l))))]);
   }

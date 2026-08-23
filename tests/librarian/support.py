@@ -281,7 +281,13 @@ def submit_meeting(conn, deps: processing.Deps, material: str, *,
                    meeting_date: str = "2026-07-29", attendees: str = "",
                    acl: list[str] | None = None) -> dict:
     """`submit`'s meeting-kind sibling — the hints a meeting takes (title, meeting_date,
-    attendees), enqueued exactly as `brain_submit(kind="meeting")` does."""
+    attendees), enqueued exactly as `brain_submit(kind="meeting")` does.
+
+    It is an ORDINARY submit and always was: the row differs from `submit`'s by its `kind` and its
+    hints, and nothing else. What changed is what the worker does with it — `kind` now chooses the
+    prose (which brief, which byte cap, which `sources/` folder) instead of a second entry point —
+    so this helper stays exactly as it was and its callers keep filing real meeting captures
+    through the one pipe."""
     hints = {"title": title, "meeting_date": meeting_date, "source_label": "granola-manual"}
     if attendees:
         hints["attendees"] = attendees
@@ -305,14 +311,11 @@ class DelayedAgent:
     builds. Plain attribute access with no default, so a backend that forgot to declare either
     fails at construction rather than one delivery at a time.
 
-    **And it forwards `run_meeting`, which it did not used to.** The delay belongs to the ORDINARY
-    flow this harness interrupts, so the second call was simply absent — and a wrapper standing in
-    for the port while answering one of its two calls is the same half-backend
-    `test_filing_port_conformance` refuses in every other shape: a worker whose queue happened to
-    hand this harness a `kind="meeting"` row would meet an `AttributeError` mid-item rather than a
-    filed page set. Forwarded UNDELAYED and deliberately so — the sleep exists to open a window for
-    a real SIGINT on the flow the signal tests actually drive, and slowing a call nothing here
-    interrupts would only make the suite wait."""
+    OLD BEHAVIOUR: it also forwarded `run_meeting`, the port's second call, undelayed — a wrapper
+    standing in for the port while answering one of its two calls was the half-backend
+    `test_filing_port_conformance` refuses in every other shape. The port has one call now, so
+    forwarding `run` IS forwarding all of it: a `kind="meeting"` row reaches this wrapper through
+    `run` like every other capture."""
 
     def __init__(self, inner, seconds: float, on_ready=lambda: None):
         self.inner = inner
@@ -325,6 +328,3 @@ class DelayedAgent:
         self.on_ready()
         time.sleep(self.seconds)
         return self.inner.run(**kwargs)
-
-    def run_meeting(self, **kwargs):
-        return self.inner.run_meeting(**kwargs)

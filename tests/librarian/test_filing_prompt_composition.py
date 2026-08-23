@@ -1,9 +1,12 @@
-"""The ORDINARY system prompt and per-item prompt, composed.
+"""The system prompt and the per-item prompt, composed.
 
-`test_meeting_prompt_composition.py`'s twin, one entry point over: the preamble in front of the
-brief is built from a shared frame plus ONE per-backend ENVIRONMENT paragraph, and the per-item
-prompt is built by ONE builder whose two caller-declared facts (`gathered_block`,
-`outcome_channel`) are the only things a backend varies.
+OLD BEHAVIOUR: this file had a twin, `test_meeting_prompt_composition.py`, one entry point over —
+`build_meeting_prompt` was a second per-item builder with its own fence discipline and its own
+section order. There is one pipe and one builder: `kind` chooses the PROSE a capture is filed with
+and never a code path, so a transcript's own metadata rides `build_prompt`'s hint channel like
+every other capture's. The preamble in front of the brief is built from a shared frame plus ONE
+per-backend ENVIRONMENT paragraph, and the per-item prompt is built by that ONE builder whose two
+caller-declared facts (`gathered_block`, `outcome_channel`) are the only things a backend varies.
 
 **A whole section of this file retired with the `sdk` backend, and it is worth saying what it
 proved.** the structured filing flow split one preamble string into four pieces so a second backend could vary exactly
@@ -101,8 +104,7 @@ def test_a_header_containing_braces_composes_instead_of_raising(brief_text):
 
 
 def test_the_gathered_block_sits_above_the_material_it_is_context_for():
-    """A reader meets its context before the thing the context is for — the same position
-    `build_meeting_prompt` gives the registry and the source page's path. Below the material it
+    """A reader meets its context before the thing the context is for. Below the material it
     would read as commentary on a document already read, and a model that had already decided
     placement would have nothing left to use it for.
 
@@ -117,36 +119,37 @@ def test_the_gathered_block_sits_above_the_material_it_is_context_for():
     assert prompt.index("GATHERED CONTEXT BLOCK") < prompt.index("The captured material follows")
 
 
-def test_the_meeting_prompt_puts_the_gathered_block_between_the_registry_and_the_transcript():
-    """The same rule on the meeting side, and BOTH of its bounds.
+def test_the_hint_block_sits_above_the_gathered_context_which_sits_above_the_material():
+    """BOTH bounds of the same rule, on the one builder there is.
 
-    Above the transcript for the reason the ordinary prompt has it there: a reader meets its
-    context before the thing the context is for. Below the REGISTRY because the two answer
-    different questions and the order says which is which — the registry is the server's own
-    answer about identity (what may be anchored to), the gathered block is what this brain
-    already wrote (what may be linked to and what this overlaps). A block above the registry
-    would put page titles people wrote ahead of the governed list they must be checked against.
+    OLD BEHAVIOUR: this was `build_meeting_prompt`'s own ordering pin — the gathered block between
+    the REGISTRY and the transcript, because the two answered different questions and the order
+    said which was which. That builder is gone, and the ordering it protected is the same ordering
+    `build_prompt` owes: what the SUBMITTER suggested first (it is about this capture), then what
+    this brain already wrote, then the material itself. A gathered block above the hints would put
+    other people's page titles ahead of the submitter's own words about their own capture.
+
+    The `kind="meeting"` hints are used deliberately: a transcript's metadata is the case that used
+    to have a builder of its own, and this is where it lands now.
     """
-    prompt = agent_module.build_meeting_prompt(
-        material="A transcript.", meeting_meta={"title": "Q3 sync"}, registry={},
-        source_page_path="sources/meetings/q3-sync-transcript.md",
+    prompt = agent_module.build_prompt(
+        material="A transcript.", submitted_by="a@b.test",
+        hints={"title": "Q3 sync", "meeting_date": "2026-07-29"},
         gathered_block="\nGATHERED CONTEXT BLOCK")
 
-    assert (prompt.index("The entity registry")
+    assert (prompt.index("The submitter's own suggestions")
             < prompt.index("GATHERED CONTEXT BLOCK")
-            < prompt.index("The transcript follows"))
+            < prompt.index("The captured material follows"))
 
 
-def test_the_meeting_prompt_is_unchanged_when_the_worker_gathered_nothing():
+def test_the_prompt_is_unchanged_when_the_worker_gathered_nothing():
     """The benign twin for the branch: an empty `gathered_block` adds no section and no stray blank
-    heading. A prompt that announced a context it did not carry would tell a tool-less agent it had
-    been handed something it can neither see nor go and fetch."""
-    without = agent_module.build_meeting_prompt(
-        material="A transcript.", meeting_meta={"title": "Q3 sync"}, registry={},
-        source_page_path="sources/meetings/q3-sync-transcript.md")
-    with_empty = agent_module.build_meeting_prompt(
-        material="A transcript.", meeting_meta={"title": "Q3 sync"}, registry={},
-        source_page_path="sources/meetings/q3-sync-transcript.md", gathered_block="")
+    heading. A prompt that announced a context it did not carry would tell an agent it had been
+    handed something it can neither see nor, on a tool-less backend, go and fetch."""
+    without = agent_module.build_prompt(material="A transcript.", hints={"title": "Q3 sync"},
+                                        submitted_by="a@b.test")
+    with_empty = agent_module.build_prompt(material="A transcript.", hints={"title": "Q3 sync"},
+                                           submitted_by="a@b.test", gathered_block="")
 
     assert without == with_empty
     assert "What this brain already holds" not in without
@@ -160,12 +163,17 @@ def test_the_outcome_channel_names_the_tool_the_account_is_written_with():
     write no file and you have no tool that could"; this run writes its account as a file, with one
     specific tool, and a sentence naming the file but not the ROUTE is how a model reaches for a
     `Write` it does not have and reports having filed nothing. So: the file, the tool, and the
-    field a run that writes its own page owes (`page_path`) — and NOT `page.body`, which belongs to
-    the shape where code writes the page.
+    field a run that writes its own pages owes (each entry's `path` in `pages`) — and NOT `body`,
+    which belongs to the shape where code writes the page.
+
+    OLD BEHAVIOUR: it named `page_path`, the singular field, while the brief above it asked for the
+    list. A model following the preamble wrote N pages and declared one, and the cross-check
+    refused the capture — the preamble and the brief disagreeing is the exact failure this file
+    exists to catch.
     """
     channel = pydantic_backend.ORDINARY_AGENTIC_OUTCOME_CHANNEL
 
     assert agent_module.OUTCOME_FILENAME in channel
     assert "write_page" in channel
-    assert "page_path" in channel
+    assert "`pages`" in channel and "`path`" in channel
     assert "page.body" not in channel

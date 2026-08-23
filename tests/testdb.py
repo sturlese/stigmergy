@@ -28,6 +28,7 @@ Named `testdb.py` rather than `test_db.py` on purpose — pytest collects `test_
 support code, not a suite. For the same reason nothing exported here is named `test_*` either.
 """
 import os
+import re
 
 import psycopg
 import pytest
@@ -47,6 +48,15 @@ DSN_ENV = "STIGMERGY_TEST_DSN"
 
 DATABASE = "stigmergy_test"
 DSN_DEFAULT = f"postgresql://stigmergy:stigmergy@localhost:54321/{DATABASE}"
+
+# A LANE is `stigmergy_test` with a numeric suffix — `stigmergy_test_3` — and it exists so several
+# suites can run at once during a long restructuring, each truncating its own tables. It changes
+# nothing about the property the guard defends: the refusal is there so a run can never truncate a
+# database somebody's real captures live in, and no such database is named `stigmergy_test<n>`.
+# What a lane DOES cost is the sole-run lock's whole point within one lane — two runs sharing a
+# lane still delete each other's rows — so `require_sole_test_run` still claims per database, and
+# the operator is responsible for giving each concurrent run a lane of its own.
+_LANE_RE = re.compile(rf"^{DATABASE}(_\d+)?$")
 
 
 # The advisory-lock key `require_sole_test_run` claims for the whole run. Spelled the way the two
@@ -97,11 +107,12 @@ def require_test_database(conninfo: str) -> str:
     is exactly the kind of question that gets one of them wrong.
     """
     found = database_of(conninfo)
-    if found != DATABASE:
+    if not _LANE_RE.match(found or ""):
         raise WrongDatabase(
             f"refusing to point a Postgres fixture at {describe(conninfo)}: the suites TRUNCATE "
             f"capture_queue, job_runs, ingest_errors and audit_log at setup, and "
-            f"{found or '<no database>'!r} is not the test database ({DATABASE!r}). "
+            f"{found or '<no database>'!r} is not the test database ({DATABASE!r}, or a numbered "
+            f"lane of it such as {DATABASE}_1). "
             f"A queued capture exists nowhere else until the librarian files it — this refusal is "
             f"what keeps `make test` from deleting one. Run `make db-up` to create {DATABASE}, or "
             f"set ${DSN_ENV} to a DSN naming it (default: {DSN_DEFAULT}).")

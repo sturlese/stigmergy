@@ -16,6 +16,7 @@ contextual_retrieval: title
 tier: 1
 verification: verified
 as_of: "2023"
+acl: [sales]
 ---
 
 # Legacy Pricing Overview 2023

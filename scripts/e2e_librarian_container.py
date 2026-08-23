@@ -149,7 +149,9 @@ def main() -> int:
         print("\n-- phase 2: submit, then start the WORKER CONTAINER --", flush=True)
         evidence_store = evidence.store_from_env()
         acks = submit_batch(conn, evidence_store, "ordinary", FIRST_BATCH)
-        # In the SAME batch: the worker dispatches by `kind`, so this rides the same drain.
+        # In the SAME batch: one pipe files every kind, so this rides the same drain and the same
+        # worker. Its kind buys it one thing — a `sources/meetings/` archive instead of
+        # `sources/notes/` — which phase 3b is what checks.
         acks["meeting"] = base.submit_meeting(conn, evidence_store, base.MEETING_MATERIAL)
         check(f"{FIRST_BATCH + 1} captures queued", len(acks) == FIRST_BATCH + 1, str(len(acks)))
         start_worker()
@@ -169,11 +171,19 @@ def main() -> int:
         head = base.remote_head()
         commits = base.remote_commits(verify)
         rows = filed_rows(conn, acks)
-        # "meeting" excluded from the ordinary-flow accounting: its commit is a multi-file page SET
-        # with a different subject phrase. Phase 3b covers it.
+        # "meeting" is still excluded from THIS count and only from this one: the number being
+        # asserted is `FIRST_BATCH`, the size of the raw batch. It rides the same pipe and the same
+        # commit shape — phase 3b is what checks the one thing its kind decides.
         filed = [r for label, r in rows.items()
                 if label != "meeting" and r["status"] == schema.FILED and r["result_ref"]]
         pages = {r["result_ref"] for r in filed}
+        # EVERY page this batch filed, transcript included — what the final no-double-file tally is
+        # counted against. Kept separate from `pages` on purpose: that one is scoped to the raw
+        # batch because the number beside it is `FIRST_BATCH`.
+        # OLD BEHAVIOUR: the final check reused `pages`, so the transcript's commit was counted in
+        # the numerator and its page was not, and the tally came out one short the moment a
+        # transcript started filing through the same pipe as everything else.
+        first_refs = {r["result_ref"] for r in rows.values() if r["result_ref"]}
 
         check("every ordinary capture was filed by the container",
               len(filed) == FIRST_BATCH,
@@ -192,24 +202,41 @@ def main() -> int:
                   body.startswith("---") and f"submitted_by: {SUBMITTER}" in body
                   and f"Submitted-by: {SUBMITTER}" in trailer, f"{len(body)} bytes")
 
-        print("\n-- phase 3b: the meeting page SET, filed by the CONTAINER's worker --",
-              flush=True)
+        print("\n-- phase 3b: the transcript, filed by the CONTAINER's worker through the same "
+              "pipe --", flush=True)
+        # OLD BEHAVIOUR: this read a `filed_meeting` block — `meeting_page` plus a `decisions` list
+        # — and expected the page SET a retired flow wrote. A transcript declares its pages in
+        # `pages_filed` like every other capture, and `source_pages` carries its verbatim archive,
+        # which is deliberately NOT among them.
         meeting_row = rows["meeting"]
-        check("the meeting drop was filed by the container as a page SET",
+        check("the transcript was filed by the container through the ordinary pipe",
               meeting_row["status"] == schema.FILED,
               meeting_row["report"].get("summary", "")[:120])
-        filed_meeting = meeting_row["report"].get("filed_meeting") or {}
-        meeting_page_path, meeting_sha = meeting_row["result_ref"].rsplit("@", 1)
-        decision_paths = [d.get("path", "") for d in filed_meeting.get("decisions", [])]
+        # `\0` rather than indexing a ref that may be empty: a transcript that did not file has
+        # already been recorded as a FAIL above, and crashing here would lose phases 4 and 5 with it.
+        meeting_sha = meeting_row["result_ref"].rsplit("@", 1)[-1] or "\0"
+        meeting_pages = meeting_row["report"].get("pages_filed") or []
         # `source_pages` is a LIST: a long transcript splits into cross-linked parts, so the arity
         # is N>=1. The set comparison stays exact — every part in the commit, nothing else.
-        source_pages = filed_meeting.get("source_pages") or []
-        expected_paths = {*source_pages, meeting_page_path, *decision_paths}
-        committed_paths = set(gitcmd.run("show", "--name-only", "--format=", meeting_sha,
-                                         cwd=str(verify), check=False).stdout.split())
-        check("...every source page part, one meeting page, its decisions, all in ONE commit",
-              meeting_sha in commits and source_pages and committed_paths == expected_paths,
+        source_pages = meeting_row["report"].get("source_pages") or []
+        expected_paths = {*source_pages, *meeting_pages}
+        # Split on NEWLINES, never on whitespace: a page path is `<Title>.md` and a title has
+        # spaces in it, so `.split()` shreds one path into four tokens and the set comparison below
+        # can then only ever fail. The host driver has always split this output the right way; this
+        # copy did not, and the paths it compared happened to be slugified until a capture's own
+        # page joined them.
+        committed_paths = {p for p in gitcmd.run("show", "--name-only", "--format=", meeting_sha,
+                                                 cwd=str(verify),
+                                                 check=False).stdout.split("\n") if p.strip()}
+        check("...every page it established and every part of its verbatim archive, all in ONE "
+              "commit and nothing else",
+              meeting_sha in commits and source_pages and meeting_pages
+              and committed_paths == expected_paths,
               f"committed={sorted(committed_paths)} expected={sorted(expected_paths)}")
+        check("...archived under sources/meetings/, with the pages it established under wiki/",
+              all(p.startswith("sources/meetings/") for p in source_pages)
+              and all(p.startswith("wiki/") for p in meeting_pages),
+              f"sources={source_pages} pages={meeting_pages}")
         base.assert_parts_carry_no_verdict(source_pages, meeting_sha=meeting_sha,
                                            cwd=str(verify), check=check)
 
@@ -277,7 +304,7 @@ def main() -> int:
         librarian_commits = [sha for sha in commits_after
                              if "Filed by the librarian from capture #" in gitcmd.run(
                                  "log", "-1", "--format=%B", sha, cwd=str(after)).stdout]
-        distinct = {r["result_ref"] for r in rows.values()} | pages
+        distinct = {r["result_ref"] for r in rows.values()} | first_refs
         check("one commit per filed page across BOTH workers — the kill filed nothing twice",
               len(librarian_commits) == len(distinct),
               f"{len(librarian_commits)} librarian commits for {len(distinct)} pages")

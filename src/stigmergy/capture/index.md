@@ -1,8 +1,12 @@
 # capture — the fast lane's front half
 
-Narrative doc: [`docs/reference/capture.md`](../../../docs/reference/capture.md); the meeting
-kind's own flow is [`docs/reference/meeting-distiller.md`](../../../docs/reference/meeting-distiller.md).
+Narrative doc: [`docs/reference/capture.md`](../../../docs/reference/capture.md); what the worker
+then does with a row is [`docs/reference/librarian.md`](../../../docs/reference/librarian.md).
 This file is the code map — for whoever is about to edit this package, not run it.
+
+**`kind` is a fact about the material, not a route.** All four submittable kinds ride the same
+filing flow; what a kind decides here is what the door REQUIRES (a `meeting` needs `title` and
+`meeting_date`, a `document` needs `title`) and how large the material may be.
 
 ## Purpose
 
@@ -27,10 +31,10 @@ drained them. What a human decides now is an IDENTITY, after the filing, through
 | `schema.py` | The contract: idempotent DDL and `startup_ddl_lock`; the status enum, its named CHECK and the two-halved guard that swaps it; `RETIRED_STATUSES` and the startup migration that returns a still-parked row to `queued` with one `trace` event saying why; the status sets (`TERMINAL_STATUSES` / `FINISHED_STATUSES` / `GATE_NOT_YET_RUN_STATUSES`); the pure submission contract (`prepare_submission`); the kind vocabularies (`SUBMITTABLE_KINDS`, what any door may ask for; `KINDS`, what the queue accepts — the two differ by `DELETE` alone, guarded by `reject_unsubmittable_kind`) and the per-kind material caps under them (`MATERIAL_CAP_BYTES`, read through `max_material_bytes`; `MAX_MATERIAL_BYTES` is the largest, which is what a transport's body limit derives from); the hint allowlists — placement, the three provenance ones, and `REGISTER_HINT_KEYS`, the four `register_*` keys a capture carries a registration as (`Registration`, `registration_hints`, `registration_from_hints`, `REGISTRATION_SOURCES` = the doors that name themselves) — `DELETE_HINT_KEYS` and the removal's own seam (`delete_paths`, `MAX_DELETED_PAGES`, `DELETE_REASON_CHARS`, the zone rules) — and `normalize_hints`; the `reject_*` refusals; the rejection reason codes and `withheld_reason`; `clean_note`; `base_report` / `SEARCHABILITY_NOTE`; `validate_meeting_date` |
 | `queue.py` | Insert · claim (`FOR UPDATE SKIP LOCKED`) · `release_expired` · `finish` (the `attempts` fence, and the ONLY transition out of a claim) · `holds_lease` · the one listing query and its two entry points · `get_submission_trace` · `query_in_flight` · `work_waiting` (is anything QUEUED right now — one bit, for the worker's view sweep deciding whether to yield the loop back) · `counts_by_status` · `outcomes_by_day` · the two latency sample readers |
 | `evidence.py` | The content-addressed store: `content_key` (pure), `S3EvidenceStore` (MinIO/R2, lazy boto3 client), `MemoryEvidenceStore` (the offline double) and `store_from_env` |
-| `ops.py` | `record_job_run`, `record_ingest_error`, the `job_run` context manager, the written-down `job_runs.status` spec (`ok` / `error` / `partial`), and `try_advisory_lock` — the NON-blocking mutual exclusion a maintenance pass takes so a loser can skip and say so (`views.regenerate.sweep`); `schema.startup_ddl_lock` is the blocking sibling, and each caller owns its own key |
+| `ops.py` | `record_job_run`, `record_ingest_error`, the `job_run` context manager, the written-down `job_runs.status` spec (`ok` / `error` / `partial`), and `try_advisory_lock` — the NON-blocking mutual exclusion a maintenance pass takes so a loser can skip and say so; `schema.startup_ddl_lock` is the blocking sibling, and each caller owns its own key. **No caller today**: the view sweep was its one user and went with the stored rollup; `slack.app` open-codes the same `pg_try_advisory_lock` rather than calling this |
 | `retention.py` | `purge` — payload/hints/outcome deletion on terminal rows past the window, plus the age-independent secret/PII reconciliation; `purge_secret_capture_immediately`. `outcome` is a legacy column nothing writes any more, so this is now its only eraser |
 | `latency.py` | `percentile`, `LatencySummary`, `summarize`, `render` — capture→filed p50/p95, refusing to answer below `MIN_SAMPLES` |
-| `render.py` | The operator dialect every CLI prints in, and the home of these renderings: `depth_line`, `format_ms`, `format_age`, `clean_for_terminal`, `RECLAIM_NOW`. Below the CLIs because `latency.py` needs `format_ms` and `server.pilot_report` imports that; reaches nothing but `stigmergy.text` |
+| `render.py` | The operator dialect every CLI prints in, and the home of these renderings: `depth_line`, `format_ms`, `format_age`, `clean_for_terminal`, `RECLAIM_NOW`. Below the CLIs because `latency.py` needs `format_ms` and `admin.measurements` imports that; reaches nothing but `stigmergy.text` |
 | `cli.py` | `stigmergy-queue` (list · show · claim · reclaim · purge — five subcommands, none of which moves a row on a person's behalf, and none of which enqueues one); `render.py`'s names re-exported for the CLIs that already import them from here; `connect`; and `WORKER_DEFAULT_LEASE_S` — the worker's derived lease, duplicated here (the reverse import would be a cycle) and pinned to `librarian.config.DEFAULT_VISIBILITY_TIMEOUT_S` by `tests/capture/test_cli.py` |
 | `errors.py` | `CaptureError` and its three subclasses (`SubmissionRejected`, `EvidenceError`, `QueueStateError`), with the which-messages-may-cross-the-network rule |
 
@@ -111,7 +115,7 @@ drained them. What a human decides now is an IDENTITY, after the filing, through
 ## Notes
 
 - `capture` is a store everyone who interprets its rows imports (`server`, `librarian`, `admin`,
-  `slack.store`, `gardener`, `digest`, `views.regenerate`), never the reverse. The only crossing is
+  `slack.store`, `gardener`, `digest`), never the reverse. The only crossing is
   downward: `stigmergy-librarian` imports `render.py`'s dialect through `cli.py`'s re-export, so two
   tools in one terminal print one dialect.
 - Write order is deliberate and asymmetric: validate → evidence blob → queue row. An orphan blob

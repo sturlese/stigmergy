@@ -20,18 +20,17 @@ from stigmergy.gardener.schema import (
     SEVERITY_WARN,
     SOURCE_DETERMINISTIC,
 )
+from stigmergy.index import corpus
 from stigmergy.kernel.acl import flows_into
 from stigmergy.kernel.registry import Registry
 from stigmergy.librarian import page as page_policy
 from stigmergy.text import parse_result_ref
-from stigmergy.views import staleness as view_staleness
 
 log = logging.getLogger(__name__)
 
 # ── check slugs ──────────────────────────────────────────────────────────────────────────────
 CHECK_ORPHAN_PAGE = "orphan-page"
 CHECK_AGING_SEED = "aging-seed"
-CHECK_STALE_VIEW = "stale-view"
 CHECK_ANCHOR_CONCENTRATION = "anchor-concentration"
 CHECK_DEAD_VOCABULARY = "dead-vocabulary"
 CHECK_COMPANY_WIDE_FRACTION = "company-wide-fraction"
@@ -39,8 +38,9 @@ CHECK_COMPANY_PAGE_NAMES_ENTITY = "company-page-names-entity"
 # A style convention, not a safety property — a finding here, never a filing veto.
 # `librarian.processing` names the same slug where it declines to veto it; one grep finds both.
 CHECK_DATE_BEARING_BODY_LINK = "date-bearing-body-link"
-# The one check with a repair kind of its own (`repair.schema.KIND_ENTITY_BODY`): the finding names
-# an entity page, and the repair proposer drafts that page's body from the pages anchored to it.
+# The finding names ONE entity page whose body is still the template. Nothing drafts it: an entity
+# page grows from the `entity_updates` a capture carries, so the fix is to capture something about
+# that entity, or to edit the page by hand.
 CHECK_ENTITY_PLACEHOLDER_BODY = "entity-placeholder-body"
 
 # The residual an applied `entity-alias` merge leaves behind and can never sweep up itself: the
@@ -59,15 +59,14 @@ CHECK_ANCHORED_TO_SUPERSEDED_ENTITY = "anchored-to-superseded-entity"
 CHECK_LINK_TO_NARROWER_PAGE = "link-to-narrower-page"
 
 ALL_CHECK_SLUGS = (
-    CHECK_ORPHAN_PAGE, CHECK_AGING_SEED, CHECK_STALE_VIEW, CHECK_ANCHOR_CONCENTRATION,
+    CHECK_ORPHAN_PAGE, CHECK_AGING_SEED, CHECK_ANCHOR_CONCENTRATION,
     CHECK_DEAD_VOCABULARY, CHECK_COMPANY_WIDE_FRACTION, CHECK_COMPANY_PAGE_NAMES_ENTITY,
     CHECK_DATE_BEARING_BODY_LINK, CHECK_ENTITY_PLACEHOLDER_BODY,
     CHECK_ANCHORED_TO_SUPERSEDED_ENTITY, CHECK_LINK_TO_NARROWER_PAGE,
 )
 
-# The tail of every "this page may be anchored wrong" action — `check_company_page_names_entity`
-# here and `sweep.MODEL_SUGGESTED_ACTIONS[CHECK_MODEL_ANCHOR_FIT]` compose the SAME instruction,
-# and an operator reading one after the other must not find two wordings of one procedure.
+# The tail of the "this page may be anchored wrong" action. One spelling of the procedure, in one
+# place, so an operator who meets it twice does not meet two wordings of it.
 REANCHOR_BY_HAND = (
     "a re-anchor has to be done by hand — edit `entity:` on the page in the knowledge repo "
     "yourself, commit and push, since a hand edit in the wiki zone never passes through the "
@@ -79,18 +78,17 @@ REANCHOR_BY_HAND = (
 def build_finding(*, check: str, severity: str, subject: str, detail: str,
             suggested_action: str, source: str = SOURCE_DETERMINISTIC,
             subjects: list[str] | None = None, **extra) -> dict:
-    """The one place a finding dict is assembled — shared by every check here and by
-    `gardener.sweep.to_finding` (`model_id` rides through `**extra`). `store.py` persists the
-    seven named keys plus `model_id` and nothing else, so anything else `**extra` carries stays
-    in memory for the run that put it there.
+    """The one place a finding dict is assembled — shared by every check here. `store.py`
+    persists the seven named keys plus `model_id` and nothing else, so anything `**extra` carries
+    stays in memory for the run that put it there.
 
     `subject` is the DISPLAY string and `subjects` the same fact as data. Omitted, it derives from
     `subject` — one page, named once — and an EMPTY subject derives to `[]` rather than `[""]`:
     `check_company_wide_fraction` reports a corpus-wide fraction that names no page at all, and a
     consumer iterating `subjects` must not be handed an empty string as if it were a path. A check
-    whose subject is not a page path (`check_stale_views` names an entity id) passes it through
-    unchanged — this function does not classify, and every reader that acts on a path filters for
-    one.
+    whose subject is not a page path (`check_dead_vocabulary` names an entity id) passes it
+    through unchanged — this function does not classify, and every reader that acts on a path
+    filters for one.
     """
     finding = {
         "check": check, "severity": severity, "source": source,
@@ -206,36 +204,6 @@ def check_aging_seeds(conn, *, threshold_days: int, population_stats: dict | Non
     ]
 
 
-# ── stale views — file-based, no DB ──────────────────────────────────────────────────────────
-def check_stale_views(repo: str) -> list[dict]:
-    """Population: every entity `views.staleness.list_stale_entities` names — reused verbatim,
-    never re-derived. Staleness is a signal mismatch, not an age — the member hash OR the backlink
-    hash, whichever moved — and reusing that function rather than re-deriving it is exactly why
-    this check inherited the backlink half (#85) without a line changing here. Import
-    `views.staleness`, never `views.regenerate`: the latter would load the git write stack into
-    every gardener process.
-
-    This finding HAS an actor, and it is not here: the librarian worker's periodic convergence
-    sweep regenerates over a SUPERSET of this population (it also creates views that never existed
-    and removes orphaned ones). So this stays detection — the gardener holds no git plumbing by
-    construction — and the command below is what an operator runs to skip the wait."""
-    return [
-        build_finding(
-            check=CHECK_STALE_VIEW, severity=SEVERITY_WARN, subject=entity_id,
-            detail="the view no longer matches the corpus — its member set or the backlinks it "
-                   "cites have changed since it was last generated",
-            # No command: the worker's own sweep converges `views/` from state, and it runs on
-            # every idle branch. A finding that told an operator to run something
-            # would be an executable promise nothing keeps — what this one says is that it will
-            # take care of itself, and roughly when.
-            suggested_action="no command — the librarian worker regenerates it on its next idle "
-                             "pass; a view still listed here after several is worth checking the "
-                             "worker's job runs for",
-        )
-        for entity_id in view_staleness.list_stale_entities(repo)
-    ]
-
-
 # ── shared population for the two windowed checks: "the last N filings" ──────────────────────
 _RECENT_FILED_REFS_SQL = """
 SELECT result_ref FROM capture_queue WHERE status = 'filed'
@@ -321,10 +289,14 @@ def check_anchor_concentration(conn, registry: Registry, *, window: int,
 
 # ── dead vocabulary — file-based, no DB ───────────────────────────────────────────────────────
 def check_dead_vocabulary(repo: str, registry: Registry) -> list[dict]:
-    """Population: every registered entity id NOT in
-    `views.staleness.list_all_anchored_entities` (reused, never re-derived) — zero pages declare
-    `entity: [<id>]`."""
-    anchored = set(view_staleness.list_all_anchored_entities(repo))
+    """Population: every registered entity id that NO page anchors — zero pages declare
+    `entity: [<id>]`.
+
+    Read straight off `index.corpus.load_pages`, the same parser the index build runs, so this
+    check and retrieval cannot disagree about which pages exist or what they anchor to."""
+    anchored: set[str] = set()
+    for row in corpus.load_pages(repo):
+        anchored.update(row.entity)
     findings = []
     for entity_id in sorted(registry.entities):
         if entity_id in anchored:
@@ -438,10 +410,10 @@ def check_company_page_names_entity(conn, registry: Registry) -> list[dict]:
 # ── pages anchored to a retired identity ──────────────────────────────────────────────────────
 # The population is the whole point, so it is spelled out: the KNOWLEDGE zone only, minus the
 # entity zone itself. The absorbed page keeps its self-anchor forever BY DESIGN (its history is
-# its own), and its `views/` rollup keeps declaring the id as a member set of one — a predicate
-# alone would therefore report two permanent, unfixable findings per merge, forever: the exact
-# disease the repair loop exists to end. With those out, the count is exactly zero the moment a
-# merge lands, and every finding is a page somebody can actually re-anchor.
+# its own), so a predicate alone would report a permanent, unfixable finding per merge, forever —
+# and a finding nobody can act on trains an operator to ignore the whole report. With it out, the
+# count is exactly zero the moment a merge lands, and every finding is a page somebody can
+# actually re-anchor.
 _ANCHORED_TO_SUPERSEDED_SQL = """
 WITH retired AS (
   SELECT DISTINCT unnest(entity) AS id
@@ -490,11 +462,11 @@ _WIKILINK_RE = re.compile(r"!?\[\[([^\[\]]+?)\]\]")
 
 
 def check_date_bearing_body_links(repo: str) -> list[dict]:
-    """Population: every page in the three content zones, read from the repo checkout. One WARN
+    """Population: every page in the two content zones, read from the repo checkout. One WARN
     finding per offending page, naming the first offending stem."""
     findings = []
     root = pathlib.Path(repo)
-    for zone in ("wiki", "sources", "views"):
+    for zone in ("wiki", "sources"):
         zone_dir = root / zone
         if not zone_dir.is_dir():
             continue
@@ -556,19 +528,16 @@ def is_placeholder_line(line: str) -> bool:
 
 def placeholder_lines(body: str) -> list[str]:
     """Every placeholder line in a body — the ONE spelling of "this body still carries its
-    template". `check_entity_placeholder_bodies` reports on it and `sweep.select_empty_body_pages`
-    EXCLUDES on it, and the two must be the same predicate or a page would be reported by both
-    checks or by neither."""
+    template", and what `check_entity_placeholder_bodies` reports on."""
     return [line for line in body.splitlines() if is_placeholder_line(line)]
 
 
 def is_blank_body(body: str) -> bool:
-    """Nothing below the title: an empty body, or an H1 and blank lines and no more. The ONE
-    spelling, for `placeholder_lines`' reason — the deterministic check reports on it and the
-    model pass excludes on it, and a page must never fall between the two. It used to: a blank
-    body carries no placeholder LINE, and the model's rubric asks about a body that is "WRITTEN
-    but says nothing" — which a blank one is not. Blank is decidable without a model, so it is
-    answered here, free and exact, with the same finding and the same repair."""
+    """Nothing below the title: an empty body, or an H1 and blank lines and no more. Reported as
+    the same finding as a body still carrying its template, because it is the same thing to a
+    reader — an identity page that says nothing about the identity — and it is answered by the
+    same drafted body. Blank is decidable without a model, so it is answered here, free and
+    exact."""
     lines = [line.strip() for line in (body or "").splitlines() if line.strip()]
     if lines and lines[0].startswith("# "):
         lines = lines[1:]
@@ -576,11 +545,10 @@ def is_blank_body(body: str) -> bool:
 
 
 # What one entity page may weigh before this walk refuses to open it at all. A FIXED figure, not
-# an env setting: it bounds the shape of one file's contribution, never how much of the population
-# is judged, which is the line `settings.py`'s own docstring draws. Generous by an entity page's
-# standards (a written one is a few kilobytes) and small next to a process's memory, because the
-# walk reads the whole zone into memory BEFORE the empty-body pass's ceiling applies — the ceiling
-# bounds the model spend and has never bounded this.
+# an env setting: it bounds one file's contribution, never how much of the population is checked,
+# which is the line `settings.py`'s own docstring draws. Generous by an entity page's standards (a
+# written one is a few kilobytes) and small next to a process's memory, because this walk reads
+# the whole zone in before any check sees a page.
 MAX_ENTITY_PAGE_BYTES = 256_000
 
 
@@ -591,16 +559,14 @@ def entity_zone_pages(repo: str, *, walk_stats: dict | None = None) -> list[dict
     convention the windowed checks' `population_stats` uses.
 
     The ONE walk of that zone, and it happens ONCE per run: `run.run_gardener` calls it and hands
-    the SAME list to `check_entity_placeholder_bodies` and to the sweep's empty-body pass, because
-    the second EXCLUDES what the first reported. Two walks minutes apart (they used to straddle
-    the editorial sweep's model call) would let a page edited in between be reported by both
-    checks or by neither, and the exclusion is only exact over one page set.
+    the list on. Two walks of one zone in one run can disagree about what the corpus contained, so
+    every consumer judges this exact list.
 
     **A symlinked leaf or a symlinked path component is refused, not followed.** What this walk
-    reads no longer stays on the machine: a body reaches a model prompt and a sanitized excerpt is
-    persisted into `gardener_findings.detail`, printed in the terminal report and rendered in the
-    admin console. `wiki/entities/Acme.md -> /proc/self/environ` would ship that file to the model
-    provider. Both halves are needed and `librarian.gather._confined` gives the reasoning for
+    reads does not stay in the process: an excerpt is persisted into `gardener_findings.detail`,
+    printed in the terminal report and rendered in the admin console, so
+    `wiki/entities/Acme.md -> /proc/self/environ` would put that file in front of an operator and
+    into a table. Both halves are needed and `librarian.gather._confined` gives the reasoning for
     each: `page.is_inside` resolves the whole path, since a symlinked DIRECTORY component is
     invisible to a leaf `islink` test, and the leaf test catches a link pointing back inside the
     zone — contained, and still not the bytes git tracks.
@@ -651,13 +617,12 @@ def entity_zone_pages(repo: str, *, walk_stats: dict | None = None) -> list[dict
 
 
 def check_entity_placeholder_bodies(pages: list[dict]) -> list[dict]:
-    """Population: `entity_zone_pages`'s own list, walked once per run and handed to this check
-    and to the model's empty-body pass alike — a page list, never a repo path, so this check is a
-    pure function of what the walk found. One INFO finding per page whose body still carries at
-    least one placeholder line."""
-    action = ("no command — the worker's repair pass drafts a body from the pages anchored to "
-              "this entity and commits it; read the diff on the Repairs page, or edit the page "
-              "by hand")
+    """Population: `entity_zone_pages`'s own list, walked once per run — a page list, never a
+    repo path, so this check is a pure function of what the walk found. One INFO finding per page
+    whose body still carries at least one placeholder line, or is blank below its title."""
+    action = ("no command — an entity page grows from what captures establish about it, so "
+              "capture something about this entity and the librarian appends it, or edit the "
+              "page by hand")
     findings = []
     for page in pages:
         placeholders = placeholder_lines(page["body"])
@@ -665,9 +630,9 @@ def check_entity_placeholder_bodies(pages: list[dict]) -> list[dict]:
             findings.append(build_finding(
                 check=CHECK_ENTITY_PLACEHOLDER_BODY, severity=SEVERITY_INFO,
                 subject=page["path"],
-                # The COUNT, never the lines themselves: a finding's detail reaches a model's
-                # prompt and a Slack digest, and this one has nothing to say that the page's own
-                # text says better to whoever opens it.
+                # The COUNT, never the lines themselves: a finding's detail reaches a Slack
+                # digest and an operator's console, and this one has nothing to say that the
+                # page's own text says better to whoever opens it.
                 detail=(f"its body still carries {len(placeholders)} unwritten placeholder line"
                         f"{'' if len(placeholders) == 1 else 's'} from the entity template — this "
                         f"identity exists and says nothing about itself"),
@@ -687,7 +652,7 @@ _LINK_NARROWER_SQL = """
 SELECT p.path, p.acl, q.path, q.acl
 FROM pages_index p
 JOIN pages_index q ON q.path = ANY(p.links)
-WHERE p.path <> q.path AND p.zone <> 'views'
+WHERE p.path <> q.path
 ORDER BY p.path, q.path
 """
 
@@ -700,8 +665,8 @@ def check_link_to_narrower_page(conn) -> list[dict]:
     demoting the link to plain text leaves the TITLE, which is the whole of what a link leaks;
     and deleting the link edits somebody's words. So this names the pair and stops.
 
-    The comparison is `kernel.acl.flows_into` — the same predicate the write path and the view
-    feeds use — asked of the TARGET flowing into the SOURCE: the link's readers are the source
+    The comparison is `kernel.acl.flows_into` — the same predicate the write path uses —
+    asked of the TARGET flowing into the SOURCE: the link's readers are the source
     page's audience, so the target must already be readable by all of them. It runs over
     `pages_index.links`, the resolved outbound graph the index computes once, rather than
     re-parsing bodies: one wikilink resolution in this system, and it is the index's.

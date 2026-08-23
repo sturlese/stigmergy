@@ -1,7 +1,7 @@
 # Operator runbook
 
 Everything below is for the operator running the system. The live world this runbook covers:
-**three zones** in the knowledge repo (`wiki/` · `sources/` · `views/`), the librarian's
+**two zones** in the knowledge repo (`wiki/` · `sources/`), the librarian's
 **9 gates**, **8 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
 `ask`, `brain_submit`/`brain_submissions`/`brain_delete`),
 **one Fly app** with three process groups (`app` · `slack` · `worker`), the **night shift** the
@@ -74,10 +74,8 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    # the admin console (`app` group) — OPTIONAL; unset = the console does not exist.
    # Hash from `stigmergy-admin-token`. That hash is the console's ENTIRE credential surface: it
    # holds no token for any other service, because it drives none (the passes it used
-   # to dispatch through a GitHub PAT now run in the worker). The digest channel id is not
-   # sensitive; secrets are simply Fly's env mechanism.
+   # to dispatch through a GitHub PAT now run in the worker).
    fly secrets set STIGMERGY_ADMIN_TOKEN_HASH="<from stigmergy-admin-token>"
-   fly secrets set STIGMERGY_DIGEST_CHANNEL_ID="C..."
    ```
 
    **Every secret here is read once, at process startup** — `STIGMERGY_TOKEN_STORE` included, which
@@ -97,7 +95,11 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    | `STIGMERGY_LIBRARIAN_GARDEN_AT` | `05:07` | when the daily gardener pass runs, UTC `HH:MM`, or `off` |
    | `STIGMERGY_LIBRARIAN_RETENTION_AT` | `04:42` | when the daily retention purge runs, UTC `HH:MM`, or `off` |
    | `STIGMERGY_RETENTION_DAYS` | `30` | how long a terminal capture keeps its payload |
-   | `STIGMERGY_GARDENER_MODEL` | **must be set** | the gardener's model. Its own default is a bare id resolving through the OpenAI Responses API, and the worker has no `OPENAI_API_KEY` — the boot strips it. Use a provider-prefixed model whose key the worker holds (`fly.toml` ships `anthropic:claude-sonnet-5`). A garden pass whose model this worker cannot authenticate fails by name and records a `job_runs` error row, rather than stopping the worker — filing never depends on maintenance |
+
+   The gardener pass needs no model and no provider key of its own: every check it runs is
+   deterministic. It used to, and the setting for it was **must be set** on a deployment precisely
+   because its default resolved through a provider whose key the worker boot strips — a trap that
+   went with the model passes.
 
    A pass never starts while a capture is waiting in the queue, and yields between units, so
    maintenance cannot delay a filing. "Did it run" is answered from `job_runs` — the same rows the
@@ -272,8 +274,6 @@ fly deploy --image <that image ref>   # redeploy it directly
 |---|---|---|---|
 | gardener | daily, `STIGMERGY_LIBRARIAN_GARDEN_AT` (default 05:07) | the worker's idle branch | `stigmergy-gardener`'s corpus-health run, findings persisted |
 | retention purge | daily, `STIGMERGY_LIBRARIAN_RETENTION_AT` (default 04:42) | the worker's idle branch | payload and hints of terminal rows past the window |
-| view sweep | every `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S`, and after anything this worker filed | the worker's idle branch | regenerates the `views/` rollups that went stale |
-| repair pass | every `STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S` | the worker's idle branch | derives repairs from the gardener's findings and APPLIES them |
 | index rebuild | **never automatically** | an operator's terminal | the full rebuild — see below |
 
 All of it runs inside the `worker` process group. **No pass starts while a capture is waiting**,
@@ -282,8 +282,8 @@ filing.
 
 The two DAILY passes decide "is today's run still owed" by reading their own last `job_runs` row,
 not an in-process timer — which is why a redeploy at 05:08 does not garden a second time, and why
-a worker that was down all night does not run a 05:07 pass at 23:00 (it would land twelve hours
-after the repair passes that were supposed to answer its findings).
+a worker that was down all night does not run a 05:07 pass at 23:00 (it would report on a corpus
+nobody was reading it against).
 
 **The index rebuild is the one pass that cannot move into the worker.** It needs an embedding key,
 and the worker's environment deliberately has none: `librarian.bootstrap` strips `OPENAI_API_KEY`
@@ -308,12 +308,8 @@ SELECT built_at FROM index_meta;                 -- the rebuild's only trace; it
 SELECT * FROM ingest_errors WHERE NOT resolved ORDER BY last_at DESC;
 ```
 
-The console's Jobs page is the same rows with the times spelled out, and its Repairs page is what
-the repair pass did with the gardener's findings ([repair.md](./repair.md)).
-
-`stigmergy-digest` is deliberately NOT on the night shift: run
-`.venv/bin/stigmergy-digest --repo $STIGMERGY_REPO` (or `--dry-run`) by hand; its watermark means each
-post covers exactly the window since the previous one.
+The console's Jobs page is the same rows with the times spelled out, and its Repairs page is the
+ledger of what has left the corpus ([repair.md](./repair.md)).
 
 ### The incremental index webhook
 
@@ -346,7 +342,7 @@ ORDER BY started_at DESC LIMIT 5;
 ### The admin console
 
 `/admin` on the `app` process group — the daily loop (queue drain, the night shift,
-gardener, repairs, digest, index, activity) in a browser instead of a terminal. Inert 404s until
+gardener, repairs, index, activity) in a browser instead of a terminal. Inert 404s until
 `STIGMERGY_ADMIN_TOKEN_HASH` is set; everything it can do, each degraded mode and the rotation
 drills are in [admin-console.md](./admin-console.md). It is management-only: nothing on it reads
 the corpus.
@@ -404,11 +400,9 @@ anything in this repo. Every zone has a closed set of writers:
 
 | Zone | Written by |
 |---|---|
-| `wiki/notes,decisions,concepts/` | the librarian, filing a capture through the nine gates |
-| `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `brain_submit(kind="meeting", …)` |
-| `sources/slack/`, `sources/documents/` | the librarian's source attachment, from the 🧠 gesture and a `brain_submit(kind="document", …)` |
-| `wiki/entities/` (+ `ops/entity-registry.json`) | one writer, and no second: `librarian.identity` CREATES an entity page inside the capture's own commit, `approved_by:` naming whoever captured, and appends new facts, connections and spellings to a registered entity's page. A repair the worker applies may later EDIT such a page (an alias merge, a body rewrite); nothing but the librarian creates one |
-| `views/` | `stigmergy.views` **only**, and only from the librarian worker: the convergence sweep on its idle branch (the guarantee) and the best-effort trigger right after a meeting files. There is no command, because there is no second writer |
+| `wiki/notes,concepts/` | the librarian, filing a capture of any kind through the nine gates — one page, or as many as its material establishes |
+| `sources/slack/`, `sources/documents/`, `sources/meetings/`, `sources/notes/` | the librarian's source archive — every capture files its material verbatim, and the door and the kind choose the folder |
+| `wiki/entities/` (+ `ops/entity-registry.json`) | one writer, and no second: `librarian.identity` CREATES an entity page inside the capture's own commit, `approved_by:` naming whoever captured, and appends new facts, connections and spellings to a registered entity's page. A removal's sweep may later scrub a dead link off such a page; nothing but the librarian creates one |
 
 After any bulk re-seed: rebuild the index (next section) and run `make index-check`.
 
@@ -428,12 +422,14 @@ Material is capped at 1 MB for both (256 KB for `raw` and `page`), in UTF-8 byte
 missing a required hint, or over its cap, is refused at the enqueue seam with no queue row and no
 evidence blob written.
 
-A meeting files a page SET — the verbatim transcript under `sources/meetings/`, one `wiki/meetings/`
-page and one `wiki/decisions/` page per decision, atomically
-([meeting-distiller.md](./meeting-distiller.md)). A document files ONE synthesis page beside the
-verbatim `sources/documents/` part(s), anchored — to a registered entity, to one this capture
-introduces, or company-wide with a reason — like every capture; the `source_url` hint lands as `url:`
-on the source page, as the submitter's own claim of where the text came from.
+**Both ride the same pipe every capture rides.** The material is archived verbatim — a transcript
+under `sources/meetings/`, a document under `sources/documents/` — and the agent then files the
+`wiki/` pages that material establishes: one for a document, as many as it took decisions for a
+transcript, each anchored on its own (to a registered entity, to one this capture introduces, or
+company-wide with a reason) and all of them in ONE commit with the archive and any identity they
+needed. The `source_url` hint lands as `url:` on the archived page, as the submitter's own claim of
+where the text came from. `title` and `meeting_date` are required for a transcript because a
+transcript's own text usually states neither; they reach the filing agent as hints.
 
 **Reading the result**: `stigmergy-queue show <id>`, or `brain_submissions` from the client that
 submitted it. A `failed` row names the stage the filing died at — there is no `conversion` stage,
@@ -543,7 +539,7 @@ trace and status but not the report.
 ```
 
 Refused **at the door**, with nothing queued: a scoped caller, an entity page (an identity is merged
-away by a repair, never deleted at this door), a path outside the corpus, more than ten pages in one
+away by removing what made it one, never deleted at this door), a path outside the corpus, more than ten pages in one
 request, an empty reason. The length bounds on `paths` and `why` are checked inside
 `BrainService.delete_pages`, within the audited seam, so a refusal is an audited call rather than a
 silent one.
@@ -558,7 +554,7 @@ all. A reason that matches a likely secret or a personal-data pattern is refused
 message, which is the one place no gate looks.
 
 **The undo is `git revert` in the knowledge repo**, by an operator with a checkout. When the sweep
-rewrote a `views/` or `sources/` page, that revert is an operator commit in a machine-owned zone —
+rewrote a `sources/` page, that revert is an operator commit in a machine-owned zone —
 so it needs adding to that repo's reviewed authorship baseline, or its CI goes red on every later
 push.
 
@@ -630,82 +626,53 @@ the librarian its own environment block and no console runs beside it.
 
 This is drill 2 of "Release gates & drills" below.
 
-### A repair that did not land
+### A removal that did not land
 
-Every outcome writes itself down. A repair the gates refused, or that faulted partway, is a
-`failed` row carrying the sentence that refused it:
+A removal the worker could not perform is a `rejected` CAPTURE, never a `repairs` row: the ledger
+records what happened to the corpus, and a refusal changed nothing.
 
 ```sql
-SELECT id, created_at, kind, target_paths, error
-FROM repairs WHERE status='failed' ORDER BY id DESC LIMIT 20;
+SELECT id, created_at, submitted_by, report->>'summary'
+FROM capture_queue WHERE kind='delete' AND status='rejected' ORDER BY id DESC LIMIT 20;
 ```
 
-**Read the `error` before doing anything.** It names the gate and its codes, or the validator's
-own refusal, and it is the whole of what anyone will know about why that finding stopped being
-answered — because it DID stop: a failed repair's `content_key` is remembered exactly like an
-applied one's, so the loop will not derive it again. That is deliberate (a repair the gates refuse
-would otherwise cost a model call every night forever), and it is why this row is the only place
-the problem surfaces.
+**Read the summary before doing anything.** Every sentence that road raises is written to be
+published — it names the gate and its codes, or the validator's own refusal, in repo-relative paths
+— and it is the whole of what the person who asked will ever be told. Nothing is retried and
+nothing is put back: they read it and decide whether to ask again.
 
 What to do with one depends on what the sentence says:
 
-- **A gate refused the diff** — the repair was wrong, and the finding is still in the gardener's
-  report. Fix the underlying page by hand, or leave it: the corpus is untouched either way.
-- **"this repair changes nothing"** — the corpus already carries the answer. Nothing to do.
-- **A fault (a git or configuration sentence)** — this is the deployment's problem, not the
-  repair's. Fix it, and if you want that finding answered afterwards, delete the row so its key
-  stops being remembered:
+- **A page it named is not there** — somebody removed it already, or the path was typed wrong.
+- **A gate refused the diff, or the sweep left a dead link** — the corpus is untouched. Ask again;
+  if it happens twice, the surviving reference is spelled in a shape the sweep does not read
+  (`repair.deletion`'s link scanner mirrors the frozen contract linter, and both are files).
+- **The plan is over `$STIGMERGY_REPAIR_MAX_PLAN_BYTES`** — the pages named are referred to by too
+  much of the corpus to remove in one decision. Remove fewer at a time.
 
-```sql
-DELETE FROM repairs WHERE id=<id> AND status='failed';
+**Nothing should ever be deleted from `repairs`.** Every row in it is a record of something that
+actually happened in the corpus, and the rows of retired kinds are the only record left of a repair
+loop that no longer exists.
+
+### A `views/` directory in the knowledge repo
+
+**Inert, and nothing needs doing about it.** The per-entity rollup used to be a stored page under
+`views/`, kept fresh by a convergence sweep on the worker's idle branch. Both are gone: "what do we
+know about X" is answered at read time by `describe_entity` and `ask`, per reader and ACL-scoped,
+which a single shared file could never be.
+
+If your knowledge repo predates the change it still has that directory. Those files are no longer
+indexed — absent from `search`, `read_page` and `ask` — and no command writes there any more.
+**Nothing in this system deletes them.** Removing them is your decision to make in your own repo:
+
+```bash
+git rm -r views/ && git commit -m "chore: drop the retired views zone"
 ```
 
-That is the ONLY row anybody should ever delete from this table, and only for this reason: every
-other row is a record of something that actually happened in the corpus.
-
-### A view that did not catch up
-
-**There is nothing for you to do, and no command to run.** The librarian worker converges `views/`
-to the corpus from its idle branch, and it is the only thing that can — nothing else in the
-deployment may write that zone. An
-ordinary capture, a 🧠 gesture, a submitted meeting or document, a removal, an applied repair, an
-entity born and a hand edit are all covered, and so is an entity that has never had a view at all,
-because the pass asks the corpus what diverges rather than waiting to be told.
-
-**Two triggers, so "wait for the interval" is usually not what happens.** The pass is due when its
-interval has elapsed, and ALSO on the first idle tick after the worker took a queued item to a
-terminal state — a filing, a meeting, a document or a removal. That second trigger is why a
-`brain_delete` does not leave a rollup citing pages it deleted for up to fifteen minutes: the queue
-goes quiet, and the sweep runs. What a repair changed is picked up by the interval, or by the next
-queued item.
-
-A withheld synthesis is not a bug: the skeleton (timeline, backlinks) still ships and stays current.
-It is re-attempted when the entity's own inputs change — `member_hash` over the members,
-`backlink_hash` over the backlinks the page renders — and not before. There is no lever that
-re-attempts one on demand, and there is no longer a road that could offer you one.
-
-**The knobs on the pass** (all on the librarian worker, all documented in full in
-[`librarian.md`](./librarian.md)'s environment table):
-
-| Var | Default | What it does |
-|---|---|---|
-| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | `900` | the BACKSTOP interval; the post-work trigger above fires regardless of it. `0` turns the pass off entirely, which leaves only the post-meeting hook; a negative value is refused at startup |
-| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | `10` | how many entities ONE pass may regenerate or remove — each is a model call. The surplus is picked up by the next pass |
-| `STIGMERGY_VIEWS_MODEL` | the librarian's DEFAULT (`anthropic:claude-sonnet-5`) | the model a view's synthesis is WRITTEN with. It defaults to the librarian's compile-time default rather than to `CLEAN_MODEL`, because every caller runs inside the worker, whose boot strips `$OPENAI_API_KEY` on purpose — a view agent inheriting the read path's model can only raise there. Note the edge: setting `STIGMERGY_LIBRARIAN_MODEL` moves the FILING agent and not this one — views and repair each hold their own knob, one model per artifact |
-
-The pass records itself in `job_runs` under the job name `views-sweep` (distinct from
-`views-on-meeting`, the post-filing hook), and prints a `view sweep:` line
-on the worker's stdout when it moved something. What a ceiling deferred is in that row's
-`stats.skip_reasons`, spelled `run-ceiling-reached(N)` — the same wording the repair pass uses.
-
-```sql
-SELECT job, status, finished_at, stats FROM job_runs
-WHERE job LIKE 'views%' ORDER BY started_at DESC LIMIT 10;
-```
-
-If a view is still listed by the gardener's `stale-view` check after several passes have run, that
-row is where to look: a ceiling that keeps deferring, a fault the pass swallowed, or a sweep that
-never ran because the queue is never idle.
+There is no sweep to check on, no `views-sweep` row in `job_runs`, and no interval, ceiling or
+model knob to tune. A deployment that still sets the three variables that used to configure the
+pass is setting nothing — nothing reads them, so they are safe to leave and better to drop; the
+names are in this repo's git history if you need to grep your own secrets for them.
 
 ### Postgres backup / restore
 
@@ -857,8 +824,8 @@ moved with the redesign. Full account: `evals/README.md`.
 
 Proves the durable tables survive a round trip: the four `capture.schema` names it (`capture_queue`,
 `audit_log`, `job_runs`, `ingest_errors`) plus every other table nothing can rebuild —
-`repairs`, whose `content_key` column is the permanent memory that keeps an applied or refused
-repair from being derived again, `slack_submissions`, `gardener_findings` and `admin_actions`. Against the
+`repairs`, the permanent record of every page that has left the corpus (and of the retired repair
+loop that ran before it), `slack_submissions`, `gardener_findings` and `admin_actions`. Against the
 docker compose Postgres (`make db-up` first):
 
 ```sh
@@ -1083,15 +1050,17 @@ never a lost capture. Add the scope and reinstall the app to fix the feedback.
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
-WHERE job IN ('gardener', 'repair', 'digest', 'digest-dry-run', 'capture-purge',
+WHERE job IN ('gardener', 'capture-purge',
               'capture-purge-dry-run', 'webhook-index-upsert')
 ORDER BY started_at DESC LIMIT 10;
 ```
 
-A `gardener` row with `status='partial'` means the deterministic checks' findings are
-complete and trustworthy and the model sweep failed (`stats->'sweep'->>'error'` names the class);
-only `status='error'` means the run cannot be trusted. Gardener exit codes: 0 clean, 1 failed or
-partial, 2 precondition (bad `--repo`, bad threshold, no database), 130 interrupted.
+A `gardener` row is `status='ok'` or `status='error'` — every check is deterministic, so a run
+completes or it does not. A `status='partial'` row is a HISTORICAL one, from when the gardener had
+model passes that could fail while the deterministic findings committed anyway; its findings are
+as trustworthy as they ever were, because they were the deterministic ones. Gardener exit codes: 0
+clean (findings are data, not errors), 1 the run failed, 2 precondition (bad `--repo`, bad
+threshold, no database), 130 interrupted.
 
 **Reading the audit trail** (every tool call, both transports, one `audit_log` row in the same
 Postgres as the index):
@@ -1119,6 +1088,6 @@ ORDER BY 1, 2;
 
 `args` is the full JSON for most tools, but `brain_submit` is audited by SIZE
 and HASH only, never content. `outcome` is `ok` or `error`; `error_class` names the exception when
-it isn't `ok`. `stigmergy-pilot-report` summarizes the same tables (latency percentiles,
+it isn't `ok`. The console's Activity page summarizes the same tables (latency percentiles,
 answered-with-citation vs honest-refusal split); on a single-operator deployment its per-identity
 counts are the operator's own credentials, never an adoption number.

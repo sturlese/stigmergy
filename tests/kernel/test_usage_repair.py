@@ -357,7 +357,7 @@ def spy(monkeypatch):
 
 
 def test_the_kernel_model_builder_installs_the_repair(spy):
-    """`kernel.llm.build_model` is the shared builder behind `views` and the `gardener`. The
+    """`kernel.llm.build_model` is the shared builder every model-backed surface goes through. The
     provider-prefixed form needs no key at all and returns before any client is constructed, so
     this reaches the install with nothing exported."""
     from stigmergy.kernel import llm
@@ -415,38 +415,37 @@ def test_the_offline_answer_path_installs_nothing(spy):
     assert spy == []
 
 
-def test_the_librarian_meeting_backend_installs_the_repair(spy, tmp_path):
+def test_the_librarian_filing_backend_installs_the_repair(spy, tmp_path):
     """The third site, and the one the paid trial burned: this backend turns tokens into dollars,
     so zeroed counts price a real filing at `$0.00` — the exact failure `librarian/pricing.py`
     exists to prevent.
 
     Reached with the real backend over an offline model and a scratch brief; no git, no queue, no
-    key. The `run_meeting` call is allowed to fail (the spy has replaced the real install, and
-    nothing here cares what the model answers) — what is asserted is that the site called it.
+    key. The `run` call is allowed to fail (the spy has replaced the real install, and nothing here
+    cares what the model answers) — what is asserted is that the site called it.
+
+    OLD BEHAVIOUR: it was reached through `run_meeting`, over the frozen meeting-distiller brief,
+    because that was the flow whose account came back through an output schema. There is one call
+    now and it is the one that spends the money.
     """
     from pydantic_ai.models.test import TestModel
 
+    from stigmergy.librarian import agent as agent_module
     from stigmergy.librarian import config
-    from stigmergy.librarian.pydantic_backend import MeetingAccount, PydanticFilingAgent
+    from stigmergy.librarian.pydantic_backend import PydanticFilingAgent
 
-    brief = tmp_path / ".claude" / "skills" / "meeting-distiller"
-    brief.mkdir(parents=True)
+    brief = pathlib.Path(tmp_path, *agent_module.SKILL_RELPATH.split("/"))
+    brief.parent.mkdir(parents=True)
     frozen = (ROOT / "tests" / "librarian" / "fixtures" / "repo" / ".claude" / "skills"
-              / "meeting-distiller" / "SKILL.md")
-    (brief / "SKILL.md").write_text(frozen.read_text(encoding="utf-8"), encoding="utf-8")
+              / "librarian" / "SKILL.md")
+    brief.write_text(frozen.read_text(encoding="utf-8"), encoding="utf-8")
 
-    # A COMPLETE account, because `MeetingAccount` demands one: `decision` is required and a filed
-    # meeting owes its title. An empty `MeetingAccount()` raises inside this lambda, and the lambda
-    # is lazy — so the run would die at model resolution instead of reaching the framework, and
-    # this test would still pass (the repair installs first) while exercising none of the `Agent`
-    # construction it exists to observe.
-    account = MeetingAccount(decision="file", meeting_title="Halcyon Grid kickoff")
     backend = PydanticFilingAgent(
         config.Settings(repo=str(tmp_path), model="openai:gpt-5.6-terra"),
-        model_factory=lambda: TestModel(custom_output_args=account.model_dump()))
+        model_factory=lambda: TestModel())
     try:
-        backend.run_meeting(worktree=str(tmp_path), material="a transcript", meeting_meta={},
-                            registry=None, source_page_path="sources/meetings/x.md")
+        backend.run(worktree=str(tmp_path), material="a note", hints={},
+                    submitted_by="a@b.test")
     except Exception:  # noqa: BLE001 — the outcome is irrelevant; the install is the assertion
         pass
 
@@ -460,7 +459,7 @@ def test_every_module_that_builds_a_pydantic_ai_agent_installs_the_repair():
 
     Derived from the source: the modules importing the `Agent` symbol are exactly the modules
     importing the repair. A module that merely catches a framework exception or reads
-    `UsageLimits` (`views.synthesis`, `gardener.sweep`, `answer.service`) builds nothing and is
+    `UsageLimits` (`answer.service` among them) builds nothing and is
     correctly absent from both sides.
     """
     import re

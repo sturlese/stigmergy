@@ -133,18 +133,6 @@
       }
     },
     {
-      "id": "benchmark: aurora dossier",
-      "q": "Give me a summary of the customer Aurora Systems",
-      "expect": {
-        "pages": [
-          "aurora-systems"
-        ]
-      },
-      "filters": {
-        "entity": "aurora-systems"
-      }
-    },
-    {
       "id": "demo: globex quarter",
       "q": "How did the quarter go for Globex?",
       "expect": {

@@ -1,132 +1,15 @@
-"""The file-based checks: stale views, dead vocabulary, date-bearing body links, and entity pages
-still carrying their template's placeholders. All four read the repo directly (the first two
-through `views.staleness.list_stale_entities`/`list_all_anchored_entities`, reused verbatim — NOT
-`views.regenerate`, which would load that module's own git write path) and need no Postgres at
+"""The file-based checks: dead vocabulary, date-bearing body links, and entity pages still
+carrying their template's placeholders. All three read the repo directly and need no Postgres at
 all — no `_pg` suffix, no `conn` fixture, fast."""
 import os
 
 from stigmergy.gardener import checks
 from stigmergy.kernel.registry import load_registry
-from stigmergy.views import skeleton, staleness
 from tests.gardener import support
 
 
 def _load_registry(repo: str):
     return load_registry(os.path.join(repo, "ops", "entity-registry.json"))
-
-
-def _write_current_view(repo: str, entity_id: str) -> str:
-    """A view carrying the signals the corpus would produce for it RIGHT NOW — both of them,
-    computed through the same `views.staleness` the check reads, so the twin stays benign as the
-    definition grows (it grew once already, in #85, and a fixture spelling out only `member_hash`
-    silently stopped describing a current view)."""
-    members = skeleton.members_of(repo, entity_id)
-    signals = staleness.current_signals(repo, entity_id, members)
-    return support.write_view(repo, entity_id, member_hash=signals.member_hash,
-                              backlink_hash=signals.backlink_hash)
-
-
-# ── stale views ─────────────────────────────────────────────────────────────────────────────────
-def test_stale_view_fires_when_the_stored_member_hash_does_not_match(repo):
-    support.write_page(repo, "wiki", "entities/acme-corp.md",
-                       frontmatter={"type": "entity", "title": "Acme Corp",
-                                   "entity": ["acme-corp"], "status": "developing"})
-    support.write_view(repo, "acme-corp", member_hash="not-the-real-hash",
-                       backlink_hash="not-the-real-hash-either")
-
-    findings = checks.check_stale_views(repo)
-
-    assert len(findings) == 1
-    f = findings[0]
-    assert f["check"] == checks.CHECK_STALE_VIEW
-    assert f["severity"] == "warn"
-    assert f["subject"] == "acme-corp"
-    # OLD BEHAVIOUR: this asserted the exact backticked `stigmergy-views regenerate --entity
-    # acme-corp`. the capture-is-the-approval change removed that CLI — the worker converges `views/` on its own idle
-    # pass — so what is checked here is the SHAPE the finding must keep: no code span, because a
-    # code span reads as a command to run. The sentence itself, and the promise it makes, are
-    # `tests/gardener/test_stale_view_promise_pg.py`'s: it runs the sweep the finding names.
-    assert "`" not in f["suggested_action"] and "stigmergy-views" not in f["suggested_action"]
-
-
-def test_stale_view_the_benign_twin_a_fresh_view_fires_nothing(repo):
-    support.write_page(repo, "wiki", "entities/acme-corp.md",
-                       frontmatter={"type": "entity", "title": "Acme Corp",
-                                   "entity": ["acme-corp"], "status": "developing"})
-    _write_current_view(repo, "acme-corp")
-
-    assert checks.check_stale_views(repo) == []
-
-
-def test_stale_view_fires_when_only_the_backlinks_moved(repo):
-    """#85's second half — "nothing detects it" — and the reason `check_stale_views` reuses
-    `list_stale_entities` verbatim instead of re-deriving a member-hash comparison of its own:
-    when the definition of stale grew a backlink signal, this check inherited it without a line
-    changing in `gardener/`. The member set here is untouched; a page that anchors NO entity
-    gains a wikilink to the entity's own page, so only what the view RENDERS moved."""
-    support.write_page(repo, "wiki", "entities/acme-corp.md",
-                       frontmatter={"type": "entity", "title": "Acme Corp",
-                                   "entity": ["acme-corp"], "status": "developing"})
-    _write_current_view(repo, "acme-corp")
-    assert checks.check_stale_views(repo) == []
-
-    support.write_page(repo, "wiki", "notes/nightingale.md",
-                       frontmatter={"type": "note", "title": "Project Nightingale",
-                                   "status": "developing"},
-                       body="See [[acme-corp]].\n")
-
-    assert [f["subject"] for f in checks.check_stale_views(repo)] == ["acme-corp"]
-
-
-def test_stale_view_survives_a_hand_written_page_sitting_in_views(repo):
-    """OLD BEHAVIOUR: this raised `ViewError` and took the WHOLE gardener run down with it.
-
-    `views/` is one of `index.corpus.ZONES`, so a hand-written page can legitimately sit beside the
-    generated ones. `list_stale_entities` derived its population from `os.listdir` and fed every
-    `.md` STEM into `view_relpath`, whose entity-id assertion then refused `README` — an assertion
-    that exists to stop a CALLER-supplied id escaping `views/`, firing here on an id that came from
-    inside that directory and so could never traverse anywhere.
-
-    The blast radius is why this is not a niceties bug: `run_gardener` catches `Exception`, records
-    `status='error'` with ZERO findings and re-raises, and `gardener/cli.py`'s last-resort handler
-    prints only the class name — so one stray file killed the daily run with no diagnosable message.
-    """
-    support.write_page(repo, "wiki", "entities/acme-corp.md",
-                       frontmatter={"type": "entity", "title": "Acme Corp",
-                                   "entity": ["acme-corp"], "status": "developing"})
-    _write_current_view(repo, "acme-corp")
-    support.write_page(repo, "views", "README.md",
-                       frontmatter={"type": "view", "title": "About these views"},
-                       body="Generated pages live here.\n")
-
-    assert checks.check_stale_views(repo) == []
-
-
-def test_stale_view_still_fires_beside_a_hand_written_page(repo):
-    """The benign twin of the case above: ignoring the foreign file must not cost the check its
-    eyesight for the real views sitting next to it."""
-    support.write_page(repo, "wiki", "entities/acme-corp.md",
-                       frontmatter={"type": "entity", "title": "Acme Corp",
-                                   "entity": ["acme-corp"], "status": "developing"})
-    support.write_view(repo, "acme-corp", member_hash="sha256:stale-and-wrong",
-                       backlink_hash="sha256:stale-and-wrong")
-    support.write_page(repo, "views", "README.md",
-                       frontmatter={"type": "view", "title": "About these views"},
-                       body="Generated pages live here.\n")
-
-    findings = checks.check_stale_views(repo)
-
-    assert [f["subject"] for f in findings] == ["acme-corp"]
-
-
-def test_stale_view_an_entity_with_no_view_yet_is_not_reported_stale(repo):
-    """`list_stale_entities`' own population is "entities WITH an existing view" — an anchored
-    entity that has never had one regenerated is a different, unrelated fact, not this check's
-    concern."""
-    support.write_page(repo, "wiki", "entities/acme-corp.md",
-                       frontmatter={"type": "entity", "title": "Acme Corp",
-                                   "entity": ["acme-corp"], "status": "developing"})
-    assert checks.check_stale_views(repo) == []
 
 
 # ── dead vocabulary ─────────────────────────────────────────────────────────────────────────────
@@ -157,8 +40,9 @@ def test_dead_vocabulary_the_benign_twin_an_entity_with_a_page_fires_nothing(rep
 
 
 def test_dead_vocabulary_an_ingested_zone_anchor_also_counts_as_alive(repo):
-    """`MEMBER_ZONES = ("wiki", "sources")` — `views.skeleton`'s own scope, reused
-    unmodified; an entity anchored only from `sources/` is not dead vocabulary either."""
+    """`check_dead_vocabulary` reads every page `index.corpus.load_pages` returns, over both of
+    `index.corpus.ZONES` alike; an entity anchored only from `sources/` is not dead vocabulary
+    either."""
     support.write_registry(repo, {
         "acme-corp": {"name": "Acme Corp", "type": "organization", "aliases": []},
     })
@@ -173,7 +57,7 @@ def test_dead_vocabulary_an_ingested_zone_anchor_also_counts_as_alive(repo):
 def test_date_bearing_body_link_fires_as_a_warn_finding(repo):
     """The meeting flow used to veto this shape at filing time; it surfaces as a gardener WARN
     over the committed corpus instead."""
-    support.write_page(repo, "wiki", "decisions/pricing-floor.md",
+    support.write_page(repo, "wiki", "notes/pricing-floor.md",
                        frontmatter={"type": "decision", "title": "Pricing Floor",
                                    "status": "developing", "sources": []},
                        body="Decided after [[2026-07-29-q3-sync]], where the floor was set.\n")
@@ -184,7 +68,7 @@ def test_date_bearing_body_link_fires_as_a_warn_finding(repo):
     f = findings[0]
     assert f["check"] == checks.CHECK_DATE_BEARING_BODY_LINK
     assert f["severity"] == "warn"
-    assert f["subject"] == "wiki/decisions/pricing-floor.md"
+    assert f["subject"] == "wiki/notes/pricing-floor.md"
     assert "2026-07-29-q3-sync" in f["detail"]
     assert "sources:" in f["suggested_action"]
 
@@ -192,7 +76,7 @@ def test_date_bearing_body_link_fires_as_a_warn_finding(repo):
 def test_date_bearing_link_in_frontmatter_is_the_benign_twin(repo):
     """The convention's OWN sanctioned home: a date-bearing target inside `sources:`/`related:`
     frontmatter fires nothing — only BODY prose is the finding's subject."""
-    support.write_page(repo, "wiki", "decisions/pricing-floor.md",
+    support.write_page(repo, "wiki", "notes/pricing-floor.md",
                        frontmatter={"type": "decision", "title": "Pricing Floor",
                                    "status": "developing",
                                    "sources": ['[[2026-07-29-q3-sync]]']},
@@ -235,7 +119,12 @@ def test_entity_placeholder_body_fires_for_a_page_that_is_still_the_template(rep
     assert f["severity"] == "info"
     assert f["subject"] == "wiki/entities/Meridian Partners.md"
     assert f["subjects"] == ["wiki/entities/Meridian Partners.md"]
-    assert "repair" in f["suggested_action"]
+    # OLD BEHAVIOUR: the action promised the worker's repair pass would draft this body. No pass
+    # drafts anything now, so what it must name is the two things a PERSON can do — and it must
+    # not name a command, because there is none.
+    action = f["suggested_action"]
+    assert "no command" in action
+    assert "capture" in action and "by hand" in action
 
 
 def test_a_written_entity_page_is_the_benign_twin(repo):

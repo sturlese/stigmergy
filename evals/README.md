@@ -19,7 +19,10 @@ committed, not generated. A fixture is a yardstick: editing one invalidates ever
 pass. Each carries a `PROVENANCE.json` naming the origin of every part.
 
 `filing/repo/` additionally holds byte-for-byte frozen copies of the knowledge repo's contract
-linter and both agent briefs, each with a `FROZEN.md`. These are deliberately **not** kept in sync
+linter and the librarian brief, each with a `FROZEN.md`. There were two briefs until the librarian
+became one pipe; the meeting-distiller copy was deleted with the reader that read it, which moves
+no score (see `filing/repo/PROVENANCE.json`'s `frozen_copies_removed`) and is the one deletion this
+tree has had. These are deliberately **not** kept in sync
 with the live originals — the opposite of `tests/librarian/fixtures/repo/`'s rule. A drift guard
 keeps a test honest about the present; a yardstick has to stay still, or every score recorded under
 the old brief is silently re-graded. Byte integrity is enforced keylessly by
@@ -110,17 +113,17 @@ and refused on drift before a model call is spent.
 | `type` | the `type:` of the page that ACTUALLY landed, read back out of git | 13 |
 | `folder` | where it landed | 13 |
 | `anchor` | the page's server-stamped `entity:` — resolved registry ids, or company-wide | 10 |
-| `edits` | which OTHER pages the commit changed, from the agent's declaration | 1 |
 | `proposals` | for an unregistered name: the identity the filing proposed for it | 2 |
-| `decisions` | for a meeting: one decision page per decision, each with its OWN anchor | 2 |
+| `pages` | the page SET a capture established — one entry per page, each with its OWN anchor | 2 |
 
-**`edits` is scored by CONTAINMENT.** Every path the expectation names must have been edited; an
-edit beyond them does not fail the facet. A declared edit is confined by `edits.validate` to
-additive growth on an existing page and judged by the same gates, so an extra one is harmless by
-construction. Containment is also required because the throwaway repo **grows during the run** — a
-later capture may legitimately backlink a page an earlier one created. Under containment `edits: []`
-is vacuously true for every backend while still filling the denominator, so "owes no edit" is said
-by naming no `edits` key at all.
+**The `edits` facet RETIRED, and no recorded score loses a comparison.** It scored which OTHER
+pages a commit changed, from the account's `edits` declaration — three additive shapes code
+performed on a page that already existed. That declaration is gone: a capture brings a page up to
+date by declaring a `rewrites` entry instead, and the additive vocabulary has no writer. The facet's
+column stops existing rather than changing meaning, so every row already in `history.ndjson` stays
+comparable on every facet it still has. The frozen librarian brief was re-frozen in the same commit
+for the same reason the one pipe re-froze it: a brief promising a mechanism the worker does not have
+is not a yardstick.
 
 **`attempts`, `bounces` and cost carry no bar and gate nothing.** A backend reaching the same page
 in two passes is more expensive, not worse. Their denominator is 12, not 14: the two proposing
@@ -139,11 +142,11 @@ drop, never in the verb form one run produced;
 the same rule where the expectations live.
 
 The loosening is **one-directional** — strictly weaker than the predicate it replaced, so a recorded
-PASS cannot become a FAIL and only a FAIL can flip. The one caveat is `_decisions_match`'s greedy
-one-to-one pairing, which `test_no_expected_decision_title_can_swallow_a_later_ones_page` guards
+PASS cannot become a FAIL and only a FAIL can flip. The one caveat is `_pages_match`'s greedy
+one-to-one pairing, which `test_no_expected_page_title_can_swallow_a_later_ones_page` guards
 using the same matcher.
 
-**A `decisions` entry may assert a title, an anchor, or both**, and which one is empirical: write
+**A `pages` entry may assert a title, an anchor, or both**, and which one is empirical: write
 whatever held across runs. What must never happen is an entry asserting neither (it matches whatever
 page is left and measures nothing) or a title-less entry written before a titled one (it is the
 weakest matcher, so greedy order lets it eat the titled entry's page). `_check_set` refuses both.
@@ -158,18 +161,27 @@ judgment. `proposed_aliases` rides beside the observation unscored, because the 
 miss is a filing that read the name as a registered entity's *spelling* and proposed an alias
 instead — a red `proposals` cell is much faster to diagnose with that in front of you.
 
-**`F09`'s decision pages are paired on title alone.** Both of its anchors used to be assertable
-because a stored reply named a registered entity; nothing names one now, so each decision anchors
-either to the proposed identity or company-wide and asserting either would pin the yardstick to a
-single sample. The count and the one-to-one pairing still carry the granularity check that facet
-exists for.
+**`F09`'s pages are paired on title alone.** Both of its anchors used to be assertable because a
+stored reply named a registered entity; nothing names one now, so each page anchors either to the
+proposed identity or company-wide and asserting either would pin the yardstick to a single sample.
+The count and the one-to-one pairing still carry the granularity check that facet exists for.
+
+**`F08`'s second page is paired on its anchor alone**, which is the mirror image and the shipped
+set's only use of that shape. Its title used to be the single word `review`, which three runs of
+the retired meeting flow made stable enough to assert; the transcript decides "one shared list of
+what every review has to cover", so `checklist`, `shared`, `scope` and `standardise` are each one
+paraphrase away, and the word that survived those runs survived them under a brief that no longer
+exists. Its anchor is company-wide while its sibling's is `northwind-freight`, so the pairing is
+exact with no vocabulary in it at all. Written LAST, because the weakest matcher always is.
 
 ### The bars
 
 Each quality facet carries a bar in [`bars.py`](bars.py)'s `FILING_BARS`, fixed from a recorded
-baseline — except `proposals`, which is a facet the file-first write path created and no run has
-ever scored, so its
-bar is `None`: REPORT, DO NOT JUDGE. **A bar is the baseline's own score, with a fractional value
+baseline — except two, whose bar is `None`: REPORT, DO NOT JUDGE. `proposals` is a facet the
+file-first write path created and no run has ever scored. `pages` inherited `decisions`' property
+and not its 1.00: that number came from runs of the meeting flow, and the two transcripts file
+ordinary pages through the one pipe now, so carrying the bar over would be a number the first run
+had to clear on a behaviour nothing has observed. **A bar is the baseline's own score, with a fractional value
 floored a point** (8/9 =
 0.888… must satisfy its own bar, and a two-decimal 0.89 would refuse the very run that set it). The
 0.88 pair on `type`/`folder` therefore tolerates exactly one disagreement — a defensible reading
@@ -202,8 +214,8 @@ rather than printed as a table of zeros.
 `make` exports the operator's gitignored env file into every target, so the runner **deletes the
 librarian GitHub App's five variables and pins the LLM backend to the fake one** before it builds
 anything — otherwise a configured App would push this fixture's commits to the real knowledge repo,
-and a filed meeting's view regeneration would spend money the instrument does not price. Same
-structural defence as `tests/conftest.py` and `scripts/e2e_isolate.sh`. It then runs the librarian's
+and a stray model-backed seam would spend money the instrument does not price on an operator's own
+key. Same structural defence as `tests/conftest.py` and `scripts/e2e_isolate.sh`. It then runs the librarian's
 own `startup_checks`, so a missing `gitleaks` or credential is one loud line rather than a table of
 `failed` rows.
 
@@ -254,6 +266,21 @@ A frozen brief re-frozen is a new measurement, not a regression — nothing is r
 is back-filled, so read the first row under new bytes as a fresh baseline candidate. The re-freezes
 so far, newest first:
 
+- **`112665a` (2026-08-23)** — REWRITING, folded into the same landing as the one pipe below. The
+  brief gains `rewrites`: a page that stopped being true is brought up to date instead of being
+  annotated, and the `why` it requires is what the page's own author is told. The linter moved with
+  it — `ZONE_TYPES` lost two rows no page could satisfy, and its own test suite was migrated off a
+  folder the contract no longer has.
+- **`3a04f8a` (2026-08-23)** — the ONE PIPE, and the largest re-freeze so far. The brief the
+  fixture ships had stopped being able to file at all: it offered a `decision` page type the
+  placement table has no folder for and told the agent "one capture yields one page", so every
+  capture it briefed would have been refused before any behaviour was measured. A brief that
+  cannot file is not a yardstick, which is what makes this a correction rather than a re-grade.
+  What moved: two page types (`note`, `concept`), ONE declaration list (`pages`, each entry
+  carrying its own `path` or `body` plus its own `anchoring`), and the `meeting-distiller` brief
+  deleted with its reader. The linter moved in the same commit — a thin `source` page no longer
+  warns, because every capture archives one now and the only way to answer that warning would be
+  to pad evidence. Which facets stopped being comparable is above.
 - **`e118c8a` (2026-08-21)** — both briefs: the librarian looks before it proposes,
   a steward's registration arrives as a capture the brief names, and `entity_updates` appends what
   a filing established to a registered entity's page. The linter and the template did not change,
@@ -317,3 +344,75 @@ which is the reason to keep passing `--report`.
 pass on every future run, and a capture that names a facet changes that facet's denominator — so
 scores before and after are comparable per facet but not per run. Say so in the `history.ndjson`
 row's own commit.
+
+### The stored rollup: three QA questions re-aimed, no facet retired
+
+The per-entity rollup stopped being a page. `views/` is no longer a zone, `describe_entity`
+assembles the rollup at read time per reader, and `evals/corpus/views/aurora-systems.md` was
+deleted with the zone — a page in a directory `corpus.load_pages` no longer walks is a file the
+instrument cannot see, so leaving it would have made the corpus claim 38 pages and serve 37.
+
+Three golden QA rows cited it, and all three keep their **id, question, `kind` and
+`expect_contains`** — only the `cites` chain moved, because the pages that make the answer true are
+the four `sources/entities/aurora-systems/` documents the rollup was derived from:
+
+- `aurora-dossier-count` cited the rollup ALONE, which had pre-computed "4 anchored page(s)" into
+  its own body. It now names those four pages, any one of which is a hit. This makes the question
+  harder rather than weaker: the answer has to come from the population (`describe_entity`'s
+  timeline, or the entity filter) instead of being read off a sentence somebody's sweep wrote.
+- `aurora-dossier-summary` and `aurora-timeline-q1` named the rollup FIRST in a chain whose second
+  entry was the meeting-notes source. `cites` accepts any one page in a chain, so dropping the
+  rollup leaves each question scored exactly as it was whenever the model cited the source — which
+  is the only citation still available.
+
+One RETRIEVAL question retires outright: `benchmark: aurora dossier` ("Give me a summary of the
+customer Aurora Systems") expected the stem `aurora-systems`, and that stem WAS the rollup file.
+Retrieval scores recall over expected pages, so re-pointing it at the four sources would have
+silently changed its denominator from 1 to 4 — a different measurement wearing the same id. It is
+deleted instead, and `test_golden_corpus_fixture.py`'s filtered-question count moved from ten to
+nine in the same commit, which is the check that would have caught its silent disappearance. The
+capability it measured has not gone anywhere: it is `describe_entity` now, and the QA suite's
+`aurora-dossier-summary` still asks for that summary in prose.
+
+The three QA ids keep their `dossier` spelling, deliberately: every recorded `history.ndjson` row and
+every `evals/out/*.json` names them, and renaming them would point those observations at questions
+nobody can find. **Rows recorded before this landing stay comparable on every facet** — no
+denominator moved, no question changed meaning, and the two chain rows are unchanged for any run
+that cited the source. `aurora-dossier-count` is the one row where a pre-landing hit and a
+post-landing hit prove slightly different things; read that id across the landing per row, not as a
+trend.
+
+### The one pipe: which facets stopped being comparable, and why
+
+The librarian became ONE pipe — a `kind="meeting"` transcript is filed like every other capture,
+its material archived verbatim under `sources/meetings/` and what it established filed as ordinary
+`wiki/` pages. `report.filed_meeting()` and the `meeting` and `decision` page types were deleted
+with the flow. Growing the yardstick is a deliberate act, and this was one: the filing golden was
+**re-aimed** at the shape the pipe has rather than having its facets retired, so the same fourteen
+captures still measure the same fourteen judgments. Three facets changed under that, and a row
+recorded before this landing is **not** comparable with one recorded after on any of them:
+
+- **`decisions` → `pages`.** Same denominator (2), same two transcripts, same predicate — the
+  count and the per-page anchoring of what a transcript establishes. What moved is what it counts:
+  the `decision` pages a meeting flow wrote into `wiki/decisions/`, versus `report['pages_filed']`,
+  every page the pipe declares. The rename is the point rather than tidying: a `decisions` key and
+  a `pages` key can never be joined into one trend line by accident, which a silently-redefined
+  facet would be. Its bar went to `None` for the same reason — see The bars.
+- **`type` and `folder`.** Denominators are unmoved at 13, and three captures changed the value
+  they name. `F05` filed a `decision` into `wiki/decisions/` and files a `note` into `wiki/notes/`;
+  `F08` and `F09` expected `meeting` in `wiki/meetings/`, which is a page no flow can create, and
+  now expect the `note` their first declared page is. Every OTHER capture's `type`/`folder` cell is
+  unchanged, so the two facet SCORES mix comparable and non-comparable captures and must be read
+  per capture across this landing, never as a trend.
+
+Everything else is untouched and stays comparable per facet: `status`, `reason`, `anchor`,
+`proposals`, `attempts` and `bounces` name the same values over the same captures. The capture IDs
+keep their old spellings — `F05-company-wide-decision`, `F08-meeting-two-decisions` — because every
+recorded row and every `evals/out/*.json` names them, and renaming them would point those
+observations at captures nobody can find.
+
+Nothing was re-scored and nothing was back-filled. Read the first row after this landing as a fresh
+baseline candidate, exactly as after a re-freeze — and note that the fixture's own frozen librarian
+brief still describes the retired flow, so **a real run is not yet a measurement**: it needs the
+knowledge repo's one-pipe brief to land and this fixture to be re-frozen at that commit, which
+retires the series again on its own terms.

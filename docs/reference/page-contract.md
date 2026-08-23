@@ -41,27 +41,28 @@ would anchor to it, and the `entity` filter would match half the corpus.
     neither a claim nor an omission. A provenance page is a RECORD OF AN EVENT, never a knowledge
     destination, so it HAS no aboutness to declare: `[]` there means "about **nothing**",
     not "about everything".
-  - In `sources/` and `views/` generally (no anchoring gate runs there) an empty list means **the
+  - In `sources/` generally (no anchoring gate runs there) an empty list means **the
     extractor found none** — an absence of evidence, not a checked judgment.
 
   Same value, three readings, one rule each, written down here so nobody has to infer it from
   which folder a page happens to sit in.
 
-  **The distinction is load-bearing for views**: views read `entity:` to build member sets, and a
-  meeting page reads as "about everything" under the company-wide interpretation and "a member of
-  nothing" under the provenance one. A provenance page is a member of nothing BY CONTRACT —
-  `page.is_provenance_type` answers the question, and answers `False` for an unknown type, the
-  conservative direction: one extra human question rather than a silently skipped governance
-  check.
+  **The distinction is load-bearing wherever `entity:` decides a population**: the gardener's
+  `dead-vocabulary` check and `describe_entity`'s own timeline both read it, and a provenance page
+  reads as "about everything" under the company-wide interpretation and "about nothing" under the
+  provenance one. `page.is_provenance_type` answers the question, and answers `False` for an
+  unknown type, the conservative direction: one extra human question rather than a silently
+  skipped governance check.
 
-- **The fast lane can only CREATE three of the seven page types.** `librarian/page.py::PAGE_TYPES`
+- **The fast lane can only CREATE two of the four page types.** `librarian/page.py::PAGE_TYPES`
   is the single vocabulary table, and a type carries a `folder` only when the fast lane may mint
-  one: `note` (`wiki/notes`), `decision` (`wiki/decisions`) and `concept` (`wiki/concepts`). The
-  other four — `entity`, `source`, `meeting`, `view` — may be read, linked and cross-referenced,
-  but a capture that wants one is refused with the reason in the submitter's own language,
-  rather than being quietly downgraded to `note`: a per-type exemption is exactly how ambient
-  ownerless content accumulates. Seven rows, one per WRITER — see
-  [`librarian.md`](./librarian.md#three-types-the-fast-lane-may-create-seven-it-knows). An `entity`
+  one: `note` (`wiki/notes`) and `concept` (`wiki/concepts`). **A conclusion is a `note`** —
+  splitting conclusions into two folders by their grammatical mood forced a placement question at
+  every filing that no reader benefited from. The other two — `entity` and `source` — may be
+  read, linked and cross-referenced, but a capture that wants one is refused with the reason in the
+  submitter's own language, rather than being quietly downgraded to `note`: a per-type exemption is
+  exactly how ambient ownerless content accumulates. Each has exactly one writer: `entity`
+  the identity writer, `source` the verbatim archive. An `entity`
   page is the one a capture's own commit can still contain, and never as a DRAFT: the agent declares
   the identity, code writes the page, and it is born CONFIRMED by the person whose capture it was —
   the lifecycle field below is where their name lands.
@@ -237,7 +238,7 @@ what it is told. The filter side is
 
 ```yaml
 ---
-type: decision
+type: note
 title: Borealis Dynamics Renewal
 entity: ["borealis-dynamics"]
 related: ["[[Northwind Group]]"]     # see-also; carries no anchoring meaning

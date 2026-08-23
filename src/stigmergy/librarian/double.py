@@ -22,20 +22,18 @@ sensitivity and never its specificity. Behaviour comes from directives in the ma
     DOUBLE:rewrite           rewrite an existing page's body
     DOUBLE:canonical         declare `status: canonical` in the drafted frontmatter
     DOUBLE:forge             declare server-owned fields in the drafted frontmatter
-    DOUBLE:overlap=<path>    file, and DECLARE an overlap cross-link on an existing page
-    DOUBLE:backlink=<path>   file, and DECLARE a reciprocal `related:` link on an existing page
-    DOUBLE:contradict=<path> file, and DECLARE a contradiction callout on an existing page
-    DOUBLE:bad-edit[=<path>] declare an edit code must refuse (outside the creatable folders, or
-                             a page that does not exist)
+    DOUBLE:overlap=<path>    file, and DECLARE that an existing page covers the same ground
+    DOUBLE:refresh=<path>    file, and DECLARE that an existing page is brought up to date — the
+                             account's `rewrites`, which the worker performs and the gates judge
     DOUBLE:no-outcome        write no outcome file at all
     DOUBLE:bad-shape         write an outcome whose SHAPE the boundary refuses, on EVERY attempt
     DOUBLE:bad-shape-once    write it on the first attempt and a good one on the corrective retry
     DOUBLE:long-summary      a summary past the prose ceiling — the benign twin: TRUNCATED and
                              filed, never refused
 
-The declaring directives write NOTHING to the other page — `edits.apply` does — and the
-proposing directives write NOTHING to `wiki/entities/`: the account declares, `librarian.identity`
-creates, which is the whole production path the offline suite exists to exercise. Well-behaved
+The declaring directives write NOTHING to another page, and the proposing directives write
+NOTHING to `wiki/entities/`: the account declares, `librarian.identity` creates, which is the whole
+production path the offline suite exists to exercise. Well-behaved
 writes go through `_write`/`agent.confined_write` and raise on denial; the misbehaviours take
 `_write_unconfined`, so each bypass is visible at its call site. The material's own text is copied
 into the page body, which is how a seeded secret reaches diff.
@@ -51,7 +49,6 @@ from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.agent import (
     OUTCOME_FILENAME,
     confined_write,
-    parse_meeting_outcome,
     parse_outcome,
 )
 from stigmergy.librarian.errors import AgentError, WorktreeError
@@ -170,25 +167,25 @@ class DoubleAgent:
                          hallucinate=hallucinate,
                          canonical="canonical" in directives, forge="forge" in directives)
 
-        # ── the overlap case: DECLARED, never performed ──────────────────────────────────
-        # Only new files, like the real agent; a double that edited leaves `edits.apply` untested.
-        overlaps, declared_edits = [], []
+        # ── the overlap case: a JUDGMENT the account carries, never a write ─────────────
+        # Only new files, like the real agent: the double never touches a page that already exists.
+        overlaps = []
         if "overlap" in directives and directives["overlap"]:
-            other = directives["overlap"]
-            note = "covers the same ground; the newer page adds what the capture carried"
-            overlaps.append({"path": other, "note": note})
-            declared_edits.append({"path": other, "kind": "overlap", "link": title, "note": note})
-        if "backlink" in directives and directives["backlink"]:
-            declared_edits.append({"path": directives["backlink"], "kind": "backlink",
-                                   "link": title, "note": ""})
-        if "contradict" in directives and directives["contradict"]:
-            declared_edits.append({
-                "path": directives["contradict"], "kind": "contradiction", "link": title,
-                "note": "the capture states the opposite of what this page records"})
-        # An edit to a page that is not there, so `edits.validate` is exercised.
-        if "bad-edit" in directives:
-            declared_edits.append({"path": directives["bad-edit"] or "ops/identities.json",
-                                   "kind": "backlink", "link": title, "note": ""})
+            overlaps.append({
+                "path": directives["overlap"],
+                "note": "covers the same ground; the newer page adds what the capture carried"})
+        # ── the rewrite case: DECLARED, never performed here ────────────────────────────
+        # The one declaration that names somebody else's page. The double writes nothing to it:
+        # `processing._apply_declared_rewrites` does, and the gates judge the diff.
+        rewrites = []
+        if "refresh" in directives and directives["refresh"]:
+            target = directives["refresh"]
+            rewrites.append({
+                "path": target,
+                "body": f"# {target.rsplit('/', 1)[-1].removesuffix('.md')}\n\n"
+                        f"Brought up to date by a later capture; what it recorded before is in "
+                        f"the history of this page.\n",
+                "why": "a later capture established what this page had wrong"})
 
         if "escape" in directives:
             # Deliberately unconfined: writing outside the lane is what the zone gate refuses.
@@ -210,7 +207,7 @@ class DoubleAgent:
             "anchoring": anchoring,
             "links_created": [] if company else [anchor_entity],
             "overlaps": overlaps,
-            "edits": declared_edits,
+            "rewrites": rewrites,
             "findings": [{"category": c} for c in findings],
             "new_entities": new_entities,
             "new_aliases": new_aliases,
@@ -244,153 +241,6 @@ class DoubleAgent:
             "connections": [f"[[{note_title}]] — the note that introduced it"],
         }
 
-    # ── the meeting flow's own directives — CONTENT only, never a page write ─────────────────
-    # No declared-vs-written mismatch directives: the agent's one legal write here is its outcome
-    # file, and code authors every page.
-    #
-    #   DOUBLE:decisions=<n>              how many decisions to distil (default 2)
-    #   DOUBLE:meeting-hallucinate        unsupported figure in the first decision BODY, every pass
-    #   DOUBLE:meeting-hallucinate-once   the same, first pass only; an honest body on the retry
-    #   DOUBLE:meeting-hallucinate-last   the figure in the LAST decision, so a check that reads
-    #                                     only the first page is distinguishable
-    #   DOUBLE:meeting-hallucinate-meeting-page  the figure in `meeting_notes` instead
-    #   DOUBLE:meeting-propose=a,b        the decisions anchor to entities the registry lacks:
-    #                                     PROPOSE them, one per decision, cycling
-    #   DOUBLE:meeting-anchor=<name>      declare this entity on every decision — a complete
-    #                                     outcome the registry cannot resolve, so it is vetoed
-    #   DOUBLE:meeting-company[=n]        the nth decision (1-indexed) anchors company-wide, so a
-    #                                     set carries both scopes at once
-    #   DOUBLE:meeting-body-date-link     a decision BODY links a date-bearing stem, against the
-    #                                     brief's body-stays-digit-free convention
-    #   DOUBLE:meeting-collide            the first decision's title slugifies onto an EXISTING
-    #                                     fixture page, exercising the collision precheck
-    #   DOUBLE:meeting-backlink=<path>    file, and DECLARE a reciprocal `related:` link on an
-    #                                     existing page — this flow's own edit mechanism
-    #   DOUBLE:meeting-overlap=<path>     the same, plus an overlap callout carrying a note
-    #   DOUBLE:meeting-bad-edit[=<path>]  declare an edit code must refuse (outside the editable
-    #                                     folders by default, or the named page)
-    #
-    # A planted secret needs no directive: the transcript reaches the SOURCE page verbatim, so the
-    # pre-agent scan catches it before any agent runs.
-    def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", gathered: str = "") -> AgentRun:
-        # `gathered` is accepted and unused: the signature answers the PORT, and what the worker
-        # gathered is a real model's input, not a scripted double's.
-        directives = _directives(material)
-        findings = _findings(material)
-        run = AgentRun(turns=1, tool_calls=1)   # one Write call: its own outcome file
-
-        title = meeting_meta.get("title") or self._title(material)
-
-        entities_for_decisions = None    # None -> cycle the registry; set -> proposed names
-        new_entities = []
-        if "meeting-propose" in directives:
-            entities_for_decisions = [n.strip() for n in directives["meeting-propose"].split(",")
-                                      if n.strip()] or ["An Unregistered Thing"]
-
-        if entities_for_decisions is None:
-            registry_entities = self._registry_entities(worktree)
-            n_decisions = int(directives.get("decisions") or "2")
-            entities_for_decisions = [registry_entities[i % len(registry_entities)]
-                                      if registry_entities else "Stigmergy"
-                                      for i in range(n_decisions)]
-        # Every decision DECLARES a name the registry lacks — a complete `file` outcome
-        # `gate_anchoring` vetoes. The BODY still wikilinks a REGISTERED entity, or a second
-        # `dead_links` veto stops `processing._refuse_meeting` from parking.
-        anchor_link = None
-        if "meeting-anchor" in directives:
-            declared = (directives.get("meeting-anchor") or "").strip() or "An Unregistered Thing"
-            anchor_link = entities_for_decisions[0] if entities_for_decisions else None
-            entities_for_decisions = [declared] * len(entities_for_decisions)
-        hallucinate_first = "meeting-hallucinate" in directives or (
-            "meeting-hallucinate-once" in directives and not corrective)
-        # Every pass: the point is a veto that SURVIVES the retry, on a late page.
-        hallucinate_last = "meeting-hallucinate-last" in directives
-        # 1-indexed. `gate_anchoring` judges each decision page independently, so a company-wide
-        # one coexists with entity-anchored siblings on purpose.
-        company_at = None
-        if "meeting-company" in directives:
-            raw_index = directives.get("meeting-company") or "1"
-            company_at = int(raw_index) if raw_index.strip() else 1
-
-        # The SAME stem `processing._meeting_stem` computes, or `meeting-body-date-link` is a dead
-        # link the linter refuses for an unrelated reason.
-        date = meeting_meta.get("meeting_date") or "2026-07-29"
-        meeting_stem = self._slug(f"{date}-{title}")
-        if "meeting-propose" in directives:
-            # The proposed page links the MEETING page by stem — the one page in this set whose
-            # name the double can know before code slugifies the decisions' titles.
-            new_entities = [self._proposed_entity(name, "organization", note_title=meeting_stem)
-                            for name in entities_for_decisions]
-
-        decisions = []
-        n = len(entities_for_decisions)
-        for i, entity in enumerate(entities_for_decisions):
-            page_hallucinate = (hallucinate_first and i == 0) or (hallucinate_last and i == n - 1)
-            company_here = company_at is not None and (i + 1) == company_at
-            if i == 0 and "meeting-collide" in directives:
-                # Slugifies onto an EXISTING fixture page: the COLLISION is the point.
-                d_title = "A decision from a previous meeting"
-            else:
-                d_title = f"{title} — decision {i + 1}"
-            body = self._decision_body(
-                entity=anchor_link or entity, company=company_here, hallucinate=page_hallucinate,
-                body_date_link="meeting-body-date-link" in directives and i == 0,
-                meeting_stem=meeting_stem)
-            anchoring = (
-                {"kind": "company", "entities": [],
-                 "reason": "applies to every customer this meeting touched, not one of them"}
-                if company_here else
-                {"kind": "entity", "entities": [entity], "reason": ""})
-            decisions.append({"title": d_title, "body": body, "anchoring": anchoring})
-
-        # ── the declared-edit case: DECLARED, never performed ─────────────────────────────
-        # Only the outcome file is written here, like every other meeting directive — the WORKER
-        # performs the edit (`edits.apply_declared`), so a double that edited a page itself would
-        # leave that call untested.
-        #
-        # The link is the first decision's own TITLE, spelled exactly as the brief tells a real
-        # agent to spell it — NOT the stem `_decision_stems` will slugify it into. A double that
-        # named the stem would be predicting a filename the agent is never shown, and the
-        # title→stem resolution in `processing._edits_with_resolved_links` (the thing that makes
-        # a correct declaration land) would go unexercised by every offline test.
-        declared_edits = []
-        edit_link = decisions[0]["title"] if decisions else meeting_stem
-        if directives.get("meeting-backlink"):
-            declared_edits.append({"path": directives["meeting-backlink"], "kind": "backlink",
-                                  "link": edit_link, "note": ""})
-        if directives.get("meeting-overlap"):
-            declared_edits.append({
-                "path": directives["meeting-overlap"], "kind": "overlap", "link": edit_link,
-                "note": "the same ground this meeting revisited, from the other side"})
-        # An edit code must refuse, so `edits.validate` is exercised on this flow too.
-        if "meeting-bad-edit" in directives:
-            declared_edits.append({"path": directives["meeting-bad-edit"] or "ops/identities.json",
-                                  "kind": "backlink", "link": edit_link, "note": ""})
-
-        attendees = [a.strip() for a in (meeting_meta.get("attendees") or "").split(",")
-                    if a.strip()]
-        outcome = {
-            "decision": "file",
-            "meeting_title": title,
-            "attendees": attendees,
-            "meeting_notes": self._meeting_notes(
-                hallucinate="meeting-hallucinate-meeting-page" in directives),
-            "action_items": ([{"owner": attendees[0], "action": "follow up", "done": False}]
-                            if attendees else []),
-            "decisions": decisions,
-            "edits": declared_edits,
-            "findings": [{"category": c} for c in findings],
-            "new_entities": new_entities,
-            "summary": f"distilled {len(decisions)} decision(s) from the meeting",
-        }
-        return self._account_meeting(worktree, run, outcome)
-
-    def _account_meeting(self, worktree, run, outcome):
-        """`_account`'s meeting sibling — writes ONLY the outcome file, the agent's one legal write."""
-        self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
-        run.outcome = self._priced_parse(run, parse_meeting_outcome, outcome)
-        return run
 
     @staticmethod
     def _slug(text: str) -> str:
@@ -398,39 +248,6 @@ class DoubleAgent:
         predicts production's filename must not own its own idea of it."""
         return normalize.slugify(text or "")
 
-    @classmethod
-    def _registry_entities(cls, worktree: str) -> list[str]:
-        return [e["name"] for e in cls._load_registry(worktree).entities.values()]
-
-    @staticmethod
-    def _decision_body(*, entity, company, hallucinate, body_date_link, meeting_stem):
-        """CONTENT only — code builds frontmatter, filename and source wikilink. Padding is
-        digit-free: any numeral reads as a figure the transcript asserted."""
-        opening = ("This decision applies company-wide, not to one customer in this meeting."
-                  if company else f"Decided about [[{entity}]] in this meeting.")
-        lines = ["## Context", "", opening, "", "## Decision", ""]
-        lines += _FILLER
-        if hallucinate:
-            lines += ["", "The meeting implies a figure of 9142 units, worth recording."]
-        if body_date_link:
-            # DELIBERATE violation: `gates.prose_written`'s numeric matcher ignores `[[...]]`.
-            # `meeting_stem` must be THIS capture's meeting page or `dead_links` fires first.
-            lines += ["", f"See the minutes at [[{meeting_stem}]] for the full discussion."]
-        # `len(lines)`: the linter trims only leading/trailing blanks, so mid-body blanks count.
-        while len(lines) < 32:
-            lines.append("Additional context recorded from the meeting for future readers.")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _meeting_notes(*, hallucinate):
-        """The meeting page's "## Notes" content — the only free text on it the agent drafts."""
-        lines = list(_FILLER)
-        if hallucinate:
-            lines += ["", "The minutes record a figure of 4173 units nobody in the transcript "
-                          "said."]
-        while len(lines) < 20:
-            lines.append("Additional minutes recorded from the meeting for future readers.")
-        return "\n".join(lines)
 
     # ── helpers ──────────────────────────────────────────────────────────────────────────
     def _account(self, worktree, run, outcome):

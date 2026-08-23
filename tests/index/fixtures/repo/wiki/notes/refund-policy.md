@@ -1,5 +1,5 @@
 ---
-type: decision
+type: note
 title: Refund Policy v2
 status: canonical
 owner: steward
