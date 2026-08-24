@@ -25,7 +25,7 @@ from stigmergy.knowledge import contradictions
 from stigmergy.knowledge.context import actor_scope, filing_context, render_context
 from stigmergy.knowledge.lint import Violation, check
 from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
-from stigmergy.knowledge.plan import FilingPlan, PageMutation
+from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation
 from stigmergy.knowledge.planner import Planner
 from stigmergy.knowledge.repair import repair_deterministic
 from stigmergy.knowledge.trust import WRITER_EMAIL as AUTHOR_EMAIL
@@ -406,6 +406,7 @@ def _apply_filing_plan(
                 context=context,
                 source=relative_source,
                 proposal_ids=proposal_ids,
+                proposals=plan.entities,
                 at=envelope.origin.captured_at.date(),
                 reasons=reasons,
                 visible_entity_ids=visible_entity_ids,
@@ -471,6 +472,7 @@ def _apply_page_mutation(
     context: WriteContext,
     source: str,
     proposal_ids: dict[str, str],
+    proposals: tuple[EntityProposal, ...],
     at: dt.date,
     reasons: dict[str, str],
     visible_entity_ids: frozenset[str],
@@ -479,11 +481,15 @@ def _apply_page_mutation(
     if mutation.action == "create":
         target_path = page_path(mutation.role or "", mutation.title or "")
         allow_create(context, context.content_acl)
-        entities = _resolve_entities(
-            records,
-            mutation.entities or (),
-            proposal_ids,
-            visible_entity_ids,
+        entities = (
+            _resolve_entities(
+                records,
+                mutation.entities,
+                proposal_ids,
+                visible_entity_ids,
+            )
+            if mutation.entities is not None
+            else _matching_proposed_entities(mutation, proposals, proposal_ids)
         )
         body = mutation.body or ""
         try:
@@ -529,7 +535,11 @@ def _apply_page_mutation(
     title = mutation.title or page.title
     destination = page_path(page.role, title)
     entities = (
-        page.entities
+        tuple(
+            dict.fromkeys(
+                (*page.entities, *_matching_proposed_entities(mutation, proposals, proposal_ids))
+            )
+        )
         if mutation.entities is None
         else _resolve_entities(
             records,
@@ -612,6 +622,58 @@ def _resolve_entities(
             raise KnowledgeWriteError("entity reference is not unambiguous")
         result.append(resolved)
     return tuple(dict.fromkeys(result))
+
+
+def _matching_proposed_entities(
+    mutation: PageMutation,
+    proposals: tuple[EntityProposal, ...],
+    proposal_ids: dict[str, str],
+) -> tuple[str, ...]:
+    candidates = []
+    for index, proposal in enumerate(proposals):
+        name = tuple(resolution_key(proposal.name).split())
+        entity_id = proposal_ids.get(proposal.name) or proposal_ids.get(" ".join(name))
+        if name and entity_id:
+            candidates.append((index, name, entity_id))
+    matched = set()
+    for text in (mutation.title or "", mutation.body or ""):
+        tokens = resolution_key(text).split()
+        matches = []
+        for index, name, entity_id in candidates:
+            width = len(name)
+            for start in range(len(tokens) - width + 1):
+                if tuple(tokens[start : start + width]) == name:
+                    matches.append((start, start + width, index, entity_id))
+        matched.update(_longest_nonoverlapping_proposals(matches))
+    return tuple(
+        dict.fromkeys(entity_id for index, _name, entity_id in candidates if index in matched)
+    )
+
+
+def _longest_nonoverlapping_proposals(matches: list[tuple[int, int, int, str]]) -> set[int]:
+    selected = []
+    for width in sorted({end - start for start, end, _index, _entity_id in matches}, reverse=True):
+        candidates = [item for item in matches if item[1] - item[0] == width]
+        ambiguous = {
+            (start, end, index, entity_id)
+            for start, end, index, entity_id in candidates
+            if any(
+                entity_id != other_entity_id
+                and _spans_overlap(start, end, other_start, other_end)
+                for other_start, other_end, _other_index, other_entity_id in candidates
+            )
+        }
+        for start, end, index, entity_id in candidates:
+            if (start, end, index, entity_id) not in ambiguous and not any(
+                _spans_overlap(start, end, other_start, other_end)
+                for other_start, other_end, _other_index, _other_entity_id in selected
+            ):
+                selected.append((start, end, index, entity_id))
+    return {index for _start, _end, index, _entity_id in selected}
+
+
+def _spans_overlap(start: int, end: int, other_start: int, other_end: int) -> bool:
+    return start < other_end and other_start < end
 
 
 def _remove_contradiction(

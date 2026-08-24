@@ -26,6 +26,7 @@ from stigmergy.server.service import BrainService, open_scoped_resources
 log = logging.getLogger(__name__)
 
 _UNAUTHORIZED_BODY = {"error": "unauthorized"}
+_HEALTH_PATH = "/health"
 
 # Enforced while streaming, before the MCP SDK buffers or parses the body.
 MAX_REQUEST_BODY_BYTES = 256 * 1024
@@ -97,8 +98,11 @@ class _BearerAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # The webhook authenticates its exact route with an HMAC over the raw body.
-        if scope.get("path") == webhook.WEBHOOK_PATH:
+        path = scope.get("path")
+        method = scope.get("method")
+        if (path == webhook.WEBHOOK_PATH and method == "POST") or (
+            path == _HEALTH_PATH and method in {"GET", "HEAD"}
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -255,6 +259,10 @@ def build_http_app(settings, *, token_store: dict[str, str]):
                     transport_security=_transport_security_for_env(), json_response=True)
 
     webhook_settings = webhook.webhook_settings_from_env()
+
+    @mcp.custom_route(_HEALTH_PATH, methods=["GET", "HEAD"])
+    async def _health(_request):
+        return JSONResponse({"status": "ok"})
 
     @mcp.custom_route(webhook.WEBHOOK_PATH, methods=["POST"])
     async def _github_webhook(request):

@@ -491,6 +491,24 @@ def test_an_ordinary_small_submit_is_unaffected_by_the_body_cap(indexed):
     assert ack["status"] == "queued"
 
 
+def test_health_is_an_unauthenticated_shallow_liveness_response(indexed):
+    _, fx = indexed
+    _token, digest = issue_test_token(fx.STEWARD)
+    app = build_test_http_app(fx, {digest: fx.STEWARD})
+
+    with run_http_server(app) as url:
+        response = httpx.get(url.removesuffix("/mcp") + "/health", timeout=5)
+        post = httpx.post(url.removesuffix("/mcp") + "/health", timeout=5)
+        head = httpx.head(url.removesuffix("/mcp") + "/health", timeout=5)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert post.status_code == 401
+    assert post.json() == {"error": "unauthorized"}
+    assert head.status_code == 200
+    assert head.content == b""
+
+
 # ── fail-closed auth, from every adversarial angle ─────────────────────────────────────────────
 class TestAuthAdversarial:
     def test_no_authorization_header_is_401_generic(self, indexed):

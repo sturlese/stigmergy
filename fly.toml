@@ -34,6 +34,13 @@ kill_timeout = "300s"
   auto_start_machines = true
   min_machines_running = 0
 
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "15s"
+  method = "GET"
+  timeout = "2s"
+  path = "/health"
+
 [[vm]]
   processes = ["app"]
   size = "shared-cpu-1x"
