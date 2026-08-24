@@ -612,6 +612,449 @@ def test_source_only_capture_is_a_landed_auditable_commit(clean_queue, target_re
     ]
 
 
+def test_exact_proposed_entity_name_anchors_a_mutated_page_when_omitted_from_mutation(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded the Northstar Research renewal",
+        entities=(
+            {
+                "name": "Northstar Research",
+                "entity_type": "organization",
+            },
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Northstar Research renewal",
+                body=(
+                    "# Northstar Research renewal\n\n"
+                    "Northstar Research approved the annual renewal."
+                ),
+                reason="The source identifies the organization and its renewal",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="implicit-entity-anchor",
+        text="Northstar Research approved the annual renewal.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    entity_id = next(iter(registry["entities"]))
+    page = parse_page(
+        "wiki/notes/Northstar Research renewal.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Northstar Research renewal.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+
+    assert page.entities == (entity_id,)
+
+
+def test_proposed_entity_name_substrings_do_not_anchor_mutated_pages(clean_queue, target_repo):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded AcmeCorp renewal",
+        entities=(({"name": "Acme", "entity_type": "organization"}),),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="AcmeCorp renewal",
+                body="# AcmeCorp renewal\n\nAcmeCorp approved the annual renewal.",
+                reason="The source records the AcmeCorp decision",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="entity-substring-does-not-anchor",
+        text="AcmeCorp approved the annual renewal.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    page = parse_page(
+        "wiki/notes/AcmeCorp renewal.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/AcmeCorp renewal.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert page.entities == ()
+
+
+def test_overlapping_proposed_names_anchor_only_the_longest_matching_name(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded entity approvals",
+        entities=(
+            {"name": "Acme", "entity_type": "organization"},
+            {"name": "Acme Inc", "entity_type": "organization"},
+            {"name": "Pinecone Labs", "entity_type": "organization"},
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Acme Inc approval",
+                body="# Acme Inc approval\n\nAcme Inc approved the renewal.",
+                reason="The source names Acme Inc exactly",
+            ),
+            PageMutation(
+                action="create",
+                role="note",
+                title="Acme and Pinecone approval",
+                body=(
+                    "# Acme and Pinecone approval\n\nAcme and Pinecone Labs "
+                    "approved the renewal."
+                ),
+                reason="The source names two distinct organizations",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="longest-proposed-entity-anchor",
+        text="Acme Inc and Pinecone Labs approved the renewal.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    entity_ids = {
+        claim["value"]: entity_id
+        for entity_id, record in registry["entities"].items()
+        for claim in record["claims"]
+    }
+    overlapping = parse_page(
+        "wiki/notes/Acme Inc approval.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Acme Inc approval.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    distinct = parse_page(
+        "wiki/notes/Acme and Pinecone approval.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Acme and Pinecone approval.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+
+    assert overlapping.entities == (entity_ids["Acme Inc"],)
+    assert distinct.entities == (entity_ids["Acme"], entity_ids["Pinecone Labs"])
+
+
+def test_separate_short_and_long_proposed_name_mentions_both_anchor(clean_queue, target_repo):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded Acme approvals",
+        entities=(
+            {"name": "Acme", "entity_type": "organization"},
+            {"name": "Acme Inc", "entity_type": "organization"},
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Acme approvals",
+                body=(
+                    "# Acme approvals\n\nAcme Inc approved its renewal, while Acme "
+                    "approved a separate renewal."
+                ),
+                reason="The source separately identifies Acme Inc and Acme",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="separate-short-long-entity-anchor",
+        text="Acme Inc and Acme approved separate renewals.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    entity_ids = {
+        claim["value"]: entity_id
+        for entity_id, record in registry["entities"].items()
+        for claim in record["claims"]
+    }
+    page = parse_page(
+        "wiki/notes/Acme approvals.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Acme approvals.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+
+    assert page.entities == (entity_ids["Acme"], entity_ids["Acme Inc"])
+
+
+def test_equivalent_proposed_name_spans_with_distinct_ids_do_not_auto_anchor(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded ambiguous Acme identity evidence",
+        entities=(
+            {"name": "Acme Inc", "entity_type": "organization"},
+            {"name": "Acme, Inc.", "entity_type": "organization"},
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Ambiguous Acme approval",
+                body="# Ambiguous Acme approval\n\nAcme Inc approved the renewal.",
+                reason="The source does not disambiguate equivalent proposed identities",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="ambiguous-equivalent-entity-anchor",
+        text="Acme Inc approved the renewal.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    assert len(registry["entities"]) == 2
+    page = parse_page(
+        "wiki/notes/Ambiguous Acme approval.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Ambiguous Acme approval.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+
+    assert page.entities == ()
+
+
+def test_omitted_update_entities_retains_existing_anchors_and_adds_exact_proposals(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    actor = Actor(subject="alice", display_name="Alice")
+    initial = FilingPlan(
+        summary="Recorded Legacy Systems renewal",
+        entities=(({"name": "Legacy Systems", "entity_type": "organization"}),),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Renewal record",
+                body="# Renewal record\n\nLegacy Systems approved the current renewal.",
+                entities=("Legacy Systems",),
+                reason="The source identifies the existing organization",
+            ),
+        ),
+    )
+    _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="existing-entity-anchor",
+        text="Legacy Systems approved the current renewal.",
+        plan=initial,
+    )
+    update = FilingPlan(
+        summary="Recorded Northstar Research renewal",
+        entities=(({"name": "Northstar Research", "entity_type": "organization"}),),
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/notes/Renewal record.md",
+                body=(
+                    "# Renewal record\n\nLegacy Systems remains the account holder. "
+                    "Northstar Research approved the annual renewal."
+                ),
+                reason="The source identifies the additional organization",
+            ),
+        ),
+    )
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="implicit-update-entity-anchor",
+        text="Northstar Research approved the annual renewal.",
+        plan=update,
+    )
+
+    assert outcome.status == schema.LANDED
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    entity_ids = {
+        claim["value"]: entity_id
+        for entity_id, record in registry["entities"].items()
+        for claim in record["claims"]
+    }
+    page = parse_page(
+        "wiki/notes/Renewal record.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Renewal record.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert page.entities == (entity_ids["Legacy Systems"], entity_ids["Northstar Research"])
+
+
+def test_explicit_entity_lists_do_not_add_matching_proposed_entities(clean_queue, target_repo):
+    store = evidence.MemoryEvidenceStore()
+    actor = Actor(subject="alice", display_name="Alice")
+    plan = FilingPlan(
+        summary="Recorded Northstar Research and Pinecone Labs evidence",
+        entities=(
+            {"name": "Northstar Research", "entity_type": "organization"},
+            {"name": "Pinecone Labs", "entity_type": "organization"},
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Listed entity page",
+                body=(
+                    "# Listed entity page\n\nNorthstar Research and Pinecone Labs "
+                    "approved the renewal."
+                ),
+                entities=("Northstar Research",),
+                reason="The source retains only the explicit selected entity",
+            ),
+            PageMutation(
+                action="create",
+                role="note",
+                title="Empty entity page",
+                body=(
+                    "# Empty entity page\n\nNorthstar Research and Pinecone Labs "
+                    "approved the renewal."
+                ),
+                entities=(),
+                reason="The source intentionally carries no entity anchor",
+            ),
+        ),
+    )
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="explicit-entity-lists-win",
+        text="Northstar Research and Pinecone Labs approved the renewal.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    entity_ids = {
+        claim["value"]: entity_id
+        for entity_id, record in registry["entities"].items()
+        for claim in record["claims"]
+    }
+    listed = parse_page(
+        "wiki/notes/Listed entity page.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Listed entity page.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    empty = parse_page(
+        "wiki/notes/Empty entity page.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Empty entity page.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+
+    assert listed.entities == (entity_ids["Northstar Research"],)
+    assert empty.entities == ()
+
+
 def test_guessed_hidden_page_and_entity_cannot_be_affected(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     bob = Actor(subject="bob", display_name="Bob")

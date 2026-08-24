@@ -54,6 +54,24 @@ def test_http_service_exposes_only_app():
     assert _fly_config()["http_service"]["processes"] == ["app"]
 
 
+def test_http_service_has_a_bounded_get_health_check():
+    checks = _fly_config()["http_service"].get("checks", [])
+    assert len(checks) == 1
+    check = checks[0]
+    assert check["method"] == "GET"
+    assert check["path"] == "/health"
+    limits = {
+        "interval": (1, 60),
+        "timeout": (1, 10),
+        "grace_period": (0, 120),
+    }
+    for key, (minimum, maximum) in limits.items():
+        match = re.fullmatch(r"(\d+)(ms|s|m)", check[key])
+        assert match
+        value = int(match.group(1)) * {"ms": 0.001, "s": 1, "m": 60}[match.group(2)]
+        assert minimum <= value <= maximum
+
+
 def test_app_process_matches_dockerfile_command():
     assert _fly_config()["processes"]["app"] == " ".join(_dockerfile_cmd())
 
