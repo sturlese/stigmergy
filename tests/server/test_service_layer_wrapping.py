@@ -184,6 +184,28 @@ def test_call_async_writes_an_audit_row_on_exception_and_reraises():
     assert audit.rows[0]["error_class"] == "RuntimeError"
 
 
+def test_call_async_external_cancellation_is_audited_as_an_error_and_reraised():
+    audit = FakeAudit()
+    svc = make(audit=audit)
+    started = asyncio.Event()
+
+    async def blocked():
+        started.set()
+        await asyncio.Event().wait()
+
+    async def go():
+        task = asyncio.create_task(svc.call_async("ask", {"question": "q"}, blocked))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(go())
+
+    assert audit.rows[0]["outcome"] == "error"
+    assert audit.rows[0]["error_class"] == "CancelledError"
+
+
 def test_call_async_checks_the_rate_limiter_before_awaiting():
     limiter = FakeRateLimiter(refuse_after=0)
     ran = []

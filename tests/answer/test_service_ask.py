@@ -618,6 +618,147 @@ def test_budget_exhaustion_uses_one_evidence_only_completion_over_hydrated_pages
     ]
 
 
+def test_primary_answer_timeout_completes_from_hydrated_ranked_evidence(ask_service, monkeypatch):
+    class StalledPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            deps.record(deps.service.search_text("globex quarterly report revenue", deps))
+            await asyncio.Event().wait()
+
+    class EvidenceOnly:
+        async def run(self, question, *, evidence):
+            assert "Revenue impact was $1.2M ARR" in evidence
+            assert "Revenue impact was $1.3M ARR" in evidence
+            return types.SimpleNamespace(output=AnswerOutput(
+                answer_markdown=(
+                    "The draft reports $1.2M ARR; the final report states $1.3M ARR."
+                ),
+                citations=[
+                    Citation(
+                        path="wiki/notes/globex-q1-report.md",
+                        quote="Revenue impact was $1.2M ARR",
+                    ),
+                    Citation(
+                        path="wiki/notes/globex-q1-report-final.md",
+                        quote="Revenue impact was $1.3M ARR",
+                    ),
+                ],
+            ))
+
+    monkeypatch.setattr(service_mod, "ANSWER_PHASE_TIMEOUT_S", 0.01, raising=False)
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: StalledPrimary())
+    monkeypatch.setattr(
+        service_mod,
+        "build_evidence_synthesizer",
+        lambda settings: EvidenceOnly(),
+        raising=False,
+    )
+
+    result = asyncio.run(asyncio.wait_for(
+        ask_service.ask("What revenue figures do the ranked Globex quarterly reports state?"),
+        timeout=0.2,
+    ))
+
+    assert result["refused"] is False
+    assert result["retried"] is True
+    assert result["verdict"]["verdict"] == "verified"
+    assert len(result["citations"]) == 2
+
+
+def test_primary_answer_timeout_returns_an_honest_refusal_when_completion_refuses(
+        ask_service, monkeypatch):
+    class StalledPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            deps.record(deps.service.search_text("globex quarterly report revenue", deps))
+            await asyncio.Event().wait()
+
+    class RefusingEvidenceOnly:
+        async def run(self, question, *, evidence):
+            return types.SimpleNamespace(output=AnswerOutput(refused=True, confidence="low"))
+
+    monkeypatch.setattr(service_mod, "ANSWER_PHASE_TIMEOUT_S", 0.01, raising=False)
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: StalledPrimary())
+    monkeypatch.setattr(
+        service_mod,
+        "build_evidence_synthesizer",
+        lambda settings: RefusingEvidenceOnly(),
+        raising=False,
+    )
+
+    result = asyncio.run(asyncio.wait_for(
+        ask_service.ask("What revenue figures do the ranked Globex quarterly reports state?"),
+        timeout=0.2,
+    ))
+
+    assert result["refused"] is True
+    assert result["refusal_case"] == "budget_exceeded"
+    assert result["answer_markdown"] == ""
+    assert result["citations"] == []
+
+
+def test_stalled_corrective_retry_keeps_the_first_strict_gated_outcome(ask_service, monkeypatch):
+    class Primary:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            self.calls += 1
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
+            if self.calls == 2:
+                await asyncio.Event().wait()
+            return types.SimpleNamespace(
+                output=AnswerOutput(answer_markdown="Revenue was $9.9M ARR.", citations=[]),
+                usage=types.SimpleNamespace(
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_read_tokens=0,
+                    details={},
+                ),
+                all_messages=lambda: [],
+            )
+
+    primary = Primary()
+    monkeypatch.setattr(service_mod, "ANSWER_PHASE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: primary)
+
+    result = asyncio.run(asyncio.wait_for(ask_service.ask("globex revenue?"), timeout=0.2))
+
+    assert primary.calls == 2
+    assert result["retried"] is True
+    assert result["refused"] is True and result["suppressed"] is True
+    assert result["refusal_case"] == "suppressed_figures"
+    assert "9.9M" in result["verdict"]["unverified_figures"]
+
+
+def test_stalled_evidence_completion_returns_an_honest_budget_refusal(ask_service, monkeypatch):
+    class StalledPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            deps.record(deps.service.search_text("globex quarterly report revenue", deps))
+            await asyncio.Event().wait()
+
+    class StalledEvidenceOnly:
+        async def run(self, question, *, evidence):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(service_mod, "ANSWER_PHASE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: StalledPrimary())
+    monkeypatch.setattr(
+        service_mod,
+        "build_evidence_synthesizer",
+        lambda settings: StalledEvidenceOnly(),
+        raising=False,
+    )
+
+    result = asyncio.run(asyncio.wait_for(
+        ask_service.ask("What revenue figures do the ranked Globex quarterly reports state?"),
+        timeout=0.2,
+    ))
+
+    assert result["refused"] is True
+    assert result["refusal_case"] == "budget_exceeded"
+    assert result["answer_markdown"] == ""
+    assert result["citations"] == []
+
+
 @pytest.mark.parametrize(
     ("quote", "accepted"),
     [

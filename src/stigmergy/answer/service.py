@@ -11,6 +11,7 @@ the server recorded this run, never from model text. It can never assert what th
 because it is handed nothing about the brain to assert from. `ask` runs under the server process
 identity — no per-call identity parameter a client could spoof.
 """
+import asyncio
 import logging
 
 from stigmergy.answer.brain import AnswerBrain
@@ -29,10 +30,19 @@ log = logging.getLogger(__name__)
 
 _RANK = {"verified": 0, "partial": 1, "failed": 2}
 _EVIDENCE_PAGE_CAP = 3
+ANSWER_PHASE_TIMEOUT_S = 90
+TOTAL_ANSWER_TIMEOUT_S = ANSWER_PHASE_TIMEOUT_S * 2
 
 
 def _dedup(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))          # order-preserving unique
+
+
+def _phase_timeout(deadline: float) -> float:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise TimeoutError
+    return min(ANSWER_PHASE_TIMEOUT_S, remaining)
 
 
 def _reverdict(figs: list[str], citation_problems: list[str]) -> dict:
@@ -212,10 +222,15 @@ class AnswerService:
         # the fake path never needs (nor constructs) pydantic_ai's UsageLimits
         limits = None if self.settings.llm == "fake" else answer_limits()
         ctx = SynthesisContext(service=self.brain)
+        deadline = asyncio.get_running_loop().time() + TOTAL_ANSWER_TIMEOUT_S
         try:
-            result = await agent.run(question, deps=ctx, usage_limits=limits)
-        except UsageLimitExceeded:
-            completed = await self._complete_budget_exhaustion(question, ctx)
+            timeout = _phase_timeout(deadline)
+            result = await asyncio.wait_for(
+                agent.run(question, deps=ctx, usage_limits=limits),
+                timeout=timeout,
+            )
+        except (UsageLimitExceeded, TimeoutError):
+            completed = await self._complete_budget_exhaustion(question, ctx, deadline)
             if completed is not None:
                 return completed
             shaped = self._shape_budget_refusal(question, ctx)
@@ -246,10 +261,17 @@ class AnswerService:
                 # evidence already in context. `deps=ctx` stays the SAME object: evidence and
                 # surfaced paths accumulate across both runs. `gated`, not the raw verdict — a
                 # quote-fabricated figure is invisible to the raw one.
-                result2 = await agent.run(feedback(question, out, gated), deps=ctx,
-                                          usage_limits=limits,
-                                          message_history=result.all_messages())
-            except UsageLimitExceeded:
+                timeout = _phase_timeout(deadline)
+                result2 = await asyncio.wait_for(
+                    agent.run(
+                        feedback(question, out, gated),
+                        deps=ctx,
+                        usage_limits=limits,
+                        message_history=result.all_messages(),
+                    ),
+                    timeout=timeout,
+                )
+            except (UsageLimitExceeded, TimeoutError):
                 # Keep the first run's outcome. The killed retry's spend is unrecoverable (the
                 # exception carries no usage object), so `usage` undercounts exactly this case.
                 pass
@@ -270,7 +292,9 @@ class AnswerService:
         shaped["usage"] = usage
         return shaped
 
-    async def _complete_budget_exhaustion(self, question: str, ctx: SynthesisContext) -> dict | None:
+    async def _complete_budget_exhaustion(
+        self, question: str, ctx: SynthesisContext, deadline: float
+    ) -> dict | None:
         """Close one budget-exhausted run over a fixed, reader-scoped evidence set."""
         from pydantic_ai.exceptions import AgentRunError
 
@@ -280,11 +304,15 @@ class AnswerService:
         for path in paths:
             ctx.record(self.brain.page_text(path, ctx))
         try:
-            result = await build_evidence_synthesizer(self.settings).run(
-                question,
-                evidence=ctx.evidence_text(),
+            timeout = _phase_timeout(deadline)
+            result = await asyncio.wait_for(
+                build_evidence_synthesizer(self.settings).run(
+                    question,
+                    evidence=ctx.evidence_text(),
+                ),
+                timeout=timeout,
             )
-        except AgentRunError as error:
+        except (AgentRunError, TimeoutError) as error:
             log.warning("evidence-only answer completion failed (%s)", error.__class__.__name__)
             return None
         out = result.output
