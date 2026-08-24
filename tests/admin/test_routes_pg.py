@@ -100,6 +100,9 @@ def admin_rig(tmp_path):
         cursor.execute("DELETE FROM knowledge_changes")
         cursor.execute("DELETE FROM capture_queue")
         cursor.execute("DELETE FROM job_runs")
+        cursor.execute(
+            "UPDATE worker_heartbeat SET heartbeat_at = now(), state = 'starting' WHERE singleton"
+        )
     build.rebuild(conn, str(repo), build_embedder("fake"))
 
     server_settings = Settings(
