@@ -4,7 +4,7 @@ primary_region = "fra"
 
 # In-flight writer work recovers through the queue lease if Fly reaches this timeout.
 kill_signal = "SIGTERM"
-kill_timeout = "900s"
+kill_timeout = "300s"
 
 [build]
 
