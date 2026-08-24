@@ -509,7 +509,8 @@ def test_operational_overview_capture_list_and_detail_share_the_queue_state(admi
     assert overview.json()["captures"]["oldest_created_at"]["queued"] is not None
     assert overview.json()["changes"] == 0
     assert overview.json()["contradictions"] == 0
-    assert overview.json()["worker"]["stale"] is True
+    assert overview.json()["worker"]["stale"] is False
+    assert overview.json()["worker"]["heartbeat"]["state"] == "starting"
     assert listing.json()["count"] == 1
     assert listing.json()["captures"][0]["id"] == capture_id
     assert detail.json()["id"] == capture_id
