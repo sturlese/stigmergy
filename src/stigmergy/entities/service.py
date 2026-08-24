@@ -3,8 +3,10 @@ from __future__ import annotations
 import datetime as dt
 import os
 import re
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 
 from stigmergy.capture.schema import EntityMergeEvidence
 from stigmergy.entities.model import (
@@ -28,49 +30,96 @@ class EntityOperationError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class ProposalResolution:
+    proposal_ids: tuple[str, ...]
+    name_candidates: Mapping[str, frozenset[str]]
+
+    @classmethod
+    def empty(cls) -> ProposalResolution:
+        return cls((), MappingProxyType({}))
+
+    def candidates(self, value: str) -> frozenset[str]:
+        return self.name_candidates.get(resolution_key(value), frozenset())
+
+    def resolve(self, value: str) -> str | None:
+        candidates = self.candidates(value)
+        return next(iter(candidates)) if len(candidates) == 1 else None
+
+
 def apply_proposals(
     root: str,
     proposals: tuple[EntityProposal, ...],
     *,
     acl: tuple[str, ...] | None,
     source: str,
+    readable_artifacts: tuple[str, ...],
     actor: str,
     at: dt.datetime,
     allowed_same_as: frozenset[str] = frozenset(),
-) -> dict[str, str]:
+) -> ProposalResolution:
+    _validate_alias_evidence(root, source, readable_artifacts, proposals)
     records = load_entities(root)
-    resolved: dict[str, str] = {}
+    proposal_ids = []
+    name_candidates: dict[str, set[str]] = {}
+    assigned: set[str] = set()
     for proposal in proposals:
         entity_id = _strong_match(
             records,
             proposal,
             allowed_same_as=allowed_same_as,
         )
-        claim = new_name_claim(
-            proposal.name,
-            kind="preferred",
-            acl=acl,
-            source=source,
-            actor=actor,
-            introduced_at=at,
-        )
         if entity_id is None:
             entity_id = mint_entity_id()
+        if entity_id in assigned:
+            raise EntityOperationError("one entity proposal per identity is required")
+        assigned.add(entity_id)
+        claims = (
+            new_name_claim(
+                proposal.name,
+                kind="preferred",
+                acl=acl,
+                source=source,
+                actor=actor,
+                introduced_at=at,
+            ),
+            *(
+                new_name_claim(
+                    alias,
+                    kind="alias",
+                    acl=acl,
+                    source=source,
+                    actor=actor,
+                    introduced_at=at,
+                )
+                for alias in proposal.aliases
+            ),
+        )
+        if entity_id not in records:
             external = _external_claim(proposal, acl=acl, source=source, actor=actor, at=at)
             records[entity_id] = EntityRecord(
                 entity_id=entity_id,
                 entity_type=proposal.entity_type,
                 created_at=at,
                 updated_at=at,
-                claims=(claim,),
+                claims=claims,
                 external_ids=(external,) if external else (),
             )
         else:
             record = records[entity_id]
             if record.entity_type != proposal.entity_type:
                 raise EntityOperationError("strong entity match conflicts with entity type")
-            if not _same_claim_exists(record, claim):
-                record = with_preferred_claim(record, claim)
+            for claim in claims:
+                if _same_claim_exists(record, claim):
+                    continue
+                if claim.kind == "preferred":
+                    record = with_preferred_claim(record, claim)
+                else:
+                    record = replace(
+                        record,
+                        claims=(*record.claims, claim),
+                        updated_at=max(record.updated_at, claim.introduced_at),
+                    )
             external = _external_claim(proposal, acl=acl, source=source, actor=actor, at=at)
             if external and not any(
                 (
@@ -93,10 +142,19 @@ def apply_proposals(
                     updated_at=max(record.updated_at, at),
                 )
             records[entity_id] = record
-        resolved[proposal.name] = entity_id
-        resolved[resolution_key(proposal.name)] = entity_id
+        proposal_ids.append(entity_id)
+        for name in (proposal.name, *proposal.aliases):
+            name_candidates.setdefault(resolution_key(name), set()).add(entity_id)
     write_records(root, records)
-    return resolved
+    return ProposalResolution(
+        tuple(proposal_ids),
+        MappingProxyType(
+            {
+                name: frozenset(entity_ids)
+                for name, entity_ids in name_candidates.items()
+            }
+        ),
+    )
 
 
 def resolve_reference(records: dict[str, EntityRecord], value: str) -> str | None:
@@ -182,28 +240,60 @@ def _verify_merge_evidence(
             raise EntityOperationError("shared external-id evidence is not present on every entity")
         return
 
-    root_path = Path(root).resolve()
     for item in evidence.source_assertions:
-        path = root_path.joinpath(*item.path.split("/"))
-        try:
-            resolved = path.resolve(strict=True)
-        except OSError as error:
-            raise EntityOperationError("merge evidence source does not exist") from error
-        if not resolved.is_relative_to(root_path) or not resolved.is_file() or path.is_symlink():
-            raise EntityOperationError("merge evidence source must be a regular repository file")
-        try:
-            text = resolved.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            raise EntityOperationError("merge evidence source could not be read") from error
-        metadata, body, malformed = split_frontmatter_checked(text)
-        if malformed or metadata.get("type") != "source" or str(metadata.get("id") or "") != resolved.stem:
-            raise EntityOperationError("merge evidence path is not an immutable source")
+        body = _read_immutable_source(root, item.path)
         assertion = " ".join(item.assertion.split())
         readable = " ".join(body.split())
         if assertion not in readable:
             raise EntityOperationError("merge assertion is not present in the cited source")
         if not _assertion_binds_records(assertion, records):
             raise EntityOperationError("merge assertion does not unambiguously equate every selected entity")
+
+
+def _read_immutable_source(root: str, relative: str) -> str:
+    root_path = Path(root).resolve()
+    path = root_path.joinpath(*relative.split("/"))
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise EntityOperationError("source does not exist") from error
+    if not resolved.is_relative_to(root_path) or not resolved.is_file() or path.is_symlink():
+        raise EntityOperationError("source must be a regular repository file")
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise EntityOperationError("source could not be read") from error
+    metadata, body, malformed = split_frontmatter_checked(text)
+    if (
+        malformed
+        or metadata.get("type") != "source"
+        or str(metadata.get("id") or "") != resolved.stem
+    ):
+        raise EntityOperationError("path is not an immutable source")
+    return body
+
+
+def _validate_alias_evidence(
+    root: str,
+    source: str,
+    readable_artifacts: tuple[str, ...],
+    proposals: tuple[EntityProposal, ...],
+) -> None:
+    aliases = tuple(alias for proposal in proposals for alias in proposal.aliases)
+    if not aliases:
+        return
+    _read_immutable_source(root, source)
+    artifact_tokens = tuple(_tokens(text) for text in readable_artifacts)
+    for alias in aliases:
+        alias_tokens = _tokens(alias)
+        if not any(
+            tokens[offset : offset + len(alias_tokens)] == alias_tokens
+            for tokens in artifact_tokens
+            for offset in range(len(tokens) - len(alias_tokens) + 1)
+        ):
+            raise EntityOperationError(
+                "entity alias is not present in the immutable source"
+            )
 
 
 def _tokens(value: str) -> tuple[str, ...]:
@@ -483,7 +573,10 @@ def _external_claim(
 
 def _same_claim_exists(record: EntityRecord, claim: NameClaim) -> bool:
     return any(
-        current.normalized == claim.normalized and current.acl == claim.acl and current.source == claim.source
+        current.normalized == claim.normalized
+        and current.kind == claim.kind
+        and current.acl == claim.acl
+        and current.source == claim.source
         for current in record.claims
     )
 

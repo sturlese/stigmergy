@@ -897,6 +897,310 @@ def test_equivalent_proposed_name_spans_with_distinct_ids_do_not_auto_anchor(
     assert page.entities == ()
 
 
+def test_alias_text_anchors_the_single_identity_proposed_for_all_names(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded the VSW approval",
+        entities=(
+            {
+                "name": "Velorum Signal Works GmbH",
+                "entity_type": "organization",
+                "aliases": ("VSW",),
+                "external_namespace": "commercial_register",
+                "external_id": "HRB 991204",
+            },
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Calibration approval",
+                body="# Calibration approval\n\nVSW approved the calibration schedule.",
+                reason="The source identifies the approving organization",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="entity-alias-anchor",
+        text="Velorum Signal Works GmbH, also called VSW, approved the schedule.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    assert len(registry["entities"]) == 1
+    entity_id, record = next(iter(registry["entities"].items()))
+    assert [(claim["value"], claim["kind"]) for claim in record["claims"]] == [
+        ("Velorum Signal Works GmbH", "preferred"),
+        ("VSW", "alias"),
+    ]
+    page = parse_page(
+        "wiki/notes/Calibration approval.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Calibration approval.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert page.entities == (entity_id,)
+
+
+@pytest.mark.parametrize(
+    ("aliases", "reverse"),
+    (
+        ((("VSW",), ("VSW",)), False),
+        ((("VSW",), ("VSW",)), True),
+        ((("VSW",), ("VSW,",)), False),
+        ((("VSW",), ("VSW,",)), True),
+    ),
+)
+def test_shared_proposed_alias_never_auto_anchors_by_plan_order(
+    clean_queue, target_repo, aliases, reverse
+):
+    store = evidence.MemoryEvidenceStore()
+    proposals = (
+        {
+            "name": "Velorum Signal Works GmbH",
+            "entity_type": "organization",
+            "aliases": aliases[0],
+        },
+        {
+            "name": "Valence Switching Works Limited",
+            "entity_type": "organization",
+            "aliases": aliases[1],
+        },
+    )
+    plan = FilingPlan(
+        summary="Recorded two organizations with a shared acronym",
+        entities=tuple(reversed(proposals)) if reverse else proposals,
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Ambiguous acronym",
+                body="# Ambiguous acronym\n\nVSW approved the schedule.",
+                reason="The source does not disambiguate the acronym",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key=f"shared-alias-{aliases[1][0]}-{reverse}",
+        text=(
+            "Velorum Signal Works GmbH is also called VSW. "
+            "Valence Switching Works Limited is also called VSW."
+        ),
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    page = parse_page(
+        "wiki/notes/Ambiguous acronym.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Ambiguous acronym.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert page.entities == ()
+
+
+def test_shared_proposed_alias_is_ambiguous_in_an_explicit_entity_list(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded two organizations with a shared acronym",
+        entities=(
+            {
+                "name": "Velorum Signal Works GmbH",
+                "entity_type": "organization",
+                "aliases": ("VSW",),
+            },
+            {
+                "name": "Valence Switching Works Limited",
+                "entity_type": "organization",
+                "aliases": ("VSW",),
+            },
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Explicit ambiguous acronym",
+                body="# Explicit ambiguous acronym\n\nVSW approved the schedule.",
+                entities=("VSW",),
+                reason="The source does not disambiguate the acronym",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="explicit-shared-alias",
+        text=(
+            "Velorum Signal Works GmbH is also called VSW. "
+            "Valence Switching Works Limited is also called VSW."
+        ),
+        plan=plan,
+    )
+
+    tree = subprocess.check_output(
+        ["git", "ls-tree", "-r", "--name-only", "main"],
+        cwd=target_repo,
+        text=True,
+    ).splitlines()
+    assert outcome.status == schema.LANDED
+    assert "wiki/notes/Explicit ambiguous acronym.md" not in tree
+
+
+@pytest.mark.parametrize(
+    ("alias", "key"),
+    (("VSW", "acronym"), ("Captured source", "generated-heading")),
+)
+def test_alias_without_exact_artifact_evidence_rejects_the_plan(
+    clean_queue, target_repo, alias, key
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded an unsupported acronym",
+        entities=(
+            {
+                "name": "Velorum Signal Works GmbH",
+                "entity_type": "organization",
+                "aliases": (alias,),
+            },
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Unsupported acronym",
+                body="# Unsupported acronym\n\nVelorum Signal Works GmbH approved the schedule.",
+                reason="The source identifies the organization",
+            ),
+        ),
+    )
+
+    _receipt, item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key=f"unsupported-entity-alias-{key}",
+        text="Velorum Signal Works GmbH approved the schedule.",
+        plan=plan,
+    )
+
+    tree = subprocess.check_output(
+        ["git", "ls-tree", "-r", "--name-only", "main"],
+        cwd=target_repo,
+        text=True,
+    ).splitlines()
+    assert outcome.status == schema.LANDED
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["wiki_changes"] == 0
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    assert registry["entities"] == {}
+    assert "wiki/notes/Unsupported acronym.md" not in tree
+
+
+def test_two_proposals_for_one_strong_identity_reject_the_plan(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded duplicate proposals for one registered organization",
+        entities=(
+            {
+                "name": "Velorum Signal Works GmbH",
+                "entity_type": "organization",
+                "external_namespace": "commercial_register",
+                "external_id": "HRB 991204",
+            },
+            {
+                "name": "VSW Holdings",
+                "entity_type": "organization",
+                "external_namespace": "commercial_register",
+                "external_id": "HRB 991204",
+            },
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Duplicate identity proposals",
+                body=(
+                    "# Duplicate identity proposals\n\n"
+                    "Velorum Signal Works GmbH and VSW Holdings share one registration."
+                ),
+                reason="The source supplies one stable registration",
+            ),
+        ),
+    )
+
+    _receipt, item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="duplicate-strong-identity-proposals",
+        text=(
+            "Velorum Signal Works GmbH and VSW Holdings are registered as HRB 991204."
+        ),
+        plan=plan,
+    )
+
+    tree = subprocess.check_output(
+        ["git", "ls-tree", "-r", "--name-only", "main"],
+        cwd=target_repo,
+        text=True,
+    ).splitlines()
+    assert outcome.status == schema.LANDED
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["wiki_changes"] == 0
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    assert registry["entities"] == {}
+    assert "wiki/notes/Duplicate identity proposals.md" not in tree
+
+
 def test_omitted_update_entities_retains_existing_anchors_and_adds_exact_proposals(
     clean_queue, target_repo
 ):

@@ -34,15 +34,37 @@ def _proposal(name: str, **values) -> EntityProposal:
 
 
 def _apply(root: Path, *proposals: EntityProposal, acl=None, at=NOW, allowed_same_as=frozenset()):
-    return apply_proposals(
+    aliases = tuple(alias for proposal in proposals for alias in proposal.aliases)
+    if aliases:
+        _source(
+            root,
+            " ".join(
+                value
+                for proposal in proposals
+                for value in (proposal.name, *proposal.aliases)
+            ),
+        )
+    resolution = apply_proposals(
         str(root),
         proposals,
         acl=acl,
         source=SOURCE,
+        readable_artifacts=(
+            " ".join(
+                value
+                for proposal in proposals
+                for value in (proposal.name, *proposal.aliases)
+            ),
+        ),
         actor="alice",
         at=at,
         allowed_same_as=allowed_same_as,
     )
+    return {
+        value: resolution.resolve(value)
+        for proposal in proposals
+        for value in (proposal.name, *proposal.aliases)
+    }
 
 
 def _note(root: Path, entity_id: str, *, link_target: str | None = None) -> Path:
@@ -106,6 +128,33 @@ def test_birth_uses_an_opaque_path_and_name_collision_does_not_merge(tmp_path):
     assert (tmp_path / "wiki" / "entities" / f"{first}.md").is_file()
 
 
+def test_one_proposal_records_every_explicit_name_for_the_same_identity(tmp_path):
+    resolved = _apply(
+        tmp_path,
+        _proposal(
+            "Acme Holdings Limited",
+            aliases=("Acme Holdings Ltd", "Acme", "AH"),
+            external_namespace="companies_house",
+            external_id="11820473",
+        ),
+    )
+    entity_id = resolved["Acme Holdings Limited"]
+    record = load_entities(str(tmp_path))[entity_id]
+
+    assert {resolved[name] for name in ("Acme Holdings Ltd", "Acme", "AH")} == {
+        entity_id
+    }
+    assert [(claim.value, claim.kind) for claim in record.claims] == [
+        ("Acme Holdings Limited", "preferred"),
+        ("Acme Holdings Ltd", "alias"),
+        ("Acme", "alias"),
+        ("AH", "alias"),
+    ]
+    assert {(claim.namespace, claim.value) for claim in record.external_ids} == {
+        ("companies_house", "11820473")
+    }
+
+
 def test_scoped_rename_preserves_id_and_demotes_the_old_preferred_name(tmp_path):
     entity_id = _apply(tmp_path, _proposal("Acme"), acl=("finance",))["Acme"]
     later = NOW + dt.timedelta(days=1)
@@ -144,6 +193,7 @@ def test_repeated_identity_evidence_survives_deletion_of_its_first_source(tmp_pa
         ),
         acl=("finance",),
         source=SECOND_SOURCE,
+        readable_artifacts=("Acme",),
         actor="alice",
         at=NOW + dt.timedelta(days=1),
         allowed_same_as=frozenset({entity_id}),
