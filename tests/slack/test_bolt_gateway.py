@@ -27,18 +27,10 @@ def _run(coro):
 
 
 class _StubClient:
-    """A minimal stand-in for `slack_sdk`'s `AsyncWebClient`, just enough surface for
-    `reactions_add`/`reactions_remove` to raise the SDK's own `SlackApiError` with a given error
-    code — the shape a real `already_reacted`/`no_reaction`/`missing_scope` response carries."""
+    """A minimal stand-in for `slack_sdk`'s `AsyncWebClient` that raises a coded error."""
 
     def __init__(self, error_code: str):
         self._error_code = error_code
-
-    async def reactions_add(self, **kwargs):
-        raise SdkSlackApiError("the request failed", {"ok": False, "error": self._error_code})
-
-    async def reactions_remove(self, **kwargs):
-        raise SdkSlackApiError("the request failed", {"ok": False, "error": self._error_code})
 
     async def chat_update(self, **kwargs):
         raise SdkSlackApiError("the request failed", {"ok": False, "error": self._error_code})
@@ -184,41 +176,6 @@ def test_conversations_replies_resolves_a_reply_to_its_complete_thread():
         {"channel": "C1", "ts": "2.0", "limit": 200},
         {"channel": "C1", "ts": "1.0", "limit": 200},
     ]
-
-
-# ── the reaction lifecycle's own benign redelivery outcomes are not failures at all ─────────────
-def test_reactions_add_treats_already_reacted_as_success_not_a_failure():
-    """Event redelivery can retry an add that already landed — `already_reacted` is Slack's own
-    honest "already in the state we wanted" answer, not an API failure, so it never reaches a
-    caller as `SlackApiError` (the `tolerate` map's whole purpose)."""
-    gateway = BoltSlackGateway(_StubClient("already_reacted"))
-    result = _run(gateway.reactions_add("C1", "1.1", "hourglass_flowing_sand"))
-    assert result == {"ok": True}
-
-
-def test_reactions_remove_treats_no_reaction_as_success_not_a_failure():
-    """The remove-side twin: a previous cleanup (or a redelivery) already took the reaction off —
-    `no_reaction` is likewise not surfaced as a failure."""
-    gateway = BoltSlackGateway(_StubClient("no_reaction"))
-    result = _run(gateway.reactions_remove("C1", "1.1", "hourglass_flowing_sand"))
-    assert result == {"ok": True}
-
-
-# ── every OTHER failure, missing_scope included, still raises — this package's ONE exception ────
-def test_reactions_add_still_raises_slack_api_error_for_a_missing_scope():
-    """An operator whose Slack app lacks `reactions:write` must not lose captures — this is what
-    makes that true one layer down: `missing_scope` is a REAL failure (not redelivery-benign), so
-    it still becomes `SlackApiError`, which every caller in `stigmergy.slack` already treats as
-    best-effort and swallows (`capture._react_or_log`)."""
-    gateway = BoltSlackGateway(_StubClient("missing_scope"))
-    with pytest.raises(SlackApiError):
-        _run(gateway.reactions_add("C1", "1.1", "hourglass_flowing_sand"))
-
-
-def test_reactions_remove_still_raises_slack_api_error_for_a_missing_scope():
-    gateway = BoltSlackGateway(_StubClient("missing_scope"))
-    with pytest.raises(SlackApiError):
-        _run(gateway.reactions_remove("C1", "1.1", "hourglass_flowing_sand"))
 
 
 # ── the error CODE survives the collapse, because a caller decides retry-or-not on it ───────────

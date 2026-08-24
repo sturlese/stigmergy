@@ -156,10 +156,7 @@ def is_ignorable_event(event: dict, *, bot_user_id: str | None) -> bool:
 
 
 def is_configured_workspace(event_team_id: str, configured_team_id: str) -> bool:
-    """The cheap, synchronous half of `resolve_slack_identity`'s fail-closed workspace check —
-    extracted so the 🧠 progress reaction can ask the SAME question before any identity work,
-    rather than a second comparison that could drift. Fails CLOSED: an absent `event_team_id` is
-    never "the configured workspace"."""
+    """Return whether the event workspace matches the configured workspace; absence fails closed."""
     return bool(event_team_id) and event_team_id == configured_team_id
 
 

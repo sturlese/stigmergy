@@ -44,7 +44,8 @@ The full implementation contract is [the team-wiki specification](./specs/karpat
   local path, or URL. Private Google Drive acquisition uses local OAuth and the OS keychain;
   Google credentials never reach Stigmergy.
 - Slack: a brain reaction snapshots the thread and downloads supported attachments under the
-  configured channel audience.
+  configured channel audience. The versioned app configuration is
+  [`deploy/slack-app-manifest.json`](./deploy/slack-app-manifest.json).
 - Backoffice: the master can paste text, upload a file, or submit a public URL.
 
 Supported artifacts are UTF-8 text/Markdown, HTML, PDF, DOCX, PPTX, PNG, JPEG, Google Doc exports,

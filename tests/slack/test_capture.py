@@ -10,12 +10,8 @@ from stigmergy.capture import schema
 from stigmergy.capture.errors import ArtifactRejected
 from stigmergy.slack import copy, snapshot
 from stigmergy.slack.capture import (
-    DONE_REACTION,
     PROFILE_LOOKUP_CONCURRENCY,
-    PROGRESS_REACTION,
-    finish_progress,
     handle_reaction_added,
-    mark_in_progress,
 )
 from stigmergy.slack.gateway import FakeSlackGateway, SlackApiError
 from stigmergy.slack.identity import ForeignTeam, Ignored, NoAccess, Resolved, TransientFailure
@@ -613,18 +609,3 @@ def test_slack_acquisition_failure_is_reported_privately(indexed, clean_tables, 
     assert capture(ctx) is False
     assert queue_rows(conn) == []
     assert gateway.ephemeral[-1].text == copy.CAPTURE_FAILED
-
-
-def test_progress_reactions_are_best_effort():
-    gateway = FakeSlackGateway()
-    run(mark_in_progress(gateway, channel_id="C1", message_ts="1.1"))
-    run(finish_progress(gateway, channel_id="C1", message_ts="1.1", ok=True))
-    assert [item.name for item in gateway.reactions_added] == [PROGRESS_REACTION, DONE_REACTION]
-    assert [item.name for item in gateway.reactions_removed] == [PROGRESS_REACTION]
-
-    failing = FakeSlackGateway()
-    failing.fail_reactions_add_count = 10
-    failing.fail_reactions_remove_count = 10
-    run(mark_in_progress(failing, channel_id="C1", message_ts="1.1"))
-    run(finish_progress(failing, channel_id="C1", message_ts="1.1", ok=True))
-    assert failing.reactions_added == [] and failing.reactions_removed == []

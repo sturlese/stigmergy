@@ -11,7 +11,6 @@ import pytest
 
 from stigmergy.server.settings import Settings
 from stigmergy.slack.app import _event_team_id, build_bolt_app, build_context, main
-from stigmergy.slack.capture import DONE_REACTION, PROGRESS_REACTION
 from stigmergy.slack.context import SlackContext
 from stigmergy.slack.gateway import FakeSlackGateway
 from stigmergy.slack.settings import SlackSettings, no_link_resolver
@@ -166,18 +165,15 @@ def test_reaction_added_from_a_foreign_workspace_produces_zero_traffic_and_no_qu
     _run(listener(event=event, context=context, ack=_noop_ack, body={"team_id": TEAM_ID, "event": event}))
 
     assert gw.posted == [] and gw.ephemeral == []
-    # The progress reaction must not fire for a foreign workspace either — `is_configured_workspace`
-    # gates it BEFORE identity resolution runs, using the same fail-closed comparison
-    # `resolve_slack_identity` makes internally, so this is genuinely zero Slack traffic, reaction
-    # included, not merely zero chat traffic.
-    assert gw.reactions_added == [] and gw.reactions_removed == []
+    assert not hasattr(gw, "reactions_add")
+    assert not hasattr(gw, "reactions_remove")
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue")
         assert cur.fetchone()[0] == 0
 
 
-# ── the progress-reaction lifecycle, wired through the REAL listener ───────────────────────────
-def test_reaction_added_success_upgrades_the_progress_reaction_to_a_done_mark(indexed, clean_tables):
+# ── a brain reaction is input only; no reaction-writing permission is required ──────────────────
+def test_reaction_added_success_queues_without_outbound_reactions(indexed, clean_tables):
     conn, fixture = indexed
     gw = FakeSlackGateway()
     gw.seed_channel(FINANCE_CHANNEL, name="finance-team")
@@ -193,17 +189,14 @@ def test_reaction_added_success_upgrades_the_progress_reaction_to_a_done_mark(in
 
     _run(listener(event=event, context=context, ack=_noop_ack, body={"team_id": TEAM_ID, "event": event}))
 
-    assert [r.name for r in gw.reactions_added] == [PROGRESS_REACTION, DONE_REACTION]
-    assert [r.name for r in gw.reactions_removed] == [PROGRESS_REACTION]
+    assert not hasattr(gw, "reactions_add")
+    assert not hasattr(gw, "reactions_remove")
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue")
         assert cur.fetchone()[0] == 1
 
 
-def test_reaction_added_refusal_clears_the_progress_reaction_without_a_done_mark(
-        indexed, clean_tables):
-    """`NoAccess` — a Slack user with no email `identities.json` recognizes — is a refusal, not a
-    success: the marker is cleared, never upgraded to the checkmark."""
+def test_reaction_added_refusal_has_no_outbound_reactions(indexed, clean_tables):
     conn, fixture = indexed
     gw = FakeSlackGateway()
     gw.seed_user("U_STRANGER", "stranger@example.com")
@@ -217,40 +210,12 @@ def test_reaction_added_refusal_clears_the_progress_reaction_without_a_done_mark
 
     _run(listener(event=event, context=context, ack=_noop_ack, body={"team_id": TEAM_ID, "event": event}))
 
-    assert [r.name for r in gw.reactions_added] == [PROGRESS_REACTION]
-    assert [r.name for r in gw.reactions_removed] == [PROGRESS_REACTION]
+    assert not hasattr(gw, "reactions_add")
+    assert not hasattr(gw, "reactions_remove")
     assert len(gw.ephemeral) == 1   # the NoAccess ephemeral still fired normally
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue")
         assert cur.fetchone()[0] == 0
-
-
-# ── the benign twin: a reactions API outage never breaks the capture it wraps ──────────────────
-def test_reaction_added_capture_still_succeeds_when_the_reactions_api_is_down(
-        indexed, clean_tables):
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    gw.seed_channel(FINANCE_CHANNEL, name="finance-team")
-    gw.seed_user("U_ANA", fixture.ANA, display_name="Ana")
-    gw.seed_thread(FINANCE_CHANNEL, "11.1", [{"ts": "11.1", "user": "U_ANA", "text": "note"}])
-    gw.fail_reactions_add_count = 99
-    gw.fail_reactions_remove_count = 99
-    ctx = build_slack_context(fixture, conn, gateway=gw)
-    app = build_bolt_app(ctx)
-    listener = _listener(app, "on_reaction_added")
-
-    event = {"reaction": "brain", "user": "U_ANA", "team": TEAM_ID,
-             "item": {"channel": FINANCE_CHANNEL, "ts": "11.1"}}
-    context = {"bot_user_id": "UBOT", "team_id": TEAM_ID}
-
-    _run(listener(event=event, context=context, ack=_noop_ack,
-                  body={"team_id": TEAM_ID, "event": event}))   # must not raise
-
-    assert gw.reactions_added == [] and gw.reactions_removed == []   # every attempt failed, swallowed
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1   # the capture itself is unaffected
-    assert len(gw.posted) == 1
 
 
 # ── is_dm derived from the payload, never a channel-id prefix guess or a hard-coded False ──────

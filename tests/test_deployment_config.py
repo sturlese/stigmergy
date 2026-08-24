@@ -11,6 +11,28 @@ FLY_TOML = ROOT / "fly.toml"
 DOCKERFILE = ROOT / "Dockerfile"
 COMPOSE = ROOT / "docker-compose.yml"
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+SLACK_APP_MANIFEST = ROOT / "deploy" / "slack-app-manifest.json"
+
+REQUIRED_SLACK_BOT_SCOPES = {
+    "app_mentions:read",
+    "channels:history",
+    "channels:read",
+    "chat:write",
+    "files:read",
+    "groups:history",
+    "groups:read",
+    "im:history",
+    "im:read",
+    "reactions:read",
+    "users:read",
+    "users:read.email",
+}
+
+REQUIRED_SLACK_BOT_EVENTS = {
+    "app_mention",
+    "message.im",
+    "reaction_added",
+}
 
 SUPPORTED_SCRIPTS = {
     "stigmergy-index": "operations",
@@ -47,6 +69,17 @@ def _dockerfile_cmd() -> list[str]:
     match = re.search(r"^CMD\s+(\[.*?\])\s*$", text, re.MULTILINE | re.DOTALL)
     assert match
     return json.loads(match.group(1).replace("\\\n", "\n"))
+
+
+def test_checked_in_slack_manifest_declares_the_runtime_contract():
+    manifest = json.loads(SLACK_APP_MANIFEST.read_text(encoding="utf-8"))
+    bot_scopes = set(manifest["oauth_config"]["scopes"]["bot"])
+
+    assert bot_scopes == REQUIRED_SLACK_BOT_SCOPES
+    assert {"files:write", "im:write", "reactions:write"}.isdisjoint(bot_scopes)
+    assert set(manifest["settings"]["event_subscriptions"]["bot_events"]) == REQUIRED_SLACK_BOT_EVENTS
+    assert manifest["settings"]["socket_mode_enabled"] is True
+    assert manifest["settings"]["interactivity"]["is_enabled"] is True
 
 
 def test_process_groups_are_exactly_app_worker_and_slack():

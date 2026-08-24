@@ -44,6 +44,22 @@ entity-registry, and Slack-channel controls into the image, deploys all process 
 single-writer/Slack process counts. The temporary copies are restored to empty tracked defaults on
 every exit path.
 
+### Slack application
+
+`deploy/slack-app-manifest.json` is the Slack configuration contract. Import it from the app's
+**App Manifest** page, reinstall or reauthorize the app whenever its OAuth scopes change, and issue
+an app-level Socket Mode token with `connections:write`.
+
+The bot needs `files:read` to download user attachments and `groups:history` to capture mapped
+private channels. `chat:write` also covers private delivery when the asker may see more than the
+channel audience. It does not need `im:write`, `files:write`, or `reactions:write`: users provide
+attachments, and capture does not write reactions. Invite the bot to every mapped public or private
+channel.
+
+After installation, verify that the token's granted scopes match the manifest. Slack returns them
+in the `x-oauth-scopes` response header; a checked-in manifest alone does not update an already
+installed token.
+
 After deployment, validate:
 
 1. Fly release and all required machines are healthy.
@@ -55,7 +71,7 @@ After deployment, validate:
    gardener runs, and index-health state.
 7. A full rebuild indexes repository HEAD, records row count/time, and clears the dirty marker.
 8. Slack authentication and channel mapping are healthy; a controlled brain reaction lands through
-   the same capture path when a safe test channel is available.
+   the same capture path with a supported attachment when a safe test channel is available.
 
 ## Nightly reconciliation
 

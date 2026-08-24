@@ -31,8 +31,11 @@ def test_committed_deploy_controls_are_fail_closed_defaults(name, expected):
     assert json.loads((DEPLOY / name).read_text(encoding="utf-8")) == expected
 
 
-def test_deploy_directory_contains_only_control_defaults():
-    assert {path.name for path in DEPLOY.iterdir()} == set(EMPTY_DEFAULTS)
+def test_deploy_directory_contains_only_known_artifacts():
+    assert {path.name for path in DEPLOY.iterdir()} == {
+        *EMPTY_DEFAULTS,
+        "slack-app-manifest.json",
+    }
 
 
 def _run_deploy(

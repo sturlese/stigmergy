@@ -24,14 +24,8 @@ class BoltSlackGateway:
     def __init__(self, client) -> None:
         self._client = client  # a slack_sdk.web.async_client.AsyncWebClient
 
-    async def _call(self, method, *, tolerate: dict | None = None, **kwargs):
-        """`tolerate` maps a Slack ERROR CODE to the value that code should return instead of
-        raising — an already-in-the-wanted-state redelivery (`already_reacted`, `no_reaction`), or
-        an honest "no such thing" negative. Membership decides, never truthiness, so a tolerated
-        code whose value is `None` returns `None` rather than raising. Every other
-        failure — the SDK's own or a timeout — still becomes this package's `SlackApiError`,
-        CARRYING the code where the failure had one: a caller deciding whether a retry could ever
-        work must not have to parse the SDK's prose back out of `str(ex)`."""
+    async def _call(self, method, **kwargs):
+        """Collapse SDK failures into this package's `SlackApiError`, retaining Slack's code."""
         from slack_sdk.errors import SlackApiError as SdkSlackApiError
 
         try:
@@ -39,8 +33,6 @@ class BoltSlackGateway:
         except SdkSlackApiError as ex:
             response = getattr(ex, "response", None)
             code = response.get("error") if response is not None else None
-            if tolerate and code in tolerate:
-                return tolerate[code]
             raise SlackApiError(str(ex), code=str(code or "")) from ex
         except Exception as ex:  # noqa: BLE001 — a timeout/connection reset is an API failure too
             raise SlackApiError(f"{ex.__class__.__name__}: {ex}") from ex
@@ -154,30 +146,6 @@ class BoltSlackGateway:
             blocks=blocks,
             thread_ts=thread_ts,
         )
-
-    async def reactions_add(self, channel_id: str, message_ts: str, name: str) -> dict:
-        """`already_reacted` (an event redelivery reaches this) is Slack saying "already in the
-        state we wanted" — translated to success; every OTHER failure still becomes
-        `SlackApiError`."""
-        return await self._call(
-            self._client.reactions_add,
-            channel=channel_id,
-            timestamp=message_ts,
-            name=name,
-            tolerate={"already_reacted": {"ok": True}},
-        )
-
-    async def reactions_remove(self, channel_id: str, message_ts: str, name: str) -> dict:
-        """`no_reaction` (the reaction already gone — a previous cleanup, or a redelivery) is
-        translated to success the same way `reactions_add` translates `already_reacted`."""
-        return await self._call(
-            self._client.reactions_remove,
-            channel=channel_id,
-            timestamp=message_ts,
-            name=name,
-            tolerate={"no_reaction": {"ok": True}},
-        )
-
 
 def build_gateway(bot_token: str) -> BoltSlackGateway:
     """Construct the Slack API gateway without exposing the SDK to callers."""
