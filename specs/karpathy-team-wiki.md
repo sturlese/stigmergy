@@ -3,17 +3,13 @@ title: "Stigmergy: a Karpathy-style team wiki"
 status: implemented
 date: 2026-08-23
 implemented: 2026-08-24
-repositories:
-  - /Users/marc/dev/stigmergy
-  - /Users/marc/dev/stigmergy-brain
-reference_implementation: /Users/marc/dev/hippocampus
 ---
 
 # Stigmergy: a Karpathy-style team wiki
 
 ## 1. Purpose
 
-Stigmergy is the team version of the wiki described by [Karpathy's gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and implemented for one person by Hippocampus.
+Stigmergy is the team version of the wiki described by [Karpathy's gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
 
 The product remains deliberately small:
 
@@ -65,7 +61,7 @@ Its knowledge model has drifted away from the simple source-to-wiki loop:
 
 The target removes these parallel concepts rather than adding another layer over them.
 
-### 3.1 Deliberate differences from Karpathy/Hippocampus
+### 3.1 Deliberate differences from Karpathy's wiki
 
 The final product keeps only team-enabling differences with a clear payoff:
 
@@ -312,7 +308,7 @@ The target corpus has four roles:
 
 `page`, `meeting`, `document`, `view`, and input-specific page roles disappear. Facts and connections about an entity live in normal notes/concepts and are composed at read time by `describe_entity`.
 
-Notes and concepts use the Hippocampus-compatible editorial maturity values `seed`, `developing`, `mature`, and `evergreen`. Entity and source pages do not have editorial maturity. Age alone is not corruption: an old seed is not a health failure unless the corpus supplies enough evidence to merge, develop, or delete it.
+Notes and concepts use the editorial maturity values `seed`, `developing`, `mature`, and `evergreen`. Entity and source pages do not have editorial maturity. Age alone is not corruption: an old seed is not a health failure unless the corpus supplies enough evidence to merge, develop, or delete it.
 
 There is no generic `deprecated` entity or fact state. A known replacement can use the existing explicit `supersedes`/`superseded_by` page relation; a factual disagreement uses a contradiction; an inactive organization/person is described as a dated fact; a bad page is rewritten, consolidated, or explicitly deleted.
 
@@ -563,7 +559,7 @@ Manual queue claim, one-shot librarian, and one-shot gardener execution remain c
 
 The knowledge repository's live librarian skill and every platform-owned frozen/evaluation copy change in the same implementation:
 
-- `/Users/marc/dev/stigmergy-brain/.claude/skills/librarian/SKILL.md`
+- live knowledge repository (`STIGMERGY_REPO`): `.claude/skills/librarian/SKILL.md`
 - `tests/librarian/fixtures/repo/.claude/skills/librarian/SKILL.md`
 - `evals/filing/repo/.claude/skills/librarian/SKILL.md`
 
@@ -885,7 +881,7 @@ The build should preserve a runnable target at the end of each slice, but it nee
 | Local bridge for private Drive | It uses the user's existing machine and OAuth without placing personal cloud credentials in Stigmergy. |
 | Presigned byte upload, not MCP base64 | It is bounded, streamable, retryable, and keeps credentials on the correct side. |
 | Exact original in R2, readable source in Git | Binary fidelity and human-readable provenance have different jobs; neither substitutes for the other. |
-| One source per capture | It preserves the Karpathy/Hippocampus mental model and stable provenance across every adapter. |
+| One source per capture | It preserves the source-to-wiki mental model and stable provenance across every adapter. |
 | Autonomous wiki mutation | The wiki is model-owned; approval would reintroduce the personal interactive loop that does not fit a team service. |
 | Explicit delete operation | Deletion expresses intent rather than new source material, while still sharing the same writer and gates. |
 | Minimal internal entity pages | Identity needs stable global resolution; facts belong in ACL-scoped knowledge pages and are composed for each reader. |
