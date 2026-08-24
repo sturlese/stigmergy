@@ -412,7 +412,6 @@ def _apply_filing_plan(
                 "contradiction cites evidence outside the supplied filing context"
             )
     proposal_ids = {}
-    mutated_paths: set[str] = set()
     if plan.entities:
         try:
             proposal_ids = apply_proposals(
@@ -428,7 +427,7 @@ def _apply_filing_plan(
             proposal_ids = {}
     for mutation in plan.mutations:
         try:
-            mutated_path = _apply_page_mutation(
+            _apply_page_mutation(
                 root,
                 mutation,
                 context=context,
@@ -439,8 +438,6 @@ def _apply_filing_plan(
                 reasons=reasons,
                 visible_entity_ids=visible_entity_ids,
             )
-            if mutated_path:
-                mutated_paths.add(mutated_path)
         except (KnowledgeWriteError, PageContractError, WriteRefused):
             continue
     for proposal in plan.contradictions:
@@ -487,8 +484,7 @@ def _apply_filing_plan(
             expected,
             at=envelope.origin.captured_at.date(),
             context=context,
-            allowed_paths=frozenset(mutated_paths),
-            required_source=relative_source,
+            resolution_source=relative_source,
         )
         reasons.update({path: envelope.intent.rationale or "Resolved contradiction" for path in removed})
 
@@ -710,8 +706,7 @@ def _remove_contradiction(
     *,
     at: dt.date,
     context: WriteContext,
-    allowed_paths: frozenset[str],
-    required_source: str,
+    resolution_source: str,
 ) -> tuple[str, ...]:
     changed = []
     for folder in ("wiki/notes", "wiki/concepts"):
@@ -720,11 +715,7 @@ def _remove_contradiction(
             continue
         for path in sorted(base.glob("*.md")):
             relative = path.relative_to(root).as_posix()
-            if relative not in allowed_paths:
-                continue
             page = parse_page(relative, path.read_text(encoding="utf-8"))
-            if required_source not in page.sources:
-                continue
             try:
                 allow_existing(context, page.acl)
             except WriteRefused:
@@ -739,7 +730,7 @@ def _remove_contradiction(
                         body=body,
                         acl=page.acl,
                         entities=page.entities,
-                        sources=page.sources,
+                        sources=tuple(dict.fromkeys((*page.sources, resolution_source))),
                         status=page.status,
                         page_id=page.page_id,
                         created=page.created,
