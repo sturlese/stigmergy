@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-label="The write path: acquire, upload, queue, process, landed; a processing failure becomes a typed safe error with bounded retries and no partial commit">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A0F1F"/>
+      <stop offset="1" stop-color="#161F3D"/>
+    </linearGradient>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.2" fill="#FFFFFF" fill-opacity="0.07"/>
+    </pattern>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrowRose" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#FB7185"/>
+    </marker>
+    <style>
+      .sans { font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+      .k { font-size: 11px; font-weight: 700; fill: #F6B73C; letter-spacing: 2px; }
+      .h { font-size: 15px; font-weight: 700; fill: #EEF2FF; }
+      .s { font-size: 11.5px; font-weight: 500; fill: #9AA6C4; }
+      .num { font-size: 14px; font-weight: 800; }
+      .chip { font-size: 10.5px; font-weight: 600; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="360" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="360" rx="28" fill="url(#dots)"/>
+  <rect x="0.5" y="0.5" width="1199" height="359" rx="27.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+
+  <text x="40" y="46" class="sans k">ONE FLOW FOR EVERY CAPTURE</text>
+  <text x="1160" y="46" text-anchor="end" class="sans s">MCP bridge · Slack · backoffice → the same envelope, queue, writer and gates</text>
+
+  <!-- trail -->
+  <line x1="130" y1="130" x2="1070" y2="130" stroke="#F6B73C" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 9" opacity="0.9"/>
+
+  <!-- state chips -->
+  <g class="mono chip">
+    <rect x="538" y="72" width="64" height="22" rx="11" fill="#8B95B0" fill-opacity="0.12" stroke="#8B95B0" stroke-opacity="0.5"/>
+    <text x="570" y="87" text-anchor="middle" fill="#C7D0E6">queued</text>
+    <line x1="570" y1="94" x2="570" y2="106" stroke="#8B95B0" stroke-opacity="0.5"/>
+
+    <rect x="746" y="72" width="88" height="22" rx="11" fill="#F6B73C" fill-opacity="0.12" stroke="#F6B73C" stroke-opacity="0.6"/>
+    <text x="790" y="87" text-anchor="middle" fill="#F6B73C">processing</text>
+    <line x1="790" y1="94" x2="790" y2="106" stroke="#F6B73C" stroke-opacity="0.5"/>
+
+    <rect x="1038" y="72" width="64" height="22" rx="11" fill="#4ADE80" fill-opacity="0.12" stroke="#4ADE80" stroke-opacity="0.6"/>
+    <text x="1070" y="87" text-anchor="middle" fill="#4ADE80">landed</text>
+    <line x1="1070" y1="94" x2="1070" y2="106" stroke="#4ADE80" stroke-opacity="0.5"/>
+  </g>
+
+  <!-- stations -->
+  <g class="sans num">
+    <circle cx="130" cy="130" r="22" fill="#0E1530" stroke="#F6B73C" stroke-width="3"/>
+    <text x="130" y="135" text-anchor="middle" fill="#F6B73C">1</text>
+    <circle cx="350" cy="130" r="22" fill="#0E1530" stroke="#F6B73C" stroke-width="3"/>
+    <text x="350" y="135" text-anchor="middle" fill="#F6B73C">2</text>
+    <circle cx="570" cy="130" r="22" fill="#0E1530" stroke="#F6B73C" stroke-width="3"/>
+    <text x="570" y="135" text-anchor="middle" fill="#F6B73C">3</text>
+    <circle cx="790" cy="130" r="22" fill="#0E1530" stroke="#F6B73C" stroke-width="3"/>
+    <text x="790" y="135" text-anchor="middle" fill="#F6B73C">4</text>
+    <g filter="url(#glow)">
+      <circle cx="1070" cy="130" r="22" fill="#0E1530" stroke="#4ADE80" stroke-width="3"/>
+    </g>
+    <text x="1070" y="135" text-anchor="middle" fill="#4ADE80">5</text>
+  </g>
+
+  <g class="sans" text-anchor="middle">
+    <text x="130" y="182" class="h">Acquire</text>
+    <text x="130" y="204" class="s">read locally, snapshotted from Slack,</text>
+    <text x="130" y="222" class="s">or fetched with SSRF defenses</text>
+
+    <text x="350" y="182" class="h">Upload</text>
+    <text x="350" y="204" class="s">presigned single-object upload,</text>
+    <text x="350" y="222" class="s">size and SHA-256 verified</text>
+
+    <text x="570" y="182" class="h">Queue</text>
+    <text x="570" y="204" class="s">envelope + blob refs, no copies,</text>
+    <text x="570" y="222" class="s">idempotent per actor and key</text>
+
+    <text x="790" y="182" class="h">Process</text>
+    <text x="790" y="204" class="s">extract · render source · FilingPlan,</text>
+    <text x="790" y="222" class="s">every write gate must pass</text>
+
+    <text x="1070" y="182" class="h" fill="#4ADE80">Landed</text>
+    <text x="1070" y="204" class="s">one commit · one change record,</text>
+    <text x="1070" y="222" class="s">index upserted, receipt updated</text>
+  </g>
+
+  <!-- failure branch -->
+  <path d="M812 136 C 905 145, 930 200, 940 256" fill="none" stroke="#FB7185" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arrowRose)"/>
+  <rect x="896" y="260" width="108" height="28" rx="14" fill="#FB7185" fill-opacity="0.12" stroke="#FB7185" stroke-opacity="0.7"/>
+  <text x="950" y="278" text-anchor="middle" class="mono chip" fill="#FB7185">failed</text>
+  <g class="sans s" text-anchor="middle">
+    <text x="950" y="310">typed safe error · bounded retries</text>
+    <text x="950" y="328">no partial commit · retry once fixed</text>
+  </g>
+</svg>

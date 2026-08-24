@@ -1,0 +1,203 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="Stigmergy architecture: three capture adapters produce one CaptureEnvelope, a durable queue feeds one serialized writer, the writer lands one commit in the Git knowledge repository, and an ACL-scoped index serves every read">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A0F1F"/>
+      <stop offset="1" stop-color="#161F3D"/>
+    </linearGradient>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.2" fill="#FFFFFF" fill-opacity="0.07"/>
+    </pattern>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#9AA6C4"/>
+    </marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#F6B73C"/>
+    </marker>
+    <style>
+      .sans { font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+      .k { font-size: 11px; font-weight: 700; fill: #F6B73C; letter-spacing: 2px; }
+      .h { font-size: 15px; font-weight: 700; fill: #EEF2FF; }
+      .s { font-size: 11.5px; font-weight: 500; fill: #9AA6C4; }
+      .m { font-size: 11.5px; font-weight: 500; fill: #C7D0E6; }
+      .n { font-size: 11px; font-weight: 700; }
+      .lbl { font-size: 10px; font-weight: 600; fill: #8B95B0; }
+      .card { fill: #FFFFFF; fill-opacity: 0.04; stroke: #FFFFFF; stroke-opacity: 0.10; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="720" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="720" rx="28" fill="url(#dots)"/>
+  <rect x="0.5" y="0.5" width="1199" height="719" rx="27.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+
+  <!-- column headers -->
+  <g class="sans k">
+    <text x="40" y="52">01 · CAPTURE</text>
+    <text x="350" y="52">02 · NORMALIZE &amp; QUEUE</text>
+    <text x="600" y="52">03 · WRITE</text>
+    <text x="900" y="52">04 · REMEMBER</text>
+  </g>
+
+  <!-- 01 adapters -->
+  <g class="sans">
+    <rect x="40" y="76" width="250" height="104" rx="14" class="card"/>
+    <rect x="52" y="92" width="4" height="72" rx="2" fill="#60A5FA"/>
+    <text x="68" y="108" class="h">Local MCP bridge</text>
+    <text x="68" y="130" class="s">Claude Code · Codex, on your machine</text>
+    <text x="68" y="154" class="mono m" fill="#93C5FD">text · path · URL · Drive</text>
+
+    <rect x="40" y="196" width="250" height="104" rx="14" class="card"/>
+    <rect x="52" y="212" width="4" height="72" rx="2" fill="#60A5FA"/>
+    <text x="68" y="228" class="h">Slack</text>
+    <text x="68" y="250" class="s">react with :brain: on any thread</text>
+    <text x="68" y="274" class="mono m" fill="#93C5FD">speakers · timestamps · files</text>
+
+    <rect x="40" y="316" width="250" height="104" rx="14" class="card"/>
+    <rect x="52" y="332" width="4" height="72" rx="2" fill="#60A5FA"/>
+    <text x="68" y="348" class="h">Master backoffice</text>
+    <text x="68" y="370" class="s">paste · upload · public URL</text>
+    <text x="68" y="394" class="mono m" fill="#93C5FD">master identity only</text>
+  </g>
+
+  <!-- traces converge -->
+  <g fill="none" stroke="#F6B73C" stroke-width="2" stroke-linecap="round" stroke-dasharray="1 6">
+    <path d="M290 128 C 312 128, 302 195, 322 195"/>
+    <path d="M290 248 C 312 248, 302 195, 322 195"/>
+    <path d="M290 368 C 312 368, 302 195, 322 195"/>
+  </g>
+  <circle cx="322" cy="195" r="4" fill="#F6B73C" filter="url(#glow)"/>
+  <line x1="327" y1="195" x2="347" y2="195" stroke="#F6B73C" stroke-width="1.8" marker-end="url(#arrowAmber)"/>
+
+  <!-- 02 envelope + queue -->
+  <g class="sans">
+    <rect x="350" y="120" width="220" height="150" rx="14" class="card"/>
+    <rect x="362" y="136" width="4" height="118" rx="2" fill="#F6B73C"/>
+    <text x="378" y="152" class="mono" font-size="14" font-weight="700" fill="#F6B73C">CaptureEnvelope</text>
+    <text x="378" y="178" class="s" font-size="11">kind-free: no meeting/doc/raw</text>
+    <text x="378" y="198" class="s" font-size="11">actor · audience · client key</text>
+    <text x="378" y="218" class="s" font-size="11">provenance: origin · time · URL</text>
+    <text x="378" y="238" class="s" font-size="11">artifact refs · sha256 · bytes</text>
+
+    <rect x="350" y="310" width="220" height="110" rx="14" class="card"/>
+    <rect x="362" y="326" width="4" height="78" rx="2" fill="#F6B73C"/>
+    <text x="378" y="342" class="h">Durable queue</text>
+    <text x="378" y="362" class="s">Postgres · leases · retries</text>
+    <text x="378" y="390" class="mono" font-size="10.5" font-weight="600">
+      <tspan fill="#8B95B0">queued</tspan><tspan fill="#5B6684">&#160;→&#160;</tspan><tspan fill="#F6B73C">processing</tspan><tspan fill="#5B6684">&#160;→&#160;</tspan><tspan fill="#4ADE80">landed</tspan>
+    </text>
+    <text x="378" y="406" class="mono" font-size="10.5" font-weight="600" fill="#FB7185">failed → safe error · retryable</text>
+  </g>
+
+  <line x1="460" y1="274" x2="460" y2="304" stroke="#9AA6C4" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="573" y1="365" x2="594" y2="365" stroke="#9AA6C4" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- 03 writer -->
+  <g class="sans">
+    <rect x="600" y="76" width="270" height="420" rx="14" class="card"/>
+    <rect x="612" y="92" width="4" height="388" rx="2" fill="#F6B73C"/>
+    <text x="628" y="108" class="h">One serialized writer</text>
+    <text x="628" y="128" class="s">the only process that mutates Git</text>
+
+    <g class="n">
+      <circle cx="640" cy="170" r="11" fill="#F6B73C" fill-opacity="0.15" stroke="#F6B73C" stroke-width="1.5"/>
+      <text x="640" y="174" text-anchor="middle" fill="#F6B73C">1</text>
+      <circle cx="640" cy="210" r="11" fill="#F6B73C" fill-opacity="0.15" stroke="#F6B73C" stroke-width="1.5"/>
+      <text x="640" y="214" text-anchor="middle" fill="#F6B73C">2</text>
+      <circle cx="640" cy="250" r="11" fill="#F6B73C" fill-opacity="0.15" stroke="#F6B73C" stroke-width="1.5"/>
+      <text x="640" y="254" text-anchor="middle" fill="#F6B73C">3</text>
+      <circle cx="640" cy="298" r="11" fill="#F6B73C" fill-opacity="0.15" stroke="#F6B73C" stroke-width="1.5"/>
+      <text x="640" y="302" text-anchor="middle" fill="#F6B73C">4</text>
+      <circle cx="640" cy="350" r="11" fill="#4ADE80" fill-opacity="0.15" stroke="#4ADE80" stroke-width="1.5"/>
+      <text x="640" y="354" text-anchor="middle" fill="#4ADE80">5</text>
+    </g>
+    <g class="m" font-size="11.5">
+      <text x="660" y="174">Extract — OCR only when needed</text>
+      <text x="660" y="214">Render immutable source page</text>
+      <text x="660" y="254">Librarian returns a FilingPlan</text>
+      <text x="660" y="294">Gates: schema · links · ACL flow</text>
+      <text x="660" y="310">entities · contradictions · trust</text>
+      <text x="660" y="354" fill="#4ADE80">One commit + one change record</text>
+    </g>
+
+    <rect x="616" y="392" width="238" height="86" rx="10" fill="#F6B73C" fill-opacity="0.06" stroke="#F6B73C" stroke-opacity="0.35"/>
+    <text x="630" y="414" font-size="12.5" font-weight="700" fill="#F6B73C">Gardener</text>
+    <text x="630" y="434" class="s" font-size="10.5">scheduled lint-and-fix inside the</text>
+    <text x="630" y="450" class="s" font-size="10.5">writer, through the same gates.</text>
+    <text x="630" y="468" class="mono" font-size="10.5" fill="#C7D0E6">clean run → zero changes, no tasks</text>
+  </g>
+
+  <line x1="873" y1="286" x2="894" y2="286" stroke="#9AA6C4" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- 04 repository -->
+  <g class="sans">
+    <rect x="900" y="76" width="260" height="420" rx="14" class="card"/>
+    <rect x="912" y="92" width="4" height="388" rx="2" fill="#A78BFA"/>
+    <text x="928" y="108" class="h">Knowledge repository</text>
+    <text x="928" y="128" class="s">Git + Markdown · current truth</text>
+
+    <circle cx="934" cy="168" r="4" fill="#2DD4BF"/>
+    <text x="946" y="172" class="mono m" fill="#2DD4BF">sources/YYYY/MM/&lt;id&gt;.md</text>
+    <text x="946" y="188" class="s" font-size="10.5">immutable readable evidence</text>
+
+    <circle cx="934" cy="218" r="4" fill="#A78BFA"/>
+    <text x="946" y="222" class="mono m" fill="#C4B5FD">wiki/notes/&lt;Title&gt;.md</text>
+    <text x="946" y="238" class="s" font-size="10.5">rewritten freely by the librarian</text>
+
+    <circle cx="934" cy="268" r="4" fill="#A78BFA"/>
+    <text x="946" y="272" class="mono m" fill="#C4B5FD">wiki/concepts/&lt;Title&gt;.md</text>
+    <text x="946" y="288" class="s" font-size="10.5">durable explanatory knowledge</text>
+
+    <circle cx="934" cy="318" r="4" fill="#60A5FA"/>
+    <text x="946" y="322" class="mono m" fill="#93C5FD">wiki/entities/ent_&lt;uuid&gt;.md</text>
+    <text x="946" y="338" class="s" font-size="10.5">opaque identity, scoped names only</text>
+
+    <circle cx="934" cy="368" r="4" fill="#6B7694"/>
+    <text x="946" y="372" class="mono m" fill="#9AA6C4">ops/entity-registry.json</text>
+    <text x="946" y="388" class="s" font-size="10.5">derived, byte-for-byte reproducible</text>
+
+    <circle cx="934" cy="418" r="4" fill="#6B7694"/>
+    <text x="946" y="422" class="mono m" fill="#9AA6C4">.claude/skills/librarian/</text>
+    <text x="946" y="438" class="s" font-size="10.5">the librarian's filing contract</text>
+
+    <text x="928" y="476" class="s" font-size="11" fill="#F6B73C">one landed operation = one commit</text>
+  </g>
+
+  <!-- bottom row -->
+  <line x1="460" y1="424" x2="460" y2="524" stroke="#9AA6C4" stroke-width="1.4" stroke-dasharray="4 5" marker-end="url(#arrow)"/>
+  <text x="470" y="466" class="sans lbl">artifact bytes</text>
+  <text x="470" y="480" class="sans lbl">land here first</text>
+
+  <line x1="735" y1="500" x2="735" y2="524" stroke="#9AA6C4" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="745" y="516" class="sans lbl">derivatives · patches</text>
+
+  <line x1="1030" y1="500" x2="1030" y2="524" stroke="#9AA6C4" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="1040" y="516" class="sans lbl">webhook · nightly</text>
+
+  <g class="sans">
+    <rect x="350" y="530" width="520" height="104" rx="14" class="card"/>
+    <rect x="362" y="546" width="4" height="72" rx="2" fill="#2DD4BF"/>
+    <text x="378" y="562" class="h">Private evidence store</text>
+    <text x="378" y="582" class="s">R2 / S3 · exact original bytes · readable derivatives · exact patches</text>
+    <text x="378" y="608" class="mono m" fill="#5EEAD4">content-addressed by sha256 · never public · never rewritten</text>
+
+    <rect x="900" y="530" width="260" height="104" rx="14" class="card"/>
+    <rect x="912" y="546" width="4" height="72" rx="2" fill="#60A5FA"/>
+    <text x="928" y="562" class="h">Search index</text>
+    <text x="928" y="582" class="s">Postgres full-text + pgvector</text>
+    <text x="928" y="608" class="mono m" fill="#93C5FD">webhook · nightly full rebuild</text>
+  </g>
+
+  <line x1="1030" y1="638" x2="1030" y2="660" stroke="#9AA6C4" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- 05 read -->
+  <g class="sans">
+    <rect x="40" y="664" width="1120" height="40" rx="20" fill="#60A5FA" fill-opacity="0.08" stroke="#60A5FA" stroke-opacity="0.35"/>
+    <text x="64" y="689" class="k" fill="#93C5FD">05 · READ</text>
+    <text x="150" y="689" class="mono m" fill="#DCE3F5">search_brain · read_page · ask · list_entities · describe_entity</text>
+    <text x="1136" y="689" text-anchor="end" class="s">every read scoped to the caller's ACL · via MCP, Slack, backoffice</text>
+  </g>
+</svg>
