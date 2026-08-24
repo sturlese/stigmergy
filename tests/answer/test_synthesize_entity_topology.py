@@ -2,8 +2,8 @@
 returns an error STRING, never a crash), the budgets are 6/8, and `ANSWER_SYS` carries the
 topology paragraph.
 
-Pure and keyless: `build_synthesizer(Settings(llm="openai", ...))` only checks that
-`OPENAI_API_KEY` is PRESENT (a dummy value is enough) and never calls the API unless the agent is
+Pure and keyless: `build_synthesizer(Settings())` only checks that
+`OPENROUTER_API_KEY` is present and never calls the API unless the agent is
 actually RUN.
 
 **The real `search` tool is driven through the PUBLIC path, never a private pydantic_ai
@@ -36,8 +36,8 @@ from stigmergy.server.settings import Settings
 
 
 @pytest.fixture(autouse=True)
-def _dummy_openai_key(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy-not-real")
+def _dummy_openrouter_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
 
 class _FakeService:
@@ -80,7 +80,7 @@ def _run_search_tool(filters: dict | None) -> tuple[str, _FakeService, Synthesis
     string the tool returned to the model (read back off the `ToolReturnPart` the framework itself
     recorded — not a value this test invented), the fake service double, and the real
     `SynthesisContext` deps object."""
-    agent = build_synthesizer(Settings(llm="openai", model="gpt-5.6-terra"))
+    agent = build_synthesizer(Settings())
     service = _FakeService()
     deps = SynthesisContext(service=service)
     result = asyncio.run(agent.run("what was quarterly revenue?", deps=deps,

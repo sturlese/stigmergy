@@ -7,6 +7,8 @@ import re
 from importlib.resources import files
 from pathlib import Path
 
+from stigmergy.knowledge.sources import REQUIRED_ARTIFACT_FIELDS, REQUIRED_SOURCE_FIELDS
+
 
 class KnowledgeContractError(ValueError):
     pass
@@ -62,18 +64,55 @@ def validate_workflows(repository: str | Path) -> None:
     required = (
         'cron: "17 4 * * *"',
         "workflow_dispatch:",
+        "OPENROUTER_API_KEY:",
         ".platform/.venv/bin/stigmergy-index --rebuild --repo .",
     )
     if any(value not in rebuild for value in required):
         raise KnowledgeContractError("index rebuild workflow does not satisfy its contract")
-    forbidden = ("continue-on-error:", "|| true", "if: false")
-    if any(value in rebuild for value in forbidden):
+    suppressed = (
+        "continue-on-error:",
+        "|| true",
+        "if: false",
+    )
+    if any(value in rebuild for value in suppressed):
         raise KnowledgeContractError("index rebuild workflow can suppress failure")
+    unsupported = (
+        "EMBED_API_KEY:",
+        "EMBED_BASE_URL:",
+        "EMBED_MODEL:",
+        "EMBED_DIMENSIONS:",
+        "ANTHROPIC_API_KEY:",
+        "OPENAI_API_KEY:",
+        "GEMINI_API_KEY:",
+    )
+    if any(value in rebuild for value in unsupported):
+        raise KnowledgeContractError("index rebuild workflow uses unsupported model configuration")
+
+
+def validate_source_template(repository: str | Path) -> None:
+    path = Path(repository) / "ops" / "templates" / "source.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise KnowledgeContractError("source template is missing or unreadable") from error
+    missing_source = [
+        field
+        for field in sorted(REQUIRED_SOURCE_FIELDS)
+        if re.search(rf"(?m)^{re.escape(field)}\s*:", text) is None
+    ]
+    missing_artifact = [
+        field
+        for field in sorted(REQUIRED_ARTIFACT_FIELDS)
+        if re.search(rf"(?m)^\s+(?:-\s+)?{re.escape(field)}\s*:", text) is None
+    ]
+    if missing_source or missing_artifact:
+        raise KnowledgeContractError("source template does not satisfy the source schema")
 
 
 def validate_repository(repository: str | Path) -> None:
     validate_librarian_skill(repository)
     validate_workflows(repository)
+    validate_source_template(repository)
 
 
 def main(argv: list[str] | None = None) -> int:

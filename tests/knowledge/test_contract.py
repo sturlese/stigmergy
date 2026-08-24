@@ -37,6 +37,7 @@ def _write_source(
         "acl": acl,
         "captured_at": "2026-08-24T00:00:00+00:00",
         "origin": "mcp",
+        "participants": [],
         "artifacts": [
             {
                 "sha256": "a" * 64,
@@ -45,13 +46,14 @@ def _write_source(
                 "readable_sha256": "a" * 64,
                 "extractor": "text",
                 "extractor_version": "1",
+                "ocr_pages": [],
             }
         ],
     }
     if acquisition is not None:
         metadata["acquisition"] = acquisition
     path.write_text(
-        f"---\n{json.dumps(metadata, sort_keys=True)}\n---\n\n# Source\n\n{body}\n",
+        f"---\n{json.dumps(metadata, sort_keys=True)}\n---\n\n# Captured source\n\n{body}\n",
         encoding="utf-8",
     )
     return relative

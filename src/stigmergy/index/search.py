@@ -119,8 +119,8 @@ def search_arms(conn, query: str, *, embedder=None, k: int = rank.TOP_K,
         raise StigmergyIndexError(
             f"this index was built against the embedding host {recorded_host} and the embedder "
             f"is configured for {live_host} — the same model name on two hosts is not provably "
-            f"the same vector space. Point $EMBED_BASE_URL back at the recorded host, or "
-            f"rebuild against the new one (`stigmergy-index --rebuild --repo <dir>`)")
+            f"the same vector space. Rebuild the index against the configured OpenRouter "
+            f"embedding endpoint (`stigmergy-index --rebuild --repo <dir>`)")
     q_emb = embedder.embed([query])[0]
     fts_query = " ".join((query, *fts_expansion)) if fts_expansion else query
     fts = fts_ranking(

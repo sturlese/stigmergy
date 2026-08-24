@@ -15,6 +15,7 @@ from stigmergy.librarian.errors import GitError, LibrarianConfigError, WorktreeE
 log = logging.getLogger(__name__)
 
 STDERR_LIMIT = 600
+DEFAULT_GIT_TIMEOUT_S = 30
 # Startup reaping matches on this, so a crash's leftovers are identifiable with no stored state.
 WORKTREE_PREFIX = "stigmergy-librarian-"
 
@@ -35,6 +36,7 @@ def _scrub(text: str) -> str:
 def run(*args: str, cwd: str | None = None, check: bool = True,
         env: dict | None = None, timeout: float | None = None) -> subprocess.CompletedProcess:
     """Run Git and raise with bounded credential-scrubbed stderr."""
+    timeout = DEFAULT_GIT_TIMEOUT_S if timeout is None else timeout
     try:
         proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
                               env={**os.environ, **(env or {})}, timeout=timeout)

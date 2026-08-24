@@ -429,12 +429,7 @@ def test_run_scrubs_a_credentialed_argument_in_its_own_raised_error(tmp_path):
     assert "ghs_supersecrettoken" not in str(exc_info.value)
 
 
-# ── run(timeout=...): a bound subprocess (audit M2) ──────────────────────────────────────────────
-# Unlike the worker's own git (a loop with a lease behind it, where cutting a push off mid-flight
-# is worse than waiting — this parameter is `None` there, by design), a server-driven mint
-# runs git inside an HTTP request: an unanswered remote must not pin that request forever.
-# Proven against a REAL, local, slow git invocation — a `!sleep` alias — never a mocked subprocess
-# and never the network, the same posture `test_run_scrubs_...` above states for this file.
+# ── bounded Git subprocesses ───────────────────────────────────────────────────────────────────
 def test_run_raises_a_git_error_naming_the_budget_when_the_timeout_elapses(tmp_path):
     repo = str(tmp_path / "repo")
     _init_repo(repo)
@@ -445,10 +440,7 @@ def test_run_raises_a_git_error_naming_the_budget_when_the_timeout_elapses(tmp_p
     assert "did not answer in time" in str(exc_info.value)
 
 
-def test_run_with_no_timeout_still_completes_an_ordinary_command(tmp_path):
-    """The benign twin: `timeout=None` (the default, and the worker's own call shape) must keep
-    working exactly as before — this parameter is additive, never a behavior change for a caller
-    that does not pass it."""
+def test_run_with_the_default_timeout_completes_an_ordinary_command(tmp_path):
     repo = str(tmp_path / "repo")
     _init_repo(repo)
     result = gitcmd.run("rev-parse", "HEAD", cwd=repo)

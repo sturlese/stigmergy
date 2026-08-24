@@ -13,7 +13,7 @@ from evals import run_qa
 
 def _args(**over):
     base = {"identities": "evals/qa_identities.json", "entity_registry": None, "repo": None,
-            "llm": "fake", "model": "gpt-5.6-terra"}
+            "llm": "fake"}
     base.update(over)
     return types.SimpleNamespace(**base)
 
@@ -38,7 +38,7 @@ def test_no_repo_still_means_fail_open_not_a_crash():
 
 
 def test_identity_and_backend_still_travel():
-    settings = run_qa._settings_for(_args(llm="openai", model="gpt-5.6-terra"), "ana")
+    settings = run_qa._settings_for(_args(llm="openrouter"), "ana")
     assert settings.identity == "ana"
-    assert settings.llm == "openai"
+    assert settings.llm == "openrouter"
     assert settings.identities_path == "evals/qa_identities.json"

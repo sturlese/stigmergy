@@ -12,7 +12,7 @@ of the measured query.
 
 ```bash
 python evals/run_retrieval.py --embedder fake --rebuild --repo evals/corpus
-python evals/run_retrieval.py --embedder openai --rebuild --repo evals/corpus \
+python evals/run_retrieval.py --embedder openrouter --rebuild --repo evals/corpus \
   --report evals/out/retrieval.json
 ```
 
@@ -24,7 +24,7 @@ scoped `analyst` identity from `qa_identities.json`.
 
 ```bash
 python evals/run_qa.py --embedder fake --llm fake --rebuild --repo evals/corpus
-python evals/run_qa.py --embedder openai --llm openai --rebuild --repo evals/corpus \
+python evals/run_qa.py --embedder openrouter --llm openrouter --rebuild --repo evals/corpus \
   --report evals/out/qa.json
 ```
 

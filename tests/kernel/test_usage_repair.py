@@ -356,50 +356,38 @@ def spy(monkeypatch):
     return calls
 
 
-def test_the_kernel_model_builder_installs_the_repair(spy):
-    """`kernel.llm.build_model` is the shared builder every model-backed surface goes through. The
-    provider-prefixed form needs no key at all and returns before any client is constructed, so
-    this reaches the install with nothing exported."""
+def test_the_kernel_model_builder_installs_the_repair(spy, monkeypatch):
     from stigmergy.kernel import llm
 
-    llm.build_model("anthropic:claude-sonnet-4-5")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    llm.build_model(llm.ANSWER_MODEL)
 
     assert spy == [1]
 
 
-def test_the_kernel_model_builder_installs_before_it_can_refuse(spy, monkeypatch):
-    """...and it installs BEFORE the key check, which is the ordering that matters: a repair
-    installed after the raise would never run on the path that raises, and an operator debugging a
-    missing key would meanwhile be reading zeroed counters from every run that succeeded."""
+def test_the_kernel_model_builder_refuses_before_framework_setup(spy, monkeypatch):
     from stigmergy.kernel import llm
 
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        llm.build_model("gpt-5.6-terra")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        llm.build_model(llm.ANSWER_MODEL)
 
-    assert spy == [1]
+    assert spy == []
 
 
 def test_the_answer_synthesizer_installs_the_repair(spy, monkeypatch):
-    """Without the repair, `audit_log.result.usage` records zeros for every ask. Since the
-    openrouter-port hardening `ask` goes through `build_model` — which installs it — AND this
-    module installs it beside its own `Agent(...)` construction, because the textual guard below
-    holds every agent-building module to that rule. The property pinned here is the ORDERING:
-    installed before the keyless refusal. The count is deliberately not pinned — two sites
-    installing an idempotent repair is the doctrine, not a defect.
-    """
     import types
 
     from stigmergy.answer import synthesize
 
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    settings = types.SimpleNamespace(llm="openai", model="gpt-5.6-terra",
-                                     reasoning_effort="medium")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    settings = types.SimpleNamespace(
+        llm="openrouter", model="openrouter:z-ai/glm-5.2"
+    )
 
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        synthesize.build_synthesizer(settings)
+    synthesize.build_synthesizer(settings)
 
-    assert spy, "the repair must be installed before the keyless refusal"
+    assert spy
 
 
 def test_the_offline_answer_path_installs_nothing(spy):
@@ -426,7 +414,7 @@ def test_the_knowledge_planner_installs_the_repair(spy, tmp_path):
               / "librarian" / "SKILL.md")
     brief.write_text(frozen.read_text(encoding="utf-8"), encoding="utf-8")
 
-    settings = type("Settings", (), {"model": "openai:gpt-5.6-terra", "timeout_s": 5,
+    settings = type("Settings", (), {"model": "openrouter:deepseek/deepseek-v4-flash", "timeout_s": 5,
                                      "max_turns": 1})()
     planner = PydanticPlanner(settings, model_factory=lambda: TestModel())
     try:

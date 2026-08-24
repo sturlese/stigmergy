@@ -4,7 +4,7 @@ primary_region = "fra"
 
 # In-flight writer work recovers through the queue lease if Fly reaches this timeout.
 kill_signal = "SIGTERM"
-kill_timeout = "300s"
+kill_timeout = "900s"
 
 [build]
 
@@ -22,8 +22,11 @@ kill_timeout = "300s"
   STIGMERGY_PUBLIC_HOST = "stigmergy.fly.dev"
   STIGMERGY_LIBRARIAN_REPO_URL = "https://github.com/sturlese/stigmergy-brain.git"
   STIGMERGY_LIBRARIAN_BACKEND = "pydantic"
-  STIGMERGY_LIBRARIAN_MODEL = "anthropic:claude-sonnet-5"
-  STIGMERGY_LIBRARIAN_TIMEOUT_S = "600"
+  ANSWER_LLM = "openrouter"
+  ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
+  STIGMERGY_LIBRARIAN_MODEL = "openrouter:deepseek/deepseek-v4-flash"
+  STIGMERGY_OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
+  STIGMERGY_LIBRARIAN_TIMEOUT_S = "180"
 
 [http_service]
   # The writer and Slack adapter expose no network service.

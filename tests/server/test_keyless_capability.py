@@ -1,6 +1,6 @@
 """**The write path starts without the read path's key.**
 
-With no `OPENAI_API_KEY`, `stigmergy-server` starts and `brain_submit` / `brain_submissions` /
+With no `OPENROUTER_API_KEY`, `stigmergy-server` starts and `brain_submit` / `brain_submissions` /
 `read_page` work, while `search_brain` / `ask` fail with an honest message naming the missing
 capability. That is the whole property, and it is asserted here at TWO levels:
 
@@ -29,7 +29,7 @@ from stigmergy.server.mcp_server import build_mcp
 from stigmergy.server.service import UnavailableEmbedder, missing_embedder_reason
 from tests.server.conftest import make_service
 
-# The reason a real keyless start produces: `OpenAIEmbedder`'s own refusal, wrapped by
+# The reason a real keyless start produces: the Qwen embedder's own refusal, wrapped by
 # `missing_embedder_reason`. Built from the embedder's OWN message constant (imported above) — a
 # retyped copy of the sentence drifted once (audit T4) and left this suite permanently green
 # about a message that no longer existed.
@@ -105,7 +105,7 @@ def test_search_brain_refuses_and_names_the_missing_capability(keyless):
     out = json.loads(_tools(svc)["search_brain"](query="anything at all"))
 
     error = out["error"]
-    assert "OPENAI_API_KEY" in error                 # WHICH thing is missing
+    assert "OPENROUTER_API_KEY" in error             # WHICH thing is missing
     assert "cannot search" in error                  # which CAPABILITY is gone
     assert "brain_submit" in error                   # and that capture still works
     # NOT the class-name-only fallback: that is the shape this test exists to prevent
@@ -123,7 +123,7 @@ def test_ask_refuses_and_names_the_missing_capability(keyless):
     out = json.loads(asyncio.run(_tools(svc)["ask"](question="what do we know about Initech?")))
 
     error = out["error"]
-    assert "OPENAI_API_KEY" in error and "cannot search" in error
+    assert "OPENROUTER_API_KEY" in error and "cannot search" in error
     assert "CapabilityUnavailableError" not in error
 
 
@@ -144,7 +144,7 @@ def test_require_embedder_is_silent_when_the_embedder_is_real(indexed):
 
 def test_require_embedder_refuses_on_the_unavailable_one(keyless):
     svc, _ = keyless
-    with pytest.raises(CapabilityUnavailableError, match="OPENAI_API_KEY"):
+    with pytest.raises(CapabilityUnavailableError, match="OPENROUTER_API_KEY"):
         svc.require_embedder()
 
 

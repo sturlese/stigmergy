@@ -468,7 +468,7 @@ def test_two_citation_only_problems_refuse_with_findings(ask_service, monkeypatc
 # `ask` handles a usage-budget refusal at either model call site.
 class _BudgetExceededFirstRun:
     """`UsageLimitExceeded` on the very FIRST `agent.run()` call, before any `AnswerOutput` ever
-    existed to verify — observed on the real model (ANSWER_LLM=openai) over the 8-tool-call
+    existed to verify — observed on the real model (ANSWER_LLM=openrouter) over the 8-tool-call
     budget: golden case `aurora-timeline-q1` hit it and the exception propagated uncaught out of
     `AnswerService.ask()`, crashing `evals/run_qa.py` mid-run."""
 

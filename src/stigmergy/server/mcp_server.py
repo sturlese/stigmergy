@@ -205,7 +205,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             # exception is check_arg_length's own marked rejection, same narrowing as read_page.
             if getattr(ex, "is_arg_length_error", False):
                 return _error(str(ex))
-            return _failure("ask", ex, "; check ANSWER_LLM / OPENAI_API_KEY and that the index "
+            return _failure("ask", ex, "; check ANSWER_LLM / OPENROUTER_API_KEY and that the index "
                                        "is built")
 
     return mcp
@@ -249,17 +249,24 @@ def main(argv=None) -> int:
                             "--identities, an explicit path is needed in production, "
                             "where no --repo is passed at all")
     parser.add_argument("--dsn", default=None, help="Postgres DSN (default: $STIGMERGY_INDEX_DSN)")
-    parser.add_argument("--embedder", choices=["openai", "fake"], default=None,
+    parser.add_argument("--embedder", choices=["openrouter", "fake"], default=None,
                         help="query embedder (default: match the index's built model)")
-    parser.add_argument("--answer-llm", dest="answer_llm", choices=["openai", "fake"], default=None,
-                        help="the `ask` synthesizer backend (default: $ANSWER_LLM, else openai)")
+    parser.add_argument(
+        "--answer-llm",
+        dest="answer_llm",
+        choices=["openrouter", "fake"],
+        default=None,
+        help="the `ask` synthesizer backend (default: $ANSWER_LLM, else openrouter)",
+    )
     args = parser.parse_args(argv)
 
     try:
         settings = Settings.from_args(args)
         # fail fast on an ANSWER_LLM typo — a bad value must never reach a live `ask` call
-        if settings.llm not in ("openai", "fake"):
-            raise StartupError(f"invalid ANSWER_LLM: {settings.llm!r} (use 'openai' or 'fake')")
+        if settings.llm not in ("openrouter", "fake"):
+            raise StartupError(
+                f"invalid ANSWER_LLM: {settings.llm!r} (use 'openrouter' or 'fake')"
+            )
         if args.transport == "http":
             # identity resolves PER REQUEST for HTTP, never at startup — settings.identity unused
             from stigmergy.server.transport_http import serve_http

@@ -4,9 +4,11 @@ import os
 from dataclasses import dataclass
 
 from stigmergy.capture import queue
+from stigmergy.capture.extraction import CAPTURE_TIMEOUT_S
+from stigmergy.kernel.llm import LIBRARIAN_MODEL, OCR_MODEL
 from stigmergy.librarian.errors import LibrarianConfigError
 
-DEFAULT_MODEL = "anthropic:claude-sonnet-5"
+DEFAULT_MODEL = LIBRARIAN_MODEL
 DEFAULT_MAX_TURNS = 12
 DEFAULT_TIMEOUT_S = 300
 DEFAULT_POLL_INTERVAL_S = 3.0
@@ -23,11 +25,15 @@ GARDEN_AT_ENV = "STIGMERGY_LIBRARIAN_GARDEN_AT"
 _TRUTHY = {"1", "true", "yes"}
 
 
+def operation_budget_s(*, timeout_s: int = DEFAULT_TIMEOUT_S) -> int:
+    return CAPTURE_TIMEOUT_S + int(timeout_s) + GATE_BUDGET_S
+
+
 def minimum_visibility_timeout_s(*, timeout_s: int = DEFAULT_TIMEOUT_S) -> int:
-    return int(timeout_s) + GATE_BUDGET_S
+    return operation_budget_s(timeout_s=timeout_s) + VISIBILITY_HEADROOM_S
 
 
-DEFAULT_VISIBILITY_TIMEOUT_S = minimum_visibility_timeout_s() + VISIBILITY_HEADROOM_S
+DEFAULT_VISIBILITY_TIMEOUT_S = minimum_visibility_timeout_s()
 
 
 def resolved_timeout_s() -> int:
@@ -45,7 +51,7 @@ def resolved_timeout_s() -> int:
 
 def resolved_visibility_timeout_s(*, timeout_s: int | None = None) -> int:
     budget = resolved_timeout_s() if timeout_s is None else int(timeout_s)
-    return minimum_visibility_timeout_s(timeout_s=budget) + VISIBILITY_HEADROOM_S
+    return minimum_visibility_timeout_s(timeout_s=budget)
 
 
 @dataclass(frozen=True)
@@ -63,7 +69,7 @@ class Settings:
     max_attempts: int = queue.DEFAULT_MAX_ATTEMPTS
     garden_at: str = "05:07"
     worktree_root: str = ""
-    ocr_languages: str = "eng"
+    ocr_model: str = OCR_MODEL
 
     @classmethod
     def from_args(cls, args) -> Settings:
@@ -88,7 +94,7 @@ class Settings:
             max_attempts=int(option("max_attempts", cls.max_attempts)),
             garden_at=os.environ.get(GARDEN_AT_ENV, cls.garden_at),
             worktree_root=os.environ.get("STIGMERGY_LIBRARIAN_WORKTREE_ROOT", ""),
-            ocr_languages=os.environ.get("STIGMERGY_OCR_LANGUAGES", cls.ocr_languages).strip(),
+            ocr_model=os.environ.get("STIGMERGY_OCR_MODEL", cls.ocr_model).strip(),
         )
         settings.check_domains()
         return settings
@@ -96,13 +102,15 @@ class Settings:
     def check_domains(self) -> None:
         if self.backend not in {"scripted", "pydantic"}:
             raise LibrarianConfigError("backend must be scripted or pydantic")
-        if self.backend == "pydantic" and ":" not in self.model:
-            raise LibrarianConfigError("the librarian model must include its provider prefix")
+        if self.backend == "pydantic" and self.model != DEFAULT_MODEL:
+            raise LibrarianConfigError(
+                f"the librarian model must be {DEFAULT_MODEL}"
+            )
         if self.max_turns < 1 or self.timeout_s < 1:
             raise LibrarianConfigError("model limits must be positive")
         if self.poll_interval_s <= 0 or self.max_attempts < 1:
             raise LibrarianConfigError("worker loop limits must be positive")
-        if not self.ocr_languages:
-            raise LibrarianConfigError("OCR languages cannot be empty")
-        if self.visibility_timeout_s <= minimum_visibility_timeout_s(timeout_s=self.timeout_s):
+        if self.ocr_model != OCR_MODEL:
+            raise LibrarianConfigError(f"the OCR model must be {OCR_MODEL}")
+        if self.visibility_timeout_s < minimum_visibility_timeout_s(timeout_s=self.timeout_s):
             raise LibrarianConfigError("visibility timeout must outlive one writer operation")

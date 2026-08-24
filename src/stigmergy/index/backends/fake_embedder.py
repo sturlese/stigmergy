@@ -6,7 +6,7 @@ DIM = 256
 
 
 class FakeEmbedder:
-    """Duck-typed like OpenAIEmbedder: `.model` and `.embed(texts)`."""
+    """Duck-typed like OpenRouterEmbedder: `.model` and `.embed(texts)`."""
 
     model = "fake-hashed-bow-256"
     dim = DIM

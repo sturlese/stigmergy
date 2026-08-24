@@ -34,7 +34,13 @@ def no_real_github_app_anywhere(monkeypatch):
 @pytest.fixture(autouse=True)
 def no_real_llm_anywhere(monkeypatch):
     """Prevent tests from selecting a paid LLM through ambient configuration."""
-    monkeypatch.setenv("CLEAN_LLM", "fake")
+    for name in (
+        "OPENROUTER_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

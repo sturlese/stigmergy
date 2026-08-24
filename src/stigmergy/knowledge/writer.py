@@ -20,6 +20,7 @@ from stigmergy.entities.service import (
     remove_source_claims,
     resolve_reference,
 )
+from stigmergy.kernel.deadline import hard_deadline
 from stigmergy.kernel.normalize import resolution_key
 from stigmergy.knowledge import contradictions
 from stigmergy.knowledge.context import actor_scope, filing_context, render_context
@@ -37,7 +38,7 @@ from stigmergy.knowledge.write_guard import (
     allow_existing,
     allow_explicit_master,
 )
-from stigmergy.librarian import gitcmd
+from stigmergy.librarian import config, gitcmd
 
 WRITER_LOCK_KEY = int.from_bytes(b"KNOWWRIT", "big", signed=True)
 
@@ -47,6 +48,10 @@ class KnowledgeWriteError(RuntimeError):
 
 
 class WriterBusy(KnowledgeWriteError):
+    retryable = True
+
+
+class WriterDeadline(KnowledgeWriteError):
     retryable = True
 
 
@@ -76,6 +81,15 @@ class WriteResult:
 
 
 def process(conn, item: dict, deps: WriterDeps) -> WriteResult:
+    budget_s = config.operation_budget_s(timeout_s=deps.settings.timeout_s)
+    with hard_deadline(
+        budget_s,
+        lambda: WriterDeadline("knowledge operation exceeded its queue lease budget"),
+    ):
+        return _process_with_lock(conn, item, deps)
+
+
+def _process_with_lock(conn, item: dict, deps: WriterDeps) -> WriteResult:
     with ops.try_advisory_lock(conn, WRITER_LOCK_KEY) as acquired:
         if not acquired:
             raise WriterBusy("another knowledge write is active")
@@ -176,7 +190,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
     extracted = extract_capture(
         deps.evidence,
         envelope,
-        ocr_languages=getattr(deps.settings, "ocr_languages", "eng"),
+        ocr_model=deps.settings.ocr_model,
     )
     relative_source = source_path(envelope)
     source_text = render_source(envelope, extracted)
@@ -203,6 +217,12 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         visible_entity_ids = frozenset(
             item["id"] for item in safe_context["entities"]
         )
+        allowed_contradiction_sources = frozenset(
+            {
+                relative_source,
+                *(item["path"] for item in safe_context["source_evidence"]),
+            }
+        )
         plan_run = deps.planner.plan(
             worktree=worktree,
             envelope=envelope,
@@ -225,6 +245,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                 relative_source=relative_source,
                 reasons=reasons,
                 visible_entity_ids=visible_entity_ids,
+                allowed_contradiction_sources=allowed_contradiction_sources,
             )
             repair_deterministic(worktree)
         except (
@@ -382,7 +403,14 @@ def _apply_filing_plan(
     relative_source: str,
     reasons: dict[str, str],
     visible_entity_ids: frozenset[str],
+    allowed_contradiction_sources: frozenset[str],
 ) -> None:
+    for proposal in plan.contradictions:
+        proposed_sources = {claim.source for claim in proposal.claims}
+        if not proposed_sources <= allowed_contradiction_sources:
+            raise KnowledgeWriteError(
+                "contradiction cites evidence outside the supplied filing context"
+            )
     proposal_ids = {}
     mutated_paths: set[str] = set()
     if plan.entities:
@@ -923,7 +951,7 @@ def _recover(conn, item: dict, deps: WriterDeps, head: str) -> WriteResult | Non
         extracted = extract_capture(
             deps.evidence,
             envelope,
-            ocr_languages=getattr(deps.settings, "ocr_languages", "eng"),
+            ocr_model=deps.settings.ocr_model,
         )
         references.record_capture(conn, envelope, extracted, relative_source)
     elif item["operation"] == schema.DELETE:

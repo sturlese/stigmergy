@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pymupdf
 
 from stigmergy.capture import evidence, queue, schema, uploads
+from stigmergy.capture import extraction as extraction_module
 from stigmergy.capture.service import CaptureService
 from stigmergy.capture.source import source_path
 from stigmergy.changes.store import list_changes
@@ -17,7 +18,9 @@ from stigmergy.index import build, corpus
 from stigmergy.index import health as index_health
 from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
+from stigmergy.kernel.llm import OCR_MODEL
 from stigmergy.knowledge import contradictions
+from stigmergy.knowledge import writer as writer_module
 from stigmergy.knowledge.pages import parse_page
 from stigmergy.knowledge.plan import (
     ContradictionClaim,
@@ -71,7 +74,11 @@ def _scanned_pdf(text: str) -> bytes:
 
 
 def _process(conn, repo, evidence_store, plan=None):
-    settings = config.Settings(repo=str(repo), branch="main", backend="scripted")
+    settings = config.Settings(
+        repo=str(repo),
+        branch="main",
+        backend="scripted",
+    )
     return worker.process_next(
         conn,
         WriterDeps(
@@ -123,6 +130,20 @@ def _search_state(conn):
 def test_clean_system_flow_converges_from_capture_to_full_index(
     clean_queue, target_repo, tmp_path_factory, monkeypatch
 ):
+    real_extract_capture = extraction_module.extract_capture
+
+    def offline_extract(store, envelope, **_kwargs):
+        return real_extract_capture(
+            store,
+            envelope,
+            bounded=False,
+            ocr_model=OCR_MODEL,
+            vision_ocr=lambda _data, _media: (
+                "Scanned board approval for the Northstar account"
+            ),
+        )
+
+    monkeypatch.setattr(writer_module, "extract_capture", offline_extract)
     evidence_store = evidence.MemoryEvidenceStore()
     actor = schema.Actor(subject="marc", display_name="Marc")
     capture = CaptureService(clean_queue, evidence_store)

@@ -22,9 +22,9 @@ rendering of the same day, and `cites` accepts a chain where any one page is val
   # keyless self-check (plumbing only — appends no history row)
   python evals/run_qa.py --embedder fake --llm fake --rebuild --repo evals/corpus
 
-  # the real measurement (needs OPENAI_API_KEY)
-  python evals/run_qa.py --embedder openai --llm openai --model gpt-5.6-terra \
-      --rebuild --repo evals/corpus --report evals/out/qa-terra.json
+  # the real measurement (needs OPENROUTER_API_KEY)
+  python evals/run_qa.py --embedder openrouter --llm openrouter \
+      --rebuild --repo evals/corpus --report evals/out/qa-glm.json
 """
 import argparse
 import asyncio
@@ -49,6 +49,7 @@ from stigmergy.answer.service import AnswerService  # noqa: E402
 from stigmergy.index import build, store  # noqa: E402
 from stigmergy.index.backends.embedder import build_embedder, embedder_for_model  # noqa: E402
 from stigmergy.index.errors import StigmergyIndexError  # noqa: E402
+from stigmergy.kernel.llm import ANSWER_MODEL  # noqa: E402
 from stigmergy.server import entity_aliases  # noqa: E402
 from stigmergy.server.identity import resolve_audiences  # noqa: E402
 from stigmergy.server.service import BrainService  # noqa: E402
@@ -60,11 +61,10 @@ def main() -> int:
     ap.add_argument("--golden", default=str(ROOT / "evals" / "qa_golden.json"))
     ap.add_argument("--identities", default=str(ROOT / "evals" / "qa_identities.json"))
     ap.add_argument("--dsn", default=None)
-    ap.add_argument("--embedder", choices=["openai", "fake"], default=None,
+    ap.add_argument("--embedder", choices=["openrouter", "fake"], default=None,
                     help="query embedder (default: match the built index's model)")
-    ap.add_argument("--llm", choices=["openai", "fake"], default="openai",
-                    help="the synthesizer backend (default: openai — the real measurement)")
-    ap.add_argument("--model", default="gpt-5.6-terra", help="ANSWER_MODEL for --llm openai")
+    ap.add_argument("--llm", choices=["openrouter", "fake"], default="openrouter",
+                    help="the synthesizer backend (default: openrouter)")
     ap.add_argument("--rebuild", metavar="", nargs="?", const=True, default=False,
                     help="rebuild the index first (requires --repo)")
     ap.add_argument("--repo", default=None, help="knowledge-repo checkout (with --rebuild)")
@@ -95,14 +95,14 @@ def _settings_for(args, identity_name: str) -> Settings:
     return Settings(identity=identity_name, identities_path=args.identities,
                     entity_registry_path=(args.entity_registry
                                           or entity_aliases.default_path(args.repo)),
-                    llm=args.llm, model=args.model)
+                    llm=args.llm, model=ANSWER_MODEL)
 
 
 def _run(args, golden) -> int:
     default_identity = golden.get("default_identity", "steward")
     with store.connect(args.dsn) as conn:
         if args.rebuild:
-            stats = build.rebuild(conn, args.repo, build_embedder(args.embedder or "openai"))
+            stats = build.rebuild(conn, args.repo, build_embedder(args.embedder or "openrouter"))
             print(f"rebuilt: {stats['pages']} pages · model={stats['model']}")
         meta = store.read_meta(conn)
         if meta is None:
@@ -144,7 +144,7 @@ def _run(args, golden) -> int:
                   file=sys.stderr)
             results.append(scored)
 
-    report = _aggregate(golden, results, "fake" if args.llm == "fake" else args.model)
+    report = _aggregate(golden, results, "fake" if args.llm == "fake" else ANSWER_MODEL)
     print(_render(report))
     if args.report:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +152,7 @@ def _run(args, golden) -> int:
         print(f"report -> {args.report}")
     # Only a real-instrument run appends to the durable series; the keyless `--llm fake` self-check
     # has no quality number worth keeping. Never fails the run.
-    if args.llm == "openai":
+    if args.llm == "openrouter":
         eval_history.append_run(
             suite="qa", git_sha=eval_history.resolve_git_sha(ROOT),
             metrics={"honesty": report["honesty"], "groundedness": report["groundedness"],

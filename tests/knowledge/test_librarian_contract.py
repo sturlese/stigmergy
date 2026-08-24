@@ -7,6 +7,7 @@ from stigmergy.knowledge.contract import (
     KnowledgeContractError,
     expected_librarian_skill,
     validate_librarian_skill,
+    validate_source_template,
     validate_workflows,
 )
 from stigmergy.knowledge.plan import (
@@ -59,6 +60,7 @@ def test_repository_validator_requires_the_nightly_rebuild_contract(tmp_path):
         "repository: sturlese/stigmergy\n"
         f"ref: {pin}\n"
         f"{uv}"
+        "OPENROUTER_API_KEY: secret\n"
         "run: .platform/.venv/bin/stigmergy-index --rebuild --repo .\n",
         encoding="utf-8",
     )
@@ -68,6 +70,69 @@ def test_repository_validator_requires_the_nightly_rebuild_contract(tmp_path):
         handle.write("continue-on-error: true\n")
     with pytest.raises(KnowledgeContractError, match="suppress failure"):
         validate_workflows(tmp_path)
+
+
+def test_repository_validator_rejects_legacy_embedding_credentials(tmp_path):
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    pin = "a" * 40
+    uv = (
+        "uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78\n"
+        'version: "0.11.16"\n'
+        'checksum: "74947fe2c03315cf07e82ab3acc703eddef01aba4d5232a98e4c6825ec116131"\n'
+    )
+    (workflows / "lint.yml").write_text(
+        f"repository: sturlese/stigmergy\nref: {pin}\n{uv}",
+        encoding="utf-8",
+    )
+    (workflows / "index-rebuild.yml").write_text(
+        "schedule:\n"
+        '  - cron: "17 4 * * *"\n'
+        "workflow_dispatch:\n"
+        "repository: sturlese/stigmergy\n"
+        f"ref: {pin}\n"
+        f"{uv}"
+        "OPENROUTER_API_KEY: secret\n"
+        "EMBED_API_KEY: legacy\n"
+        "run: .platform/.venv/bin/stigmergy-index --rebuild --repo .\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(KnowledgeContractError, match="unsupported model configuration"):
+        validate_workflows(tmp_path)
+
+
+def test_repository_validator_requires_every_source_template_field(tmp_path):
+    template = tmp_path / "ops" / "templates" / "source.md"
+    template.parent.mkdir(parents=True)
+    template.write_text(
+        "---\n"
+        "id: <capture-id>\n"
+        "type: source\n"
+        "submitted_by: <subject>\n"
+        "acl: null\n"
+        "captured_at: <timestamp>\n"
+        "origin: mcp\n"
+        "participants: []\n"
+        "artifacts:\n"
+        "  - sha256: <digest>\n"
+        "    bytes: <count>\n"
+        "    media_type: <mime>\n"
+        "    readable_sha256: <digest>\n"
+        "    extractor: <name>\n"
+        "    extractor_version: <version>\n"
+        "    ocr_pages: []\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    validate_source_template(tmp_path)
+
+    template.write_text(
+        template.read_text(encoding="utf-8").replace("    ocr_pages: []\n", ""),
+        encoding="utf-8",
+    )
+    with pytest.raises(KnowledgeContractError, match="source schema"):
+        validate_source_template(tmp_path)
 
 
 def test_every_promised_librarian_operation_exists_in_the_structured_contract():
@@ -144,3 +209,8 @@ def test_librarian_preserves_existing_sourced_knowledge_during_rewrites():
     assert "every newly added or changed factual conclusion" in text
     assert "preserve existing sourced conclusions" in text
     assert "every conclusion must remain supported by the supplied source" not in text
+
+
+def test_librarian_requires_exact_available_paths_for_contradiction_claims():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "exact source path supplied in provenance or source evidence" in text

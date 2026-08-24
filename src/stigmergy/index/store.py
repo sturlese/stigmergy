@@ -25,7 +25,7 @@ CREATE TABLE pages_index (
   sources text[] NOT NULL DEFAULT '{{}}',
   content_hash text NOT NULL,
   tsv tsvector,
-  -- halfvec supports the 3072-dimensional default model within pgvector's HNSW limits.
+  -- halfvec supports the 2560-dimensional default model within pgvector's HNSW limits.
   embedding halfvec({dim})
 )
 """

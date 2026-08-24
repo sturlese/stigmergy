@@ -398,16 +398,18 @@ def test_registry_and_absorbed_anchor_are_repaired_deterministically(
         "type: source\n"
         "submitted_by: marc\n"
         "acl: null\n"
-        "captured_at: '2026-08-24T00:00:00+00:00'\n"
-        "origin: mcp\n"
-        "artifacts:\n"
+            "captured_at: '2026-08-24T00:00:00+00:00'\n"
+            "origin: mcp\n"
+            "participants: []\n"
+            "artifacts:\n"
         "- sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
         "  bytes: 1\n"
         "  media_type: text/plain\n"
         "  readable_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-        "  extractor: text\n"
-        "  extractor_version: '1'\n"
-        "---\n\n# Source\n\nAcme.\n",
+            "  extractor: text\n"
+            "  extractor_version: '1'\n"
+            "  ocr_pages: []\n"
+            "---\n\n# Captured source\n\nAcme.\n",
         encoding="utf-8",
     )
     write_records(str(target_repo), {canonical: record})

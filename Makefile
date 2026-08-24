@@ -48,7 +48,7 @@ gates: venv ## Run measured release gates with real model credentials
 
 index-rebuild: venv ## Rebuild the local index from the configured knowledge repository
 	$(VENV)/bin/stigmergy-index --rebuild --repo $${STIGMERGY_REPO:-../stigmergy-brain} \
-	  --embedder $(or $(EMBEDDER),openai) $(INDEX_ARGS)
+	  --embedder $(or $(EMBEDDER),openrouter) $(INDEX_ARGS)
 
 deploy-staging: venv ## Deploy all staging process groups
 	bash scripts/deploy_staging.sh

@@ -1,125 +1,86 @@
-"""The real embedder: any OpenAI-compatible `/embeddings` host — OpenAI itself by default,
-serving `text-embedding-3-large` because cross-language retrieval is the requirement (ES->EN
-hit@5 measured 1.00 on this corpus). `build_embedder` is the one fake/real dispatch; the offline
-double is imported DEFERRED so production never loads it.
-"""
+"""Qwen embeddings through the approved OpenRouter boundary."""
+
+from __future__ import annotations
+
 import os
 
 import httpx
 
-DEFAULT_MODEL = "text-embedding-3-large"
-# The HOST is configuration, the request shape is not: every embedding host worth pointing at
-# (OpenRouter, a self-hosted server, OpenAI itself) speaks OpenAI's `/embeddings` dialect, so one
-# client with a movable base URL covers them all. `$EMBED_BASE_URL` is a BASE — `/embeddings` is
-# appended here; a full endpoint pasted by mistake fails loudly with a doubled path, never
-# silently against the wrong route.
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
-BASE_URL_ENV = "EMBED_BASE_URL"
-API_KEY_ENV = "EMBED_API_KEY"
-MODEL_ENV = "EMBED_MODEL"
-# Matryoshka (MRL) truncation, sent as the OpenAI-dialect `dimensions` field ONLY when set: the
-# index's HNSW ceiling is 4000 (`store.py`'s halfvec note) and Qwen3-Embedding-8B is 4096
-# native, so the pairing that fits is the model plus this. BUILD and QUERY must agree with the
-# standing index — set once per deployment; a mismatch fails loudly in pgvector (a dimension
-# error), never silently in ranking.
-DIMENSIONS_ENV = "EMBED_DIMENSIONS"
+DEFAULT_MODEL = "qwen/qwen3-embedding-8b"
+DEFAULT_DIMENSIONS = 2560
+DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 EMBED_BATCH = 128
 
+PROVIDER_POLICY = {
+    "allow_fallbacks": False,
+    "require_parameters": True,
+    "data_collection": "deny",
+    "zdr": True,
+}
+
 MISSING_KEY_MESSAGE = (
-    "OPENAI_API_KEY is not set, and this index was built with the real embedder. "
-    "(EMBED_API_KEY, the explicit override, is not set either.) "
-    "`--embedder fake` is NOT a substitute: it embeds into a different space, so search would "
-    "silently return unrelated results instead of failing. Set OPENAI_API_KEY, or rebuild the "
-    "whole index with --embedder fake for an offline run "
-    "(`stigmergy-index --rebuild --embedder fake`).")
+    "OPENROUTER_API_KEY is not set, so Qwen embeddings are unavailable. "
+    "Capture remains available; configure the key or rebuild and run the complete index with "
+    "the deterministic fake embedder for offline tests."
+)
 
 
-class OpenAIEmbedder:
-    """OpenAI-DIALECT embedder, whatever the host: the class name and `build_embedder`'s
-    'openai' kind name the request/response shape, not the company billed."""
-
-    def __init__(self, model: str | None = None, api_key: str | None = None,
-                 transport: httpx.BaseTransport | None = None, base_url: str | None = None,
-                 dimensions: int | None = None):
-        # An EXPLICIT model always beats `$EMBED_MODEL`: `embedder_for_model` passes the index's
-        # own recorded model, and a query embedded per-env against an index built per-flag would
-        # land in a different vector space without ever failing. The env is the BUILD-time
-        # default only.
-        self.model = model or os.environ.get(MODEL_ENV) or DEFAULT_MODEL
-        base = (base_url or os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL).rstrip("/")
-        self._url = base + "/embeddings"
-        # Model name and host jointly identify the vector space recorded by the index.
-        self.host = base
-        # The OpenAI key is the fallback for the OpenAI HOST and nowhere else — precedence is
-        # not isolation, and a bearer token sent to a host that did not issue it is DISCLOSED to
-        # that host whether or not it is accepted. A non-default host with no
-        # EMBED_API_KEY is therefore a refusal below, never a borrowed credential.
-        self._api_key = api_key or os.environ.get(API_KEY_ENV)
-        if not self._api_key and base == DEFAULT_BASE_URL:
-            self._api_key = os.environ.get("OPENAI_API_KEY")
-        raw_dims = dimensions if dimensions is not None else os.environ.get(DIMENSIONS_ENV)
-        if raw_dims in (None, ""):
-            self._dimensions = None
-        else:
-            try:
-                self._dimensions = int(raw_dims)
-            except (TypeError, ValueError):
-                raise RuntimeError(
-                    f"EMBED_DIMENSIONS must be a whole number of dimensions (got {raw_dims!r}) — "
-                    f"it is the MRL truncation sent to the embedding host, e.g. 2560 for "
-                    f"Qwen3-Embedding-8B under the index's 4000-dimension ceiling") from None
-            if self._dimensions <= 0:
-                raise RuntimeError(
-                    f"EMBED_DIMENSIONS must be positive (got {self._dimensions}) — a vector with "
-                    f"no dimensions embeds nothing")
-        # Optional transport supports controlled HTTP routing.
+class OpenRouterEmbedder:
+    def __init__(
+        self,
+        model: str | None = None,
+        api_key: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ):
+        self.model = model or DEFAULT_MODEL
+        if self.model != DEFAULT_MODEL:
+            raise RuntimeError(
+                f"embedding model is not approved for Stigmergy: {self.model!r}"
+            )
+        self.host = DEFAULT_BASE_URL
+        self._url = f"{self.host}/embeddings"
+        self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self._transport = transport
         if not self._api_key:
-            # Never suggest the fake as a keyless substitute: a query embedded by the fake against
-            # an index built real lands in a different vector space — search returns noise and
-            # does not fail, the one failure mode worse than an error.
-            if base == DEFAULT_BASE_URL:
-                raise RuntimeError(MISSING_KEY_MESSAGE)
-            raise RuntimeError(
-                f"EMBED_API_KEY is not set, and EMBED_BASE_URL points this embedder at {base} — "
-                f"OPENAI_API_KEY is deliberately NOT sent there (a bearer token transmitted to a "
-                f"host that did not issue it is disclosed either way). Set EMBED_API_KEY to that "
-                f"host's own credential, or unset EMBED_BASE_URL to return to OpenAI. "
-                f"`--embedder fake` is NOT a substitute: it embeds into a different space, so "
-                f"search would silently return unrelated results instead of failing; rebuild the "
-                f"whole index with --embedder fake for an offline run "
-                f"(`stigmergy-index --rebuild --embedder fake`).")
+            raise RuntimeError(MISSING_KEY_MESSAGE)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
         with httpx.Client(timeout=120, transport=self._transport) as client:
-            for i in range(0, len(texts), EMBED_BATCH):
-                payload = {"model": self.model, "input": texts[i:i + EMBED_BATCH]}
-                if self._dimensions is not None:
-                    payload["dimensions"] = self._dimensions
-                resp = client.post(self._url,
-                                   headers={"Authorization": f"Bearer {self._api_key}"},
-                                   json=payload)
-                resp.raise_for_status()
-                data = sorted(resp.json()["data"], key=lambda d: d["index"])
-                vectors.extend(d["embedding"] for d in data)
+            for index in range(0, len(texts), EMBED_BATCH):
+                response = client.post(
+                    self._url,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json={
+                        "model": self.model,
+                        "input": texts[index:index + EMBED_BATCH],
+                        "dimensions": DEFAULT_DIMENSIONS,
+                        "provider": dict(PROVIDER_POLICY),
+                    },
+                )
+                response.raise_for_status()
+                batch = sorted(response.json()["data"], key=lambda item: item["index"])
+                for item in batch:
+                    vector = item["embedding"]
+                    if len(vector) != DEFAULT_DIMENSIONS:
+                        raise RuntimeError(
+                            f"embedding host returned {len(vector)} dimensions; "
+                            f"expected {DEFAULT_DIMENSIONS}"
+                        )
+                    vectors.append(vector)
         return vectors
 
 
-def build_embedder(kind: str = "openai", model: str | None = None):
-    """'openai' (default — any OpenAI-compatible host, see `$EMBED_BASE_URL`) or 'fake'. The fake
-    import is deferred on purpose — production modules must never load the offline double."""
+def build_embedder(kind: str = "openrouter", model: str | None = None):
     if kind == "fake":
         from stigmergy.index.backends.fake_embedder import FakeEmbedder
         return FakeEmbedder()
-    if kind == "openai":
-        return OpenAIEmbedder(model)
-    raise ValueError(f"unknown embedder: {kind!r} (use 'openai' or 'fake')")
+    if kind == "openrouter":
+        return OpenRouterEmbedder(model)
+    raise ValueError(f"unknown embedder: {kind!r} (use 'openrouter' or 'fake')")
 
 
 def embedder_for_model(model: str):
-    """The embedder matching an already-built index's recorded model (index_meta): queries
-    must embed in the same space the documents did."""
     if model.startswith("fake"):
         return build_embedder("fake")
-    return build_embedder("openai", model)
+    return build_embedder("openrouter", model)

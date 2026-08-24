@@ -78,12 +78,17 @@ class PydanticPlanner:
         skill_path = f"{worktree}/.claude/skills/librarian/SKILL.md"
         with open(skill_path, encoding="utf-8") as handle:
             instructions = handle.read()
-        model = self.model_factory() if self.model_factory else self.settings.model
+        if self.model_factory:
+            model, model_settings = self.model_factory(), None
+        else:
+            from stigmergy.kernel.llm import build_model
+            model, model_settings = build_model(self.settings.model)
         agent = Agent(
             model,
             instructions=instructions,
             output_type=FilingPlan,
             retries=2,
+            model_settings=model_settings,
         )
         prompt = _prompt(
             envelope=envelope,
@@ -139,8 +144,18 @@ class PydanticPlanner:
             f"FILES\n{fence(json.dumps(files, ensure_ascii=False, sort_keys=True))}"
         )
         _guard_prompt(prompt)
-        model = self.model_factory() if self.model_factory else self.settings.model
-        agent = Agent(model, instructions=instructions, output_type=RepairPlan, retries=2)
+        if self.model_factory:
+            model, model_settings = self.model_factory(), None
+        else:
+            from stigmergy.kernel.llm import build_model
+            model, model_settings = build_model(self.settings.model)
+        agent = Agent(
+            model,
+            instructions=instructions,
+            output_type=RepairPlan,
+            retries=2,
+            model_settings=model_settings,
+        )
         usage = RunUsage()
         async with asyncio.timeout(self.settings.timeout_s):
             result = await agent.run(

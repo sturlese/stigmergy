@@ -30,6 +30,7 @@ def main(argv=None) -> int:
         args = build_parser().parse_args(argv)
         settings = config.Settings.from_args(args)
         conn = store.connect(settings.dsn)
+        worker.configure_connection(conn)
         schema.ensure_capture_schema(conn)
         ensure_upload_schema(conn)
         ensure_change_schema(conn)
