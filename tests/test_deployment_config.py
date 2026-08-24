@@ -119,13 +119,14 @@ def test_deployed_scanned_ocr_uses_the_approved_qwen_model():
     assert _fly_config()["env"]["STIGMERGY_OCR_MODEL"] == llm.OCR_MODEL
 
 
-def test_deployed_writer_shutdown_outlives_its_operation_budget():
+def test_deployed_writer_shutdown_uses_fly_maximum_and_recovers_through_the_lease():
     fly = _fly_config()
     model_timeout = int(fly["env"]["STIGMERGY_LIBRARIAN_TIMEOUT_S"])
     visibility = librarian_config.resolved_visibility_timeout_s(timeout_s=model_timeout)
     kill_timeout = int(fly["kill_timeout"].removesuffix("s"))
 
-    assert kill_timeout > visibility
+    assert kill_timeout == 300
+    assert visibility > kill_timeout
 
 
 def test_static_model_configuration_names_no_disallowed_provider():
