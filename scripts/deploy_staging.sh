@@ -9,7 +9,7 @@ DEPLOY_DIR="$HERE/deploy"
 # This one list defines both the temporary bake and its fail-closed restoration.
 BAKED=(
   'identities.json:{}'
-  'entity-registry.json:{"version":1,"entities":{},"redirects":{}}'
+  'entity-registry.json:{"version": 1, "entities": {}, "redirects": {}}'
   'slack-channels.json:{}'
 )
 
@@ -62,7 +62,7 @@ echo "deploy: baked $STIGMERGY_REPO/ops/slack-channels.json -> deploy/slack-chan
 
 
 cd "$HERE"
-fly deploy
+fly deploy --ha=false --yes
 
-# Both service-less consumers are intentional singletons.
-fly scale count slack=1 worker=1 --yes
+# Staging runs exactly one machine per process group.
+fly scale count app=1 slack=1 worker=1 --yes

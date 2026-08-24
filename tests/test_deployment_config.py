@@ -128,9 +128,21 @@ def test_deployment_image_installs_the_ocr_engine():
     assert re.search(r"(?:^|\s)tesseract-ocr=\S+", dockerfile, re.MULTILINE)
 
 
-def test_deploy_script_pins_service_consumers_to_one_machine():
+def test_deploy_script_pins_each_staging_process_group_to_one_machine():
     script = (ROOT / "scripts" / "deploy_staging.sh").read_text(encoding="utf-8")
-    assert "fly scale count slack=1 worker=1 --yes" in script
+    assert "fly deploy --ha=false --yes" in script
+    assert "fly scale count app=1 slack=1 worker=1 --yes" in script
+
+
+def test_deploy_script_restores_exact_tracked_defaults():
+    script = (ROOT / "scripts" / "deploy_staging.sh").read_text(encoding="utf-8")
+    defaults = dict(
+        re.findall(r"^\s+'([^:]+):(.*)'$", script, re.MULTILINE)
+    )
+
+    assert set(defaults) == {"identities.json", "entity-registry.json", "slack-channels.json"}
+    for name, default in defaults.items():
+        assert (ROOT / "deploy" / name).read_text(encoding="utf-8") == f"{default}\n"
 
 
 def test_installed_commands_are_the_classified_supported_surface():
