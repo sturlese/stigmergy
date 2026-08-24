@@ -7,6 +7,8 @@ import signal
 import time
 from dataclasses import dataclass
 
+from pydantic_ai.exceptions import AgentRunError
+
 from stigmergy.capture import ops, queue, schema, uploads
 from stigmergy.capture.errors import CaptureError, QueueStateError, SubmissionRejected
 from stigmergy.knowledge.planner import PydanticPlanner, ScriptedPlanner
@@ -114,7 +116,7 @@ def _retryable(error: Exception) -> bool:
         return bool(error.retryable)
     return isinstance(
         error,
-        (CaptureError, GitError, TimeoutError, ConnectionError, OSError),
+        (AgentRunError, CaptureError, GitError, TimeoutError, ConnectionError, OSError),
     )
 
 
