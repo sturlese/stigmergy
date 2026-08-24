@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="Stigmergy: a team's knowledge, captured where the work happens, filed by an agent, and answered with citations you can check">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A0F1F"/>
+      <stop offset="1" stop-color="#161F3D"/>
+    </linearGradient>
+    <radialGradient id="haloV" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#A78BFA" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#A78BFA" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="haloA" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F6B73C" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#F6B73C" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.2" fill="#FFFFFF" fill-opacity="0.07"/>
+    </pattern>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .sans { font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+      .wordmark { font-size: 82px; font-weight: 800; fill: #F4F6FF; letter-spacing: -2.5px; }
+      .tag { font-size: 19px; font-weight: 500; fill: #C7D0E6; }
+      .chip { font-size: 12px; font-weight: 600; fill: #DCE3F5; letter-spacing: 0.2px; }
+      .pill { font-size: 12px; font-weight: 600; fill: #EEF2FF; }
+      .tiny { font-size: 10.5px; font-weight: 700; fill: #F6B73C; letter-spacing: 2px; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="340" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="340" rx="28" fill="url(#dots)"/>
+  <rect x="0.5" y="0.5" width="1199" height="339" rx="27.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+
+  <!-- soft halos -->
+  <circle cx="960" cy="172" r="150" fill="url(#haloV)"/>
+  <circle cx="780" cy="170" r="120" fill="url(#haloA)" opacity="0.6"/>
+
+  <!-- wordmark -->
+  <text x="64" y="72" class="sans tiny">KARPATHY-STYLE TEAM WIKI</text>
+  <text x="62" y="150" class="sans wordmark">Stigmergy</text>
+  <path d="M66 170 C 180 176, 300 160, 470 168" fill="none" stroke="#F6B73C" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 9"/>
+
+  <text x="66" y="212" class="sans tag">A team's knowledge, captured where the work happens,</text>
+  <text x="66" y="240" class="sans tag">filed by an agent, and answered with citations you can check.</text>
+
+  <!-- chips -->
+  <g class="sans chip">
+    <rect x="64" y="270" width="122" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="125" y="289" text-anchor="middle">Git + Markdown</text>
+    <rect x="196" y="270" width="164" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="278" y="289" text-anchor="middle">One serialized writer</text>
+    <rect x="370" y="270" width="190" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="465" y="289" text-anchor="middle">ACL-scoped reads and writes</text>
+    <rect x="570" y="270" width="176" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="658" y="289" text-anchor="middle">MCP · Slack · Backoffice</text>
+  </g>
+
+  <!-- traces: three adapters leave traces that converge on one wiki page -->
+  <g class="sans pill">
+    <rect x="762" y="66" width="112" height="34" rx="17" fill="#0E1530" stroke="#60A5FA" stroke-opacity="0.8"/>
+    <circle cx="779" cy="83" r="4" fill="#60A5FA"/>
+    <text x="791" y="88">MCP bridge</text>
+
+    <rect x="762" y="153" width="112" height="34" rx="17" fill="#0E1530" stroke="#60A5FA" stroke-opacity="0.8"/>
+    <circle cx="779" cy="170" r="4" fill="#60A5FA"/>
+    <text x="791" y="175">Slack</text>
+
+    <rect x="762" y="240" width="112" height="34" rx="17" fill="#0E1530" stroke="#60A5FA" stroke-opacity="0.8"/>
+    <circle cx="779" cy="257" r="4" fill="#60A5FA"/>
+    <text x="791" y="262">Backoffice</text>
+  </g>
+
+  <g fill="none" stroke="#F6B73C" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="1 7">
+    <path d="M876 83 C 902 83, 882 170, 904 170"/>
+    <path d="M876 170 L 904 170"/>
+    <path d="M876 257 C 902 257, 882 170, 904 170"/>
+  </g>
+  <circle cx="904" cy="170" r="4.5" fill="#F6B73C" filter="url(#glow)"/>
+
+  <!-- the wiki page -->
+  <g filter="url(#glow)">
+    <rect x="908" y="100" width="110" height="140" rx="12" fill="#121A38" stroke="#A78BFA" stroke-width="2"/>
+  </g>
+  <g stroke="#A78BFA" stroke-width="3" stroke-linecap="round" stroke-opacity="0.9">
+    <line x1="926" y1="128" x2="978" y2="128"/>
+  </g>
+  <g stroke="#C7D0E6" stroke-width="2.5" stroke-linecap="round" stroke-opacity="0.55">
+    <line x1="926" y1="150" x2="1000" y2="150"/>
+    <line x1="926" y1="166" x2="992" y2="166"/>
+    <line x1="926" y1="182" x2="1000" y2="182"/>
+    <line x1="926" y1="198" x2="972" y2="198"/>
+  </g>
+  <g stroke="#2DD4BF" stroke-width="2.5" stroke-linecap="round">
+    <line x1="926" y1="220" x2="958" y2="220"/>
+  </g>
+  <text x="963" y="262" text-anchor="middle" class="mono" font-size="11" fill="#A78BFA">wiki/notes</text>
+
+  <!-- answer trace -->
+  <path d="M1020 170 C 1040 170, 1040 170, 1064 170" fill="none" stroke="#2DD4BF" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="1 7"/>
+  <g class="sans pill">
+    <rect x="1064" y="153" width="122" height="34" rx="17" fill="#0E1530" stroke="#2DD4BF" stroke-opacity="0.9"/>
+    <path d="M1078 170 l5 5 l9 -10" fill="none" stroke="#2DD4BF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1100" y="175">cited answer</text>
+  </g>
+</svg>
