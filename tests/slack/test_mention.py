@@ -3,9 +3,12 @@ answer synthesizer (keyless) and an offline Slack double.
 """
 import asyncio
 import dataclasses
+import types
 
 import pytest
 
+import stigmergy.answer.service as answer_service_mod
+from stigmergy.answer.synthesize import AnswerOutput, Citation
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import RateLimitError
 from stigmergy.server.ratelimit import RateLimiter
@@ -335,6 +338,54 @@ def test_an_ask_timeout_edits_the_placeholder_into_the_honest_took_too_long_mess
     monkeypatch.setattr(mention, "_run_ask", _timeout)
     _ask(ctx, channel_id="D1", is_dm=True, question=ARR_Q, identity=STEWARD)
     assert _updated_text(gw) == copy.TIMEOUT
+
+
+def test_slack_ask_timeout_exceeds_the_full_service_deadline_with_margin():
+    assert mention.ASK_TIMEOUT_S > answer_service_mod.TOTAL_ANSWER_TIMEOUT_S + 5
+
+
+def test_slack_run_ask_reaches_the_service_timeout_evidence_fallback(
+        indexed, clean_tables, monkeypatch):
+    conn, fixture = indexed
+    ctx = build_context(fixture, conn)
+
+    class StalledPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            deps.record(deps.service.page_text("wiki/notes/initech-kpi.md", deps))
+            await asyncio.Event().wait()
+
+    class EvidenceOnly:
+        async def run(self, question, *, evidence):
+            assert "ARR reached 512000 usd." in evidence
+            return types.SimpleNamespace(output=AnswerOutput(
+                answer_markdown="ARR reached 512000 usd.",
+                citations=[Citation(
+                    path="wiki/notes/initech-kpi.md",
+                    quote="ARR reached 512000 usd.",
+                )],
+            ))
+
+    monkeypatch.setattr(answer_service_mod, "ANSWER_PHASE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(answer_service_mod, "build_synthesizer", lambda settings: StalledPrimary())
+    monkeypatch.setattr(
+        answer_service_mod,
+        "build_evidence_synthesizer",
+        lambda settings: EvidenceOnly(),
+        raising=False,
+    )
+
+    result = _run(asyncio.wait_for(
+        mention._run_ask(ctx.build_service(Fixture.STEWARD, None), ARR_Q),
+        timeout=0.2,
+    ))
+
+    assert result["refused"] is False
+    assert result["retried"] is True
+    assert result["verdict"]["verdict"] == "verified"
+    assert result["citations"] == [{
+        "path": "wiki/notes/initech-kpi.md",
+        "quote": "ARR reached 512000 usd.",
+    }]
 
 
 def test_an_unexpected_error_never_leaks_a_traceback_or_none(indexed, clean_tables, monkeypatch):

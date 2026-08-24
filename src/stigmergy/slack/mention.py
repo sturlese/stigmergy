@@ -8,6 +8,7 @@ import asyncio
 import logging
 import re
 
+from stigmergy.answer.service import TOTAL_ANSWER_TIMEOUT_S
 from stigmergy.server.errors import CapabilityUnavailableError, IdentityError, RateLimitError
 from stigmergy.slack import channels, copy, render
 from stigmergy.slack.context import short_ref
@@ -17,7 +18,7 @@ from stigmergy.slack.mrkdwn import escape_mrkdwn, to_mrkdwn
 
 log = logging.getLogger(__name__)
 
-ASK_TIMEOUT_S = 90
+ASK_TIMEOUT_S = TOTAL_ANSWER_TIMEOUT_S + 10
 
 # Per-scope hit budget for the cheap retrieval-set comparison: wide enough that a wider scope's
 # extra pages rarely sit past this rank, small enough that both calls stay one filtered query.

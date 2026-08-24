@@ -1,4 +1,5 @@
 """Transport-independent knowledge service."""
+import asyncio
 import datetime as dt
 import hashlib
 import logging
@@ -205,6 +206,9 @@ class BrainService:
                 self.rate_limiter.check(self.identity, tool)
             value = await coro_fn()
             return value
+        except asyncio.CancelledError:
+            outcome, error_class = "error", "CancelledError"
+            raise
         except Exception as ex:
             outcome, error_class = "error", ex.__class__.__name__
             raise
