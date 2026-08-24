@@ -5,11 +5,16 @@ suppresses the answer instead of shipping it labeled `failed`. Needs postgres (s
 it)."""
 import asyncio
 import types
+from dataclasses import replace
 
+import pytest
 from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.models.function import FunctionModel
 
 import stigmergy.answer.service as service_mod
 from stigmergy.answer.synthesize import AnswerOutput, Citation
+from stigmergy.kernel.llm import model_override
 from tests.answer.conftest import brain_service
 
 
@@ -551,6 +556,145 @@ def test_budget_exceeded_on_corrective_retry_keeps_the_first_runs_outcome(ask_se
     assert "111%" in res["verdict"]["unverified_figures"]
     assert res["refusal_case"] == "suppressed_figures"     # the FIRST run's outcome, not a budget one
     assert "111" not in res["reason"]                       # findings never leak into shipped prose
+
+
+def test_budget_exhaustion_uses_one_evidence_only_completion_over_hydrated_pages(
+        ask_service, monkeypatch):
+    class BudgetedPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            deps.record(deps.service.search_text("globex quarterly report revenue", deps))
+            raise UsageLimitExceeded("The next tool call would exceed the tool_calls_limit of 8")
+
+    class EvidenceOnly:
+        def __init__(self):
+            self.calls = []
+
+        async def run(self, question, *, evidence):
+            self.calls.append((question, evidence))
+            assert "Revenue impact was $1.2M ARR" in evidence
+            assert "Revenue impact was $1.3M ARR" in evidence
+            output = AnswerOutput(
+                answer_markdown=(
+                    "The draft reports $1.2M ARR; the final report states $1.3M ARR."
+                ),
+                citations=[
+                    Citation(
+                        path="wiki/notes/globex-q1-report.md",
+                        quote="Revenue impact was $1.2M ARR",
+                    ),
+                    Citation(
+                        path="wiki/notes/globex-q1-report-final.md",
+                        quote="Revenue impact was $1.3M ARR",
+                    ),
+                ],
+            )
+            return types.SimpleNamespace(output=output)
+
+    completion = EvidenceOnly()
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: BudgetedPrimary())
+    monkeypatch.setattr(
+        service_mod,
+        "build_evidence_synthesizer",
+        lambda settings: completion,
+        raising=False,
+    )
+
+    result = _ask(ask_service, "What revenue figures do the ranked Globex quarterly reports state?")
+
+    assert len(completion.calls) == 1
+    assert result["refused"] is False
+    assert result["retried"] is True
+    assert result["usage"] is None
+    assert result["verdict"]["verdict"] == "verified"
+    assert result["citations"] == [
+        {
+            "path": "wiki/notes/globex-q1-report.md",
+            "quote": "Revenue impact was $1.2M ARR",
+        },
+        {
+            "path": "wiki/notes/globex-q1-report-final.md",
+            "quote": "Revenue impact was $1.3M ARR",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("quote", "accepted"),
+    [
+        ("Revenue impact was $1.3M ARR", True),
+        ("Revenue impact was $9.9M ARR", False),
+    ],
+)
+def test_real_evidence_completion_is_one_toolless_request_and_requires_valid_citations(
+        ask_service, monkeypatch, quote, accepted):
+    class BudgetedPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            deps.record(deps.service.search_text("globex quarterly report revenue", deps))
+            raise UsageLimitExceeded("The next tool call would exceed the tool_calls_limit of 8")
+
+    requests = []
+
+    def complete(_messages, agent_info):
+        requests.append(agent_info)
+        return ModelResponse(parts=[TextPart(
+            '{"answer_markdown":"The final report states $1.3M ARR.",'
+            '"citations":[{"path":"wiki/notes/globex-q1-report-final.md",'
+            f'"quote":"{quote}"}}],"confidence":"high","refused":false}}'
+        )])
+
+    ask_service.settings = replace(ask_service.settings, llm="openrouter")
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: BudgetedPrimary())
+
+    with model_override(FunctionModel(complete)):
+        result = _ask(ask_service, "What does the final Globex report state?")
+
+    assert len(requests) == 1
+    assert requests[0].function_tools == []
+    assert requests[0].output_tools == []
+    assert result["refused"] is not accepted
+    if accepted:
+        assert result["verdict"]["verdict"] == "verified"
+        assert result["citations"] == [{
+            "path": "wiki/notes/globex-q1-report-final.md",
+            "quote": quote,
+        }]
+    else:
+        assert result["refusal_case"] == "budget_exceeded"
+
+
+def test_unverified_evidence_only_completion_keeps_the_budget_refusal(ask_service, monkeypatch):
+    class BudgetedPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
+            raise UsageLimitExceeded("The next tool call would exceed the tool_calls_limit of 8")
+
+    class UnverifiedEvidenceOnly:
+        async def run(self, question, *, evidence):
+            output = AnswerOutput(
+                answer_markdown="The final report states $9.9M ARR.",
+                citations=[
+                    Citation(
+                        path="wiki/notes/globex-q1-report-final.md",
+                        quote="Revenue impact was $9.9M ARR",
+                    )
+                ],
+            )
+            return types.SimpleNamespace(output=output)
+
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: BudgetedPrimary())
+    monkeypatch.setattr(
+        service_mod,
+        "build_evidence_synthesizer",
+        lambda settings: UnverifiedEvidenceOnly(),
+        raising=False,
+    )
+
+    result = _ask(ask_service, "What does the final Globex report state?")
+
+    assert result["refused"] is True
+    assert result["refusal_case"] == "budget_exceeded"
+    assert result["answer_markdown"] == ""
+    assert result["citations"] == []
 
 
 def test_renderers_neutralize_a_hostile_title(answer_indexed):

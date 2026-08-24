@@ -16,6 +16,7 @@ _PNG = b"\x89PNG\r\n\x1a\n"
 _JPEG = b"\xff\xd8\xff"
 _PDF = b"%PDF-"
 _ZIP = b"PK\x03\x04"
+_TEXT_MEDIA_TYPES = frozenset({schema.MEDIA_TEXT, schema.MEDIA_MARKDOWN})
 
 
 def detect_media(
@@ -37,6 +38,9 @@ def detect_media(
         validate_snapshot(data)
         return schema.MEDIA_SLACK
     detected = _detect(data, original_name=original_name)
+    if normalized in _TEXT_MEDIA_TYPES and detected in _TEXT_MEDIA_TYPES:
+        # UTF-8 bytes do not encode a Markdown/plain distinction; retain the validated declaration.
+        return normalized
     if declared and normalized not in {"application/octet-stream", detected}:
         raise ArtifactRejected("declared media type does not match the artifact bytes")
     return detected

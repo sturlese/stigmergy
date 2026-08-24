@@ -53,6 +53,32 @@ def test_plain_text_extraction_is_byte_exact():
     assert result.ocr_pages == ()
 
 
+def test_capture_envelope_preserves_a_valid_markdown_artifact_through_extraction():
+    data = b"# Decision\n\nKeep the source bytes immutable.\n"
+    store = MemoryEvidenceStore()
+    digest = hashlib.sha256(data).hexdigest()
+    envelope = schema.CaptureEnvelope(
+        idempotency_key="markdown-worker-extraction",
+        actor=schema.Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        origin=schema.Origin(adapter="mcp", captured_at=dt.datetime.now(dt.UTC)),
+        artifacts=(
+            schema.ArtifactRef(
+                blob_ref=store.put(data),
+                sha256=digest,
+                bytes=len(data),
+                media_type=schema.MEDIA_MARKDOWN,
+                original_name="decision.md",
+            ),
+        ),
+    )
+
+    extracted = extraction_module.extract_capture(store, envelope, bounded=False)
+
+    assert extracted[0].result.media_type == schema.MEDIA_MARKDOWN
+    assert extracted[0].result.text.encode() == data
+
+
 def test_readable_output_limit_is_enforced_before_child_serialization(monkeypatch):
     monkeypatch.setattr(extraction_module, "MAX_CAPTURE_EXTRACTED_BYTES", 10)
 

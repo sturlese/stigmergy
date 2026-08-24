@@ -28,6 +28,8 @@ from stigmergy.answer.synthesize import (
     ANSWER_REQUEST_LIMIT,
     ANSWER_SYS,
     ANSWER_TOOL_CALLS_LIMIT,
+    EVIDENCE_COMPLETION_REQUEST_LIMIT,
+    MAX_ANSWER_REQUESTS,
     SynthesisContext,
     answer_limits,
     build_synthesizer,
@@ -126,10 +128,12 @@ def test_search_tool_error_string_is_not_recorded_as_evidence():
     assert deps.evidence == []
 
 
-# ── the budgets: 6 requests, 8 tool calls ───────────────────────────────────────────────────────
+# ── primary budget: 6 requests/8 tools; evidence completion: 1 request/no tools ───────────────
 def test_budgets_are_six_requests_eight_tool_calls():
     assert ANSWER_REQUEST_LIMIT == 6
     assert ANSWER_TOOL_CALLS_LIMIT == 8
+    assert EVIDENCE_COMPLETION_REQUEST_LIMIT == 1
+    assert MAX_ANSWER_REQUESTS == 7
 
 
 def test_answer_limits_builds_a_usage_limits_object_with_the_pinned_budgets():
