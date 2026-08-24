@@ -1,7 +1,8 @@
 ---
 title: "Stigmergy: a Karpathy-style team wiki"
-status: ready
+status: implemented
 date: 2026-08-23
+implemented: 2026-08-24
 repositories:
   - /Users/marc/dev/stigmergy
   - /Users/marc/dev/stigmergy-brain
@@ -24,7 +25,10 @@ The product remains deliberately small:
 
 Stigmergy adds only the complexity forced by a team deployment: cloud operation, identity, visibility, concurrent submissions, durable processing, binary evidence, Slack capture, hybrid search, and a master-operated backoffice.
 
-This document is the implementation contract. It is based on the executable code inspected on 2026-08-23, not on the repository's `index.md` prose. Where current code and documentation differ, the code described in the baseline below is the current behavior and this specification is the target behavior.
+This document is the implemented contract. It was derived from the executable code inspected on
+2026-08-23 rather than the repository's historical `index.md` prose, then implemented and validated
+on 2026-08-24. Section 3 records the replaced baseline; the remaining sections describe the current
+contract. Executable code and tests remain authoritative if prose drifts.
 
 ## 2. Explicit clean-cut decision
 
@@ -39,9 +43,11 @@ Stigmergy has only operated with test data. The new design replaces the experime
 
 This decision concerns software and persisted-format compatibility. Ordinary knowledge edits remain reversible through Git history.
 
-## 3. Problem in the current code
+## 3. Problem in the replaced implementation
 
-The current implementation already has valuable team infrastructure: a durable Postgres queue, a single Git writer, identity and page ACLs, R2/S3 evidence storage, a Slack reaction adapter, hybrid full-text/vector search, an MCP server, and a master backoffice.
+The replaced implementation already had valuable team infrastructure: a durable Postgres queue, a
+single Git writer, identity and page ACLs, R2/S3 evidence storage, a Slack reaction adapter, hybrid
+full-text/vector search, an MCP server, and a master backoffice.
 
 Its knowledge model has drifted away from the simple source-to-wiki loop:
 

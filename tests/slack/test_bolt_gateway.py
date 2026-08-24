@@ -3,6 +3,7 @@ outside `stigmergy.slack` needs, so that nothing outside this package imports `s
 No network call happens at construction time, so this needs no mocking."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from slack_sdk.errors import SlackApiError as SdkSlackApiError
@@ -202,3 +203,135 @@ def test_a_failure_that_never_reached_slack_carries_no_code_at_all():
         _run(gateway.chat_update("C1", "1.1", text="closed"))
 
     assert raised.value.code == ""
+
+
+class _SurfaceClient:
+    def __init__(self):
+        self.calls = []
+
+    async def users_info(self, **kwargs):
+        self.calls.append(("users_info", kwargs))
+        return {"user": {"id": kwargs["user"]}}
+
+    async def users_lookupByEmail(self, **kwargs):
+        self.calls.append(("users_lookupByEmail", kwargs))
+        return {"user": {"id": "U_LOOKUP"}}
+
+    async def conversations_info(self, **kwargs):
+        self.calls.append(("conversations_info", kwargs))
+        return {"channel": {"id": kwargs["channel"]}}
+
+    async def chat_getPermalink(self, **kwargs):
+        self.calls.append(("chat_getPermalink", kwargs))
+        return {"permalink": "https://workspace.slack.com/archives/C1/p1"}
+
+    async def chat_postMessage(self, **kwargs):
+        self.calls.append(("chat_postMessage", kwargs))
+        return {"ok": True, "ts": "2.0"}
+
+    async def chat_postEphemeral(self, **kwargs):
+        self.calls.append(("chat_postEphemeral", kwargs))
+        return {"ok": True, "message_ts": "3.0"}
+
+
+def test_gateway_forwards_identity_channel_permalink_and_message_calls():
+    client = _SurfaceClient()
+    gateway = BoltSlackGateway(client)
+
+    assert _run(gateway.users_info("U1"))["user"]["id"] == "U1"
+    assert _run(gateway.users_lookup_by_email("ana@example.com")) == "U_LOOKUP"
+    assert _run(gateway.conversations_info("C1"))["channel"]["id"] == "C1"
+    assert _run(gateway.get_permalink("C1", "1.0")).endswith("/p1")
+    assert _run(
+        gateway.chat_post_message("C1", text="done", blocks=[{"type": "divider"}], thread_ts="1.0")
+    )["ts"] == "2.0"
+    assert _run(
+        gateway.chat_post_ephemeral("C1", "U1", text="private", thread_ts="1.0")
+    )["message_ts"] == "3.0"
+
+    assert [name for name, _kwargs in client.calls] == [
+        "users_info",
+        "users_lookupByEmail",
+        "conversations_info",
+        "chat_getPermalink",
+        "chat_postMessage",
+        "chat_postEphemeral",
+    ]
+
+
+class _MissingUserClient:
+    async def users_lookupByEmail(self, **_kwargs):
+        raise SdkSlackApiError("not found", {"ok": False, "error": "users_not_found"})
+
+
+def test_missing_email_is_an_ordinary_empty_lookup_result():
+    assert _run(BoltSlackGateway(_MissingUserClient()).users_lookup_by_email("gone@example.com")) == ""
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://files.slack.com/file.pdf",
+        "https://slack.example/file.pdf",
+        "https://evilslack.com/file.pdf",
+    ],
+)
+def test_attachment_download_rejects_non_slack_urls_before_opening_a_session(url):
+    gateway = BoltSlackGateway(SimpleNamespace(token="xoxb-secret"))
+
+    with pytest.raises(SlackApiError, match="invalid attachment URL"):
+        _run(gateway.download_file(url, max_bytes=10))
+
+
+class _DownloadBody:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def iter_chunked(self, _size):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _DownloadResponse:
+    def __init__(self, chunks, *, status=200):
+        self.status = status
+        self.content = _DownloadBody(chunks)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _DownloadSession:
+    response = None
+    seen_headers = None
+
+    def __init__(self, *, timeout, headers):
+        assert timeout.total == 60
+        self.__class__.seen_headers = headers
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    def get(self, _url):
+        return self.__class__.response
+
+
+def test_attachment_download_streams_with_bot_auth_and_enforces_the_byte_limit(monkeypatch):
+    import aiohttp
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _DownloadSession)
+    gateway = BoltSlackGateway(SimpleNamespace(token="xoxb-secret"))
+    _DownloadSession.response = _DownloadResponse([b"abc", b"def"])
+
+    assert _run(gateway.download_file("https://files.slack.com/file.pdf", max_bytes=6)) == b"abcdef"
+    assert _DownloadSession.seen_headers == {"Authorization": "Bearer xoxb-secret"}
+
+    _DownloadSession.response = _DownloadResponse([b"abc", b"def"])
+    with pytest.raises(SlackApiError, match="configured limit"):
+        _run(gateway.download_file("https://files.slack.com/file.pdf", max_bytes=5))

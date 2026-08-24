@@ -5,6 +5,7 @@ import pytest
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.ops.reset import (
     ResetRefused,
+    clear_evidence,
     confirmation_token,
     reset_environment,
 )
@@ -120,3 +121,81 @@ def test_reset_requires_an_exact_non_production_target(tmp_path):
             embedding_model="fake",
         )
     conn.close()
+
+
+class _PaginatedObjectClient:
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.list_calls = []
+        self.delete_calls = []
+
+    def list_objects_v2(self, **kwargs):
+        self.list_calls.append(kwargs)
+        return self.pages.pop(0)
+
+    def delete_objects(self, **kwargs):
+        self.delete_calls.append(kwargs)
+
+
+class _ObjectStore:
+    bucket = "private-evidence"
+
+    def __init__(self, client):
+        self._client = client
+
+    def client(self):
+        return self._client
+
+
+def test_clear_evidence_deletes_every_paginated_object_without_listing_other_buckets():
+    client = _PaginatedObjectClient(
+        [
+            {
+                "Contents": [{"Key": "sha256/aa/first"}, {"Key": "sha256/bb/second"}],
+                "IsTruncated": True,
+                "NextContinuationToken": "next-page",
+            },
+            {
+                "Contents": [{"Key": "sha256/cc/third"}],
+                "IsTruncated": False,
+            },
+        ]
+    )
+
+    deleted = clear_evidence(_ObjectStore(client))
+
+    assert deleted == 3
+    assert client.list_calls == [
+        {"Bucket": "private-evidence", "MaxKeys": 1000},
+        {
+            "Bucket": "private-evidence",
+            "MaxKeys": 1000,
+            "ContinuationToken": "next-page",
+        },
+    ]
+    assert client.delete_calls == [
+        {
+            "Bucket": "private-evidence",
+            "Delete": {
+                "Objects": [
+                    {"Key": "sha256/aa/first"},
+                    {"Key": "sha256/bb/second"},
+                ],
+                "Quiet": True,
+            },
+        },
+        {
+            "Bucket": "private-evidence",
+            "Delete": {
+                "Objects": [{"Key": "sha256/cc/third"}],
+                "Quiet": True,
+            },
+        },
+    ]
+
+
+def test_clear_evidence_refuses_a_truncated_listing_without_a_continuation_token():
+    client = _PaginatedObjectClient([{"Contents": [], "IsTruncated": True}])
+
+    with pytest.raises(RuntimeError, match="continuation token"):
+        clear_evidence(_ObjectStore(client))
