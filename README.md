@@ -15,8 +15,9 @@
 source material enters one queue, one librarian agent keeps a small Git-and-Markdown wiki current,
 and every search and answer is scoped to what the caller may see.
 
-Ants coordinate by leaving traces in the environment. Here every capture is a trace, the librarian
-follows the traces, and the wiki emerges — nobody approves a queue.
+Ants coordinate by leaving traces in the environment, not by talking to each other. Here every
+capture is a trace — a person reacting in Slack, an agent finishing a task in Claude Code — the
+librarian follows the traces, and the wiki emerges. Nobody approves a queue.
 
 ---
 
@@ -36,13 +37,13 @@ follows the traces, and the wiki emerges — nobody approves a queue.
 
 ## Why
 
-A one-person wiki works because the loop is tiny. A team needs the same loop plus what a shared
-deployment forces on it: identity, visibility, concurrency, binary evidence, Slack, audit.
-Stigmergy adds exactly that and nothing that duplicates the loop.
+A one-person wiki works because the loop is tiny. Once several people and agents write to the
+same wiki, you need what a shared deployment forces on you: identity, visibility, concurrency,
+binary evidence, Slack, audit. Stigmergy adds exactly that and nothing that duplicates the loop.
 
 | | |
 |---|---|
-| **Capture where the work happens** | Claude Code or Codex, a `:brain:` reaction in Slack, or the backoffice. |
+| **Capture where the work happens** | Agents through the MCP bridge, people through a `:brain:` reaction in Slack, the master through the backoffice. |
 | **Evidence you can trust** | Exact bytes in a private store; one immutable source page per capture. |
 | **A librarian that files** | Creates, rewrites, consolidates, and deletes pages without approval. |
 | **Answers with receipts** | Hybrid search and `ask` with citations verified by code. |
@@ -65,8 +66,8 @@ Stigmergy adds exactly that and nothing that duplicates the loop.
    librarian for a `FilingPlan`, and advances the branch only when every gate passes.
 4. **Remember.** The knowledge repository is plain Git and Markdown. Postgres is operational state
    and a rebuildable index, never a second wiki.
-5. **Read.** Five tools, one visibility policy. A webhook indexes incrementally; a nightly full
-   rebuild guarantees convergence.
+5. **Read.** Five MCP tools for agents, `@brain` for people, one visibility policy. A webhook
+   indexes incrementally; a nightly full rebuild guarantees convergence.
 
 ## The write path
 
@@ -189,7 +190,9 @@ required = true
 | *"Capture https://docs.google.com/document/d/…"* | Local Google OAuth, token in your keychain, DOCX export uploaded. |
 | *"What did we decide about the Aurora renewal?"* | `ask` retrieves within your visibility and answers with verified citations. |
 
-Private Drive needs `STIGMERGY_GOOGLE_CLIENT_SECRETS=/absolute/path/google-oauth-client.json`.
+The same tools and the same token rules apply whether a person is driving the session or an
+agent runs on its own after a task. Private Drive needs
+`STIGMERGY_GOOGLE_CLIENT_SECRETS=/absolute/path/google-oauth-client.json`.
 
 ### From Slack
 
@@ -235,8 +238,9 @@ your configured default, never organization-wide by accident.
 
 ## Visibility and security
 
-- Identities and groups live in the knowledge repository's `ops/identities.json`; a page's `acl`
-  is `null` or a list of groups. `brain-admins` is unrestricted.
+- Every identity — whoever or whatever holds the token — has groups and a default audience in the
+  knowledge repository's `ops/identities.json`; a page's `acl` is `null` or a list of groups.
+  `brain-admins` is unrestricted.
 - One policy for reads and writes: `server.acl.visible`, `kernel.acl.flows_into`, and the write
   guard. A restricted capture gets a restricted companion page; open pages are never rewritten
   from narrower evidence.
