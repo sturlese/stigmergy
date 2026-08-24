@@ -15,7 +15,12 @@ import logging
 
 from stigmergy.answer.brain import AnswerBrain
 from stigmergy.answer.numbers import unverified_figures
-from stigmergy.answer.synthesize import SynthesisContext, answer_limits, build_synthesizer
+from stigmergy.answer.synthesize import (
+    SynthesisContext,
+    answer_limits,
+    build_evidence_synthesizer,
+    build_synthesizer,
+)
 from stigmergy.answer.verify_answer import feedback, verify
 from stigmergy.index import store
 from stigmergy.server.service import neutralize_fence
@@ -23,6 +28,7 @@ from stigmergy.server.service import neutralize_fence
 log = logging.getLogger(__name__)
 
 _RANK = {"verified": 0, "partial": 1, "failed": 2}
+_EVIDENCE_PAGE_CAP = 3
 
 
 def _dedup(items: list[str]) -> list[str]:
@@ -209,8 +215,9 @@ class AnswerService:
         try:
             result = await agent.run(question, deps=ctx, usage_limits=limits)
         except UsageLimitExceeded:
-            # No `AnswerOutput` ever existed to verify — a genuine refusal, never the corrective
-            # retry, which would double the very spend the limit bounds.
+            completed = await self._complete_budget_exhaustion(question, ctx)
+            if completed is not None:
+                return completed
             shaped = self._shape_budget_refusal(question, ctx)
             shaped["usage"] = None   # the run died mid-flight; there is no usage object to read
             return shaped
@@ -263,9 +270,46 @@ class AnswerService:
         shaped["usage"] = usage
         return shaped
 
+    async def _complete_budget_exhaustion(self, question: str, ctx: SynthesisContext) -> dict | None:
+        """Close one budget-exhausted run over a fixed, reader-scoped evidence set."""
+        from pydantic_ai.exceptions import AgentRunError
+
+        paths = tuple(ctx.read_paths_order[:_EVIDENCE_PAGE_CAP])
+        if not paths:
+            return None
+        for path in paths:
+            ctx.record(self.brain.page_text(path, ctx))
+        try:
+            result = await build_evidence_synthesizer(self.settings).run(
+                question,
+                evidence=ctx.evidence_text(),
+            )
+        except AgentRunError as error:
+            log.warning("evidence-only answer completion failed (%s)", error.__class__.__name__)
+            return None
+        out = result.output
+        if out.refused:
+            return None
+        evidence = ctx.evidence_text()
+        verdict = verify(out, evidence, self.brain.get_page, ctx.read_paths)
+        figures, gated = strict_gate_findings(out, verdict, evidence)
+        if figures or gated["verdict"] != "verified":
+            return None
+        shaped = self._shape(
+            question,
+            out,
+            verdict,
+            True,
+            evidence,
+            ctx,
+            first_verdict=None,
+        )
+        shaped["usage"] = None
+        return shaped
+
     # ── response shaping + the strict gate ──────────────────────────────────
     def _shape(self, question: str, out, verdict: dict, retried: bool, evidence: str,
-              ctx: SynthesisContext, *, first_verdict: dict) -> dict:
+              ctx: SynthesisContext, *, first_verdict: dict | None) -> dict:
         if out.refused:
             return self._shape_refusal(question, out, verdict, retried, ctx,
                                        first_verdict=first_verdict)
@@ -310,9 +354,7 @@ class AnswerService:
                              surfaced=surfaced, first_verdict=first_verdict)
 
     def _shape_budget_refusal(self, question: str, ctx: SynthesisContext) -> dict:
-        """`UsageLimitExceeded` on the agent's FIRST run: no `AnswerOutput` existed, so there is
-        nothing to verify. `retried` is always False — the corrective retry is never spent on a
-        run that already exhausted the budget."""
+        """Shape a primary-budget refusal when evidence-only completion cannot ship."""
         verdict = _reverdict([], [])   # vacuously verified: no drafted answer existed to distrust
         surfaced = _titles_for(self.brain.get_page, list(ctx.read_paths_order))
         reason = self._compose_reason("budget_exceeded", question, ctx.searched, surfaced)
