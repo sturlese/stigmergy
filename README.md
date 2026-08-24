@@ -257,7 +257,8 @@ Report vulnerabilities privately: [`SECURITY.md`](./SECURITY.md).
 
 ## Models
 
-One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, no provider fallback, zero-data
+One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, same-model provider failover only,
+no model fallback or direct alternate-provider credentials, zero-data
 retention. Direct Anthropic, OpenAI, or Gemini credentials are rejected.
 
 | Purpose | Model |

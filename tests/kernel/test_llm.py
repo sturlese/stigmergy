@@ -1,4 +1,10 @@
+import asyncio
+import json
+
+import httpx
 import pytest
+from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.models.test import TestModel
 
@@ -23,8 +29,63 @@ def test_every_approved_model_has_the_mandatory_provider_policy(monkeypatch):
         model, settings = llm.build_model(configured)
         assert isinstance(model, OpenRouterModel)
         assert model.model_name == configured.removeprefix("openrouter:")
-        assert settings is None
+        assert settings is model.settings
         assert model.settings["openrouter_provider"] == llm.OPENROUTER_PROVIDER_POLICY
+
+
+def test_approved_models_enable_provider_failover_without_relaxing_privacy(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    model, _ = llm.build_model(llm.LIBRARIAN_MODEL)
+
+    assert model.model_name == "deepseek/deepseek-v4-flash"
+    assert model.settings["openrouter_provider"] == {
+        "allow_fallbacks": True,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }
+
+
+def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": "test-completion",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "deepseek/deepseek-v4-flash",
+            "provider": "deepseek",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+
+    async def run_twice():
+        model, model_settings = llm.build_model(llm.LIBRARIAN_MODEL)
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        model.provider._set_http_client(client)
+        request = ModelRequest(parts=[UserPromptPart(content="hello")])
+        try:
+            await model.request([request], model_settings, ModelRequestParameters())
+            await model.request([request], model_settings, ModelRequestParameters())
+        finally:
+            await client.aclose()
+        return model
+
+    model = asyncio.run(run_twice())
+
+    assert [payload["provider"] for payload in payloads] == [
+        llm.OPENROUTER_PROVIDER_POLICY,
+        llm.OPENROUTER_PROVIDER_POLICY,
+    ]
+    assert model.settings["openrouter_provider"] == llm.OPENROUTER_PROVIDER_POLICY
 
 
 @pytest.mark.parametrize(

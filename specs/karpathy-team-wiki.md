@@ -109,9 +109,10 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 Deterministic linting is the gardener's detection step and makes no model call. Semantic repair is
 the only model-backed part of a garden run and uses the librarian's DeepSeek model. OpenRouter
-routing disables provider fallback, requires requested parameters, denies data collection, and
-requires zero-data-retention processing. The application never reads, forwards, or falls back to
-Anthropic, OpenAI, Gemini, or another direct model-provider credential.
+routing permits failover only among providers serving the same pinned model, requires requested
+parameters, denies data collection, and requires zero-data-retention processing. Model fallback is
+prohibited. The application never reads, forwards, or falls back to Anthropic, OpenAI, Gemini, or
+another direct model-provider credential.
 
 ## 5. Target system
 
