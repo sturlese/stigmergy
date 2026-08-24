@@ -3,12 +3,13 @@
     "major_version": 1
   },
   "display_information": {
-    "name": "Stigmergy",
-    "description": "Team knowledge capture and retrieval"
+    "name": "synapse",
+    "description": "The company brain — ask it questions, react 🧠 to keep something",
+    "background_color": "#2C2D30"
   },
   "features": {
     "bot_user": {
-      "display_name": "Stigmergy",
+      "display_name": "brain",
       "always_online": false
     }
   },
