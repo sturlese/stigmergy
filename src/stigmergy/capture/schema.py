@@ -170,6 +170,16 @@ class Origin(BaseModel):
     def captured_at_utc(cls, value: dt.datetime) -> dt.datetime:
         return _utc(value)
 
+    @field_validator("occurred_at", mode="before")
+    @classmethod
+    def preserve_bare_occurred_date(cls, value):
+        if isinstance(value, str):
+            try:
+                return dt.date.fromisoformat(value)
+            except ValueError:
+                pass
+        return value
+
     @field_validator("occurred_at")
     @classmethod
     def occurred_at_utc(cls, value: dt.datetime | dt.date | None):
