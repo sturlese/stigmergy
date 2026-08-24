@@ -2004,6 +2004,115 @@ def test_contradiction_and_resolution_are_ordinary_atomic_captures(clean_queue, 
     assert item["change_id"] and resolved_item["change_id"]
 
 
+def test_resolution_removes_a_visible_marker_without_a_prose_mutation(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    service = CaptureService(clean_queue, store)
+    master = Actor(subject="marc", display_name="Marc")
+    settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
+
+    seed = service.capture_text(
+        actor=master,
+        audience=None,
+        adapter="mcp",
+        text="Two public policies state incompatible retention periods.",
+        idempotency_key="resolution-without-prose-seed",
+        captured_at=dt.datetime(2026, 8, 20, tzinfo=dt.UTC),
+    )
+    seed_source = source_path(schema.parse_capture(seed["request"]))
+    worker.process_next(
+        clean_queue,
+        WriterDeps(
+            settings,
+            store,
+            ScriptedPlanner(
+                FilingPlan(
+                    summary="Preserved a public retention contradiction",
+                    mutations=(
+                        PageMutation(
+                            action="create",
+                            role="note",
+                            title="Public retention",
+                            body="# Public retention\n\nThe policies disagree.",
+                            reason="Both policies remain credible",
+                        ),
+                    ),
+                    contradictions=(
+                        ContradictionProposal(
+                            page_path="wiki/notes/Public retention.md",
+                            explanation="Two public policies disagree.",
+                            claims=(
+                                ContradictionClaim(
+                                    text="Retention is 30 days.",
+                                    source=seed_source,
+                                    date="2026-08-20",
+                                ),
+                                ContradictionClaim(
+                                    text="Retention is 60 days.",
+                                    source=seed_source,
+                                    date="2026-08-20",
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            str(target_repo),
+        ),
+    )
+    before = parse_page(
+        "wiki/notes/Public retention.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Public retention.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    contradiction_id = contradictions.parse_all(before.body)[0].record.contradiction_id
+
+    resolution = service.capture_text(
+        actor=master,
+        audience=None,
+        adapter="admin",
+        text="The signed public policy confirms that 30 days controls.",
+        idempotency_key="resolution-without-prose",
+        captured_at=dt.datetime(2026, 8, 22, tzinfo=dt.UTC),
+        intent=schema.CaptureIntent(
+            resolution_of=contradiction_id,
+            rationale="The signed public policy controls.",
+        ),
+    )
+    resolution_source = source_path(schema.parse_capture(resolution["request"]))
+    item, outcome = worker.process_next(
+        clean_queue,
+        WriterDeps(
+            settings,
+            store,
+            ScriptedPlanner(
+                FilingPlan(
+                    summary="Resolved the public retention contradiction",
+                    resolved_contradictions=(contradiction_id,),
+                )
+            ),
+            str(target_repo),
+        ),
+    )
+
+    after = parse_page(
+        "wiki/notes/Public retention.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Public retention.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert outcome.status == schema.LANDED
+    assert item["report"]["wiki_changes"] == 1
+    assert contradictions.parse_all(after.body) == ()
+    assert after.sources == (seed_source, resolution_source)
+
+
 def test_invalid_contradiction_proposal_cannot_block_a_valid_capture(
     clean_queue, target_repo
 ):
@@ -2483,7 +2592,6 @@ def test_unsupported_resolution_lands_as_evidence_and_preserves_uncertainty(
             ScriptedPlanner(
                 FilingPlan(
                     summary="Archived evidence that does not resolve the contradiction",
-                    resolved_contradictions=(contradiction_id,),
                 )
             ),
             str(target_repo),
