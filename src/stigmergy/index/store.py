@@ -1,12 +1,14 @@
 """Postgres storage for the derived search index and repository control snapshots."""
 import json
 import os
+import time
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 DSN_ENV = "STIGMERGY_INDEX_DSN"
 DSN_DEFAULT = "postgresql://stigmergy:stigmergy@localhost:54321/stigmergy"
+_CONNECT_RETRY_DELAYS = (0.1, 0.5)
 
 _PAGES_DDL = """
 CREATE TABLE pages_index (
@@ -89,7 +91,16 @@ def host_of_dsn(conninfo: str | None) -> str:
 
 def connect(conninfo: str | None = None) -> psycopg.Connection:
     """Use autocommit so readers do not block a concurrent full rebuild."""
-    return psycopg.connect(conninfo or dsn(), autocommit=True)
+    target = conninfo or dsn()
+    attempt = 0
+    while True:
+        try:
+            return psycopg.connect(target, autocommit=True)
+        except psycopg.OperationalError:
+            if attempt == len(_CONNECT_RETRY_DELAYS):
+                raise
+            time.sleep(_CONNECT_RETRY_DELAYS[attempt])
+            attempt += 1
 
 
 def init_schema(conn: psycopg.Connection, dim: int, model: str, fts_config: str,
