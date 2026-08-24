@@ -4,10 +4,33 @@ All notable changes to this project are documented here, in
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) style, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-While the version stays below `1.0.0` the contracts described in
-[`docs/reference/`](./docs/reference) may still move between minor releases. What will not move
-without answering to [`docs/DESIGN.md`](./docs/DESIGN.md) is *behaviour*: this project treats its
-test suite as the contract.
+While the version stays below `1.0.0`, the public contracts may still move between minor releases.
+The current product contract is [`specs/karpathy-team-wiki.md`](./specs/karpathy-team-wiki.md), the
+runtime map is [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md), and the executable code and tests
+remain authoritative.
+
+## [Unreleased]
+
+### Changed
+
+- Rebuilt Stigmergy as a Karpathy-style team wiki with one kind-free capture envelope, one durable
+  queue, one serialized Git writer, immutable readable sources, and autonomous wiki maintenance.
+- Added exact binary evidence, typed extraction and selective OCR for the supported file formats,
+  including local private Google Drive acquisition through the MCP bridge.
+- Replaced entity dossiers and generated views with opaque entity identities, scoped sourced name
+  claims, deterministic registry projection, and reader-scoped entity descriptions.
+- Added first-class cited contradictions, master-submitted resolution evidence, one Changes ledger
+  with friendly and exact diffs, and a single autonomous lint-and-fix gardener operation.
+- Standardized runtime model access on a closed OpenRouter allowlist using DeepSeek, GLM, and Qwen;
+  direct Anthropic, OpenAI, and Gemini runtime credentials are rejected.
+- Restored the pinned nightly full index rebuild while retaining webhook-driven incremental
+  indexing and explicit convergence health.
+
+### Removed
+
+- Removed legacy capture kinds, generated knowledge views, human approval/task states, standalone
+  repair workflows, and user-like search, queue, and gardener CLIs.
+- Removed compatibility and migration machinery for the abandoned test-only contract.
 
 ## [0.9.1] - 2026-08-22
 
