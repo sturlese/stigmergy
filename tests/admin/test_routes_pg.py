@@ -212,6 +212,23 @@ def test_text_file_and_public_url_use_one_normalized_capture_contract(admin_rig,
     assert "secret" not in json.dumps(rows[2]["request"])
 
 
+def test_text_capture_normalizes_an_iso_date_before_queueing(admin_rig):
+    response = admin_rig.client.post(
+        "/admin/api/captures/text",
+        headers=admin_rig.auth,
+        json={
+            "text": "A dated capture",
+            "audience": None,
+            "occurred_at": "2026-08-24",
+        },
+    )
+
+    assert response.status_code == 200
+    queued = queue.get_submission_trace(admin_rig.conn, response.json()["id"])
+    envelope = schema.CaptureEnvelope.model_validate(queued["request"])
+    assert envelope.origin.occurred_at == dt.date(2026, 8, 24)
+
+
 def test_contradiction_resolution_url_provenance_lands_in_its_source(admin_rig, monkeypatch):
     contradiction = Contradiction(
         contradiction_id="con_00000000-0000-4000-8000-000000000001",
