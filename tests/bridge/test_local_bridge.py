@@ -355,3 +355,63 @@ def test_local_search_forwards_only_the_public_search_arguments():
             "max_results": 3,
         },
     }
+
+
+def test_local_bridge_forwards_every_non_acquisition_tool_without_changing_arguments():
+    class RecordingCloud:
+        def __init__(self):
+            self.calls = []
+
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, arguments))
+            return json.dumps({"tool": name})
+
+    cloud = RecordingCloud()
+    mcp = build_mcp(cloud, Acquirer())
+    cases = [
+        ("read_page", {"path": "wiki/notes/Terms.md"}),
+        ("list_entities", {}),
+        ("describe_entity", {"entity": "Acme"}),
+        ("ask", {"question": "What is the renewal term?"}),
+        ("brain_submissions", {"limit": 7, "status": "failed"}),
+        (
+            "brain_delete",
+            {"paths": ["wiki/notes/Obsolete.md"], "why": "Superseded"},
+        ),
+    ]
+
+    async def call_all():
+        responses = []
+        for name, arguments in cases:
+            blocks, _ = await mcp.call_tool(name, arguments)
+            responses.append(json.loads(blocks[0].text))
+        return responses
+
+    responses = asyncio.run(call_all())
+
+    assert cloud.calls == cases
+    assert responses == [{"tool": name} for name, _arguments in cases]
+
+
+def test_local_bridge_acquires_text_and_paths_before_using_the_shared_upload_flow(tmp_path):
+    class UploadCloud:
+        def __init__(self):
+            self.uploads = []
+
+        def submit_artifacts(self, artifacts, **metadata):
+            self.uploads.append((artifacts, metadata))
+            return {"id": f"capture-{len(self.uploads)}", "status": "queued"}
+
+    path = tmp_path / "decision.txt"
+    path.write_bytes(b"Path decision")
+    cloud = UploadCloud()
+    mcp = build_mcp(cloud, Acquirer())
+
+    async def submit(arguments):
+        blocks, _ = await mcp.call_tool("brain_submit", arguments)
+        return json.loads(blocks[0].text)
+
+    assert asyncio.run(submit({"text": "Text decision"}))["id"] == "capture-1"
+    assert asyncio.run(submit({"path": str(path)}))["id"] == "capture-2"
+    assert cloud.uploads[0][0][0].data == b"Text decision"
+    assert cloud.uploads[1][0][0].data == b"Path decision"

@@ -475,3 +475,86 @@ def test_index_endpoint_warns_on_stale_rebuild_and_convergence(admin_rig):
     assert response.status_code == 200
     assert response.json()["healthy"] is False
     assert len(response.json()["warnings"]) == 2
+
+
+def test_operational_overview_capture_list_and_detail_share_the_queue_state(admin_rig):
+    submitted = admin_rig.client.post(
+        "/admin/api/captures/text",
+        headers=admin_rig.auth,
+        json={
+            "text": "The annual renewal was approved.",
+            "title": "Renewal approval",
+            "audience": ["finance"],
+            "idempotency_key": "admin-overview-test",
+        },
+    )
+    capture_id = submitted.json()["id"]
+
+    overview = admin_rig.client.get("/admin/api/overview", headers=admin_rig.auth)
+    listing = admin_rig.client.get(
+        "/admin/api/captures?status=queued&submitter=marc&limit=10&offset=0",
+        headers=admin_rig.auth,
+    )
+    detail = admin_rig.client.get(
+        f"/admin/api/captures/{capture_id}",
+        headers=admin_rig.auth,
+    )
+    missing = admin_rig.client.get(
+        "/admin/api/captures/00000000-0000-4000-8000-000000000000",
+        headers=admin_rig.auth,
+    )
+
+    assert overview.status_code == listing.status_code == detail.status_code == 200
+    assert overview.json()["captures"]["counts"]["queued"] == 1
+    assert overview.json()["captures"]["oldest_created_at"]["queued"] is not None
+    assert overview.json()["changes"] == 0
+    assert overview.json()["contradictions"] == 0
+    assert overview.json()["worker"]["stale"] is True
+    assert listing.json()["count"] == 1
+    assert listing.json()["captures"][0]["id"] == capture_id
+    assert detail.json()["id"] == capture_id
+    assert detail.json()["provenance"]["title"] == "Renewal approval"
+    assert detail.json()["artifacts"][0]["media_type"] == schema.MEDIA_TEXT
+    assert missing.status_code == 404
+    assert missing.json() == {"error": "capture not found"}
+
+
+def test_admin_capture_validates_timestamp_and_audience_before_queueing(admin_rig):
+    timestamped = admin_rig.client.post(
+        "/admin/api/captures/text",
+        headers=admin_rig.auth,
+        json={
+            "text": "Timestamped evidence",
+            "occurred_at": "2026-08-24T15:30:00+02:00",
+            "audience": ["finance"],
+        },
+    )
+    naive_timestamp = admin_rig.client.post(
+        "/admin/api/captures/text",
+        headers=admin_rig.auth,
+        json={
+            "text": "Ambiguous timestamp",
+            "occurred_at": "2026-08-24T15:30:00",
+            "audience": ["finance"],
+        },
+    )
+    empty_audience = admin_rig.client.post(
+        "/admin/api/captures/text",
+        headers=admin_rig.auth,
+        json={"text": "Empty audience", "audience": []},
+    )
+    unknown_audience = admin_rig.client.post(
+        "/admin/api/captures/text",
+        headers=admin_rig.auth,
+        json={"text": "Unknown audience", "audience": ["unknown-team"]},
+    )
+
+    assert timestamped.status_code == 200
+    queued = queue.get_submission_trace(admin_rig.conn, timestamped.json()["id"])
+    assert queued["request"]["origin"]["occurred_at"] == "2026-08-24T13:30:00Z"
+    assert naive_timestamp.status_code == 400
+    assert "timezone-aware" in naive_timestamp.json()["error"]
+    assert empty_audience.status_code == 400
+    assert "audience cannot be empty" in empty_audience.json()["error"]
+    assert unknown_audience.status_code == 400
+    assert "unknown group" in unknown_audience.json()["error"]
