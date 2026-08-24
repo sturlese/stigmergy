@@ -1,13 +1,4 @@
-"""The deployment config, checked as a shipped artifact: `fly.toml`'s THREE process groups
-(`app`/`worker`/`slack` — the ceiling counts process groups, not machines), read with `tomllib`
-— `http_service.processes == ["app"]` (neither `worker` nor `slack` is ever health-checked or
-takes public HTTP traffic), and `[processes].app` byte-identical to the Dockerfile's own `CMD`
-(`fly.toml`'s own comment: "Byte-identical to the image's own CMD: `[processes]` overrides it...
-the two must not drift").
-
-Pure file parsing — no `fly` command, no docker build, no deploy. The config as shipped is the
-whole subject.
-"""
+import json
 import pathlib
 import re
 import tomllib
@@ -15,208 +6,207 @@ import tomllib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FLY_TOML = ROOT / "fly.toml"
 DOCKERFILE = ROOT / "Dockerfile"
+COMPOSE = ROOT / "docker-compose.yml"
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+
+SUPPORTED_SCRIPTS = {
+    "stigmergy-index": "operations",
+    "stigmergy-server": "service",
+    "stigmergy-bridge": "local bridge",
+    "stigmergy-issue-token": "bootstrap",
+    "stigmergy-librarian": "service",
+    "stigmergy-librarian-boot": "bootstrap",
+    "stigmergy-librarian-credential": "bootstrap",
+    "stigmergy-slack": "service",
+    "stigmergy-admin-token": "bootstrap",
+}
+
+EXECUTABLE_MODULES = {
+    "src/stigmergy/admin/cli.py": "bootstrap",
+    "src/stigmergy/librarian/bootstrap.py": "bootstrap",
+    "src/stigmergy/librarian/cli.py": "service",
+    "src/stigmergy/librarian/gitcredential.py": "bootstrap",
+    "src/stigmergy/knowledge/contract.py": "operations",
+    "src/stigmergy/ops/reset.py": "operations",
+    "src/stigmergy/server/issue_token.py": "bootstrap",
+    "src/stigmergy/server/mcp_server.py": "service",
+    "src/stigmergy/slack/app.py": "service",
+}
 
 
 def _fly_config() -> dict:
-    with open(FLY_TOML, "rb") as f:
-        return tomllib.load(f)
+    with FLY_TOML.open("rb") as handle:
+        return tomllib.load(handle)
 
 
 def _dockerfile_cmd() -> list[str]:
-    """The exec-form `CMD [...]` array, across its backslash line continuations — Docker's own
-    exec form is a JSON array, so once the continuations are joined it parses as one."""
     text = DOCKERFILE.read_text(encoding="utf-8")
     match = re.search(r"^CMD\s+(\[.*?\])\s*$", text, re.MULTILINE | re.DOTALL)
-    assert match, "no exec-form CMD found in the Dockerfile"
-    # Join the physical continuation lines: a trailing `\` followed by a newline is Dockerfile
-    # syntax, not JSON syntax, and has to be gone before this parses.
-    raw = match.group(1).replace("\\\n", "\n")
-    import json
-    return json.loads(raw)
-
-
-def test_fly_toml_parses_with_tomllib():
-    config = _fly_config()
-    assert "processes" in config
+    assert match
+    return json.loads(match.group(1).replace("\\\n", "\n"))
 
 
 def test_process_groups_are_exactly_app_worker_and_slack():
-    """The exact set the deployment declares. A group added on purpose UPDATES this assertion to
-    the new intended state — it is never worked around."""
-    config = _fly_config()
-    assert set(config["processes"]) == {"app", "worker", "slack"}
+    assert set(_fly_config()["processes"]) == {"app", "worker", "slack"}
 
 
-def test_http_service_exposes_only_the_app_process():
-    """The worker's own comment, covering `slack` too: neither the worker nor the
-    Slack bot exposes a port. If `http_service.processes` ever drifted to include either, Fly
-    would health-check a process that listens on nothing and it would flap — or worse, receive
-    public HTTP traffic never designed for it."""
-    config = _fly_config()
-    assert config["http_service"]["processes"] == ["app"]
+def test_http_service_exposes_only_app():
+    assert _fly_config()["http_service"]["processes"] == ["app"]
 
 
-def test_slack_group_exposes_no_http_service():
-    config = _fly_config()
-    assert "slack" not in config["http_service"]["processes"]
+def test_app_process_matches_dockerfile_command():
+    assert _fly_config()["processes"]["app"] == " ".join(_dockerfile_cmd())
 
 
-def test_slack_process_runs_the_stigmergy_slack_console_script():
-    config = _fly_config()
-    assert config["processes"]["slack"].startswith("stigmergy-slack ")
+def test_worker_uses_boot_entry_point():
+    assert _fly_config()["processes"]["worker"] == "stigmergy-librarian-boot"
 
 
-def test_slack_vm_block_documents_why_it_never_scales_past_one_machine():
-    """Socket Mode has no leader election, so a second machine in this group would double-handle
-    every event. That reason belongs in a `fly.toml` comment, and this pins that the comment
-    actually exists — not merely the config value it explains."""
-    text = FLY_TOML.read_text(encoding="utf-8")
-    assert "no leader election" in text.lower()
+def test_slack_receives_all_baked_control_files():
+    command = _fly_config()["processes"]["slack"]
+    assert command.startswith("stigmergy-slack ")
+    assert "--identities /app/identities.json" in command
+    assert "--entity-registry /app/entity-registry.json" in command
+    assert "--channels /app/slack-channels.json" in command
 
 
-def test_the_slack_process_command_carries_every_baked_file_it_needs():
-    """The `app` command is pinned byte-for-byte against the Dockerfile CMD below; the `slack`
-    command has no CMD to be identical to, so its flags are pinned here instead.
-
-    A dropped flag returns a process group to a broken shape — the same class of drift as
-    review button refusing the configured steward — and nothing else in the suite would notice:
-    the group starts fine, serves Slack fine, and simply never rings. The same is true of the
-    other two, which is why all three are checked against the Dockerfile's own COPY targets rather
-    than against a hand-written list that can drift from them."""
-    processes = _fly_config()["processes"]
-    app_flags = set(re.findall(r"(--[\w-]+) (/app/[\w.-]+)", processes["app"]))
-    slack_flags = set(re.findall(r"(--[\w-]+) (/app/[\w.-]+)", processes["slack"]))
-    missing = app_flags - slack_flags
-    assert not missing, (
-        f"the app group passes {sorted(missing)} and the slack group does not. Both hold NO "
-        f"checkout, so every one of these files is the only source of what it configures for "
-        f"BOTH — a flag on one command and not the other is a group silently running without it")
-    # Not derived from the Dockerfile's COPY set on purpose: `slack-channels.json` is baked but
-    # named by NEITHER command — the channel->audience map reaches `stigmergy-slack` through
-    # `--channels`, which this deployment does not pass, so the transport falls back to the empty
-    # audience set. That is a wiring gap, not a symmetry break, and this test is not the place to
-    # assert it: the invariant here is the SYMMETRY between two commands that need the same
-    # things, not "every baked file appears everywhere".
+def test_static_environment_contains_no_credentials():
+    forbidden = {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "STIGMERGY_INDEX_DSN",
+        "STIGMERGY_TOKEN_STORE",
+        "STIGMERGY_EVIDENCE_ACCESS_KEY_ID",
+        "STIGMERGY_EVIDENCE_SECRET_ACCESS_KEY",
+    }
+    assert not forbidden.intersection(_fly_config().get("env", {}))
 
 
-def test_the_app_process_command_is_byte_identical_to_the_dockerfile_cmd():
-    """The property the `fly.toml` comment states as a promise: "the two must not drift". Checked
-    byte-for-byte, not "looks similar" — a single dropped flag here is a working `docker run` and
-    a broken staging deploy, silently, since nothing else would catch it (the image's own default
-    CMD is never exercised once `[processes]` overrides it)."""
-    config = _fly_config()
-    dockerfile_cmd = " ".join(_dockerfile_cmd())
-    assert config["processes"]["app"] == dockerfile_cmd
+def test_vm_blocks_cover_all_process_groups():
+    groups = {group for vm in _fly_config()["vm"] for group in vm["processes"]}
+    assert groups == {"app", "worker", "slack"}
 
 
-def test_the_worker_process_is_the_boot_entry_point_not_the_bare_loop():
-    """Never `stigmergy-librarian run` directly — `stigmergy-librarian-boot` clones, verifies the
-    checkout matches the base ref, and strips the read path's secrets before exec'ing the loop."""
-    config = _fly_config()
-    assert config["processes"]["worker"].strip() == "stigmergy-librarian-boot"
+def test_app_autostarts_and_sleeps_when_idle():
+    service = _fly_config()["http_service"]
+    assert service["auto_stop_machines"] is True
+    assert service["auto_start_machines"] is True
+    assert service["min_machines_running"] == 0
 
 
-def test_the_worker_carries_no_openai_key_env_line_hardcoded_in_fly_toml():
-    """The static half: nothing in `[env]` sets `OPENAI_API_KEY` — the runtime half
-    (`bootstrap.worker_env` stripping it even if the App's secrets carried it) is
-    `tests/librarian/test_bootstrap.py`'s job; this is the config-as-shipped half."""
-    config = _fly_config()
-    assert "OPENAI_API_KEY" not in config.get("env", {})
+def test_package_metadata_is_copied_before_install():
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        project = tomllib.load(handle)["project"]
+    named = [project["readme"], *project.get("license-files", [])]
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    before_install = dockerfile[: dockerfile.index("RUN uv sync --frozen")]
+    assert all(name in before_install for name in named)
+    assert "pyproject.toml" in before_install
+    assert "uv.lock" in before_install
 
 
-def test_vm_groups_declare_exactly_the_three_process_groups():
-    config = _fly_config()
-    vm_processes = {p for vm in config.get("vm", []) for p in vm.get("processes", [])}
-    assert vm_processes == {"app", "worker", "slack"}
+def test_deployment_image_installs_the_ocr_engine():
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    assert re.search(r"(?:^|\s)tesseract-ocr=\S+", dockerfile, re.MULTILINE)
 
 
-# ── every `COPY deploy/...` needs its e2e placeholder (the admin console's own CI failure) ───────────────
-CONTAINER_E2E = ROOT / "scripts" / "e2e_librarian_container.sh"
-
-
-def _dockerfile_deploy_copies() -> set[str]:
-    """The basenames the Dockerfile bakes out of the `deploy/` directory."""
-    text = DOCKERFILE.read_text(encoding="utf-8")
-    return set(re.findall(r"^COPY\s+deploy/(\S+)\s", text, re.MULTILINE))
-
-
-def test_the_dockerfile_bakes_at_least_the_two_original_deploy_files():
-    """The floor that keeps the test below from passing vacuously — a check that stops checking
-    must be impossible to miss."""
-    found = _dockerfile_deploy_copies()
-    assert {"identities.json", "entity-registry.json"} <= found, found
-
-
-def test_every_deploy_copy_has_a_placeholder_in_the_container_e2e():
-    """**A `COPY deploy/x` with no placeholder line in the container e2e breaks the build and
-    nothing local.** `make test` never builds the image; the container e2e does, and it must run
-    on a checkout whose `deploy/` holds whatever the last deploy left — or nothing at all, which
-    is how it first failed on CI. Without a placeholder the build dies at the COPY with a checksum
-    error that names a file, not a cause.
-
-    This has happened twice: the first container-e2e run on CI (a bare redirection into a missing
-    directory) and the `slack-channels.json` COPY, added without its placeholder. The rule
-    lived in a comment both times; it is a test now."""
-    script = CONTAINER_E2E.read_text(encoding="utf-8")
-    missing = sorted(name for name in _dockerfile_deploy_copies()
-                     if f"deploy/{name}" not in script)
-    assert not missing, (
-        f"the Dockerfile COPYs deploy/{{{', '.join(missing)}}} but "
-        f"scripts/e2e_librarian_container.sh writes no placeholder for it — the container e2e "
-        f"will fail at that COPY on any checkout without it, while every local test stays "
-        f"green. Add a line beside its siblings: "
-        f"`[ -f deploy/<name> ] || echo '<empty json>' > deploy/<name>`")
-
-
-# ── the metadata files pyproject NAMES have to reach the build context ─────────────────────────
-def test_every_file_pyproject_names_is_copied_into_the_image():
-    """**A file `pyproject.toml` names and the Dockerfile does not COPY breaks the image and
-    nothing local.** `readme` and `license-files` are read by the build backend while it generates
-    metadata, so their absence fails `pip install .` with `Readme file does not exist` — inside the
-    build, before any of this project's code runs, and long after `make test` has gone green.
-
-    This is the sibling of the `deploy/` placeholder rule below, and it has now happened once:
-    adding `readme`/`license-files` to declare the licence (a wheel built without them declared
-    none at all) turned the container e2e red on the first CI run of the open-source repo, while
-    the whole local suite passed. Same shape, same lesson: the local gate never builds the image.
-    """
-    with open(ROOT / "pyproject.toml", "rb") as f:
-        project = tomllib.load(f)["project"]
-    named = ([project["readme"]] if isinstance(project.get("readme"), str) else []) \
-        + list(project.get("license-files", []))
-    assert named, "pyproject names no readme or licence files — this check has lost its subject"
-
-    text = DOCKERFILE.read_text(encoding="utf-8")
-    install = text.index("pip install --no-cache-dir .")
-    copied = " ".join(re.findall(r"^COPY\s+(.*)$", text[:install], re.MULTILINE))
-    missing = sorted(name for name in named if name not in copied)
-    assert not missing, (
-        f"pyproject.toml names {missing} but no COPY before `pip install` puts them in the build "
-        f"context — the image build will fail while every local test stays green. Add them to the "
-        f"`COPY pyproject.toml ...` line.")
-
-
-def test_the_app_group_sleeps_when_idle():
-    """The server auto-stops between requests: every caller of the `app` group can wait out a
-    cold start (an MCP client's first request, a webhook delivery, an operator opening /admin),
-    and Slack Q&A never routes through it — the `slack` process answers in-process against
-    Postgres, not over HTTP. A regression to `min_machines_running = 1` (or auto-stop off)
-    silently reinstates 24/7 machine-hours nobody decided to buy back."""
-    config = _fly_config()
-    svc = config["http_service"]
-    assert svc["auto_stop_machines"] is True
-    assert svc["auto_start_machines"] is True
-    assert svc["min_machines_running"] == 0
-
-
-def test_the_deploy_script_pins_both_singleton_groups():
-    """`fly deploy`'s default second machine for a service-less group is a Fly STANDBY — created
-    stopped, claiming nothing (the runbook's scaling note). The script pins `slack=1` (Socket
-    Mode has no leader election — a STARTED second machine double-handles every event) and
-    `worker=1` (a started standby is a second PAID poller: the queue's leases keep it correct,
-    and only the model bill notices — a spend invariant rather than a correctness one, which is
-    exactly why nothing else would catch it). `fly.toml`'s header states both pins; this keeps
-    the statement executable."""
+def test_deploy_script_pins_service_consumers_to_one_machine():
     script = (ROOT / "scripts" / "deploy_staging.sh").read_text(encoding="utf-8")
-    assert "fly scale count slack=1 --yes" in script
-    assert "fly scale count worker=1 --yes" in script
+    assert "fly scale count slack=1 worker=1 --yes" in script
+
+
+def test_installed_commands_are_the_classified_supported_surface():
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        scripts = tomllib.load(handle)["project"]["scripts"]
+
+    assert set(scripts) == set(SUPPORTED_SCRIPTS)
+    assert set(SUPPORTED_SCRIPTS.values()) == {
+        "service",
+        "bootstrap",
+        "operations",
+        "local bridge",
+    }
+    assert {"stigmergy-search", "stigmergy-queue", "stigmergy-gardener"}.isdisjoint(scripts)
+
+
+def test_no_supported_user_capability_exists_only_as_a_remote_cli():
+    local = {name for name, category in SUPPORTED_SCRIPTS.items() if category == "local bridge"}
+    remote = set(SUPPORTED_SCRIPTS) - local
+
+    assert local == {"stigmergy-bridge"}
+    assert all(
+        SUPPORTED_SCRIPTS[name] in {"service", "bootstrap", "operations"}
+        for name in remote
+    )
+
+
+def test_all_directly_executable_runtime_modules_are_classified():
+    discovered = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "src" / "stigmergy").rglob("*.py")
+        if 'if __name__ == "__main__"' in path.read_text(encoding="utf-8")
+    }
+    assert discovered == set(EXECUTABLE_MODULES)
+    assert set(EXECUTABLE_MODULES.values()) <= {
+        "service", "bootstrap", "operations", "local bridge"
+    }
+
+
+def test_retired_runtime_modules_are_absent():
+    retired = {
+        "src/stigmergy/capture/cli.py",
+        "src/stigmergy/gardener/__init__.py",
+        "src/stigmergy/repair/__init__.py",
+        "src/stigmergy/librarian/processing.py",
+        "src/stigmergy/librarian/page.py",
+        "src/stigmergy/kernel/page.py",
+        "src/stigmergy/server/review.py",
+    }
+    assert [path for path in sorted(retired) if (ROOT / path).exists()] == []
+
+
+def test_fresh_runtime_schema_has_no_compatibility_alters():
+    offenders = []
+    for path in (ROOT / "src" / "stigmergy").rglob("*.py"):
+        if "ALTER TABLE" in path.read_text(encoding="utf-8").upper():
+            offenders.append(path.relative_to(ROOT).as_posix())
+    assert offenders == []
+
+
+def test_local_service_images_are_digest_pinned():
+    images = re.findall(
+        r"^\s*image:\s*(\S+)\s*$",
+        COMPOSE.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert images
+    assert all(re.fullmatch(r"[^\s@]+:[^\s@]+@sha256:[0-9a-f]{64}", image) for image in images)
+
+
+def test_ci_uses_a_commit_pinned_checksum_verified_uv_installer():
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in workflow
+    assert 'version: "0.11.16"' in workflow
+    assert (
+        'checksum: "74947fe2c03315cf07e82ab3acc703eddef01aba4d5232a98e4c6825ec116131"'
+        in workflow
+    )
+    assert "pip install uv" not in workflow
+
+
+def test_runtime_has_no_human_task_or_separate_repair_queue():
+    forbidden = (
+        "awaiting_review",
+        "needs_human",
+        "human_task",
+        "gardener_tasks",
+        "garden_tasks",
+        "repair_queue",
+        "repair_worker",
+    )
+    offenders = []
+    for path in (ROOT / "src" / "stigmergy").rglob("*.py"):
+        text = path.read_text(encoding="utf-8").casefold()
+        if any(term in text for term in forbidden):
+            offenders.append(path.relative_to(ROOT).as_posix())
+    assert offenders == []

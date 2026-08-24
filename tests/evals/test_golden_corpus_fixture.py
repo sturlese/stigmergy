@@ -19,14 +19,8 @@ from stigmergy.index import corpus, golden
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "evals" / "corpus"
 
-# `evals/retrieval_golden.json`'s `benchmark: foxglove prospect` lists a second expectation,
-# `foxglove-health`, that matches no page id and no file stem — so that question's recall is capped
-# at 0.5. It is the drift described above: an earlier preflight fell back to a SUBSTRING match
-# against paths, and `foxglove-health` is a path SEGMENT of the pitch-deck page, so it reported
-# resolved. Named here so it cannot silently grow a sibling.
-KNOWN_UNRESOLVED = {"foxglove-health"}
-
-CORPUS_PAGES = 37
+KNOWN_UNRESOLVED = set()
+CORPUS_PAGES = 13
 
 
 @pytest.fixture(scope="module")
@@ -63,6 +57,17 @@ def test_the_root_readme_and_provenance_are_not_indexed_as_pages(pages):
     assert "README.md" not in {p.path for p in pages}
 
 
+def test_the_frozen_corpus_explicitly_clears_access_control_snapshots():
+    identities = json.loads((CORPUS / "ops" / "identities.json").read_text())
+    assert identities["eval-master"]["groups"] == [
+        "brain-admins",
+        "finance",
+        "product",
+        "sales",
+    ]
+    assert (CORPUS / "ops" / "slack-channels.json").read_text() == "{}\n"
+
+
 def test_every_qa_citation_resolves_to_a_real_page(pages):
     qa = json.loads((ROOT / "evals" / "qa_golden.json").read_text(encoding="utf-8"))
     paths = {p.path for p in pages}
@@ -76,7 +81,7 @@ def test_every_qa_citation_resolves_to_a_real_page(pages):
     assert not missing, f"qa_golden.json cites pages absent from the frozen corpus: {missing}"
 
 
-def test_every_retrieval_expectation_resolves_apart_from_the_named_known_gap(
+def test_every_retrieval_expectation_resolves(
         pages, retrieval_questions):
     resolvable = {p.page_id for p in pages} | {Path(p.path).stem for p in pages}
     unresolved = {expected for q in retrieval_questions for expected in q["expect"]
@@ -100,8 +105,6 @@ def test_every_filtered_questions_expected_pages_really_carry_that_entity(
     for q in filtered:
         entity = q["filters"]["entity"]
         for expected in q["expect"]:
-            if expected in KNOWN_UNRESOLVED:
-                continue
             page = by_key[expected]
             assert entity in page.entity, (
                 f"{q['id']} filters on entity={entity!r} but its expected page {page.path} "

@@ -1,12 +1,4 @@
-"""`stigmergy.text` — the one text-hygiene seam every subsystem renders untrusted text through.
-
-These tests moved here from `tests/index/test_rank.py` when the functions did: `sanitize`/`clamp`
-lived in `index/rank.py` only because they were first written to render search hits, and that
-accident is what made the capture queue's note cleaning — a steward's note, cleaned before a
-submitter reads it — collide with the rule that the queue must not depend on the search index. A
-dependency-free module at the bottom of the stack can be imported by everyone precisely because
-it imports no one. The functions are unchanged; only their address is.
-"""
+"""Text hygiene contracts."""
 
 from stigmergy import text
 
@@ -62,46 +54,6 @@ def test_fence_wraps_and_neutralizes_a_hostile_body():
 def test_fence_is_a_noop_on_ordinary_text():
     body = "Revenue reached 512 in March 2026."
     assert body in text.fence(body)
-
-
-# ── `parse_result_ref` — the shared parser the gardener's own call sites migrated onto
-# (`gardener.checks._recent_filed_pages` and its neighbours) — pinned here at that shared address
-# so a future caller finds the contract in one place rather than re-deriving it.
-def test_parse_result_ref_splits_on_the_last_at_sign():
-    assert text.parse_result_ref("wiki/notes/X.md@abc123") == ("wiki/notes/X.md", "abc123")
-
-
-def test_parse_result_ref_accepts_a_non_hex_placeholder_sha():
-    """The migration must not tighten the format: every existing fixture in this suite stands in a
-    readable placeholder (`sha0`, `shaX`, `nomatchingsha`) rather than a real hex git sha, and the
-    parser has to keep accepting exactly what `rpartition("@")` always did."""
-    assert text.parse_result_ref("wiki/notes/never-indexed.md@shaX") == (
-        "wiki/notes/never-indexed.md", "shaX")
-
-
-def test_parse_result_ref_none_on_an_empty_or_unseparated_value():
-    assert text.parse_result_ref("") is None
-    assert text.parse_result_ref(None) is None
-    assert text.parse_result_ref("no-at-sign-here") is None
-    assert text.parse_result_ref("@no-path") is None
-
-
-# ── `..`/absolute paths are unparseable, not merely unusual ──────────────────────────────────────
-def test_parse_result_ref_none_on_a_traversal_path():
-    assert text.parse_result_ref("pages/../../etc/passwd@sha0") is None
-    assert text.parse_result_ref("../outside.md@sha0") is None
-    assert text.parse_result_ref("wiki/notes/../../../etc/shadow@deadbeef") is None
-
-
-def test_parse_result_ref_none_on_an_absolute_path():
-    assert text.parse_result_ref("/etc/passwd@sha0") is None
-
-
-def test_parse_result_ref_still_accepts_a_dotted_filename_that_is_not_traversal():
-    """Only a path SEGMENT that is exactly `..` is refused — a filename that merely starts with
-    two literal dots (unusual, but not a traversal vector) must keep parsing exactly as before."""
-    assert text.parse_result_ref("wiki/notes/..hidden-notes.md@sha0") == (
-        "wiki/notes/..hidden-notes.md", "sha0")
 
 
 # ── the two prompt-scalar rules, and why they are two ─────────────────────────────

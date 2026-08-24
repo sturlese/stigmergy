@@ -1,6 +1,4 @@
-"""Async-rebuild compatibility: with the server up, a `stigmergy-index` rebuild refreshes what it
-serves WITHOUT a restart, and searches issued while a rebuild runs never error.
-Skips without postgres."""
+"""A live server remains available and observes completed index rebuilds."""
 import asyncio
 import threading
 import time

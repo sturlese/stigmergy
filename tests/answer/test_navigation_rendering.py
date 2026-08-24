@@ -1,17 +1,6 @@
-"""The `ask` agent must be able to SEE the navigation it is instructed to walk.
-
-`synthesize.ANSWER_SYS` Method item 2 tells the agent to identify `type: entity` pages and follow
-the `links`/`backlinks` `read_page` serves, one hop, before concluding — but `AnswerBrain.page_text`
-(the text the agent's `read_page` tool actually returns) used to render none of
-`type`/`status`/`links`/`backlinks`, and `AnswerBrain.search_text` rendered no `type` per hit
-either. The agent was told to walk a graph its own tools never showed it.
-
-Own small corpus + two identities (one hidden link), isolated from `tests/answer/conftest.py`'s
-shared fixture and `tests/server/test_read_page_graph.py`'s own — the same posture the other
-fixtures in this suite take (a wikilink graph would change what those fixtures' other consumers
-exercise for unrelated reasons).
-"""
+"""Navigation rendered to the answer agent stays ACL-scoped."""
 import os
+from pathlib import Path
 
 import pytest
 
@@ -21,27 +10,27 @@ from stigmergy.index import build
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.server.service import BrainService
 from stigmergy.server.settings import Settings
+from tests.index.support import write_controls
 from tests.server.conftest import connect_or_skip, write_page
 
-HUB_PAGE = "wiki/graph/nav-text-hub.md"
-OPEN_SPOKE = "wiki/graph/nav-text-spoke-open.md"
-RESTRICTED_SPOKE = "wiki/graph/nav-text-spoke-restricted.md"
+HUB_PAGE = "wiki/concepts/nav-text-hub.md"
+OPEN_SPOKE = "wiki/notes/nav-text-spoke-open.md"
+RESTRICTED_SPOKE = "wiki/notes/nav-text-spoke-restricted.md"
 
 
 class _NavTextFixture:
     def __init__(self, root: str):
         self.repo = os.path.join(root, "repo")
         write_page(self.repo, HUB_PAGE,
-                  {"type": "entity", "status": "canonical", "title": "Nav Text Hub",
-                   "verification": "verified"},
+                  {"status": "evergreen", "title": "Nav Text Hub"},
                   "Hub links to [[nav-text-spoke-open]] and [[nav-text-spoke-restricted]].")
         write_page(self.repo, OPEN_SPOKE,
-                  {"type": "note", "title": "Nav Text Spoke Open", "verification": "verified"},
+                  {"title": "Nav Text Spoke Open"},
                   "Open spoke links back to [[nav-text-hub]].")
         write_page(self.repo, RESTRICTED_SPOKE,
-                  {"type": "note", "title": "Nav Text Spoke Restricted", "verification": "verified",
-                   "acl": "['finance']"},
+                  {"title": "Nav Text Spoke Restricted", "acl": ["finance"]},
                   "Restricted spoke also links to [[nav-text-hub]].")
+        write_controls(Path(self.repo))
 
 
 @pytest.fixture(scope="module")
@@ -96,8 +85,8 @@ def test_page_text_renders_type_and_status(nav_text_indexed):
     conn, fx = nav_text_indexed
     brain = _brain(conn, fx)
     text = brain.page_text(HUB_PAGE)
-    assert "type: entity" in text
-    assert "status: canonical" in text
+    assert "type: concept" in text
+    assert "status: evergreen" in text
 
 
 def test_page_text_head_extension_sits_outside_the_fence_and_before_the_body(nav_text_indexed):
@@ -110,8 +99,8 @@ def test_page_text_head_extension_sits_outside_the_fence_and_before_the_body(nav
     assert text.count("<<<UNTRUSTED-DATA") == 1
     assert text.count("UNTRUSTED-DATA;end>>>") == 1
     fence_start = text.index("<<<UNTRUSTED-DATA")
-    assert text.index("type: entity") < fence_start
-    assert text.index("status: canonical") < fence_start
+    assert text.index("type: concept") < fence_start
+    assert text.index("status: evergreen") < fence_start
     assert text.index("links:") < fence_start
     assert text.index("backlinks:") < fence_start
 
@@ -122,9 +111,8 @@ def test_page_text_of_an_unknown_page_is_unchanged(nav_text_indexed):
     assert brain.page_text("wiki/does-not-exist.md") == brain_mod.UNKNOWN_PAGE
 
 
-# ── search_text renders `type` per hit too (ANSWER_SYS: "identify type: entity pages") ───────────
 def test_search_text_renders_type_per_hit(nav_text_indexed):
     conn, fx = nav_text_indexed
     brain = _brain(conn, fx)
     listing = brain.search_text("Nav Text Hub")
-    assert "Nav Text Hub (entity)" in listing
+    assert "Nav Text Hub (concept" in listing

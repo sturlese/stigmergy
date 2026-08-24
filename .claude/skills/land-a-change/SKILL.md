@@ -1,78 +1,49 @@
 ---
 name: land-a-change
 description: >
-  Pick the right delivery pipeline for a change in this repository and close it properly — which
-  squad flow fits which kind of change, when the auditor is mandatory rather than optional, which
-  changes also have to land in the knowledge repo, and what "done" means when a fix only takes
-  effect after a deploy. Use when starting work on a tracker issue, a bug report, or a feature
-  here, before writing any code.
+  Select and complete the delivery workflow for a Stigmergy issue, defect, feature, or refactor.
 ---
 
-# land-a-change: from an issue to something actually landed
+# Land a Stigmergy change
 
-`CLAUDE.md` holds the doctrine — the invariants, the testing rules, the documentation rule.
-**This file does not repeat it**; a second copy of a rule is a copy that goes stale. What
-follows is only what that file does not say: which pipeline to run, and what "landed" means
-here rather than in a repo with one artifact and no deployment.
+Read `CLAUDE.md` and the active implementation specification before changing behavior. Use code
+and tests as the authority when older prose conflicts with them.
 
-## Pick the pipeline
+## Select the workflow
 
-| The change is… | Run | Notes |
-|---|---|---|
-| A defect with observable wrong behaviour | `squad:fix` | Reproduce-first is this repo's own rule too, so the pipeline and the doctrine agree. |
-| A string that promises something untrue (a refusal naming a dead variable, a report claiming an outcome that does not happen, a suggested action the gates forbid) | `squad:fix` | Still a defect: **a message containing a command is an executable promise**. The red test pins the true wording or exercises what the message names. |
-| A comment or a doc paragraph with no runtime behaviour behind it | An ordinary PR, closed with `squad:review` | The full pipeline is ceremony here. Batch related ones into a single PR. |
-| A new capability, or one that moves between surfaces | `squad:define` → `squad:build` | The spec's acceptance criteria are what the build verifies against. |
-| Restructuring with identical behaviour | `squad:refactor` | The existing tests are the frozen invariant. |
-| Anything changing a tool's documented contract, a schema, a persisted format, or an event shape | Read `squad:breaking-change` **first**, then the pipeline above | An MCP tool's docstring is a contract: clients rely on it. |
+| Change | Workflow |
+|---|---|
+| Observable defect or false executable promise | `squad:fix` |
+| New capability or moved product surface | `squad:define` then `squad:build` |
+| Behavior-preserving restructuring | `squad:refactor` |
+| Documentation-only correction | ordinary change closed by `squad:review` |
 
-Two calls the flows will not make for you:
+Read `squad:breaking-change` before changing a public tool contract, schema, persisted format, or
+event shape. The current test deployment uses a clean cut: do not add migration, compatibility, or
+rollback machinery unless a later specification explicitly requires it.
 
-- **The auditor is opt-in.** `squad:fix` spawns it only when told the diff touches sensitive
-  territory. Here that means: anything under `server/acl.py` or a read path, the answer
-  verifier, the librarian's gates, the capture queue's leases and attempts, identity and token
-  resolution, and the evidence plane. When in doubt on those, spawn it.
-- **The documentator is conditional in the flow and unconditional here.** This repo's rule is
-  that a change making a sentence false corrects that sentence in the same commit — so if the
-  behaviour, a count, a route or a promise moved, documentation is part of the change, not a
-  follow-up.
+Use an independent security/architecture auditor when the change touches ACL decisions, identity
+or token resolution, queue leasing or retries, Git gates, evidence storage, answer verification, or
+any read path that can reveal restricted knowledge.
 
-## The second repository
+## Keep both repositories coherent
 
-This platform's changes often have a half that lives in the **knowledge repo** (`$STIGMERGY_REPO`):
-the librarian's skill, the contract linter, the entity registry,
-the ACL and identity maps. That repo has its own CI — a strict linter, gitleaks, and an
-authorship check over zones and trust fields.
+Changes to the filing contract normally affect both the platform and the knowledge repository.
+Update the live librarian skill, thin linter/authorship launchers, templates, control files, and
+workflows with the platform code and fixtures. The platform package owns the executable contract;
+the knowledge repository must not carry a second implementation.
 
-Consequences, both of which have bitten:
+Model-owned knowledge paths are committed by the trusted writer identity and pushed through the
+librarian GitHub App. Operator-owned controls and documentation use the normal contributor
+identity. Both repositories must pass their own CI.
 
-- A fix is not done until **both** repos are green. A change to how the agent files pages is a
-  knowledge-repo change; the platform test suite will not notice it at all.
-- An operator commit that touches the machine-owned zone (`sources/`) makes that
-  repo's authorship check red **on every later push** until the commit is added to its
-  reviewed baseline, with its own test updated. Deleting content in bulk is exactly such a
-  commit.
+## Completion
 
-## What "landed" means
+1. Run focused tests, Ruff, and the complete keyless suite.
+2. Run the proportional final-validation workflow and resolve every finding.
+3. Commit and push both repositories with the required identities; wait for green CI.
+4. Deploy every affected process group.
+5. Follow `validate-deployment` for live evidence when the image or cross-system contract changed.
 
-1. `make lint` and `make test` green (the suite is keyless by construction — if your change
-   needs a key to pass, it is in the wrong place).
-2. `squad:final-validation` to choose the targets rather than running everything blind.
-3. PR merged — this repo's history is merge commits from topic branches.
-4. **Deployed, if the change ships in the image.** A fix to a string the worker prints, to a
-   gate, or to the console does nothing for anyone until `make deploy-staging` runs. Deploy
-   configuration lives entirely outside the repo (`.env` plus Fly secrets — see
-   `.env.example`), so a deploy is that command and nothing else.
-5. Verified **on the deployment**, not only in CI, when the defect was found there. The
-   `validate-deployment` skill is the systematic version of that.
-
-## Pointing the operator CLIs at a deployment
-
-Every `stigmergy-*` binary defaults to the local composition. To exercise one against a live
-deployment, export `STIGMERGY_INDEX_DSN` (the deployment's own DSN — `.env` keeps it under a
-deliberately different name so a test run cannot reach it) and the four `STIGMERGY_EVIDENCE_*`
-variables, which `.env` stores under `R2_*` names for the smoke check. Getting the second half
-wrong is silent and fatal — the row lands in the deployment's queue while the bytes go to a
-local store, and the capture fails seconds later inside the worker. No CLI enqueues any more (a
-capture is `brain_submit` or the console), so nothing refuses that combination on your behalf:
-check both halves point at the same deployment before you submit anything.
+A cross-repository feature is not landed while either repository, CI run, deployment group, or
+scheduled reconciliation path still points at a different contract.

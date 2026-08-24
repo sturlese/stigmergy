@@ -1,0 +1,146 @@
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from stigmergy.knowledge.contract import (
+    KnowledgeContractError,
+    expected_librarian_skill,
+    validate_librarian_skill,
+    validate_workflows,
+)
+from stigmergy.knowledge.plan import (
+    ContradictionClaim,
+    ContradictionProposal,
+    EntityProposal,
+    FilingPlan,
+    PageMutation,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+FROZEN = ROOT / "tests/librarian/fixtures/repo/.claude/skills/librarian/SKILL.md"
+EVALUATION = ROOT / "evals/filing/repo/.claude/skills/librarian/SKILL.md"
+
+
+def test_packaged_frozen_and_evaluation_librarian_contracts_are_identical():
+    expected = expected_librarian_skill()
+    assert FROZEN.read_bytes() == expected
+    assert EVALUATION.read_bytes() == expected
+
+
+def test_repository_validator_requires_the_exact_librarian_contract(tmp_path):
+    skill = tmp_path / ".claude" / "skills" / "librarian" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_bytes(expected_librarian_skill())
+    validate_librarian_skill(tmp_path)
+
+    skill.write_text("incomplete\n", encoding="utf-8")
+    with pytest.raises(KnowledgeContractError, match="does not match"):
+        validate_librarian_skill(tmp_path)
+
+
+def test_repository_validator_requires_the_nightly_rebuild_contract(tmp_path):
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    pin = "a" * 40
+    uv = (
+        "uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78\n"
+        'version: "0.11.16"\n'
+        'checksum: "74947fe2c03315cf07e82ab3acc703eddef01aba4d5232a98e4c6825ec116131"\n'
+    )
+    (workflows / "lint.yml").write_text(
+        f"repository: sturlese/stigmergy\nref: {pin}\n{uv}",
+        encoding="utf-8",
+    )
+    (workflows / "index-rebuild.yml").write_text(
+        "schedule:\n"
+        '  - cron: "17 4 * * *"\n'
+        "workflow_dispatch:\n"
+        "repository: sturlese/stigmergy\n"
+        f"ref: {pin}\n"
+        f"{uv}"
+        "run: .platform/.venv/bin/stigmergy-index --rebuild --repo .\n",
+        encoding="utf-8",
+    )
+    validate_workflows(tmp_path)
+
+    with (workflows / "index-rebuild.yml").open("a", encoding="utf-8") as handle:
+        handle.write("continue-on-error: true\n")
+    with pytest.raises(KnowledgeContractError, match="suppress failure"):
+        validate_workflows(tmp_path)
+
+
+def test_every_promised_librarian_operation_exists_in_the_structured_contract():
+    claim = ContradictionClaim(
+        text="The term is annual.",
+        source="sources/2026/08/00000000-0000-4000-8000-000000000001.md",
+        date="2026-08-24",
+    )
+    plan = FilingPlan(
+        summary="Updated durable knowledge",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Renewal term",
+                body="# Renewal term\n\nThe term is annual.",
+                reason="Created the durable conclusion",
+            ),
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Contracts.md",
+                body="# Contracts\n\nCurrent explanation.",
+                reason="Rewrote the explanation",
+            ),
+            PageMutation(
+                action="delete",
+                path="wiki/notes/Redundant.md",
+                reason="Consolidated the conclusion",
+            ),
+        ),
+        entities=(EntityProposal(name="Acme", entity_type="organization"),),
+        contradictions=(
+            ContradictionProposal(
+                page_path="wiki/notes/Renewal term.md",
+                explanation="Two signed sources disagree.",
+                claims=(claim, claim.model_copy(update={"text": "The term is monthly."})),
+            ),
+        ),
+        resolved_contradictions=("con_00000000-0000-4000-8000-000000000001",),
+    )
+
+    assert {mutation.action for mutation in plan.mutations} == {"create", "update", "delete"}
+    assert plan.entities and plan.contradictions and plan.resolved_contradictions
+
+
+@pytest.mark.parametrize("role", ["meeting", "document", "page", "raw", "source", "entity", "view"])
+def test_librarian_contract_rejects_retired_page_roles(role):
+    with pytest.raises(ValidationError):
+        PageMutation(
+            action="create",
+            role=role,
+            title="Invalid",
+            body="# Invalid",
+            reason="invalid",
+        )
+
+
+def test_librarian_skill_has_no_nonexistent_writer_or_human_workflow():
+    text = FROZEN.read_text().casefold()
+    forbidden = (
+        "meeting distiller",
+        "document door",
+        "view regenerator",
+        "awaiting review",
+        "approved_by",
+        "identity gardener",
+    )
+    assert all(term not in text for term in forbidden)
+    assert "treat a submitted synthesis as the complete source" in text
+
+
+def test_librarian_preserves_existing_sourced_knowledge_during_rewrites():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "every newly added or changed factual conclusion" in text
+    assert "preserve existing sourced conclusions" in text
+    assert "every conclusion must remain supported by the supplied source" not in text

@@ -1,91 +1,59 @@
-# stigmergy — working notes for an AI agent
+# Stigmergy project doctrine
 
-This repository holds the **code**: the durable capture queue and the doors that fill it, the
-librarian service that drains it, the hybrid index builder, the single MCP server (the only API)
-and the answering half behind its `ask`, the entity-birth rules the librarian writes through, the
-Slack transport, the view layer, the gardener, the admin
-console, `docker-compose` for the local test stack, and the evals.
+This repository owns the platform. The knowledge repository is a separate Git checkout configured
+with `STIGMERGY_REPO`; it owns current Markdown knowledge and its operational control files.
 
-**This repo never stores pages.** Knowledge content lives in a separate git repository — the
-knowledge repo — that you point at with `STIGMERGY_REPO`. Its page format is
-[`docs/reference/page-contract.md`](./docs/reference/page-contract.md).
+Read the implementation specification at `specs/karpathy-team-wiki.md` before changing architecture
+or product behavior. Code and tests are authoritative when older prose disagrees.
 
-Human-facing setup, workflow and PR expectations are in
-[`CONTRIBUTING.md`](./CONTRIBUTING.md). What follows is the part that is easy to get wrong.
+## Invariants
 
-## Orientation
+1. Git and Markdown are current knowledge. Postgres is operational state and a rebuildable index.
+2. Every adapter produces the same kind-free `CaptureEnvelope` before queueing.
+3. Original bytes and readable source pages are immutable during ordinary filing and gardening.
+4. One serialized writer owns every Git mutation and records one commit and one change ledger row.
+5. ACL policy is shared. A write may never expose narrower evidence to broader readers.
+6. The librarian owns notes and concepts. Entity files are minimal machine data owned by entity
+   primitives; raw entity files are not ordinary searchable pages.
+7. No active write state waits for human approval. Supported uncertainty is represented honestly.
+8. Corpus-health findings are preventable or autonomously repairable; they are not human tasks.
+9. Product capabilities are available through Slack, MCP, or the backoffice. Installed CLI commands
+   are service, bootstrap, security, index-operation, or local-bridge entry points.
+10. Comments and docstrings explain only a local non-obvious invariant or mechanism. History and
+    design narration belong in Git and the specification.
 
-Read [`README.md`](./README.md) first for the annotated tree, then the `index.md` code map inside
-whichever package you are about to touch — each one lists what its modules are for, what to reuse
-and what to avoid. [`docs/DESIGN.md`](./docs/DESIGN.md) is what the system IS — the closed list of what multi-user
-forces, the page vocabulary and the rules; read it before adding a subsystem, and before defending
-one from removal. [`docs/reference/`](./docs/reference) is what each subsystem does.
+## Package orientation
 
-**Two skills live in `.claude/skills/` here and are worth loading before you start.**
-`land-a-change` picks the delivery pipeline a change belongs in, says when the auditor stops being
-optional, and names which changes also have to land in the knowledge repo. `validate-deployment`
-walks a deployed stack through MCP, Slack and the admin console with evidence at each step. Do not
-confuse this `.claude/` with the knowledge repo's, which is where the librarian's own operating
-procedure and the contract linter live — that one is described in
-[`docs/reference/knowledge-repo.md`](./docs/reference/knowledge-repo.md).
-
-**Nothing under `src/` loads a `.env` file.** `make` loads it for its own targets; a binary invoked
-directly sees only the environment you exported. A "why is `$STIGMERGY_REPO` empty" debugging
-session starts here.
-
-## The invariants a change has to respect
-
-Not style — these are enforced, and the enforcement is where to look when one fails:
-
-| Invariant | Enforced by |
-|---|---|
-| `stigmergy.kernel` and `stigmergy.text` import nothing from this project — they are the bottom of the stack | `tests/test_architecture.py` |
-| The librarian never imports the server; every cross-package reach is a named, exercised exception | same file, per-package |
-| Every reader of `pages_index` names an ACL predicate, or is a listed exception | same file |
-| No exception list keeps an entry that has stopped being used | same file, the pruning tests |
-| The UNTRUSTED-DATA fence is built in `stigmergy.text` only | same file |
-| The frozen contract linter and the frozen librarian brief match the knowledge repo's own | `tests/librarian/test_frozen_linter.py`, `test_librarian_brief_contract.py` |
-| The diff the nine gates approved is the diff that lands | `gitcmd.commit(gated_entries=…)` + `tests/librarian/test_gitcmd_unit.py` |
-| `server.acl.visible()` is the ONE place read access is decided, and the only implementation of it | `server/acl.py`, `tests/test_contract_parity.py` |
-| The librarian reaches `stigmergy.entities` from `librarian/identity.py` only, and only for the birth fold, the generator and its errors — the birth writer is the one seam between filing and identity | `tests/test_architecture.py`, a named exception with its own pruning test |
-| The shared mint sequence carries no authorization, so its caller set is closed to the surfaces that decide their own | `tests/test_architecture.py` — set equality both ways, so a caller that stops calling it fails too |
-| The README's countable claims match the code | `tests/test_readme_claims.py` |
-| `docs/reference/` names no command, variable or count the code does not have, and `docs/README.md` lists every document that exists | `tests/test_docs_claims.py` |
+- `capture`: normalized envelopes, evidence, uploads, acquisition, extraction, queue, and sources.
+- `bridge`: the local MCP client, local files, public URLs, and private Google Drive export.
+- `knowledge`: page contracts, filing context, structured plans, writer, linter, repair primitives,
+  contradictions, authorization guard, and authorship gate.
+- `entities`: opaque identity records, scoped claims, registry derivation, merge, rename, and delete.
+- `changes`: exact patches and append-only mutation metadata.
+- `index`: canonical corpus selection, lexical/vector ranking, incremental updates, full rebuild,
+  and convergence health.
+- `server` and `answer`: ACL-scoped MCP tools, HTTP transport, webhook, retrieval, and cited answers.
+- `slack`: authenticated Socket Mode transport, identity/channel mapping, canonical snapshots, and
+  notifications.
+- `admin`: master-only operational API and browser UI.
+- `librarian`: long-running worker/bootstrap, Git transport, credentials, schedule, and model setup.
+- `ops`: explicitly guarded non-production reset tooling.
 
 ## Working rules
 
-- **Tests are the contract.** The suites under `tests/` are the behavioural invariant. Restructure
-  freely; change what the code DOES only with a decision behind it.
-- **Reproduce before you fix.** A bug gets a failing test that demonstrates it *before* production
-  code is touched, and the test's own comment says what the old behaviour was. Several of this
-  repo's worst defects were invisible to 3,000 green tests and visible in one deliberate mutation:
-  *a rule nothing has tried to break is not a rule you know about.*
-- **This repo owns everything it documents.** Documentation here never links to another project —
-  not to a predecessor, not to a private checkout, not to anything that could be archived or made
-  private. Corollary: never satisfy "remove the external reference" by deleting a link to an
-  explanation — that leaves the repo clean and dumber. Port the explanation.
-- **Documentation is rewritten, not appended to.** `README.md`, this file and every `index.md`
-  describe what EXISTS. A code map that was appended to at every change and rewritten at none
-  becomes a changelog whose accuracy is inversely proportional to its age. If a change makes a
-  sentence false, correct the sentence in the same commit.
-- **Do not write a comment the code will outlive.** A comment states a constraint the code cannot
-  show: the failure that motivated a design, the attack a defense exists for, the "if you change
-  this you must also change that". Counts, signatures and module names drift — prefer a sentence
-  that stays true, or pin the fact in a test.
+- Preserve unrelated work in a dirty tree.
+- Use `rg` for discovery and `apply_patch` for edits.
+- A defect gets a reproducing test before its production fix.
+- Use real Git and Postgres where the behavior depends on them.
+- Keep adapters thin; acquisition differences end at `CaptureService`.
+- Do not add compatibility branches, migrations, or dual formats for the abandoned test contract.
+- Update platform code, knowledge-repository controls, tests, workflows, and documentation together.
 
-## Testing doctrine, in four lines
+For an issue, defect, or feature, follow `.claude/skills/land-a-change/SKILL.md`. After deployment or
+a cross-subsystem release, follow `.claude/skills/validate-deployment/SKILL.md`.
 
-- **A benign twin for every defense.** A test that only proves a gate fires measures its
-  sensitivity and never its specificity, and every gate here can bounce someone's real work.
-- **A message containing a command is an executable promise.** If a refusal tells a human to run
-  something, a test runs it.
-- **Never fake what you are claiming to prove.** Real git, real Postgres, real gates — a faked git
-  proves nothing about the property being claimed.
-- **A check that stops running must be impossible to miss.** Skipped and retired dimensions are
-  printed, counted and asserted — never quietly dropped. A permanently-green test is worse than no
-  test, because it reads as coverage.
+## Completion
 
-## Before you finish
-
-`make lint` and `make test` both green. The suite is keyless by construction — if something you
-wrote needs an API key to pass, it is in the wrong place.
+Run focused tests first, then Ruff, then the complete suite. Cross-repository changes are complete
+only when both repositories are committed, pushed, deployed, and the live service, writer, Slack
+adapter, index, backoffice, and scheduled reconciliation have evidence of health.

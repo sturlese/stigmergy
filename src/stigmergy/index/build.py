@@ -1,87 +1,82 @@
-"""Full rebuild: a knowledge-repo checkout -> a fresh `pages_index` and the ops-file snapshots
-beside it. Incremental-on-merge lives in `stigmergy.server.webhook`; the only incrementality here
-is the embedding cache, which keeps a rebuild's API spend proportional to what actually changed.
-"""
-import logging
-import os
+"""Rebuild the derived index and repository control snapshots from a checkout."""
+import subprocess
+from pathlib import Path
 
-from stigmergy.index import corpus, store
-from stigmergy.index.errors import EmptyCorpusError
-
-log = logging.getLogger(__name__)
-
-# `store.ENTITY_REGISTRY_RELPATH` re-exported under the name `index/cli.py` and one architecture
-# pin already know. The store owns the ONE spelling of every cached ops file's relpath.
-ENTITY_REGISTRY_RELPATH = store.ENTITY_REGISTRY_RELPATH
+from stigmergy.index import corpus, health, store
+from stigmergy.index.errors import StigmergyIndexError
+from stigmergy.server.controls import ControlError, validate_texts
 
 
-def registry_path(repo_dir: str) -> str:
-    """`<repo_dir>/ops/entity-registry.json`, resolved through the store's one spelling —
-    `index/cli.py` builds the `--check` path through it rather than re-joining the parts."""
-    return os.path.join(repo_dir, *ENTITY_REGISTRY_RELPATH.split("/"))
-
-
-def _read_ops_file(repo_dir: str, relpath: str) -> tuple[str | None, bool]:
-    """`(TEXT, oversized)` for one checkout ops file — `(None, False)` when the checkout has no
-    such file, `(None, True)` when it has one too big to install.
-
-    The two `None`s are different decisions and must not collapse: an ABSENT file goes to
-    `store.CLEARED_WHEN_CHECKOUT_LACKS`'s per-file posture, while an OVERSIZED one always leaves
-    the previous snapshot standing — the same answer the push webhook gives it, because two roads
-    writing one row must not disagree about the same fault, and the honest floor is a snapshot
-    that is stale, not one that costs every identity a multi-megabyte parse per tool call.
-
-    The cap is the webhook's (`store.MAX_OPS_FILE_BYTES`), for the same one-row reason."""
-    path = os.path.join(repo_dir, *relpath.split("/"))
-    if not os.path.exists(path):
-        return None, False
-    with open(path, encoding="utf-8") as f:
-        text = f.read()
-    size = len(text.encode("utf-8"))
-    if size > store.MAX_OPS_FILE_BYTES:
-        log.error("index rebuild: %s is %d bytes, above the %d-byte snapshot cap — NOT installed; "
-                  "the previous snapshot of %s stands", path, size, store.MAX_OPS_FILE_BYTES,
-                  relpath)
-        return None, True
-    return text, False
-
-
-def _reconcile_ops_files(conn, repo_dir: str) -> dict[str, str]:
-    """Make the snapshots match the checkout, one decision per file — the nightly counterpart of
-    the push webhook's incremental refresh. Returns `{relpath: "written" | "cleared" | "kept"}`,
-    the same words the returned stats carry.
-
-    "kept" is the access files' absent-in-checkout posture (`store.CLEARED_WHEN_CHECKOUT_LACKS`):
-    clearing would hand every deployed process back to the copy baked at the last deploy —
-    a revocation silently undone by a cron — so the snapshot stands and this run says so.
-
-    "absent" is the quiet fourth outcome: the checkout has no such file AND the cache holds no
-    snapshot of it, so there is nothing to destroy, nothing to keep, and nothing to warn about —
-    the nightly log of a deployment that simply never scoped its channels must not cry wolf."""
-    outcomes: dict[str, str] = {}
+def _control_files(repo_dir: str) -> dict[str, str]:
+    controls = {}
+    root = Path(repo_dir)
     for relpath in store.OPS_FILE_RELPATHS:
-        text, oversized = _read_ops_file(repo_dir, relpath)
-        if text is not None:
-            store.write_ops_file(conn, relpath, text, "rebuild")
-            outcomes[relpath] = "written"
-        elif not oversized and store.CLEARED_WHEN_CHECKOUT_LACKS[relpath]:
-            outcomes[relpath] = "cleared" if store.clear_ops_file(conn, relpath) else "absent"
-        else:
-            snapshot_exists = store.read_ops_file(conn, relpath) is not None
-            outcomes[relpath] = "kept" if snapshot_exists else "absent"
-    return outcomes
+        path = root.joinpath(*relpath.split("/"))
+        if not path.is_file() or path.is_symlink():
+            raise StigmergyIndexError(f"required control file is missing: {relpath}")
+        data = path.read_bytes()
+        if len(data) > store.MAX_OPS_FILE_BYTES:
+            raise StigmergyIndexError(
+                f"required control file exceeds the size limit: {relpath}"
+            )
+        try:
+            controls[relpath] = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise StigmergyIndexError(
+                f"required control file is not UTF-8: {relpath}"
+            ) from error
+    return controls
 
 
-def rebuild(conn, repo_dir: str, embedder, fts_config: str = "english") -> dict:
-    """Drop + recreate the index from `repo_dir`. Returns build stats: per-zone page counts,
-    cache hits vs new embeddings, and `ops_files` — each cached ops file's reconcile outcome
-    (`written`/`cleared`/`kept`/`absent`), with the registry's repeated under `entity_registry`
-    because that is the key `job_runs` history already carries."""
+def _git(repo_dir: str, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _checked_repository_head(repo_dir: str) -> str:
+    root = Path(repo_dir).resolve()
+    top = _git(str(root), "rev-parse", "--show-toplevel")
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root:
+        raise StigmergyIndexError("--repo must be the root of a Git checkout")
+    head = _git(str(root), "rev-parse", "--verify", "HEAD")
+    if head.returncode != 0 or not head.stdout.strip():
+        raise StigmergyIndexError("the knowledge repository has no HEAD commit")
+    status = _git(
+        str(root),
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--",
+        *corpus.ZONES,
+        *store.OPS_FILE_RELPATHS,
+    )
+    if status.returncode != 0 or status.stdout.strip():
+        raise StigmergyIndexError("the indexed corpus must match repository HEAD")
+    return head.stdout.strip()
+
+
+def rebuild(
+    conn,
+    repo_dir: str,
+    embedder,
+    fts_config: str = "english",
+    *,
+    require_repository_head: bool = False,
+) -> dict:
+    """Atomically replace the page index and return rebuild statistics."""
+    expected_head = _checked_repository_head(repo_dir) if require_repository_head else ""
+    controls = _control_files(repo_dir)
+    try:
+        validate_texts(controls)
+    except ControlError as error:
+        raise StigmergyIndexError(f"invalid repository controls: {error}") from error
     rows = corpus.load_pages(repo_dir)
-    if not rows:
-        raise EmptyCorpusError(f"no pages found under {repo_dir!r} zones {corpus.ZONES}")
 
-    # consult the cache only if it exists already (first build on an empty database)
     hashes = [r.content_hash for r in rows]
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('embedding_cache')")
@@ -89,7 +84,6 @@ def rebuild(conn, repo_dir: str, embedder, fts_config: str = "english") -> dict:
     cached = store.cached_embeddings(conn, embedder.model, hashes) if cache_exists else {}
 
     to_embed = [r for r in rows if r.content_hash not in cached]
-    # one embedding per distinct content_hash (identical pages embed once)
     unique: dict[str, str] = {}
     for r in to_embed:
         unique.setdefault(r.content_hash, r.embed_text)
@@ -100,41 +94,36 @@ def rebuild(conn, repo_dir: str, embedder, fts_config: str = "english") -> dict:
         fresh = dict(zip(keys, vectors, strict=True))
 
     embeddings = {**cached, **fresh}
-    dim = len(next(iter(embeddings.values())))
-    # ONE transaction for drop+create+cache+insert (the store's own transaction blocks nest
-    # as savepoints): a failure mid-rebuild must leave the previous index, never an
-    # empty-but-valid one a concurrent reader would answer from with silent zero hits.
+    dim = (
+        len(next(iter(embeddings.values())))
+        if embeddings
+        else len(embedder.embed(["empty team wiki"])[0])
+    )
+    if require_repository_head:
+        commit_sha = _checked_repository_head(repo_dir)
+        if commit_sha != expected_head:
+            raise StigmergyIndexError("repository HEAD changed during the rebuild")
+        if _control_files(repo_dir) != controls:
+            raise StigmergyIndexError("repository controls changed during the rebuild")
+    else:
+        git_head = _git(repo_dir, "rev-parse", "HEAD")
+        commit_sha = git_head.stdout.strip() if git_head.returncode == 0 else ""
     with conn.transaction():
         store.init_schema(conn, dim=dim, model=embedder.model, fts_config=fts_config,
                           host=getattr(embedder, "host", ""))
         if fresh:
             store.store_embeddings(conn, embedder.model, fresh)
         store.insert_pages(conn, rows, embeddings, fts_config)
-        # after the rows, never before — see `create_search_indexes`' own docstring
         store.create_search_indexes(conn)
-        ops_files = _reconcile_ops_files(conn, repo_dir)
-
-    # NEVER silent, either way a snapshot stops matching the checkout: a CLEAR destroys state the
-    # push webhook may have refreshed seconds ago (the registry's absent-in-checkout posture), and
-    # a KEEP means the checkout and the snapshot now disagree about an access-scoping file. The
-    # same function refuses an empty CORPUS loudly (`EmptyCorpusError`); these are not errors, but
-    # they must be as visible — in the log, and in the stats `job_runs` keeps.
-    for relpath, outcome in ops_files.items():
-        if outcome == "cleared":
-            log.warning("index rebuild: nothing installable at %s/%s — the snapshot is CLEARED "
-                        "and every reader falls back to its own copy until the file lands again",
-                        repo_dir, relpath)
-        elif outcome == "kept":
-            log.error("index rebuild: %s/%s is missing from the checkout and its snapshot STANDS "
-                      "— an access-scoping file's absence is an anomaly, never an instruction to "
-                      "fall back to the deploy-time copy. Push the file (an explicit {} is a "
-                      "committed, reviewable statement), or clear the row by hand",
-                      repo_dir, relpath)
+        for relpath, text in controls.items():
+            store.write_ops_file(conn, relpath, text, "rebuild")
+        health.record_full_rebuild(conn, commit_sha, len(rows))
 
     zones: dict[str, int] = {}
     for r in rows:
         zones[r.zone] = zones.get(r.zone, 0) + 1
     return {"pages": len(rows), "zones": zones, "embedded": len(fresh), "cached": len(cached),
             "model": embedder.model, "dim": dim, "fts_config": fts_config,
-            "entity_registry": ops_files[store.ENTITY_REGISTRY_RELPATH],
-            "ops_files": ops_files}
+            "commit_sha": commit_sha,
+            "entity_registry": "written",
+            "ops_files": {relpath: "written" for relpath in store.OPS_FILE_RELPATHS}}

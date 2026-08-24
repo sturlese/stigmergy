@@ -74,19 +74,23 @@ async def _rpc_call_tool(client: httpx.AsyncClient, url: str, token: str, name: 
 
 # ── token_store_from_env: the startup half — the token store is a deploy secret ────────────────
 def test_token_store_from_env_prefers_inline_json(monkeypatch):
+    from stigmergy.server.identity import hash_token
     from stigmergy.server.transport_http import token_store_from_env
-    monkeypatch.setenv("STIGMERGY_TOKEN_STORE", '{"abc123": "ana@example.com"}')
+    digest = hash_token("token")
+    monkeypatch.setenv("STIGMERGY_TOKEN_STORE", json.dumps({digest: "ana@example.com"}))
     monkeypatch.delenv("STIGMERGY_TOKEN_STORE_FILE", raising=False)
-    assert token_store_from_env() == {"abc123": "ana@example.com"}
+    assert token_store_from_env() == {digest: "ana@example.com"}
 
 
 def test_token_store_from_env_reads_the_file_path(monkeypatch, tmp_path):
+    from stigmergy.server.identity import hash_token
     from stigmergy.server.transport_http import token_store_from_env
+    digest = hash_token("token")
     path = tmp_path / "tokens.json"
-    path.write_text('{"abc123": "ana@example.com"}', encoding="utf-8")
+    path.write_text(json.dumps({digest: "ana@example.com"}), encoding="utf-8")
     monkeypatch.delenv("STIGMERGY_TOKEN_STORE", raising=False)
     monkeypatch.setenv("STIGMERGY_TOKEN_STORE_FILE", str(path))
-    assert token_store_from_env() == {"abc123": "ana@example.com"}
+    assert token_store_from_env() == {digest: "ana@example.com"}
 
 
 def test_token_store_from_env_neither_set_fails_closed(monkeypatch):
@@ -94,8 +98,98 @@ def test_token_store_from_env_neither_set_fails_closed(monkeypatch):
     from stigmergy.server.transport_http import token_store_from_env
     monkeypatch.delenv("STIGMERGY_TOKEN_STORE", raising=False)
     monkeypatch.delenv("STIGMERGY_TOKEN_STORE_FILE", raising=False)
-    with pytest.raises(IdentityError, match="no token store configured"):
+    with pytest.raises(IdentityError, match="no token store is configured"):
         token_store_from_env()
+
+
+def test_http_requests_use_distinct_closed_database_connections(monkeypatch):
+    from types import SimpleNamespace
+
+    from starlette.responses import JSONResponse
+
+    from stigmergy.server import ops_files
+    from stigmergy.server.identity import Principal, hash_token
+    from stigmergy.server.ratelimit import RateLimiter
+    from stigmergy.server.transport_http import (
+        _BearerAuthMiddleware,
+        _current_service,
+    )
+
+    class Connection:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    created = []
+    seen = []
+
+    def connect():
+        connection = Connection()
+        created.append(connection)
+        return connection
+
+    monkeypatch.setattr(
+        ops_files,
+        "resolve_identity_principal",
+        lambda _conn, _path, subject: Principal(
+            subject=subject,
+            display_name="Member",
+            groups=("engineering",),
+            default_audience=("engineering",),
+        ),
+    )
+
+    async def inner(scope, receive, send):
+        seen.append(_current_service.get().conn)
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    middleware = _BearerAuthMiddleware(
+        inner,
+        settings=SimpleNamespace(identities_path="ignored"),
+        token_store={hash_token("token"): "member@example.com"},
+        connection_factory=connect,
+        embedder=object(),
+        rate_limiter=RateLimiter(),
+    )
+
+    async def request():
+        consumed = False
+
+        async def receive():
+            nonlocal consumed
+            if consumed:
+                return {"type": "http.disconnect"}
+            consumed = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(_message):
+            return None
+
+        await middleware(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/mcp",
+                "raw_path": b"/mcp",
+                "query_string": b"",
+                "headers": [(b"authorization", b"Bearer token")],
+                "client": ("127.0.0.1", 1),
+                "server": ("localhost", 80),
+            },
+            receive,
+            send,
+        )
+
+    _run(request())
+    _run(request())
+
+    assert len(created) == 2
+    assert seen == created
+    assert created[0] is not created[1]
+    assert all(connection.closed for connection in created)
 
 
 def test_identities_fixture_is_keyed_by_email(fixture):
@@ -191,32 +285,10 @@ def test_brain_submit_attributes_to_the_tokens_email_over_http(indexed):
     material = f"http harness capture {time.monotonic_ns()}"
 
     with run_http_server(app) as url:
-        ack = _run(_call_over_http(url, token, "brain_submit", kind="raw", material=material))
+        ack = _run(_call_over_http(url, token, "brain_submit", text=material))
 
     assert ack["status"] == "queued"
     assert ack["submitted_by"] == fx.ANA   # the TOKEN's email, never a client-supplied name
-
-
-def test_brain_submit_forged_submitted_by_is_refused_over_http_with_no_row_or_blob(indexed):
-    conn, fx = indexed
-    token, digest = issue_test_token(fx.STEWARD)
-    app = build_test_http_app(fx, {digest: fx.STEWARD})
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue WHERE submitted_by = %s",
-                    ("forged-ceo@example.com",))
-        before = cur.fetchone()[0]
-
-    with run_http_server(app) as url:
-        out = _run(_call_over_http(url, token, "brain_submit", kind="raw",
-                                   material="forged capture over http",
-                                   submitted_by="forged-ceo@example.com"))
-
-    assert "error" in out and "submitted_by" in out["error"]
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue WHERE submitted_by = %s",
-                    ("forged-ceo@example.com",))
-        after = cur.fetchone()[0]
-    assert after == before
 
 
 def test_brain_submissions_two_tokens_different_scopes_over_http(indexed):
@@ -231,10 +303,12 @@ def test_brain_submissions_two_tokens_different_scopes_over_http(indexed):
     eng_marker = f"eng http capture {time.monotonic_ns()}"
 
     with run_http_server(app) as url:
-        steward_ack = _run(_call_over_http(url, steward_token, "brain_submit", kind="raw",
-                                        material=steward_marker))
-        eng_ack = _run(_call_over_http(url, eng_token, "brain_submit", kind="raw",
-                                       material=eng_marker))
+        steward_ack = _run(_call_over_http(
+            url, steward_token, "brain_submit", text=steward_marker
+        ))
+        eng_ack = _run(_call_over_http(
+            url, eng_token, "brain_submit", text=eng_marker
+        ))
         eng_view = _run(_call_over_http(url, eng_token, "brain_submissions", limit=200))
         steward_view = _run(_call_over_http(url, steward_token, "brain_submissions", limit=200))
 
@@ -296,8 +370,9 @@ def test_brain_submit_refused_by_the_rate_limiter_over_http_creates_no_row(index
                 rows_before = cur.fetchone()[0]
             objects_before = len(evidence.client().list_objects_v2(
                 Bucket=evidence.bucket).get("Contents", []))
-            refused = await _call_over_http(url, token, "brain_submit", kind="raw",
-                                            material="refused by rate limit")
+            refused = await _call_over_http(
+                url, token, "brain_submit", text="refused by rate limit"
+            )
             return refused, rows_before, objects_before
     refused, rows_before, objects_before = _run(go())
 
@@ -360,13 +435,6 @@ def test_a_bad_token_with_an_oversized_body_still_gets_401_auth_wins_before_the_
 
 
 def test_a_chunked_body_with_no_declared_length_is_capped_mid_stream_with_no_row_created(indexed):
-    """The backstop for a body that never declares `content-length` at all (module docstring: "a
-    client that streams a body without saying how big it is has already opted out of being told
-    before it sends"). Honestly characterized: `_capped_receive` reports `http.disconnect`, which
-    surfaces as a `ClientDisconnect` INSIDE the MCP SDK's own request handling — deliberately less
-    polite than the clean 413 the declared-length path returns above; this test asserts what is
-    ACTUALLY true (the read is aborted and nothing downstream ever runs), not a tidier shape the
-    code never promised for this path."""
     from stigmergy.server.transport_http import MAX_REQUEST_BODY_BYTES
     conn, fx = indexed
     token, digest = issue_test_token(fx.ENG)
@@ -389,7 +457,8 @@ def test_a_chunked_body_with_no_declared_length_is_capped_mid_stream_with_no_row
     # no declared content-length reached the wire (httpx streams a generator as chunked transfer)
     assert "content-length" not in {k.lower() for k in
                                     httpx.Request("POST", url, content=oversized_chunks()).headers}
-    assert r.status_code == 500          # the read was aborted mid-stream — not the clean 413
+    assert r.status_code == 413
+    assert r.json() == {"error": "request too large"}
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue WHERE submitted_by = %s", (fx.ENG,))
         after = cur.fetchone()[0]
@@ -405,9 +474,7 @@ def test_this_cap_sits_below_the_mcp_sdks_own_body_ceiling():
 
     from stigmergy.server.transport_http import MAX_REQUEST_BODY_BYTES
     assert MAX_REQUEST_BODY_BYTES < DEFAULT_MAX_REQUEST_BODY_SIZE
-    # and it still fits the largest material cap with JSON-escaping room to spare
-    from stigmergy.capture.schema import MAX_MATERIAL_BYTES
-    assert MAX_REQUEST_BODY_BYTES >= 3 * MAX_MATERIAL_BYTES
+    assert MAX_REQUEST_BODY_BYTES >= 64 * 1024
 
 
 def test_an_ordinary_small_submit_is_unaffected_by_the_body_cap(indexed):
@@ -418,8 +485,9 @@ def test_an_ordinary_small_submit_is_unaffected_by_the_body_cap(indexed):
     app = build_test_http_app(fx, {digest: fx.STEWARD})
 
     with run_http_server(app) as url:
-        ack = _run(_call_over_http(url, token, "brain_submit", kind="raw",
-                                   material="a perfectly normal, small capture"))
+        ack = _run(_call_over_http(
+            url, token, "brain_submit", text="a perfectly normal, small capture"
+        ))
     assert ack["status"] == "queued"
 
 

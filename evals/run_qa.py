@@ -144,7 +144,7 @@ def _run(args, golden) -> int:
                   file=sys.stderr)
             results.append(scored)
 
-    report = _aggregate(golden, results, args.model)
+    report = _aggregate(golden, results, "fake" if args.llm == "fake" else args.model)
     print(_render(report))
     if args.report:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
@@ -167,12 +167,34 @@ def _run(args, golden) -> int:
 # deliberately do NOT match: they carry digits but are prose, and numeric equivalence loose on them
 # would score any answer containing a 2 as a hit.
 _PURE_FIGURE = re.compile(r"^\s*\d[\d.,]*\s?(?:bn|[kKmMbB])?\s?[%xX]?\s*$")
+_SMALL_INTEGERS = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen",
+)
+_TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
 
 
 # Dimension-BLIND on purpose: this asks "is the right number present", so it must not demand `40%`
 # over `40 per cent`. Both sides strip the dimension before the subset test.
 def _figures(text: str) -> set[str]:
     return {canon.removesuffix("%") for canon in numbers.number_pool(text)}
+
+
+def _small_integer_matches(expected: str, answer: str) -> bool:
+    stripped = expected.strip()
+    if not stripped.isascii() or not stripped.isdecimal():
+        return False
+    value = int(stripped)
+    if value < len(_SMALL_INTEGERS):
+        forms = (_SMALL_INTEGERS[value],)
+    elif value < 100:
+        tens, ones = divmod(value, 10)
+        phrase = _TENS[tens] if not ones else f"{_TENS[tens]} {_SMALL_INTEGERS[ones]}"
+        forms = (phrase, phrase.replace(" ", "-"))
+    else:
+        return False
+    return any(re.search(rf"(?<![A-Za-z]){re.escape(form)}(?![A-Za-z])", answer, re.I) for form in forms)
 
 
 # An ISO date in an expectation must match the date HOWEVER the answer writes it — equivalence,
@@ -224,6 +246,8 @@ def _expectation_met(case: dict, answer: str) -> bool:
         return _date_matches(expected, answer)
     if not _PURE_FIGURE.match(expected):
         return False
+    if _small_integer_matches(expected, answer):
+        return True
     want = _figures(expected)
     return bool(want) and want <= _figures(answer)
 

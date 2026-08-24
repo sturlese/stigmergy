@@ -415,38 +415,23 @@ def test_the_offline_answer_path_installs_nothing(spy):
     assert spy == []
 
 
-def test_the_librarian_filing_backend_installs_the_repair(spy, tmp_path):
-    """The third site, and the one the paid trial burned: this backend turns tokens into dollars,
-    so zeroed counts price a real filing at `$0.00` — the exact failure `librarian/pricing.py`
-    exists to prevent.
-
-    Reached with the real backend over an offline model and a scratch brief; no git, no queue, no
-    key. The `run` call is allowed to fail (the spy has replaced the real install, and nothing here
-    cares what the model answers) — what is asserted is that the site called it.
-
-    OLD BEHAVIOUR: it was reached through `run_meeting`, over the frozen meeting-distiller brief,
-    because that was the flow whose account came back through an output schema. There is one call
-    now and it is the one that spends the money.
-    """
+def test_the_knowledge_planner_installs_the_repair(spy, tmp_path):
     from pydantic_ai.models.test import TestModel
 
-    from stigmergy.librarian import agent as agent_module
-    from stigmergy.librarian import config
-    from stigmergy.librarian.pydantic_backend import PydanticFilingAgent
+    from stigmergy.knowledge.planner import PydanticPlanner
 
-    brief = pathlib.Path(tmp_path, *agent_module.SKILL_RELPATH.split("/"))
+    brief = pathlib.Path(tmp_path, ".claude", "skills", "librarian", "SKILL.md")
     brief.parent.mkdir(parents=True)
     frozen = (ROOT / "tests" / "librarian" / "fixtures" / "repo" / ".claude" / "skills"
               / "librarian" / "SKILL.md")
     brief.write_text(frozen.read_text(encoding="utf-8"), encoding="utf-8")
 
-    backend = PydanticFilingAgent(
-        config.Settings(repo=str(tmp_path), model="openai:gpt-5.6-terra"),
-        model_factory=lambda: TestModel())
+    settings = type("Settings", (), {"model": "openai:gpt-5.6-terra", "timeout_s": 5,
+                                     "max_turns": 1})()
+    planner = PydanticPlanner(settings, model_factory=lambda: TestModel())
     try:
-        backend.run(worktree=str(tmp_path), material="a note", hints={},
-                    submitted_by="a@b.test")
-    except Exception:  # noqa: BLE001 — the outcome is irrelevant; the install is the assertion
+        planner.repair(worktree=str(tmp_path), violations=())
+    except Exception:  # noqa: BLE001
         pass
 
     assert spy == [1]
@@ -479,51 +464,3 @@ def test_every_module_that_builds_a_pydantic_ai_agent_installs_the_repair():
         f"these build a pydantic-ai agent and do not install the usage repair: "
         f"{sorted(builders - repairers)}; these install it and build nothing: "
         f"{sorted(repairers - builders)}")
-
-
-# ── the whole point: the figure a repaired run prices to ───────────────────────────────────────
-def test_the_repaired_counts_price_a_real_run_to_a_real_figure(installed):
-    """**End to end, through the seam this milestone built.** The counts come out of the repaired
-    extraction, go into `librarian.pricing.compute_cost_usd` exactly as
-    `PydanticFilingAgent._cost` sends them, and produce dollars.
-
-    The expected figure is DERIVED here from the payload's own counts and the table's own rates —
-    never a number copied from a run — so a rate change or a payload edit moves both sides
-    together and the assertion keeps meaning what it says.
-    """
-    from stigmergy.librarian import pricing
-
-    model = "openai:gpt-5.6-terra"
-    rate_in, rate_cached, rate_write, rate_out = pricing.require_priced(model)
-    usage = installed.extract(CRASH_PAYLOAD, details=dict(CRASH_DETAILS), **RESPONSES)
-
-    cost = pricing.compute_cost_usd(
-        model, input_tokens=usage.input_tokens, cached_input_tokens=usage.cache_read_tokens,
-        cache_write_tokens=usage.cache_write_tokens, output_tokens=usage.output_tokens)
-
-    # This payload reports no cache-write count (an Anthropic concept), so the write term is
-    # zero today — kept in the derivation with its own rate so a payload that grows one moves
-    # both sides together.
-    written = usage.cache_write_tokens or 0
-    fresh = REPORTED_INPUT - REPORTED_CACHED - written
-    expected = round((fresh * rate_in + REPORTED_CACHED * rate_cached + written * rate_write
-                      + REPORTED_OUTPUT * rate_out) / 1_000_000, 6)
-    assert cost == expected
-    assert cost > 0
-
-
-def test_the_unrepaired_counts_price_that_same_run_at_nothing(original):
-    """The consequence the shim prevents, priced. The zeros above are not an abstraction: they
-    reach `compute_cost_usd` and produce `$0.00` for a run that cost real money — through a module
-    whose entire purpose is that this cannot happen, and which refuses an unpriced model at startup
-    for exactly this reason."""
-    from stigmergy.librarian import pricing
-
-    cost = pricing.compute_cost_usd(
-        "openai:gpt-5.6-terra",
-        input_tokens=original["crash_counts"]["input_tokens"],
-        cached_input_tokens=original["crash_counts"]["cache_read_tokens"],
-        cache_write_tokens=original["crash_counts"]["cache_write_tokens"],
-        output_tokens=original["crash_counts"]["output_tokens"])
-
-    assert cost == 0.0

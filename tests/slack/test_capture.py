@@ -1,23 +1,33 @@
-"""The 🧠 gesture — end to end against real Postgres, offline Slack."""
 import asyncio
 import dataclasses
+import datetime as dt
+import json
 
 import pytest
+from pydantic import ValidationError
 
-from stigmergy.server.errors import RateLimitError
-from stigmergy.slack import copy
+from stigmergy.capture import schema
+from stigmergy.capture.errors import ArtifactRejected
+from stigmergy.slack import copy, snapshot
 from stigmergy.slack.capture import (
     DONE_REACTION,
+    PROFILE_LOOKUP_CONCURRENCY,
     PROGRESS_REACTION,
     finish_progress,
     handle_reaction_added,
     mark_in_progress,
 )
-from stigmergy.slack.channels import channel_audiences
 from stigmergy.slack.gateway import FakeSlackGateway, SlackApiError
-from stigmergy.slack.identity import NoAccess, Resolved, TransientFailure, resolve_slack_identity
+from stigmergy.slack.identity import ForeignTeam, Ignored, NoAccess, Resolved, TransientFailure
+from stigmergy.slack.snapshot import (
+    SlackSnapshot,
+    SnapshotMessage,
+    canonical_bytes,
+    validate_snapshot,
+)
 from tests.slack.conftest import (
     FINANCE_CHANNEL,
+    PUBLIC_CHANNEL,
     TEAM_ID,
     UNLISTED_CHANNEL,
     build_context,
@@ -26,721 +36,595 @@ from tests.slack.conftest import (
 pytestmark = pytest.mark.timeout(30)
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def run(coroutine):
+    return asyncio.run(coroutine)
 
 
-def _seed_thread(gw: FakeSlackGateway, channel: str, root_ts: str):
-    gw.seed_channel(channel, name="finance-team")
-    gw.seed_user("U_ANA", "ana@example.com", display_name="Ana")
-    gw.seed_thread(channel, root_ts, [
-        {"ts": root_ts, "thread_ts": root_ts, "user": "U_ANA", "text": "we should track this"},
-        {"ts": "100.2", "thread_ts": root_ts, "user": "U_ANA", "text": "decision: ship it Friday"},
-    ])
+def seed_thread(gateway, channel, thread_ts="100.1", *, attachments=()):
+    gateway.seed_channel(channel, name="finance-team")
+    gateway.seed_user("U_ANA", "ana@example.com", display_name="Ana")
+    messages = [
+        {
+            "ts": thread_ts,
+            "thread_ts": thread_ts,
+            "user": "U_ANA",
+            "text": "we should track this",
+            "files": list(attachments),
+        },
+        {
+            "ts": "100.2",
+            "thread_ts": thread_ts,
+            "user": "U_ANA",
+            "text": "decision: ship it Friday",
+        },
+    ]
+    gateway.seed_thread(channel, thread_ts, messages)
 
 
-def _fetch_row(conn, submission_id):
-    with conn.cursor() as cur:
-        cur.execute("SELECT payload->>'text', hints, submitted_by FROM capture_queue WHERE id = %s",
-                   (submission_id,))
-        return cur.fetchone()
+def resolved(subject="ana@example.com", audiences=frozenset({"finance"})):
+    return Resolved(email=subject, audiences=audiences)
 
 
-def test_capture_queues_one_row_with_byte_identical_material_and_provenance_hints(indexed, clean_tables):
+def capture(ctx, *, channel=FINANCE_CHANNEL, thread_ts="100.1", user="U_ANA", identity=None):
+    return run(
+        handle_reaction_added(
+            ctx,
+            reaction="brain",
+            team_id=TEAM_ID,
+            channel_id=channel,
+            message_ts=thread_ts,
+            slack_user_id=user,
+            identity_result=identity or resolved(),
+        )
+    )
+
+
+def queue_rows(conn):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT id, operation, request, submitted_by, actor, acl, status FROM capture_queue ORDER BY created_at, id"
+        )
+        return cursor.fetchall()
+
+
+def test_brain_reaction_queues_one_normalized_capture_with_canonical_snapshot(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "100.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="100.1", slack_user_id="U_ANA", identity_result=identity))
+    assert capture(ctx) is True
 
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1
-        cur.execute("SELECT payload->>'text', hints, submitted_by FROM capture_queue")
-        material, hints, submitted_by = cur.fetchone()
+    rows = queue_rows(conn)
+    assert len(rows) == 1
+    capture_id, operation, request, submitted_by, actor, acl, status = rows[0]
+    assert operation == schema.CAPTURE
+    assert submitted_by == "ana@example.com"
+    assert actor == {"subject": "ana@example.com", "display_name": "Ana"}
+    assert acl == ["finance"]
+    assert status == schema.QUEUED
+    assert request["capture_id"] == str(capture_id)
+    assert request["origin"]["adapter"] == "slack"
+    assert request["origin"]["acquisition"] is None
+    assert "metadata" not in request["origin"]
+    assert len(request["artifacts"]) == 1
+    snapshot_bytes = ctx.evidence.get(request["artifacts"][0]["blob_ref"])
+    snapshot = validate_snapshot(snapshot_bytes)
+    assert [message.text for message in snapshot.messages] == [
+        "we should track this",
+        "decision: ship it Friday",
+    ]
+    assert json.dumps(request).find("decision: ship it Friday") == -1
+    assert len(gateway.posted) == 1
+    assert "queued and attributed to Ana" in gateway.posted[0].text
 
-    assert material == "we should track this\ndecision: ship it Friday"
-    assert submitted_by == "ana@example.com"   # attributed to the REACTING user
-    assert hints["client"]["source_client"] == "slack"
-    assert hints["client"]["source_channel_id"] == FINANCE_CHANNEL
-    assert "Ana" in hints["client"]["source_participants"]
 
-    assert len(gw.posted) == 1
-    assert "queued and attributed to Ana" in gw.posted[0].text
-    for forbidden in ("saved", "searchable", "is filed", "has been filed", "was filed"):
-        assert forbidden not in gw.posted[0].text.lower()
-
-
-def test_a_single_message_not_in_a_thread_captures_just_that_message(indexed, clean_tables):
+def test_single_message_uses_the_same_snapshot_contract(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    gw.seed_channel(FINANCE_CHANNEL, name="finance-team")
-    gw.seed_user("U_ANA", "ana@example.com", display_name="Ana")
-    gw.seed_thread(FINANCE_CHANNEL, "200.1", [{"ts": "200.1", "user": "U_ANA", "text": "one-off note"}])
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = FakeSlackGateway()
+    gateway.seed_channel(FINANCE_CHANNEL, name="finance-team")
+    gateway.seed_user("U_ANA", "ana@example.com", display_name="Ana")
+    gateway.seed_thread(
+        FINANCE_CHANNEL,
+        "200.1",
+        [
+            {"ts": "200.1", "user": "U_ANA", "text": "one-off note"},
+        ],
+    )
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="200.1", slack_user_id="U_ANA", identity_result=identity))
+    assert capture(ctx, thread_ts="200.1") is True
 
-    material, _, _ = _fetch_row(conn, _first_id(conn))
-    assert material == "one-off note"
-
-
-def _first_id(conn):
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM capture_queue ORDER BY id DESC LIMIT 1")
-        return cur.fetchone()[0]
+    request = queue_rows(conn)[0][2]
+    snapshot = validate_snapshot(ctx.evidence.get(request["artifacts"][0]["blob_ref"]))
+    assert len(snapshot.messages) == 1
+    assert snapshot.messages[0].text == "one-off note"
 
 
-def test_redelivered_event_produces_exactly_one_queue_row(indexed, clean_tables):
-    """Exactly-once, the redelivery half."""
+def test_reacting_to_a_reply_captures_its_complete_thread(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "300.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
-    args = dict(reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL, message_ts="300.1",
-               slack_user_id="U_ANA", identity_result=identity)
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    _run(handle_reaction_added(ctx, **args))
-    _run(handle_reaction_added(ctx, **args))   # the identical event, delivered twice
+    assert (
+        run(
+            handle_reaction_added(
+                ctx,
+                reaction="brain",
+                team_id=TEAM_ID,
+                channel_id=FINANCE_CHANNEL,
+                message_ts="100.2",
+                slack_user_id="U_ANA",
+                identity_result=resolved(),
+            )
+        )
+        is True
+    )
 
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1
-    assert len(gw.posted) == 1   # only ONE ack, not two
+    request = queue_rows(conn)[0][2]
+    snapshot = validate_snapshot(ctx.evidence.get(request["artifacts"][0]["blob_ref"]))
+    assert snapshot.thread_ts == "100.1"
+    assert [message.ts for message in snapshot.messages] == ["100.1", "100.2"]
+    assert snapshot.permalink.endswith("p1001")
+    assert snapshot.messages[0].permalink.endswith("p1001")
+    assert snapshot.messages[1].permalink.endswith("p1002")
+    assert gateway.posted[0].thread_ts == "100.1"
 
 
-def test_a_remove_then_re_add_by_the_same_person_also_produces_one_row(indexed, clean_tables):
-    """Exactly-once, the remove-then-re-add half — modeled as the same reaction_added event
-    firing again (Slack's own redelivery shape for this scenario: the dedup key is
-    (team, channel, message_ts, slack_user_id), which is identical whether it is a genuine
-    redelivery or a real remove-then-re-add)."""
+def test_max_thread_bounds_profile_concurrency_and_uses_one_permalink_call(indexed, clean_tables):
+    class BoundedGateway(FakeSlackGateway):
+        def __init__(self):
+            super().__init__()
+            self.active_profiles = 0
+            self.max_active_profiles = 0
+            self.profile_calls = 0
+            self.permalink_calls = 0
+
+        async def users_info(self, user_id):
+            self.profile_calls += 1
+            self.active_profiles += 1
+            self.max_active_profiles = max(self.max_active_profiles, self.active_profiles)
+            try:
+                await asyncio.sleep(0.001)
+                return await super().users_info(user_id)
+            finally:
+                self.active_profiles -= 1
+
+        async def get_permalink(self, channel_id, message_ts):
+            self.permalink_calls += 1
+            return await super().get_permalink(channel_id, message_ts)
+
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "301.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
-    args = dict(reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL, message_ts="301.1",
-               slack_user_id="U_ANA", identity_result=identity)
-    _run(handle_reaction_added(ctx, **args))
-    _run(handle_reaction_added(ctx, **args))
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1
+    gateway = BoundedGateway()
+    thread_ts = "300.000001"
+    gateway.seed_channel(FINANCE_CHANNEL, name="finance-team")
+    messages = []
+    for index in range(snapshot.MAX_THREAD_MESSAGES):
+        user_id = f"U_{index:03d}"
+        gateway.seed_user(user_id, None, display_name=f"User {index}")
+        messages.append(
+            {
+                "ts": f"300.{index + 1:06d}",
+                "thread_ts": thread_ts,
+                "user": user_id,
+                "text": f"Message {index}",
+            }
+        )
+    gateway.seed_thread(FINANCE_CHANNEL, thread_ts, messages)
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx, thread_ts=thread_ts, user="U_000") is True
+    assert gateway.profile_calls == snapshot.MAX_THREAD_MESSAGES
+    assert 1 < gateway.max_active_profiles <= PROFILE_LOOKUP_CONCURRENCY
+    assert gateway.permalink_calls == 1
 
 
-def test_two_different_people_reacting_to_the_same_message_both_get_queued(indexed, clean_tables):
-    """Dedup is per (message, person), never per message alone."""
+def test_acquisition_deadline_releases_the_reservation_for_retry(indexed, clean_tables, monkeypatch):
+    class StallingGateway(FakeSlackGateway):
+        def __init__(self):
+            super().__init__()
+            self.stall = True
+
+        async def conversations_replies(self, channel_id, thread_ts):
+            if self.stall:
+                self.stall = False
+                await asyncio.sleep(60)
+            return await super().conversations_replies(channel_id, thread_ts)
+
+    monkeypatch.setattr("stigmergy.slack.capture.CAPTURE_ACQUISITION_TIMEOUT_S", 0.1)
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "302.1")
-    gw.seed_user("U_STEWARD", "steward@example.com", display_name="Sam")
-    ctx = build_context(fixture, conn, gateway=gw)
+    gateway = StallingGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="302.1", slack_user_id="U_ANA",
-                               identity_result=Resolved(email="ana@example.com",
-                                                        audiences=frozenset({"finance"}))))
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="302.1", slack_user_id="U_STEWARD",
-                               identity_result=Resolved(email="steward@example.com", audiences=None)))
+    assert capture(ctx) is False
+    assert queue_rows(conn) == []
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT count(*) FROM slack_submissions")
+        assert cursor.fetchone()[0] == 0
 
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 2
-    assert len(gw.posted) == 2
+    assert capture(ctx) is True
+    assert len(queue_rows(conn)) == 1
 
 
-def test_a_reaction_other_than_brain_does_nothing(indexed, clean_tables):
+def test_slack_attachments_are_exact_additional_artifacts(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    ctx = build_context(fixture, conn, gateway=gw)
-    _run(handle_reaction_added(ctx, reaction="thumbsup", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="1.1", slack_user_id="U_ANA",
-                               identity_result=Resolved(email="ana@example.com",
-                                                        audiences=frozenset({"finance"}))))
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0
-    assert gw.posted == [] and gw.ephemeral == []
+    gateway = FakeSlackGateway()
+    attachment = {
+        "id": "F1",
+        "name": "decision.txt",
+        "mimetype": "text/plain",
+        "url_private_download": "https://slack.local/F1",
+    }
+    gateway.seed_file(attachment["url_private_download"], b"exact attachment bytes")
+    seed_thread(gateway, FINANCE_CHANNEL, attachments=[attachment])
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is True
+
+    request = queue_rows(conn)[0][2]
+    assert len(request["artifacts"]) == 2
+    snapshot = validate_snapshot(ctx.evidence.get(request["artifacts"][0]["blob_ref"]))
+    assert snapshot.messages[0].attachments[0].artifact_index == 2
+    second = request["artifacts"][1]
+    assert second["original_name"] == "decision.txt"
+    assert ctx.evidence.get(second["blob_ref"]) == b"exact attachment bytes"
 
 
-# ── identity failures: no BrainService constructed (verified by "no queue row") ─────────────────
-def test_no_access_identity_gets_ephemeral_and_no_queue_row(indexed, clean_tables):
+def test_snapshot_plus_nineteen_attachments_is_the_hard_limit(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    ctx = build_context(fixture, conn, gateway=gw)
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="1.1", slack_user_id="U_STRANGER",
-                               identity_result=NoAccess()))
-    assert len(gw.ephemeral) == 1
-    assert gw.ephemeral[0].text == copy.no_access(is_dm=False)
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0
+    gateway = FakeSlackGateway()
+    attachments = []
+    for index in range(19):
+        url = f"https://slack.local/F{index}"
+        attachments.append(
+            {
+                "id": f"F{index}",
+                "name": f"file-{index}.txt",
+                "mimetype": "text/plain",
+                "url_private_download": url,
+            }
+        )
+        gateway.seed_file(url, f"file {index}".encode())
+    seed_thread(gateway, FINANCE_CHANNEL, attachments=attachments)
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is True
+    assert len(queue_rows(conn)[0][2]["artifacts"]) == schema.MAX_ARTIFACTS
 
 
-def test_transient_identity_failure_gets_its_own_copy_not_the_no_access_one(indexed, clean_tables):
+def test_snapshot_schema_rejects_threads_over_the_message_limit():
+    with pytest.raises(ValidationError):
+        SlackSnapshot(
+            team_id="T1",
+            channel_id="C1",
+            channel_name="product",
+            thread_ts="1.0",
+            permalink="https://example.slack.com/thread",
+            messages=tuple(
+                SnapshotMessage(
+                    order=index + 1,
+                    ts=f"{index + 1}.0",
+                    occurred_at=dt.datetime(2026, 8, 24, tzinfo=dt.UTC),
+                    user_id="U1",
+                    speaker="Alice",
+                    text="message",
+                    permalink="https://example.slack.com/thread",
+                )
+                for index in range(snapshot.MAX_THREAD_MESSAGES + 1)
+            ),
+        )
+
+
+def test_snapshot_schema_rejects_bytes_over_the_snapshot_limit(monkeypatch):
+    monkeypatch.setattr(snapshot, "MAX_SNAPSHOT_BYTES", 200, raising=False)
+    value = SlackSnapshot(
+        team_id="T1",
+        channel_id="C1",
+        channel_name="product",
+        thread_ts="1.0",
+        permalink="https://example.slack.com/thread",
+        messages=(
+            SnapshotMessage(
+                order=1,
+                ts="1.0",
+                occurred_at=dt.datetime(2026, 8, 24, tzinfo=dt.UTC),
+                user_id="U1",
+                speaker="Alice",
+                text="x" * 500,
+                permalink="https://example.slack.com/thread",
+            ),
+        ),
+    )
+
+    with pytest.raises(ArtifactRejected):
+        canonical_bytes(value)
+
+
+def test_slack_attachment_download_uses_the_remaining_capture_budget(indexed, clean_tables, monkeypatch):
+    class BudgetGateway(FakeSlackGateway):
+        def __init__(self):
+            super().__init__()
+            self.download_limits = []
+
+        async def download_file(self, url, *, max_bytes):
+            self.download_limits.append(max_bytes)
+            return await super().download_file(url, max_bytes=max_bytes)
+
+    monkeypatch.setattr(schema, "MAX_CAPTURE_BYTES", 1_000, raising=False)
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    ctx = build_context(fixture, conn, gateway=gw)
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="1.1", slack_user_id="U_FLAKY",
-                               identity_result=TransientFailure("timeout")))
-    assert gw.ephemeral[0].text == copy.TRANSIENT_IDENTITY_FAILURE
-    assert gw.ephemeral[0].text != copy.no_access(is_dm=False)
+    gateway = BudgetGateway()
+    attachment = {
+        "id": "F-budget",
+        "name": "budget.txt",
+        "mimetype": "text/plain",
+        "url_private_download": "https://slack.local/F-budget",
+    }
+    gateway.seed_file(attachment["url_private_download"], b"x" * 1_000)
+    seed_thread(gateway, FINANCE_CHANNEL, attachments=[attachment])
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is False
+    assert gateway.download_limits and gateway.download_limits[0] < len(
+        gateway.files[attachment["url_private_download"]]
+    )
+    assert queue_rows(conn) == []
 
 
-# ── Ignored/ForeignTeam through the actual handler, not just the unit-level
-# classification (`is_ignorable_event`/`resolve_slack_identity`) — zero Slack traffic, no queue row
-def test_ignored_and_foreign_team_identities_queue_nothing_and_post_nothing(indexed, clean_tables):
-    from stigmergy.slack.identity import ForeignTeam, Ignored
+def test_twentieth_attachment_is_refused_without_a_queue_row(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    ctx = build_context(fixture, conn, gateway=gw)
-    for identity in (Ignored("bot_message"), ForeignTeam("T_OTHER")):
-        _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID,
-                                   channel_id=FINANCE_CHANNEL, message_ts="1.1",
-                                   slack_user_id="U_X", identity_result=identity))
-    assert gw.posted == [] and gw.ephemeral == []
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0
+    gateway = FakeSlackGateway()
+    attachments = []
+    for index in range(20):
+        url = f"https://slack.local/F{index}"
+        attachments.append(
+            {
+                "id": f"F{index}",
+                "name": f"file-{index}.txt",
+                "mimetype": "text/plain",
+                "url_private_download": url,
+            }
+        )
+        gateway.seed_file(url, f"file {index}".encode())
+    seed_thread(gateway, FINANCE_CHANNEL, attachments=attachments)
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is False
+    assert queue_rows(conn) == []
+    assert gateway.ephemeral[0].text == copy.CAPTURE_FAILED
 
 
-# ── private channel / group DM / DM refusal ───────────────────────────────────────────────────
-@pytest.mark.parametrize("kwargs", [
-    {"is_private": True}, {"is_im": True}, {"is_mpim": True},
-])
-def test_non_public_channel_refuses_and_queues_nothing(indexed, clean_tables, kwargs):
+def test_same_reactor_and_thread_is_idempotent(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    gw.seed_channel("C_PRIVATE", **kwargs)
-    gw.seed_user("U_ANA", "ana@example.com")
-    ctx = build_context(fixture, conn, gateway=gw)
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id="C_PRIVATE",
-                               message_ts="1.1", slack_user_id="U_ANA",
-                               identity_result=Resolved(email="ana@example.com",
-                                                        audiences=frozenset({"finance"}))))
-    assert gw.ephemeral[0].text == copy.PRIVATE_CHANNEL_REFUSAL
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is True
+    assert capture(ctx) is False
+    assert len(queue_rows(conn)) == 1
+    assert len(gateway.posted) == 1
 
 
-# ── a system error while queuing ───────────────────────────────────────────────────────────────
-def test_a_system_error_while_queuing_tells_the_reactor_and_releases_the_dedup_key(indexed, clean_tables):
+def test_duplicate_reaction_is_reserved_before_thread_acquisition(indexed, clean_tables):
+    class CountingGateway(FakeSlackGateway):
+        def __init__(self):
+            super().__init__()
+            self.reply_calls = 0
+            self.download_calls = 0
+
+        async def conversations_replies(self, channel_id, thread_ts):
+            self.reply_calls += 1
+            return await super().conversations_replies(channel_id, thread_ts)
+
+        async def download_file(self, url, *, max_bytes):
+            self.download_calls += 1
+            return await super().download_file(url, max_bytes=max_bytes)
+
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "400.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    broken_ctx = dataclasses.replace(ctx, evidence=None)   # BrainService.submit refuses without one
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = CountingGateway()
+    attachment = {
+        "id": "F-dedup",
+        "name": "decision.txt",
+        "mimetype": "text/plain",
+        "url_private_download": "https://slack.local/F-dedup",
+    }
+    gateway.seed_file(attachment["url_private_download"], b"decision")
+    seed_thread(gateway, FINANCE_CHANNEL, attachments=[attachment])
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    _run(handle_reaction_added(broken_ctx, reaction="brain", team_id=TEAM_ID,
-                               channel_id=FINANCE_CHANNEL, message_ts="400.1",
-                               slack_user_id="U_ANA", identity_result=identity))
+    assert capture(ctx) is True
+    assert capture(ctx) is False
 
-    assert gw.ephemeral[0].text == copy.CAPTURE_FAILED
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0
-        cur.execute("SELECT count(*) FROM slack_submissions")
-        assert cur.fetchone()[0] == 0   # the reservation was released, not left dangling
-
-    # the dedup key is free again — a real retry (not merely a redelivery) can now succeed
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="400.1", slack_user_id="U_ANA", identity_result=identity))
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1
+    assert gateway.reply_calls == 1
+    assert gateway.download_calls == 1
 
 
-# ── reserve + submit + attach are ONE transaction ─────────────────────────────────────────────
-def test_attach_submission_failure_rolls_back_the_whole_capture_not_just_leaving_it_orphaned(
-        indexed, clean_tables, monkeypatch):
-    """The OLD code called `attach_submission` OUTSIDE any `try`: if `submit()` succeeded and
-    `attach_submission` then raised, a REAL `capture_queue` row was left committed with
-    `slack_submissions.submission_id` stuck NULL — invisible to `find_thread_submission`/
-    `due_for_report` forever (both filter `submission_id IS NOT NULL`), so ask-back was dead for
-    that capture and every redelivery logged a false "duplicate" against a capture that was never
-    actually retrievable. Wrapping reserve+submit+attach in one transaction means this failure
-    rolls back EVERYTHING, so a genuine retry succeeds cleanly instead of being silently lost."""
+def test_different_reactors_create_distinct_attributed_captures(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "500.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    gateway.seed_user("U_STEWARD", "steward@example.com", display_name="Steward")
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    from stigmergy.slack import capture as capture_mod
+    assert capture(ctx) is True
+    assert (
+        capture(
+            ctx,
+            user="U_STEWARD",
+            identity=resolved("steward@example.com", None),
+        )
+        is True
+    )
 
-    def _boom(conn, reservation_id, submission_id):
-        raise RuntimeError("simulated failure between submit() and attach_submission()")
-
-    monkeypatch.setattr(capture_mod, "attach_submission", _boom)
-
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="500.1", slack_user_id="U_ANA", identity_result=identity))
-
-    assert gw.ephemeral[0].text == copy.CAPTURE_FAILED
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0   # the queue row submit() wrote is GONE, not orphaned
-        cur.execute("SELECT count(*) FROM slack_submissions")
-        assert cur.fetchone()[0] == 0   # the reservation is gone too
-
-    # a genuine retry (the dedup key was truly freed, not just marked) succeeds cleanly
-    monkeypatch.undo()
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="500.1", slack_user_id="U_ANA", identity_result=identity))
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1
-        cur.execute("SELECT submission_id FROM slack_submissions WHERE message_ts = '500.1'")
-        assert cur.fetchone()[0] is not None   # properly attached this time
+    assert {row[3] for row in queue_rows(conn)} == {"ana@example.com", "steward@example.com"}
 
 
-# ── SlackApiError guarded at the gateway-call boundary, never left unguarded ──────────────────
-def test_a_conversations_info_failure_gets_the_server_error_copy_not_an_unhandled_exception(
-        indexed, clean_tables):
+def test_non_brain_reaction_is_ignored(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    gw.fail_conversations_info.add(FINANCE_CHANNEL)
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    ctx = build_context(fixture, conn, gateway=FakeSlackGateway())
+    result = run(
+        handle_reaction_added(
+            ctx,
+            reaction="thumbsup",
+            team_id=TEAM_ID,
+            channel_id=FINANCE_CHANNEL,
+            message_ts="1.1",
+            slack_user_id="U_ANA",
+            identity_result=resolved(),
+        )
+    )
+    assert result is False
+    assert queue_rows(conn) == []
 
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="600.1", slack_user_id="U_ANA", identity_result=identity))
 
-    assert gw.ephemeral[0].text == copy.server_error()
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0
-
-
-def test_the_final_capture_ack_post_failing_does_not_raise_out_of_the_handler(
-        indexed, clean_tables):
-    """Reproduced against the real code — only
-    `mention._edit_or_fallback` and `poller.poll_once` were guarded; the capture ack's own
-    `chat_post_message` was not. A Slack outage on this LAST call must degrade honestly (the
-    capture is already safely queued) rather than raise past a caller with no top-level guard."""
+@pytest.mark.parametrize("identity", [Ignored("bot"), ForeignTeam("other")])
+def test_ignored_identity_produces_no_slack_traffic(indexed, clean_tables, identity):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "700.1")
-    gw.fail_post_count = 1
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = FakeSlackGateway()
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="700.1", slack_user_id="U_ANA", identity_result=identity))
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1   # the capture itself is safely queued regardless
-    assert gw.posted == []   # the ack post failed and was swallowed, not retried into a duplicate
+    assert capture(ctx, identity=identity) is False
+    assert queue_rows(conn) == []
+    assert gateway.posted == [] and gateway.ephemeral == []
 
 
-def test_the_no_access_ephemeral_failing_does_not_raise_out_of_the_handler(indexed, clean_tables):
+def test_identity_refusals_are_private_and_distinct(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    gw.fail_ephemeral_count = 1
-    ctx = build_context(fixture, conn, gateway=gw)
+    gateway = FakeSlackGateway()
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="1.1", slack_user_id="U_STRANGER",
-                               identity_result=NoAccess()))
-    # no exception raised — the failed ephemeral is logged and swallowed, not left to crash the
-    # listener
+    assert capture(ctx, identity=NoAccess()) is False
+    assert gateway.ephemeral[-1].text == copy.no_access(is_dm=False)
+    assert capture(ctx, identity=TransientFailure("timeout")) is False
+    assert gateway.ephemeral[-1].text == copy.TRANSIENT_IDENTITY_FAILURE
+    assert queue_rows(conn) == []
 
 
-# ── a very long thread must not overflow MAX_HINT_CHARS forever ───────────────────────────────
-def test_a_very_long_thread_does_not_overflow_max_hint_chars_forever(indexed, clean_tables):
-    """`source_message_timestamps` is the comma-joined `ts` of every message in the thread —
-    for a thread with enough messages that string alone exceeds `MAX_HINT_CHARS` (8192), and
-    `normalize_hints` refuses any hint value over that limit outright. Without truncation, this
-    capture would fail DETERMINISTICALLY on every retry, forever. Truncating this PROVENANCE
-    metadata loses nothing the material itself carries."""
+def test_unmapped_channel_fails_safely_even_when_public(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    gw.seed_channel(FINANCE_CHANNEL, name="finance-team")
-    gw.seed_user("U_ANA", "ana@example.com", display_name="Ana")
-    messages = [{"ts": f"{100000 + i}.000001", "thread_ts": "100000.000001", "user": "U_ANA",
-                "text": f"message {i}"} for i in range(700)]
-    gw.seed_thread(FINANCE_CHANNEL, "100000.000001", messages)
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, UNLISTED_CHANNEL)
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="100000.000001", slack_user_id="U_ANA",
-                               identity_result=identity))
-
-    assert gw.ephemeral == []   # not CAPTURE_FAILED
-    assert len(gw.posted) == 1   # the ordinary capture ack
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1
-        cur.execute("SELECT hints FROM capture_queue")
-        hints = cur.fetchone()[0]
-    assert len(hints["client"]["source_message_timestamps"]) <= 8192
+    assert capture(ctx, channel=UNLISTED_CHANNEL) is False
+    assert queue_rows(conn) == []
+    assert gateway.ephemeral[0].text == copy.PRIVATE_CHANNEL_REFUSAL
 
 
-# ── the progress-reaction lifecycle ───────────────────────────────────────────────────────────
-# `mark_in_progress`/`finish_progress` are exercised directly here (they are called from
-# `app.on_reaction_added`, never from `handle_reaction_added` itself — see the module docstring),
-# and end to end through the listener in `tests/slack/test_app_wiring.py`.
-def test_mark_in_progress_adds_the_hourglass():
-    gw = FakeSlackGateway()
-    _run(mark_in_progress(gw, channel_id="C1", message_ts="1.1"))
-    assert len(gw.reactions_added) == 1
-    assert gw.reactions_added[0].name == PROGRESS_REACTION
-    assert gw.reactions_added[0].channel_id == "C1" and gw.reactions_added[0].ts == "1.1"
-
-
-def test_finish_progress_ok_true_removes_the_hourglass_and_adds_the_checkmark():
-    gw = FakeSlackGateway()
-    _run(finish_progress(gw, channel_id="C1", message_ts="1.1", ok=True))
-    assert [r.name for r in gw.reactions_removed] == [PROGRESS_REACTION]
-    assert [r.name for r in gw.reactions_added] == [DONE_REACTION]
-
-
-def test_finish_progress_ok_false_only_removes_the_hourglass(indexed, clean_tables):
-    """A refusal/failure/duplicate never gets the checkmark — just cleanup, no trace of an
-    attempt that produced no capture."""
-    gw = FakeSlackGateway()
-    _run(finish_progress(gw, channel_id="C1", message_ts="1.1", ok=False))
-    assert [r.name for r in gw.reactions_removed] == [PROGRESS_REACTION]
-    assert gw.reactions_added == []
-
-
-# ── the benign twin: the reactions API being down never breaks a capture ─────────────────────
-def test_mark_in_progress_is_best_effort_when_the_reactions_api_is_down():
-    gw = FakeSlackGateway()
-    gw.fail_reactions_add_count = 99
-    _run(mark_in_progress(gw, channel_id="C1", message_ts="1.1"))   # must not raise
-    assert gw.reactions_added == []
-
-
-def test_finish_progress_is_best_effort_when_the_reactions_api_is_down():
-    gw = FakeSlackGateway()
-    gw.fail_reactions_add_count = 99
-    gw.fail_reactions_remove_count = 99
-    _run(finish_progress(gw, channel_id="C1", message_ts="1.1", ok=True))   # must not raise
-    assert gw.reactions_added == [] and gw.reactions_removed == []
-
-
-def test_capture_still_succeeds_end_to_end_when_the_reactions_api_is_down(indexed, clean_tables):
-    """The reaction is decorative; the capture is not. `handle_reaction_added` itself never calls
-    the reactions API (that lifecycle lives in `app.on_reaction_added`), so this proves the OTHER
-    half directly: nothing about a broken reactions API can reach this function at all."""
+def test_explicit_public_channel_is_organization_wide(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "900.1")
-    gw.fail_reactions_add_count = 99
-    gw.fail_reactions_remove_count = 99
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, PUBLIC_CHANNEL)
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    outcome = _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID,
-                                         channel_id=FINANCE_CHANNEL, message_ts="900.1",
-                                         slack_user_id="U_ANA", identity_result=identity))
-
-    assert outcome is True
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 1
-    assert len(gw.posted) == 1
+    assert capture(ctx, channel=PUBLIC_CHANNEL) is True
+    assert queue_rows(conn)[0][5] is None
 
 
-# ── handle_reaction_added's own return value: the finish_progress "ok" signal ────────────────
-def test_handle_reaction_added_returns_true_only_on_the_genuine_success_path(indexed, clean_tables):
+def test_mapped_private_channel_uses_its_configured_audience(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "901.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
-    outcome = _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID,
-                                         channel_id=FINANCE_CHANNEL, message_ts="901.1",
-                                         slack_user_id="U_ANA", identity_result=identity))
-    assert outcome is True
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    gateway.seed_channel(FINANCE_CHANNEL, name="finance-team", is_private=True)
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is True
+    assert queue_rows(conn)[0][5] == ["finance"]
 
 
-def test_handle_reaction_added_returns_false_on_a_refusal_path(indexed, clean_tables):
+@pytest.mark.parametrize("channel_flag", ["is_im", "is_mpim"])
+def test_direct_messages_are_not_capture_channels(indexed, clean_tables, channel_flag):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    ctx = build_context(fixture, conn, gateway=gw)
-    outcome = _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID,
-                                         channel_id=FINANCE_CHANNEL, message_ts="1.1",
-                                         slack_user_id="U_STRANGER", identity_result=NoAccess()))
-    assert outcome is False
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    gateway.seed_channel(FINANCE_CHANNEL, name="dm", **{channel_flag: True})
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is False
+    assert queue_rows(conn) == []
 
 
-def test_handle_reaction_added_returns_false_on_a_duplicate(indexed, clean_tables):
+def test_reactor_outside_channel_audience_is_refused_before_reservation(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "902.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
-    args = dict(reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-               message_ts="902.1", slack_user_id="U_ANA", identity_result=identity)
-    assert _run(handle_reaction_added(ctx, **args)) is True
-    assert _run(handle_reaction_added(ctx, **args)) is False   # the redelivered duplicate
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    gateway.seed_user("U_ENG", "eng@example.com", display_name="Engineer")
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert (
+        capture(
+            ctx,
+            user="U_ENG",
+            identity=resolved("eng@example.com", frozenset({"eng"})),
+        )
+        is False
+    )
+    assert queue_rows(conn) == []
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT count(*) FROM slack_submissions")
+        assert cursor.fetchone()[0] == 0
 
 
-# ── the display-name cache: a reactor already resolved by identity gets no second users.info ──
-def test_the_reactors_display_name_is_served_from_the_identity_cache_not_a_second_users_info(
-        indexed, clean_tables):
-    """`identity.resolve_slack_identity`'s own `users.info` call (fetching the reactor's email)
-    populates the SAME cache's display-name map as a side effect — `capture._display_name`'s
-    later lookup, for the identical `(team_id, slack_user_id)`, must be a cache hit rather than a
-    second round trip. This also covers the thread-participant fan-out: the reactor here is also
-    the thread's only author, so a regression that dropped the cache-sharing would double the
-    `users.info` count, not just fail to halve it."""
+def test_queue_failure_releases_reservation_for_a_real_retry(indexed, clean_tables):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "903.1")
-    ctx = build_context(fixture, conn, gateway=gw)
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    good = build_context(fixture, conn, gateway=gateway)
+    broken = dataclasses.replace(good, evidence=None)
 
-    calls = {"n": 0}
-    real_users_info = gw.users_info
-
-    async def _counting_users_info(user_id):
-        calls["n"] += 1
-        return await real_users_info(user_id)
-
-    gw.users_info = _counting_users_info
-
-    identity_result = _run(resolve_slack_identity(
-        gw, ctx.cache, identities_path=fixture.identities_path, configured_team_id=TEAM_ID,
-        event_team_id=TEAM_ID, slack_user_id="U_ANA"))
-    assert calls["n"] == 1   # the one call identity resolution itself needs
-
-    _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-                               message_ts="903.1", slack_user_id="U_ANA",
-                               identity_result=identity_result))
-
-    assert calls["n"] == 1   # neither the participant fan-out nor the ack's own lookup called it again
-    assert "Ana" in gw.posted[0].text
+    assert capture(broken) is False
+    assert queue_rows(conn) == []
+    assert gateway.ephemeral[-1].text == copy.CAPTURE_FAILED
+    assert capture(good) is True
+    assert len(queue_rows(conn)) == 1
 
 
-def test_a_thread_read_failure_tells_the_reactor_instead_of_vanishing(indexed, clean_tables,
-                                                                      monkeypatch):
-    """OLD BEHAVIOUR: the reactor saw the ⏳ appear, vanish, and nothing else — ever.
-
-    `conversations.info` above was guarded and answered with an honest ephemeral; the two reads
-    right after it were not. `conversations.replies` needs `channels:history` and is rate-limited,
-    so a missing scope or a Tier-3 429 escaped `handle_reaction_added` entirely. `on_reaction_added`
-    then ran its `finally` with `queued` still False (hourglass removed, no checkmark) and the outer
-    handler logged the exception — no capture, no refusal, no acknowledgement of any kind.
-    """
+def test_attach_failure_rolls_back_queue_and_reservation(indexed, clean_tables, monkeypatch):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "100.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    async def _boom(*_a, **_k):
-        raise SlackApiError("conversations.replies failed (missing_scope)")
+    def fail(*args, **kwargs):
+        raise RuntimeError("attach failed")
 
-    monkeypatch.setattr(gw, "conversations_replies", _boom)
+    monkeypatch.setattr("stigmergy.slack.capture.attach_submission", fail)
 
-    ok = _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID,
-                                    channel_id=FINANCE_CHANNEL, message_ts="100.1",
-                                    slack_user_id="U_ANA", identity_result=identity))
-
-    assert ok is False
-    assert len(gw.ephemeral) == 1, "the reactor must be told something"
-    assert gw.ephemeral[0].text == copy.server_error()
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0   # nothing queued, and nothing half-queued
+    assert capture(ctx) is False
+    assert queue_rows(conn) == []
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT count(*) FROM slack_submissions")
+        assert cursor.fetchone()[0] == 0
 
 
-# ── the audience a 🧠 files at is the channel's, and the reactor must hold it ──────────────────
-# The audience-from-the-door change. The door's rule is `acl.visible()` asked of the WRITER: you may file only what you
-# could read afterwards. Asked BEFORE the dedup reservation, so a refusal reads as a refusal
-# rather than as a capture that failed.
-
-def _acl_of(conn, submission_id=None):
-    with conn.cursor() as cur:
-        cur.execute("SELECT acl FROM capture_queue ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
-    return row[0] if row else None
-
-
-def test_a_capture_from_a_scoped_channel_is_filed_at_that_channels_groups(indexed, clean_tables):
-    """The benign twin, and the case that carries the feature: a member of the channel captures,
-    and the page set lands at the channel's audience."""
+def test_slack_acquisition_failure_is_reported_privately(indexed, clean_tables, monkeypatch):
     conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "200.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+    gateway = FakeSlackGateway()
+    seed_thread(gateway, FINANCE_CHANNEL)
+    ctx = build_context(fixture, conn, gateway=gateway)
 
-    queued = _run(handle_reaction_added(
-        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-        message_ts="200.1", slack_user_id="U_ANA", identity_result=identity))
+    async def fail(*args, **kwargs):
+        raise SlackApiError("unavailable")
 
-    assert queued is True
-    assert _acl_of(conn) == ["finance"]
+    monkeypatch.setattr(gateway, "conversations_replies", fail)
 
-
-def test_a_capture_from_an_UNLISTED_channel_is_filed_open(indexed, clean_tables):
-    """A channel not listed is public, and public is OPEN — stored as NULL, never `{}`. "This
-    channel has no groups" is a fact about the channel; `{}` on a page means nobody."""
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, UNLISTED_CHANNEL, "201.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
-
-    queued = _run(handle_reaction_added(
-        ctx, reaction="brain", team_id=TEAM_ID, channel_id=UNLISTED_CHANNEL,
-        message_ts="201.1", slack_user_id="U_ANA", identity_result=identity))
-
-    assert queued is True
-    assert _acl_of(conn) is None
+    assert capture(ctx) is False
+    assert queue_rows(conn) == []
+    assert gateway.ephemeral[-1].text == copy.CAPTURE_FAILED
 
 
-def test_a_reactor_outside_the_channels_groups_is_refused_and_nothing_is_queued(
-        indexed, clean_tables):
-    """The refusal. Somebody who cannot read the channel's material cannot capture it either —
-    the page would be one they could not read back, which is what makes a mislabelled page
-    unfixable. It must leave NO row: a reservation spent here would make the retry a duplicate."""
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "202.1")
-    gw.seed_user("U_BOB", "bob@example.com", display_name="Bob")
-    ctx = build_context(fixture, conn, gateway=gw)
-    # Bob is authenticated and holds no group: he reads every open page and no other.
-    identity = Resolved(email="bob@example.com", audiences=frozenset())
+def test_progress_reactions_are_best_effort():
+    gateway = FakeSlackGateway()
+    run(mark_in_progress(gateway, channel_id="C1", message_ts="1.1"))
+    run(finish_progress(gateway, channel_id="C1", message_ts="1.1", ok=True))
+    assert [item.name for item in gateway.reactions_added] == [PROGRESS_REACTION, DONE_REACTION]
+    assert [item.name for item in gateway.reactions_removed] == [PROGRESS_REACTION]
 
-    queued = _run(handle_reaction_added(
-        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-        message_ts="202.1", slack_user_id="U_BOB", identity_result=identity))
-
-    assert queued is False
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM slack_submissions")
-        assert cur.fetchone()[0] == 0, "the dedup reservation must not be spent on a refusal"
-
-
-def test_the_refusal_reaches_the_person_and_names_the_channel_not_the_groups(
-        indexed, clean_tables):
-    """It is ephemeral — a refusal about somebody's access is never posted to the channel — and it
-    names the CHANNEL, which they are already in and can see. Which groups EXIST is not this
-    message's to disclose."""
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "203.1")
-    gw.seed_user("U_BOB", "bob@example.com", display_name="Bob")
-    ctx = build_context(fixture, conn, gateway=gw)
-
-    _run(handle_reaction_added(
-        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-        message_ts="203.1", slack_user_id="U_BOB",
-        identity_result=Resolved(email="bob@example.com", audiences=frozenset())))
-
-    assert gw.ephemeral, "the reactor was told nothing at all"
-    text = " ".join(str(e) for e in gw.ephemeral)
-    assert "finance-team" in text, text
-    assert "finance" not in text.replace("finance-team", ""), (
-        "the refusal must not name the groups it checked against")
-
-
-def test_the_filed_card_goes_back_to_the_channel_that_set_the_audience(indexed, clean_tables):
-    """**Why the filed card needs no ACL filter, asserted rather than assumed.**
-
-    `slack/poller.py` posts the page path, the source page, the anchor and the names of any
-    entities born, into the thread the capture came from — with no `visible()` anywhere. That is
-    safe by CONSTRUCTION and not by a filter: the capture was filed at the groups of that very
-    channel, so every page it names is one the channel's members may read, and the
-    card is posted where they already are.
-
-    The construction is what this pins. Two facts have to hold together, and each of them is
-    somebody's to break: the row's audience IS the channel's groups, and the report goes back to
-    the SAME channel. Break either — file at a different audience, or report into another
-    thread — and the card starts naming pages its readers may not open."""
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "300.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
-
-    _run(handle_reaction_added(
-        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-        message_ts="300.1", slack_user_id="U_ANA", identity_result=identity))
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT id, acl FROM capture_queue ORDER BY id DESC LIMIT 1")
-        submission_id, acl = cur.fetchone()
-        cur.execute("SELECT channel_id FROM slack_submissions WHERE submission_id = %s",
-                    (submission_id,))
-        reported_to = cur.fetchone()[0]
-
-    channel_groups = sorted(channel_audiences(fixture.channels_path, FINANCE_CHANNEL))
-    assert acl == channel_groups, (
-        "the row's audience is no longer the channel's groups — the filed card's safety rests on "
-        "these being the same fact")
-    assert reported_to == FINANCE_CHANNEL, (
-        "the report goes somewhere other than the channel that set the audience")
-
-
-def test_a_reactor_holding_no_group_still_captures_from_a_PUBLIC_channel(indexed, clean_tables):
-    """The twin of the channel-groups refusal, on the identity the refusal is about. Bob holds no
-    group: he cannot capture from `#finance`, and he must still be able to capture from an
-    unlisted channel — otherwise the door refuses the person it is trying to onboard, and the
-    refusal test above reads as a passing security test while the feature is broken."""
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, UNLISTED_CHANNEL, "400.1")
-    gw.seed_user("U_BOB", "bob@example.com", display_name="Bob")
-    ctx = build_context(fixture, conn, gateway=gw)
-
-    queued = _run(handle_reaction_added(
-        ctx, reaction="brain", team_id=TEAM_ID, channel_id=UNLISTED_CHANNEL,
-        message_ts="400.1", slack_user_id="U_BOB",
-        identity_result=Resolved(email="bob@example.com", audiences=frozenset())))
-
-    assert queued is True
-    assert _acl_of(conn) is None
-
-
-def test_an_audience_check_that_FAILS_tells_the_reactor_instead_of_vanishing(indexed,
-                                                                             clean_tables):
-    """The seam's own guard. `check_submit_audience` goes through the audited `_call`, so it can
-    raise a `RateLimitError` — a server error, not a `SubmitRefused` — and the audit write in that
-    seam's `finally` can fail too. Unguarded, either escapes the handler and the reactor sees the
-    ⏳ appear, vanish, and nothing else: no capture, no refusal, no acknowledgement at all."""
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    _seed_thread(gw, FINANCE_CHANNEL, "500.1")
-    ctx = build_context(fixture, conn, gateway=gw)
-
-    def _boom(_audience):
-        raise RateLimitError("30 requests per minute")
-
-    original = type(ctx).build_service
-    def _probing(self, email, audiences, **kw):
-        service = original(self, email, audiences, **kw)
-        service.check_submit_audience = _boom
-        return service
-    ctx.build_service = _probing.__get__(ctx, type(ctx))
-
-    queued = _run(handle_reaction_added(
-        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
-        message_ts="500.1", slack_user_id="U_ANA",
-        identity_result=Resolved(email="ana@example.com", audiences=frozenset({"finance"}))))
-
-    assert queued is False
-    assert gw.ephemeral, "the reactor was told nothing at all"
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue")
-        assert cur.fetchone()[0] == 0
+    failing = FakeSlackGateway()
+    failing.fail_reactions_add_count = 10
+    failing.fail_reactions_remove_count = 10
+    run(mark_in_progress(failing, channel_id="C1", message_ts="1.1"))
+    run(finish_progress(failing, channel_id="C1", message_ts="1.1", ok=True))
+    assert failing.reactions_added == [] and failing.reactions_removed == []

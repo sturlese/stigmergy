@@ -6,7 +6,7 @@ import asyncio
 
 import httpx
 
-from stigmergy.admin.settings import TOKEN_HASH_ENV
+from stigmergy.admin.settings import ACTOR_ENV, TOKEN_HASH_ENV
 from stigmergy.server.identity import hash_token
 from tests.server.conftest import build_test_http_app, issue_test_token, rate_limiter_of
 
@@ -36,6 +36,7 @@ def test_without_the_env_the_console_does_not_exist_and_mcp_stays_fail_closed(in
 
 def test_with_the_env_the_console_serves_and_mcp_auth_is_untouched(indexed, monkeypatch):
     monkeypatch.setenv(TOKEN_HASH_ENV, hash_token(ADMIN_TOKEN))
+    monkeypatch.setenv(ACTOR_ENV, "steward@example.com")
     _conn, fixture = indexed
     token, digest = issue_test_token("steward@example.com")
     app = build_test_http_app(fixture, {digest: "steward@example.com"})

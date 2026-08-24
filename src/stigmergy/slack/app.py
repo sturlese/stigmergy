@@ -72,12 +72,15 @@ def _interaction_actor(body: dict) -> tuple[str, str, str]:
             (body.get("team") or {}).get("id", ""))
 
 
-def _log_listener_failure(listener_name: str) -> None:
-    """The last-resort backstop every listener wraps its body in — the ack already happened, so an
-    unexpected exception degrades to a logged incident with a correlation ref. Handlers' own
-    guards cover every failure that can produce a user-facing reply."""
+def _log_listener_failure(listener_name: str, error: Exception) -> None:
+    """Record a value-free incident after an acknowledged Slack event fails."""
     ref = short_ref()
-    log.error("slack: %s failed unexpectedly (ref=%s)", listener_name, ref, exc_info=True)
+    log.error(
+        "slack: %s failed unexpectedly (ref=%s error=%s)",
+        listener_name,
+        ref,
+        error.__class__.__name__,
+    )
 
 
 def _is_dm(*, channel_type: str = "") -> bool:
@@ -130,8 +133,8 @@ def build_bolt_app(ctx: SlackContext):
                 question=mention.strip_mention(event.get("text", ""),
                                                    context.get("bot_user_id", "")),
                 identity_result=identity_result)
-        except Exception:
-            _log_listener_failure("on_app_mention")
+        except Exception as error:
+            _log_listener_failure("on_app_mention", error)
 
     @app.event("message")
     async def on_message(event, context, ack, body):
@@ -163,8 +166,8 @@ def build_bolt_app(ctx: SlackContext):
             # is not this bot's business: nothing a capture does ever waits on a reply in its
             # thread, so a thread message is ordinary conversation.
             return
-        except Exception:
-            _log_listener_failure("on_message")
+        except Exception as error:
+            _log_listener_failure("on_message", error)
 
     @app.event("reaction_added")
     async def on_reaction_added(event, context, ack, body):
@@ -180,18 +183,12 @@ def build_bolt_app(ctx: SlackContext):
             message_ts = item.get("ts", "")
             slack_user_id = event.get("user", "")
 
-            # The same fail-closed check `resolve_slack_identity` runs internally, asked BEFORE
-            # any identity work so an Ignored/ForeignTeam event never gets the progress reaction
-            # either — genuinely zero Slack traffic. It is the ONLY gate in front of the marker,
-            # deliberately: the channel and identity checks live inside `handle_reaction_added`,
-            # so a private channel or an unrecognized reactor gets an hourglass that is then
-            # removed — gating on the channel too would cost the `conversations.info` round trip
-            # this marker exists to hide. Stated in `docs/reference/slack.md`.
+            # Reject foreign workspaces before adding a progress reaction. Channel and audience
+            # authorization remain inside the capture handler.
             reacted = is_configured_workspace(team_id, ctx.settings.team_id)
             queued = False
             try:
-                # First thing INSIDE the `try` — not before it — so even an unexpected failure in
-                # `mark_in_progress` itself reaches the `finally` below and gets cleaned up.
+                # Keep the progress lifecycle inside this try so the finally path always runs.
                 if reacted:
                     await capture.mark_in_progress(ctx.gateway, channel_id=channel_id,
                                                    message_ts=message_ts)
@@ -207,8 +204,8 @@ def build_bolt_app(ctx: SlackContext):
                 if reacted:
                     await capture.finish_progress(ctx.gateway, channel_id=channel_id,
                                                   message_ts=message_ts, ok=queued)
-        except Exception:
-            _log_listener_failure("on_reaction_added")
+        except Exception as error:
+            _log_listener_failure("on_reaction_added", error)
 
     @app.event("reaction_removed")
     async def on_reaction_removed(event, context, ack):
@@ -227,8 +224,8 @@ def build_bolt_app(ctx: SlackContext):
                 ctx, action_value=action.get("value", ""), clicking_slack_user_id=user_id,
                 channel_id=channel_id, thread_ts=thread_ts, is_dm=is_dm,
                 event_team_id=event_team_id)
-        except Exception:
-            _log_listener_failure("on_show_it_here")
+        except Exception as error:
+            _log_listener_failure("on_show_it_here", error)
 
     return app
 

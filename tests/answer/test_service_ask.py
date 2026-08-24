@@ -94,7 +94,7 @@ def test_a_refused_first_draft_never_spends_the_retry_even_if_the_verifier_fails
 
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
             self.calls += 1
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             out = AnswerOutput(refused=True, confidence="low")
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
             return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
@@ -119,7 +119,7 @@ def test_ask_retry_fires_and_improves(ask_service, monkeypatch):
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
             self.calls += 1
             deps.record(deps.service.search_text("globex quarterly report", deps))
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             if self.calls == 1:
                 out = AnswerOutput(answer_markdown="Revenue was 9.9M with 77% margin.",
                                    citations=[Citation(path="entities/nowhere.md", quote="ghost")])
@@ -127,7 +127,7 @@ def test_ask_retry_fires_and_improves(ask_service, monkeypatch):
                 assert "DETERMINISTIC VERIFIER" in prompt   # findings reached the retry
                 out = AnswerOutput(
                     answer_markdown="Revenue impact was $1.3M ARR.",
-                    citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
+                    citations=[Citation(path="wiki/notes/globex-q1-report-final.md",
                                         quote="Revenue impact was $1.3M ARR")])
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
             return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
@@ -166,7 +166,7 @@ def test_ask_retry_carries_the_first_runs_message_history(ask_service, monkeypat
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
             self.calls += 1
             self.received_history.append(message_history)
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             if self.calls == 1:
                 out = AnswerOutput(answer_markdown="Revenue was 9.9M with 77% margin.",
                                    citations=[Citation(path="entities/nowhere.md", quote="ghost")])
@@ -175,7 +175,7 @@ def test_ask_retry_carries_the_first_runs_message_history(ask_service, monkeypat
                 assert "DETERMINISTIC VERIFIER" in prompt   # findings reached the retry too
                 out = AnswerOutput(
                     answer_markdown="Revenue impact was $1.3M ARR.",
-                    citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
+                    citations=[Citation(path="wiki/notes/globex-q1-report-final.md",
                                         quote="Revenue impact was $1.3M ARR")])
                 all_msgs = []   # the retry's own run produced no further history worth carrying
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
@@ -246,7 +246,7 @@ def test_partial_first_attempt_ships_without_spending_the_retry(ask_service, mon
 
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
             self.calls += 1
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             # no figures (nothing to mistrace) but zero citations -> exactly one problem -> partial
             out = AnswerOutput(answer_markdown="Globex had a strong quarter.", citations=[])
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
@@ -272,7 +272,7 @@ def test_strict_gate_suppresses_when_retry_also_leaves_an_unverified_figure(ask_
 
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
             self.calls += 1
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             bad = AnswerOutput(answer_markdown=f"Invented {self.calls * 111}% and {self.calls * 222}%.",
                                citations=[])
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
@@ -302,18 +302,18 @@ def test_quote_figure_suppression_earns_the_retry_and_the_gates_findings_reach_i
 
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
             self.calls += 1
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             if self.calls == 1:
                 out = AnswerOutput(
                     answer_markdown="Globex performed well this quarter.",
-                    citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
+                    citations=[Citation(path="wiki/notes/globex-q1-report-final.md",
                                         quote="secret revenue was 7777777")])   # not in the page
             else:
                 assert "DETERMINISTIC VERIFIER" in prompt
                 assert "7777777" in prompt   # the GATE's finding — a quote figure — reached the retry
                 out = AnswerOutput(
                     answer_markdown="Globex performed well this quarter.",
-                    citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
+                    citations=[Citation(path="wiki/notes/globex-q1-report-final.md",
                                         quote="Quarterly business review for Globex")])
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
             return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
@@ -324,7 +324,7 @@ def test_quote_figure_suppression_earns_the_retry_and_the_gates_findings_reach_i
     assert res["retried"] is True and scripted.calls == 2      # exactly one retry, never a third
     assert res["refused"] is False and res["suppressed"] is False
     assert res["verdict"]["verdict"] == "verified"
-    assert res["citations"] and res["citations"][0]["path"] == "wiki/entities/globex/q1-report-final.md"
+    assert res["citations"] and res["citations"][0]["path"] == "wiki/notes/globex-q1-report-final.md"
 
 
 def test_ask_result_and_audit_carry_token_usage_counts(ask_service, monkeypatch):
@@ -338,13 +338,13 @@ def test_ask_result_and_audit_carry_token_usage_counts(ask_service, monkeypatch)
 
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
             self.calls += 1
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             if self.calls == 1:
                 out = AnswerOutput(answer_markdown="Invented 999% growth.", citations=[])
             else:
                 out = AnswerOutput(
                     answer_markdown="Globex performed well this quarter.",
-                    citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
+                    citations=[Citation(path="wiki/notes/globex-q1-report-final.md",
                                         quote="Quarterly business review for Globex")])
             usage = types.SimpleNamespace(requests=2, input_tokens=100, output_tokens=10,
                                           cache_read_tokens=40, details={})
@@ -363,7 +363,7 @@ def test_strict_gate_ships_citation_only_problem_as_partial(ask_service, monkeyp
     """A citation-only problem (no figures) is NOT suppressed — it ships labeled `partial`."""
     class Scripted:
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             out = AnswerOutput(answer_markdown="Globex had a strong quarter.", citations=[])
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
             return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
@@ -387,7 +387,7 @@ def test_model_has_no_channel_left_to_smuggle_a_refusal_figure_through(ask_servi
     facts), so there is nothing left to scrub in the first place."""
     class Scripted:
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             out = AnswerOutput(refused=True, confidence="low",
                                reason="I could not find it, but the classified revenue was 5550000.")
             assert not hasattr(out, "reason")   # dropped from the schema, not merely unread
@@ -419,10 +419,10 @@ def test_strict_gate_suppresses_a_fabricated_citation_quote_figure(ask_service, 
     whole response (verify() alone would only flag the bad citation and ship it as `partial`)."""
     class Scripted:
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             out = AnswerOutput(
                 answer_markdown="Globex performed well this quarter.",
-                citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
+                citations=[Citation(path="wiki/notes/globex-q1-report-final.md",
                                     quote="secret revenue was 8888888")])   # not in the page
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
             return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
@@ -441,7 +441,7 @@ def test_two_citation_only_problems_refuse_with_findings(ask_service, monkeypatc
     ships, labeled `partial`."""
     class Scripted:
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
-            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
             out = AnswerOutput(
                 answer_markdown="Globex performed well.",
                 citations=[Citation(path="wiki/entities/nowhere-a.md", quote="ghost a"),
@@ -465,11 +465,7 @@ def test_two_citation_only_problems_refuse_with_findings(ask_service, monkeypatc
     assert "figure" not in res["reason"] and "nowhere" not in res["reason"]
 
 
-# ── `UsageLimitExceeded` on the ask path. The bounded agent catches exactly ONE of pydantic_ai's
-# five exception classes, deliberately — a model outage is a different question, answered
-# elsewhere. Every other bounded agent in this codebase (`librarian.pydantic_backend`,
-# `repair.sweep`) closes the identical defect at its own call site; these two stubs are `ask`'s own
-# pair, adapted to its two `agent.run()` call sites. ─────────────────────────────────────────────
+# `ask` handles a usage-budget refusal at either model call site.
 class _BudgetExceededFirstRun:
     """`UsageLimitExceeded` on the very FIRST `agent.run()` call, before any `AnswerOutput` ever
     existed to verify — observed on the real model (ANSWER_LLM=openai) over the 8-tool-call
@@ -489,7 +485,7 @@ class _BudgetExceededFirstRun:
         # back to the generic sentence and making this test assert nothing about the actual
         # budget-exceeded wording.
         deps.note_query("total-compensation acme")
-        deps.record(deps.service.page_text("wiki/entities/acme/payroll.md", deps))
+        deps.record(deps.service.page_text("wiki/notes/acme-payroll.md", deps))
         raise UsageLimitExceeded("The next request would exceed the request_limit of 6")
 
 
@@ -503,7 +499,7 @@ class _BudgetExceededOnRetry:
 
     async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
         self.calls += 1
-        deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+        deps.record(deps.service.page_text("wiki/notes/globex-q1-report-final.md", deps))
         if self.calls == 1:
             out = AnswerOutput(answer_markdown=f"Invented {self.calls * 111}% and {self.calls * 222}%.",
                                citations=[])
@@ -579,24 +575,21 @@ def test_renderers_neutralize_a_hostile_title(answer_indexed):
     assert _FENCE_NEUTRALIZED in listing
 
 
-def test_search_text_carries_trust_flags(answer_indexed):
+def test_search_text_carries_current_page_metadata(answer_indexed):
     conn, fx = answer_indexed
     from stigmergy.answer.brain import AnswerBrain
     brain = AnswerBrain(brain_service(conn, fx, "steward"))
-    assert "SUPERSEDED" in brain.search_text("globex quarterly report revenue")
-    # `verification=<verdict>` used to be a second trust flag, and was removed: the agent was
-    # being shown a verdict nothing computes. Asserted as a negative now — the fixture page still
-    # carries `verification: failed` in its frontmatter, so this would go red the moment the flag
-    # came back.
-    assert "verification" not in brain.search_text("roadmap themes")
+    listing = brain.search_text("globex quarterly report revenue")
+    assert "note" in listing
+    assert "2026-04-01" in listing
 
 
 
-def test_page_text_fences_body_and_reports_supersession(answer_indexed):
+def test_page_text_fences_body_and_reports_current_metadata(answer_indexed):
     conn, fx = answer_indexed
     from stigmergy.answer.brain import AnswerBrain
     brain = AnswerBrain(brain_service(conn, fx, "steward"))
     txt = brain.page_text(fx.GLOBEX_DRAFT)
     assert "<<<UNTRUSTED-DATA" in txt
-    assert "superseded_by: drive:globex-final" in txt
+    assert "updated: 2026-03-31" in txt
     assert "unknown page" in brain.page_text("nope.md")

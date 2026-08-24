@@ -25,9 +25,6 @@ MODEL_ENV = "EMBED_MODEL"
 DIMENSIONS_ENV = "EMBED_DIMENSIONS"
 EMBED_BATCH = 128
 
-# The DEFAULT host's missing-key refusal, importable so the one suite that needs these exact
-# words (tests/server/test_keyless_capability.py) derives them instead of retyping them — a
-# retyped copy drifts and turns that suite permanently green.
 MISSING_KEY_MESSAGE = (
     "OPENAI_API_KEY is not set, and this index was built with the real embedder. "
     "(EMBED_API_KEY, the explicit override, is not set either.) "
@@ -51,13 +48,11 @@ class OpenAIEmbedder:
         self.model = model or os.environ.get(MODEL_ENV) or DEFAULT_MODEL
         base = (base_url or os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL).rstrip("/")
         self._url = base + "/embeddings"
-        # WHERE this embeds — recorded in index_meta beside model and dim at rebuild, compared
-        # at query time: the same model name on two hosts is not provably the same vector space
-        # (issue #112). A base URL, never a credential.
+        # Model name and host jointly identify the vector space recorded by the index.
         self.host = base
         # The OpenAI key is the fallback for the OpenAI HOST and nowhere else — precedence is
         # not isolation, and a bearer token sent to a host that did not issue it is DISCLOSED to
-        # that host whether or not it is accepted (audit S1). A non-default host with no
+        # that host whether or not it is accepted. A non-default host with no
         # EMBED_API_KEY is therefore a refusal below, never a borrowed credential.
         self._api_key = api_key or os.environ.get(API_KEY_ENV)
         if not self._api_key and base == DEFAULT_BASE_URL:
@@ -77,8 +72,7 @@ class OpenAIEmbedder:
                 raise RuntimeError(
                     f"EMBED_DIMENSIONS must be positive (got {self._dimensions}) — a vector with "
                     f"no dimensions embeds nothing")
-        # the injectable HTTP seam: production passes None (real network), tests an
-        # httpx.MockTransport
+        # Optional transport supports controlled HTTP routing.
         self._transport = transport
         if not self._api_key:
             # Never suggest the fake as a keyless substitute: a query embedded by the fake against

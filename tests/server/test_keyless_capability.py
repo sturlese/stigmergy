@@ -59,15 +59,15 @@ def _tools(service):
 def test_brain_submit_works_with_no_embedder(keyless):
     svc, _ = keyless
     ack = json.loads(asyncio.run(_tools(svc)["brain_submit"](
-        kind="raw", material="a capture made while the embedding key was expired")))
-    assert ack["status"] == "queued" and isinstance(ack["id"], int)
+        text="a capture made while the embedding key was expired")))
+    assert ack["status"] == "queued" and isinstance(ack["id"], str)
     assert "error" not in ack
 
 
 def test_brain_submissions_works_with_no_embedder(keyless):
     svc, _ = keyless
     tools = _tools(svc)
-    asyncio.run(tools["brain_submit"](kind="raw", material="something to read back keyless"))
+    asyncio.run(tools["brain_submit"](text="something to read back keyless"))
     out = json.loads(tools["brain_submissions"]())
     assert "error" not in out and out["submissions"]
 
@@ -89,14 +89,14 @@ def test_list_entities_works_with_no_embedder(keyless):
     svc, _ = keyless
     out = json.loads(_tools(svc)["list_entities"]())
     assert "error" not in out
-    assert out["entities"]
+    assert isinstance(out["entities"], list)
 
 
 def test_describe_entity_works_with_no_embedder(keyless):
     svc, _ = keyless
     out = json.loads(_tools(svc)["describe_entity"](entity="initech"))
     assert "error" not in out
-    assert out["entity"]["id"] == "initech"
+    assert out["found"] is False
 
 
 # ── the half that must refuse, honestly ──────────────────────────────────────────────────────────

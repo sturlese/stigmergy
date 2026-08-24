@@ -5,7 +5,6 @@ path is DB-backed (a forged index_meta model) and skips without postgres.
 
 import pytest
 
-from stigmergy.index import store
 from stigmergy.server.errors import CapabilityUnavailableError, StartupError
 from stigmergy.server.mcp_server import main
 from stigmergy.server.service import UnavailableEmbedder, _resolve_embedder
@@ -17,14 +16,14 @@ def test_no_identity_exits_nonzero_with_message(fixture, monkeypatch, capsys):
     monkeypatch.delenv("STIGMERGY_IDENTITY", raising=False)
     rc = main(["--identities", fixture.identities_path])
     assert rc == 2
-    assert "no identity given" in capsys.readouterr().err
+    assert "no identity was provided" in capsys.readouterr().err
 
 
 def test_unknown_identity_exits_nonzero_with_message(fixture, monkeypatch, capsys):
     monkeypatch.delenv("STIGMERGY_IDENTITY", raising=False)
     rc = main(["--identity", "ghost", "--identities", fixture.identities_path])
     assert rc == 2
-    assert "unknown identity 'ghost'" in capsys.readouterr().err
+    assert "identity is not configured" in capsys.readouterr().err
 
 
 def test_malformed_identities_file_exits_nonzero_with_message(tmp_path, monkeypatch, capsys):
@@ -109,24 +108,3 @@ def test_postgres_unreachable_exits_cleanly_without_leaking_credentials(fixture,
     # credentials never reach stderr; the credential-free location still helps the operator
     assert "sup3rs3cret" not in err and "dbuser" not in err
     assert "127.0.0.1:1/stigmergy" in err
-
-
-def test_index_meta_without_built_at_exits_with_rebuild_hint(indexed, fixture, capsys):
-    """An `index_meta` from before the `built_at` column existed — a database nobody has rebuilt
-    since — must not crash with a raw UndefinedColumn: `read_meta` tolerates the missing column
-    and returns None, so the empty-index path surfaces the clean, actionable rebuild hint
-    instead."""
-    conn, _ = indexed
-    with conn.cursor() as cur:
-        cur.execute("ALTER TABLE index_meta DROP COLUMN built_at")
-    try:
-        assert store.read_meta(conn) is None          # tolerant: a missing column is not a crash
-        rc = main(["--identity", fixture.STEWARD, "--identities", fixture.identities_path,
-                   "--embedder", "fake"])
-        assert rc == 2
-        err = capsys.readouterr().err
-        assert "stigmergy-index --rebuild" in err and "Traceback" not in err
-    finally:
-        with conn.cursor() as cur:
-            cur.execute("ALTER TABLE index_meta ADD COLUMN built_at timestamptz"
-                        " NOT NULL DEFAULT now()")

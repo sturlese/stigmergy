@@ -1,0 +1,7 @@
+{
+  "test-master": {
+    "display_name": "Test Master",
+    "groups": ["brain-admins"],
+    "default_audience": null
+  }
+}

@@ -1,4 +1,5 @@
-"""stigmergy.entities — governed entity birth, and the registry's derived view.
+"""Opaque entity identities with scoped, provenanced name claims."""
 
-See `index.md` in this directory for the code map.
-"""
+from stigmergy.entities.model import EntityRecord, NameClaim
+
+__all__ = ["EntityRecord", "NameClaim"]

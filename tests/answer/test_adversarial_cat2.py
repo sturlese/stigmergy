@@ -1,21 +1,10 @@
-"""Adversarial category 2 — ACL leakage / existence disclosure.
-
-The category the release gate arms that had COVERAGE but no NAME: the existence tests elsewhere
-pin the service invariant one property at a time, but nothing collected them as an adversarial
-category the way `-k adversarial_cat1` does for injection. These cases exercise the attacker's
-QUESTION SHAPES against the ACL boundary end to end — search, read, entity navigation, and the
-refusal composer — under a real scoped identity over the real index. Named `adversarial_cat2_*`
-so the release gate (`make adversarial`, `evals/run_gates.py`) collects them by pattern.
-
-Fixture: `tests/answer/conftest.py`'s corpus — `ACME_PAGE` carries `acl: ['finance']`; identity
-`eng` (audiences `{'eng'}`) must never see it exist; `ana` (finance) is the benign twin.
-"""
+"""ACL non-disclosure across answer surfaces."""
 import asyncio
 
 from stigmergy.answer import brain as brain_mod
 from stigmergy.answer.brain import AnswerBrain
 from stigmergy.answer.service import AnswerService
-from tests.answer.conftest import brain_service
+from tests.answer.conftest import ACME_ID, brain_service
 
 
 def _brain(conn, fx, identity):
@@ -50,16 +39,14 @@ def test_adversarial_cat2_read_by_exact_path_is_absence_not_denial(answer_indexe
 
 
 def test_adversarial_cat2_entity_surfaces_hide_out_of_scope_existence(answer_indexed):
-    """`describe_entity` for a scoped-out entity is byte-identical to a nonexistent one, and
-    `known_entities` never names it — existence itself is scoped."""
     conn, fx = answer_indexed
     eng = _brain(conn, fx, "eng")
-    described = eng.service.describe_entity("acme")
+    described = eng.service.describe_entity("Acme")
     ghost = eng.service.describe_entity("no-such-entity")
-    assert described == {"error": "unknown entity: acme"}
-    assert described.keys() == ghost.keys()
-    assert "acme" not in eng.known_entities()
-    assert "acme" in _brain(conn, fx, "ana").known_entities()   # the benign twin
+    assert described == ghost
+    assert described["found"] is False
+    assert ACME_ID not in eng.known_entities()
+    assert ACME_ID in _brain(conn, fx, "ana").known_entities()
 
 
 def test_adversarial_cat2_a_refusal_never_names_what_the_asker_cannot_see(answer_indexed):
@@ -80,7 +67,7 @@ def test_adversarial_cat2_entity_filtered_search_does_not_confirm_existence(answ
     both, never an error that distinguishes them."""
     conn, fx = answer_indexed
     svc = brain_service(conn, fx, "eng")
-    scoped = svc.search("payroll", filters={"entity": "acme"})
+    scoped = svc.search("payroll", filters={"entity": ACME_ID})
     ghost = svc.search("payroll", filters={"entity": "no-such-entity"})
     assert scoped["count"] == 0
     assert scoped["count"] == ghost["count"]

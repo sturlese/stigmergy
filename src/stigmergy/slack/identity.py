@@ -113,8 +113,7 @@ class UsersInfoCache:
     The separation IS the security property: nothing writes a display name through the email
     accessors, so a user-settable display name can never reach an identity — and therefore an
     ACL — decision. Both hold ONLY positive results, so an unmapped user who gets mapped
-    works on their next question. `clock` is injectable so a test drives expiry without a real
-    sleep."""
+    works on their next question."""
 
     def __init__(self, ttl_seconds: int = DEFAULT_TTL_SECONDS, clock=time.monotonic,
                 max_entries: int = DEFAULT_MAX_ENTRIES):

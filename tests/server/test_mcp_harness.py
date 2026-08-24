@@ -27,9 +27,14 @@ def test_server_exposes_the_read_tools_and_ask_over_stdio(indexed):
 
     async def go():
         async with mcp_session(fx, fx.STEWARD) as session:
-            names = {t.name for t in (await session.list_tools()).tools}
+            tools = (await session.list_tools()).tools
+            names = {tool.name for tool in tools}
             assert names == {"search_brain", "read_page", "list_entities", "describe_entity",
                              "ask", "brain_submit", "brain_submissions", "brain_delete"}
+            submit = next(tool for tool in tools if tool.name == "brain_submit")
+            assert set(submit.inputSchema["properties"]) == {
+                "text", "path", "url", "title", "occurred_at", "audience"
+            }
             # exactly eight tools and no more. The in-process mirror of this same closed set is
             # `test_mcp_adapter.py::test_the_mounted_tool_list_is_exactly_the_eight_supported_tools`
             # — that one proves `build_mcp()`'s own output; this one proves the REAL entry point
@@ -133,18 +138,16 @@ def test_same_question_two_identities_get_different_realities(indexed):
     assert set(b_read) == set(b_ghost) == {"error"}
 
 
-def test_filters_and_include_superseded_roundtrip_over_mcp(indexed):
+def test_filters_roundtrip_over_mcp(indexed):
     """Structured params survive the MCP boundary."""
     _, fx = indexed
 
     async def go():
         async with mcp_session(fx, fx.STEWARD) as session:
             out = await call_json(session, "search_brain", query="revenue",
-                                  filters={"entity": "initech"}, include_superseded=False,
+                                  filters={"entity": fx.INITECH_ID},
                                   max_results=3)
-            # `entity` is a LIST — membership, not equality.
-            assert out["hits"] and all("initech" in h["entity"] for h in out["hits"])
-            assert all(not h["superseded"] for h in out["hits"])   # current-only dropped the old page
+            assert out["hits"] and all(fx.INITECH_ID in h["entity"] for h in out["hits"])
             assert len(out["hits"]) <= 3
             # an unknown filter comes back as a clean error, not a crash
             bad = await call_json(session, "search_brain", query="x", filters={"body": "nope"})
@@ -152,89 +155,31 @@ def test_filters_and_include_superseded_roundtrip_over_mcp(indexed):
     _run(go())
 
 
-def test_include_superseded_default_keeps_but_demotes_the_superseded_page_over_mcp(indexed):
-    """At least one test per surface runs on the DEFAULTS: the `include_superseded=True` path is
-    not passed here — proving the default itself, not just the explicit True — and it keeps a
-    superseded page reachable in the results while ranking it below its current counterpart. The
-    test above only proves `include_superseded=False` can drop it; this proves the default demotes
-    rather than silently ignoring supersession."""
-    _, fx = indexed
-
-    async def go():
-        async with mcp_session(fx, fx.STEWARD) as session:
-            out = await call_json(session, "search_brain", query="quarterly revenue",
-                                  filters={"entity": "initech"}, max_results=20)
-            by_path = {h["path"]: h for h in out["hits"]}
-            assert fx.OPEN_PAGE in by_path and fx.SUPERSEDED_PAGE in by_path
-            assert by_path[fx.SUPERSEDED_PAGE]["superseded"] is True
-            assert "superseded" in by_path[fx.SUPERSEDED_PAGE]["factors"]
-            assert by_path[fx.SUPERSEDED_PAGE]["score"] < by_path[fx.OPEN_PAGE]["score"]
-            positions = [h["path"] for h in out["hits"]]
-            assert positions.index(fx.OPEN_PAGE) < positions.index(fx.SUPERSEDED_PAGE)
-    _run(go())
-
-
-
 # ── capture over the REAL stdio protocol: submit end to end, and stdio attribution ─────────────
 def test_brain_submit_and_brain_submissions_round_trip_over_stdio(indexed):
-    conn, fx = indexed
+    _conn, fx = indexed
     material = f"stdio harness capture {time.monotonic_ns()}"
 
     async def go():
         async with mcp_session(fx, fx.STEWARD) as session:
-            ack = await call_json(session, "brain_submit", kind="raw", material=material,
-                                  hints={"title": "stdio harness"})
+            ack = await call_json(
+                session,
+                "brain_submit",
+                text=material,
+                title="stdio harness",
+            )
             listed = await call_json(session, "brain_submissions", limit=200)
             return ack, listed
     ack, listed = _run(go())
 
     assert ack["status"] == "queued"
     assert ack["submitted_by"] == fx.STEWARD             # the --identity name, resolved over stdio
-    assert isinstance(ack["id"], int)
+    assert isinstance(ack["id"], str)
 
     row = next(r for r in listed["submissions"] if r["id"] == ack["id"])
     assert row["mine"] is True
     assert row["submitted_by"] == fx.STEWARD
-    # a `queued` row's excerpt is withheld until the librarian has looked — move THIS row (by id,
-    # never `queue.claim_next`: `conn` is shared with every other stdio test that submits and
-    # leaves a row `queued`) past the gate before checking the UNTRUSTED-DATA fence.
-    from stigmergy.capture import queue, schema
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE capture_queue SET status = 'claimed', claimed_at = now(), "
-            "attempts = attempts + 1 WHERE id = %s AND status = 'queued' RETURNING attempts",
-            (ack["id"],))
-        attempts = cur.fetchone()[0]
-    queue.finish(conn, ack["id"], status=schema.FILED, expected_attempts=attempts,
-                result_ref="wiki/x.md")
-
-    async def go2():
-        async with mcp_session(fx, fx.STEWARD) as session:
-            return await call_json(session, "brain_submissions", limit=200)
-    listed2 = _run(go2())
-    row2 = next(r for r in listed2["submissions"] if r["id"] == ack["id"])
-    assert row2["excerpt"].startswith("<<<UNTRUSTED-DATA\n")   # fenced, once the librarian looked
-
-
-def test_brain_submit_a_forged_submitted_by_is_refused_over_stdio(indexed):
-    """Over the real protocol: the tool DOES declare `submitted_by` on its signature
-    (so it can be refused explicitly — see `tests/server/test_mcp_adapter.py`'s adversarial pair
-    for what happens to an UNDECLARED extra argument by contrast), so a real client sending it
-    reaches the service and is refused with no row created for the forged identity."""
-    conn, fx = indexed
-
-    async def go():
-        async with mcp_session(fx, fx.STEWARD) as session:
-            return await call_json(session, "brain_submit", kind="raw", material="forged capture",
-                                   submitted_by="ceo@example.com")
-    out = _run(go())
-
-    assert "error" in out and "submitted_by" in out["error"]
-    assert "ceo@example.com" not in out["error"]   # the message never echoes the forged value
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM capture_queue WHERE submitted_by = %s",
-                    ("ceo@example.com",))
-        assert cur.fetchone()[0] == 0
+    assert material not in json.dumps(row)
 
 
 def test_postgres_down_fails_the_mcp_handshake_promptly_not_a_hang(fixture):

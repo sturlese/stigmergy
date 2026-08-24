@@ -110,16 +110,16 @@ def test_a_search_that_hits_still_records_what_came_back():
 
 def test_a_page_that_exists_still_records_its_body():
     ctx = SynthesisContext(service=None)
-    page = {"path": "wiki/kpi.md", "title": "KPI metrics", "type": "report", "status": "",
-            "entity": ["initech"], "as_of": "2026-01", "supersedes": None, "superseded_by": None,
-            "body": "ARR reached 512000 usd this quarter.",
-            "links": [], "backlinks": [], "links_note": "", "backlinks_note": ""}
+    page = {"path": "wiki/notes/KPI metrics.md", "title": "KPI metrics", "type": "note",
+            "status": "mature", "entity": ["ent_initech"], "updated": "2026-01-31",
+            "body": "ARR reached 512000 usd this quarter.", "links": [], "backlinks": [],
+            "links_note": "", "backlinks_note": ""}
     brain = AnswerBrain(_FakeService(page=page))
 
-    ctx.record(brain.page_text("wiki/kpi.md", ctx))
+    ctx.record(brain.page_text("wiki/notes/KPI metrics.md", ctx))
 
     assert "512000" in ctx.evidence_text()
-    assert ctx.read_paths == {"wiki/kpi.md"}
+    assert ctx.read_paths == {"wiki/notes/KPI metrics.md"}
 
 
 def test_the_lookup_itself_is_still_a_recorded_fact():

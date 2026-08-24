@@ -1,9 +1,0 @@
-{
-  "entities": {
-    "acme-corp": {
-      "name": "Acme Corp",
-      "type": "organization",
-      "aliases": ["Acme"]
-    }
-  }
-}

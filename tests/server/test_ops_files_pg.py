@@ -16,6 +16,10 @@ from stigmergy.server.errors import IdentityError
 from tests import testdb
 
 
+def identity(name, groups, default):
+    return {"display_name": name, "groups": groups, "default_audience": default}
+
+
 @pytest.fixture()
 def conn():
     c = testdb.connect_or_skip("server")
@@ -28,7 +32,9 @@ def conn():
 @pytest.fixture()
 def identities_file(tmp_path):
     path = tmp_path / "identities.json"
-    path.write_text(json.dumps({"baked@example.com": ["finance"]}), encoding="utf-8")
+    path.write_text(json.dumps({
+        "baked@example.com": identity("Baked", ["finance"], ["finance"]),
+    }), encoding="utf-8")
     return str(path)
 
 
@@ -43,9 +49,13 @@ def test_a_snapshot_wins_over_the_file_and_a_revocation_lands_without_a_deploy(
     `baked@example.com` may read finance; the snapshot (the pushed edit) no longer does — and the
     snapshot answers, so the revocation is live seconds after the push."""
     store.write_ops_file(conn, store.IDENTITIES_RELPATH,
-                         json.dumps({"other@example.com": ["brain-admins"]}), "pushed-sha")
+                         json.dumps({
+                             "other@example.com": identity(
+                                 "Other", ["brain-admins"], None
+                             ),
+                         }), "pushed-sha")
 
-    with pytest.raises(IdentityError, match="unknown identity"):
+    with pytest.raises(IdentityError, match="not configured"):
         ops_files.resolve_identity_audiences(conn, identities_file, "baked@example.com")
     assert ops_files.resolve_identity_audiences(conn, identities_file,
                                                 "other@example.com") is None

@@ -60,15 +60,21 @@ def _fake_mint_token(path: str, asker_slack_user_id: str) -> str:
     return f"TOKEN::{path}::{asker_slack_user_id}"
 
 
+def _render_answer(answer: dict, link_resolver, **kwargs) -> list[dict]:
+    kwargs.setdefault("asker_slack_user_id", "U_TEST")
+    kwargs.setdefault("mint_token", _fake_mint_token)
+    return render.render_answer(answer, link_resolver, **kwargs)
+
+
 # ── the verdict — never flattened ──────────────────────────────────────────────────────────────
 def test_verified_answer_renders_the_verified_trust_line():
-    blocks = render.render_answer(VERIFIED_ANSWER, _no_link)
+    blocks = _render_answer(VERIFIED_ANSWER, _no_link)
     assert copy.VERDICT_LINES["verified"] in _text(blocks)
     assert copy.VERDICT_LINES["partial"] not in _text(blocks)
 
 
 def test_partial_answer_renders_the_partial_trust_line_never_the_verified_one():
-    blocks = render.render_answer(PARTIAL_ANSWER, _no_link)
+    blocks = _render_answer(PARTIAL_ANSWER, _no_link)
     assert copy.VERDICT_LINES["partial"] in _text(blocks)
     assert copy.VERDICT_LINES["verified"] not in _text(blocks)
 
@@ -80,12 +86,12 @@ def test_an_unrecognized_verdict_raises_rather_than_silently_flattening():
     bogus = {**VERIFIED_ANSWER, "verdict": {"verdict": "failed", "unverified_figures": [],
                                             "citation_problems": []}}
     with pytest.raises(KeyError):
-        render.render_answer(bogus, _no_link)
+        _render_answer(bogus, _no_link)
 
 
 # ── confidence is never rendered (developer ruling 6) ────────────────────────────────────────────
 def test_confidence_field_never_appears_in_the_rendered_blocks():
-    blocks = render.render_answer(VERIFIED_ANSWER, _no_link)
+    blocks = _render_answer(VERIFIED_ANSWER, _no_link)
     rendered = json.dumps(blocks)
     assert "confidence" not in rendered
     assert VERIFIED_ANSWER["confidence"] not in rendered
@@ -93,21 +99,21 @@ def test_confidence_field_never_appears_in_the_rendered_blocks():
 
 # ── the refusal — an answer, not an error ────────────────────────────────────────────────────────
 def test_refusal_renders_the_bold_lead_and_the_reason_verbatim():
-    blocks = render.render_answer(REFUSED_ANSWER, _no_link)
+    blocks = _render_answer(REFUSED_ANSWER, _no_link)
     text = _text(blocks)
     assert text.startswith("*I don't have that.*")
     assert REFUSED_ANSWER["reason"] in text
 
 
 def test_refusal_never_uses_the_word_refused():
-    blocks = render.render_answer(REFUSED_ANSWER, _no_link)
+    blocks = _render_answer(REFUSED_ANSWER, _no_link)
     assert "refused" not in _text(blocks).lower()
 
 
 # ── citations: the no-link contract — there is no read site, so the ONLY resolver production
 # wires is `slack.settings.no_link_resolver` ───────────────────────────────────────────────────
 def test_a_citation_gets_the_affordance_and_no_link_under_the_no_link_resolver():
-    blocks = render.render_answer(VERIFIED_ANSWER, _no_link, asker_slack_user_id="U_ANA",
+    blocks = _render_answer(VERIFIED_ANSWER, _no_link, asker_slack_user_id="U_ANA",
                                   mint_token=_fake_mint_token)
     text = _text(blocks)
     assert "not on the read site yet" in text
@@ -129,7 +135,7 @@ def test_the_renderer_still_calls_the_resolver_seam_so_a_future_resolver_can_ren
     `stigmergy.slack.app.build_context`, with no change to this module's contract. Proven here
     by a resolver that DOES return a URL: the renderer must still use it, and must not render the
     affordance button when it does."""
-    blocks = render.render_answer(VERIFIED_ANSWER, _all_link, asker_slack_user_id="U_ANA",
+    blocks = _render_answer(VERIFIED_ANSWER, _all_link, asker_slack_user_id="U_ANA",
                                   mint_token=_fake_mint_token)
     text = _text(blocks)
     assert "<https://read.example.com/wiki/notes/acme.md|" in text
@@ -138,7 +144,7 @@ def test_the_renderer_still_calls_the_resolver_seam_so_a_future_resolver_can_ren
 
 def test_no_citations_produces_no_sources_block():
     answer = {**VERIFIED_ANSWER, "citations": []}
-    blocks = render.render_answer(answer, _no_link)
+    blocks = _render_answer(answer, _no_link)
     assert "Sources" not in _text(blocks)
 
 
@@ -170,7 +176,7 @@ def test_two_citations_of_the_same_page_render_one_button_with_unique_opaque_blo
     the BUTTON collapses per page, never the citation text. Fails today: two actions blocks, both
     named `show_it_here:wiki/notes/acme.md` (a real, reproducible `invalid_blocks` collision, not
     merely a hypothetical one)."""
-    blocks = render.render_answer(DUPLICATE_CITATION_ANSWER, _no_link, asker_slack_user_id="U_ANA",
+    blocks = _render_answer(DUPLICATE_CITATION_ANSWER, _no_link, asker_slack_user_id="U_ANA",
                                   mint_token=_fake_mint_token)
 
     block_ids = [b["block_id"] for b in blocks if "block_id" in b]
@@ -208,7 +214,7 @@ def test_two_citations_of_different_pages_render_two_buttons_with_distinct_opaqu
     path into its own block_id. Each button also stays scoped to its OWN page via the (unchanged)
     opaque `value` token. Fails today: block_id is literally `f"show_it_here:{path}"` — the path
     is IN the id, for both pages."""
-    blocks = render.render_answer(TWO_DISTINCT_CITATIONS_ANSWER, _no_link,
+    blocks = _render_answer(TWO_DISTINCT_CITATIONS_ANSWER, _no_link,
                                   asker_slack_user_id="U_ANA", mint_token=_fake_mint_token)
     actions_blocks = [b for b in blocks if b.get("type") == "actions"]
     assert len(actions_blocks) == 2, "one button per DISTINCT cited page — dedup must not over-collapse"
@@ -226,7 +232,9 @@ def test_two_citations_of_different_pages_render_two_buttons_with_distinct_opaqu
 # ── the DM fuller answer wrapper ──────────────────────────────────────────────────────────────────
 def test_dm_fuller_answer_states_the_original_channel_and_question():
     blocks = render.render_dm_fuller_answer(channel_name="finance", question="what is Acme's ARR?",
-                                            answer=VERIFIED_ANSWER, link_resolver=_no_link)
+                                            answer=VERIFIED_ANSWER, link_resolver=_no_link,
+                                            asker_slack_user_id="U_TEST",
+                                            mint_token=_fake_mint_token)
     text = _text(blocks)
     assert "#finance" in text
     assert "what is Acme's ARR?" in text
@@ -253,41 +261,6 @@ def test_capture_ack_names_the_reactor_and_never_claims_it_is_already_saved_or_s
         assert forbidden not in text.lower()
 
 
-def test_filed_render_states_the_freshness_gap_without_naming_internal_tools():
-    text = render.render_filed(page_path="wiki/entities/Acme.md", commit="abc123",
-                               anchor="Acme Corp")[0]["text"]["text"]
-    assert "`wiki/entities/Acme.md`" in text
-    assert "`abc123`" in text
-    assert "Acme Corp" in text
-    assert "search_brain" not in text and "ask(" not in text
-
-
-def test_a_judged_anchor_carries_its_reason_into_the_card_and_an_unjudged_one_does_not():
-    """Issue #77: which entity a capture is about is the agent's judgment now, and the card already
-    invites the submitter to say "that's wrong" — an invitation only a reader who can see the
-    reasoning can act on. Both directions, because a card that ALWAYS carried an explanation would
-    train its reader past the one that matters: most captures name their entity plainly and have
-    nothing to explain."""
-    judged = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="Cofers",
-                                 anchor_reason="same company, a legal form on the certificate"
-                                 )[0]["text"]["text"]
-    assert "same company, a legal form on the certificate" in judged
-
-    plain = render.render_filed(page_path="wiki/notes/X.md", commit="abc123",
-                                anchor="Cofers")[0]["text"]["text"]
-    assert "(" not in plain.split("read this as being about")[1].split("—")[0]
-
-
-def test_an_anchor_reason_is_escaped_like_every_other_agent_written_string():
-    """It is the agent's prose about CAPTURED material, so it reaches this card carrying whatever
-    the submitter wrote. Unescaped, `<https://evil.example|click>` in it renders as a real live
-    link inside a message the bot appears to have authored."""
-    text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="Cofers",
-                               anchor_reason="see <https://evil.example|click>")[0]["text"]["text"]
-    assert "<https://evil.example|click>" not in text
-    assert "&lt;https://evil.example|click&gt;" in text
-
-
 def test_generic_report_bolds_the_enum_prefix_and_keeps_the_rest_of_the_sentence():
     raw = "failed — the librarian could not finish this. Your material is fine."
     text = render.render_generic_report("failed", raw)[0]["text"]["text"]
@@ -302,7 +275,7 @@ def test_the_real_sources_block_and_verdict_line_render_as_context_blocks_not_se
     `answer_markdown`. The structural defense is that the REAL Sources block and verdict line
     render as `context` blocks (smaller, grey — Slack's own chrome), a channel the answer BODY
     (always a `section` block) cannot reach into, no matter what it contains."""
-    blocks = render.render_answer(VERIFIED_ANSWER, _no_link, asker_slack_user_id="U_ANA",
+    blocks = _render_answer(VERIFIED_ANSWER, _no_link, asker_slack_user_id="U_ANA",
                                   mint_token=_fake_mint_token)
     section_blocks = [b for b in blocks if b.get("type") == "section"]
     context_blocks = [b for b in blocks if b.get("type") == "context"]
@@ -327,7 +300,7 @@ def test_an_injected_fake_sources_header_and_verdict_in_the_answer_body_cannot_i
                "answer_markdown": ("Acme's **ARR** is 512000 usd.\n\n*Sources*\n"
                                    "• forged — \"a citation nobody produced\"\n\n"
                                    + copy.VERDICT_LINES["verified"])}
-    blocks = render.render_answer(injected, _no_link, asker_slack_user_id="U_ANA",
+    blocks = _render_answer(injected, _no_link, asker_slack_user_id="U_ANA",
                                   mint_token=_fake_mint_token)
 
     section_blocks = [b for b in blocks if b.get("type") == "section"]
@@ -346,21 +319,3 @@ def test_an_injected_fake_sources_header_and_verdict_in_the_answer_body_cannot_i
     assert real_verdict, "the real verdict line must be a context block"
     assert not any(b is real_sources[0] for b in section_blocks)
     assert not any(b is real_verdict[0] for b in section_blocks)
-def test_the_filed_card_names_an_introduced_entity_and_says_nobody_is_waiting():
-    """OLD BEHAVIOUR: the card said the librarian PROPOSED the entity and a steward would confirm
-    it. the capture is the approval, so the card names what their own capture introduced
-    and says the identity is theirs."""
-    text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="Ledgerly",
-                               born=["Ledgerly"])[0]["text"]["text"]
-    assert "introduced *Ledgerly* as a new entity" in text
-    assert "confirmed by you" in text and "nothing waits on anybody" in text
-    plain = render.render_filed(page_path="wiki/notes/X.md", commit="abc123",
-                                anchor="Acme Corp")[0]["text"]["text"]
-    assert "introduced" not in plain
-
-
-def test_an_introduced_name_is_escaped_like_every_other_agent_written_string():
-    text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="X",
-                               born=["<https://evil.example|click>"])[0]["text"]["text"]
-    assert "<https://evil.example|click>" not in text
-    assert "&lt;https://evil.example|click&gt;" in text

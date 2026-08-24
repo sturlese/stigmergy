@@ -1,8 +1,4 @@
-"""Every user-facing string this transport ships. `render` and the handler modules call these
-functions and never format their own copy — a wording change is a one-file change, and the
-strings are pinnable by a test. Distinct states keep distinct strings: a transient identity failure is not an unmapped
-user, and a capture that failed to queue is not one the librarian declined.
-"""
+"""User-facing Slack copy shared by renderers and handlers."""
 # Who a user is pointed at when they need a human. A ROLE, never a name: this transport has no
 # registry of people to look one up in, and copy naming somebody who has left the company is worse
 # than copy naming nobody.
@@ -105,85 +101,16 @@ CAPTURE_FAILED = ("That didn't go through — something went wrong on my side, n
 
 
 # ── the 🧠 gesture — private channel / group DM / DM refusal ─────────────────────────────────────
-PRIVATE_CHANNEL_REFUSAL = ("🧠 doesn't work here — a private channel's material would carry "
-                          "permissions the brain can't yet translate into its own rules. Public "
-                          "channels only, for now.")
-
-
-def not_in_this_channels_groups(channel_name: str) -> str:
-    """The 🧠 refusal when the reactor does not hold the groups this channel files at.
-
-    A capture from a scoped channel is filed at that channel's groups, and the door's
-    rule is that you may file only what you could read afterwards — so somebody who cannot read
-    the channel's material cannot capture it either. It names the CHANNEL, which they are already
-    in and can see, and never the groups: which groups exist is not this message's to disclose.
-    """
-    where = f"#{channel_name}" if channel_name else "this channel"
-    return (f"I can't capture that for you — {where} files into the brain at an audience you're "
-            f"not in, so you wouldn't be able to read the page afterwards. Ask whoever looks "
-            f"after the brain to add you, or ask someone in that audience to react instead.")
-
-
-# ── the push channel ────────────────────────────────────────────────────────────────────────────
-def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
-          anchor_reason: str = "", born: list[str] = ()) -> str:
-    # `source_page` names the thread's own verbatim archive filed beside the synthesis; empty for
-    # captures without one, and the card is unchanged.
-    source_line = (f"Your thread is also archived word-for-word at `{source_page}`.\n\n"
-                   if source_page else "")
-    # `born` names the entities the librarian CREATED for this capture because the registry did
-    # not know them — in the brain now, confirmed by the person who captured. Said here because the
-    # registry grew on their say-so, and the sentence is where they learn it did.
-    born_line = (f"It introduced {', '.join(f'*{name}*' for name in born)} as "
-                 f"{'a new entity' if len(born) == 1 else 'new entities'} — created now and "
-                 f"confirmed by you; nothing waits on anybody.\n\n"
-                 if born else "")
-    # Which entity a capture is about is a JUDGMENT (issue #77), so where one was explained the
-    # explanation belongs beside the invitation to correct it: "if that's wrong, say so" is only
-    # actionable for a reader who can see what the librarian thought. Empty for a capture that
-    # named its entity plainly, which is most of them — a card that always carried an explanation
-    # would train its reader past the one that matters.
-    reason_clause = f" ({anchor_reason})" if anchor_reason else ""
-    return (f"*filed* — this became a page: `{page_path}` @ `{commit}`\n\n"
-            f"{source_line}{born_line}"
-            f"The librarian read this as being about *{anchor}*{reason_clause} — if that's wrong, "
-            f"tell {WHO_TO_ASK} so the page can be pointed at the right thing.\n\n"
-            "Heads up: this won't show up yet if you `@brain` a question about it — that catches "
-            "up automatically tonight, not right away.")
-
-
-def page_rewritten(*, page_path: str, why: str, by: str) -> str:
-    """What the person who filed a page is told when a later capture brought it up to date.
-
-    **This message is the whole reason a capture may rewrite at all.** There is no proof that the
-    new text is right — the bytes are the ones the agent just wrote, so comparing them to what the
-    agent wrote proves nothing — and what stands in its place is that the change is loud and has an
-    owner. That makes this sentence load-bearing rather than courteous: it names the page, the
-    reason, and who caused it, so the one person who can tell whether the revision is wrong finds
-    out from the brain rather than from a git log they never read.
-
-    No verdict is asked for and there is no button: the undo is `git revert` in a repository they
-    own, and telling them is not the same as asking them.
-    """
-    reason = (why or "").strip() or "no reason was given"
-    return (f"📝 *{page_path}* — a page you filed has been brought up to date.\n"
-            f"> {reason}\n"
-            f"Filed by {by or 'somebody'}. Nothing is being asked of you: the page's history has "
-            f"the previous version, and `git revert` in the knowledge repo is the undo.")
-
-
-def filed_fallback(*, page_path: str) -> str:
-    """The `text=` companion of `filed`'s card: the notification line for a filed capture."""
-    return f"filed: {page_path}"
+PRIVATE_CHANNEL_REFUSAL = (
+    "🧠 capture is not configured for this channel or this person. Ask the brain operator to "
+    "map the channel to an audience you belong to."
+)
 
 
 def report_fallback(status: str) -> str:
     """The `text=` companion of every other reported status — the status word, then a noun for
     what happened, since the sentence itself is in the card."""
     return f"{status}: capture update"
-
-
-
 # ── error states ────────────────────────────────────────────────────────────────────────────────
 def server_error(short_id: str = "") -> str:
     ref = f" (ref: {short_id})" if short_id else ""

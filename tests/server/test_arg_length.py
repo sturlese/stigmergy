@@ -237,19 +237,14 @@ def test_brain_delete_checks_every_path_it_was_handed_not_only_the_reason():
 
 
 def test_brain_delete_at_the_limit_reason_reaches_the_service():
-    """The benign twin: an AT-limit reason is never rejected for its LENGTH — the call proceeds
-    into the door, which then refuses it for a completely different reason, so "passed the guard"
-    can never be read as "was rejected by it"."""
+    """An at-limit reason reaches the service instead of the length guard."""
     from stigmergy.server.mcp_server import build_mcp
 
     svc = poisoned_service(audit=FakeAudit())
     mcp = build_mcp(svc)
 
     out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md"], why="x" * MAX_ARG_CHARS)
-    # Past the guard and into the door's own first refusal — a genuinely different sentence from
-    # the length check's, on a service with no evidence store wired (a removal is QUEUED,
-    # so the capture queue is what this door needs and what this service has not got).
-    assert "evidence store" in out["error"]
+    assert "IdentityError" in out["error"]
     assert "too long" not in out["error"]
 
 
@@ -261,13 +256,8 @@ def test_a_pydantic_shaped_value_error_is_still_reduced_to_a_class_name(monkeypa
 
     def _unmarked(*_a, **_kw):
         raise ValueError("SECRET-MARKER field path leaked from somewhere internal")
-    # The door's own sequence, reached as a module attribute — patched here rather than raised
-    # from a double, so the ValueError arrives from exactly where a real one would.
-    monkeypatch.setattr("stigmergy.server.review.queue_deletion", _unmarked)
-
-    # `poisoned_service` resolves no audiences, so it is unrestricted — the one identity kind
-    # `brain_delete` authorizes, which is what lets the call reach the door at all.
     svc = poisoned_service(audit=FakeAudit())
+    monkeypatch.setattr(svc, "delete_pages", _unmarked)
     mcp = build_mcp(svc)
 
     out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md"], why="a short reason")

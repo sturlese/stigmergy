@@ -1,38 +1,54 @@
-"""CLI argument handling — the offline half (end-to-end CLI runs live in the pg suite)."""
+"""Offline argument contract for index maintenance."""
+import subprocess
+
 import pytest
 
-from stigmergy.index import cli
-
-
-def test_parse_filters_key_value_pairs():
-    assert cli._parse_filters(["entity=globex", "type=report"]) == \
-        {"entity": "globex", "type": "report"}
-    assert cli._parse_filters(None) == {}
-
-
-def test_parse_filters_rejects_malformed_pairs():
-    with pytest.raises(SystemExit):
-        cli._parse_filters(["entityglobex"])
+from stigmergy.index import build, cli, store
+from stigmergy.index.errors import StigmergyIndexError
 
 
 def test_index_main_requires_rebuild_and_repo(capsys):
     with pytest.raises(SystemExit):
-        cli.index_main(["--repo", "somewhere"])          # missing --rebuild
+        cli.index_main(["--repo", "somewhere"])
     with pytest.raises(SystemExit):
-        cli.index_main(["--rebuild"])                    # missing --repo
+        cli.index_main(["--rebuild"])
 
 
-def test_render_hit_shows_factors_and_arms():
-    out = cli._render_hit(1, {"title": "T", "path": "a.md", "zone": "sources",
-                              "score": 0.0123, "arms": ["fts", "vec"],
-                              "factors": ["superseded", "entity:globex"],
-                              "snippet": "the snippet"})
-    assert "superseded, entity:globex" in out
-    assert "fts+vec" in out
-    assert "the snippet" in out
+def _commit_checkout(path):
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Index Test",
+            "-c",
+            "user.email=index@example.invalid",
+            "commit",
+            "-qm",
+            "test fixture",
+        ],
+        cwd=path,
+        check=True,
+    )
 
 
-def test_render_hit_without_factors_says_none():
-    out = cli._render_hit(2, {"title": "T", "path": "a.md", "zone": "wiki",
-                              "score": 1.0, "arms": ["vec"], "factors": [], "snippet": ""})
-    assert "factors: none" in out
+def test_checked_repository_head_requires_exact_clean_root_and_controls(tmp_path):
+    repo = tmp_path / "brain"
+    note = repo / "wiki" / "notes" / "Seed.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("seed\n", encoding="utf-8")
+    for relpath in store.OPS_FILE_RELPATHS:
+        target = repo.joinpath(*relpath.split("/"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}\n", encoding="utf-8")
+    _commit_checkout(repo)
+
+    head = build._checked_repository_head(str(repo))
+    assert len(head) == 40
+    with pytest.raises(StigmergyIndexError, match="root"):
+        build._checked_repository_head(str(note.parent))
+
+    note.write_text("changed\n", encoding="utf-8")
+    with pytest.raises(StigmergyIndexError, match="must match"):
+        build._checked_repository_head(str(repo))

@@ -1,10 +1,5 @@
 #!/usr/bin/env python
-"""R2 smoke check: put + get + delete one object against an
-S3-compatible bucket, using ONLY credentials from the environment. This script never creates a
-bucket or any cloud resource — that stays a human step, documented in
-`docs/reference/operator-runbook.md`'s R2 section. It only proves scoped credentials for an
-ALREADY-PROVISIONED bucket actually work end to end, before the write path becomes their first
-real consumer.
+"""Verify put, get, and delete against a configured S3-compatible evidence bucket.
 
 Env (all required — fails closed with a clear message on any missing one, never a traceback):
     R2_ENDPOINT_URL       e.g. https://<account-id>.r2.cloudflarestorage.com
@@ -25,8 +20,7 @@ def _require_env() -> dict[str, str]:
     values = {n: os.environ.get(n) for n in names}
     missing = [n for n, v in values.items() if not v]
     if missing:
-        print(f"r2-smoke: missing env var(s): {', '.join(missing)} — see the R2 section of "
-              "docs/reference/operator-runbook.md", file=sys.stderr)
+        print(f"r2-smoke: missing env var(s): {', '.join(missing)}", file=sys.stderr)
         sys.exit(2)
     return values
 
@@ -60,10 +54,7 @@ def run() -> int:
             return 1
         client.delete_object(Bucket=bucket, Key=key)
     except (BotoCoreError, ClientError) as ex:
-        # credential-free posture (audit LOW-9 precedent): never print the secret key; the
-        # exception text from boto3 does not embed it, only the access key id (already known to
-        # whoever set the env var), so it is safe to surface as-is.
-        print(f"r2-smoke: FAILED — {ex.__class__.__name__}: {ex}", file=sys.stderr)
+        print(f"r2-smoke: FAILED — {ex.__class__.__name__}", file=sys.stderr)
         return 1
 
     print(f"r2-smoke: OK — put+get+delete round-tripped {bucket}/{key}")

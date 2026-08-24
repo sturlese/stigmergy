@@ -64,15 +64,7 @@ def test_evaluate_passes_each_questions_filters_to_the_ranking_fn():
 
 
 def test_retrieval_golden_v0_asks_at_least_nine_entity_filtered_questions():
-    """The shipped set exercises the filter: every question whose SUBJECT is a named entity
-    carries `filters.entity`, so breaking the membership clause in `index/search.py` moves this
-    run's result.
-
-    A FLOOR, not a census — it is here so the filter cannot quietly stop being exercised, and it
-    drops only when a filtered question is deliberately retired. It went from ten to nine when
-    `benchmark: aurora dossier` was retired with the stored per-entity rollup it expected: the
-    question asked retrieval for a page that was the rollup, and no page answers it now.
-    `evals/README.md` records that retirement; lowering this number is the reviewed half of it."""
+    """The shipped set keeps entity-filtered retrieval materially exercised."""
     questions = golden.load_golden(GOLDEN_V0)
     filtered = [q for q in questions if q["filters"]]
     assert len(filtered) >= 9
@@ -116,18 +108,3 @@ def test_evaluate_reports_per_arm_numbers_and_misses():
     rendered = golden.render_report(report)
     assert "MISS [fts,rrf] two" in rendered
     assert "fts" in rendered and "R@2" in rendered
-
-
-# --- chain-equivalent scoring: surfacing a part IS surfacing the document ---------------------
-
-def test_recall_credits_a_chain_member_when_the_base_is_expected():
-    """rank's top-k collapses a chain to its best-scoring member; WHICH member that is must not
-    decide a hit — the golden always expects the base id."""
-    assert golden.recall_at_k(["meeting-transcript"], ["meeting-transcript-p3"], 5) == 1.0
-    assert golden.hit_at_k(["meeting-transcript"], ["meeting-transcript-p3"], 5)
-    assert golden.recall_at_k(["drive:R1"], ["drive:R1#p2"], 5) == 1.0
-
-
-def test_chain_equivalence_never_credits_a_different_document():
-    assert golden.recall_at_k(["meeting-transcript"], ["other-page"], 5) == 0.0
-    assert not golden.hit_at_k(["meeting-transcript"], ["other-page-p2"], 5)

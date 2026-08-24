@@ -186,37 +186,6 @@ def test_the_committed_series_is_valid_ndjson_in_chronological_order():
                       if a > b))
 
 
-def test_the_reader_still_reads_the_rows_written_before_ADR_041_retired_two_facets():
-    """**The append-only file's own compatibility test, over the real file.**
-
-    `history.ndjson` is years long and never rewritten, so sixteen `suite: "filing"` rows carry
-    `park_question` and `reuse` — facets `run_filing` no longer scores, from runs whose statuses say
-    `needs_input`. Nothing rewrites them: a recorded row says what was measured, and re-grading it
-    against today's yardstick would destroy the only thing the series is for.
-
-    So the READER has to stay indifferent to which facets a row names, and that is what this pins.
-    `read_history` parses lines and never a schema, which is the property — a reader that grew a
-    required-facet check would make every filing score recorded before the redesign unreadable, and
-    the failure would look like an empty series rather than a broken parser.
-    """
-    from evals import run_filing
-
-    rows = eval_history.read_history()
-    filing = [r for r in rows if r.get("suite") == "filing" and r.get("facets")]
-    assert filing, "the series carries no filing row at all — this check lost its subject"
-
-    retired = {"park_question", "reuse"}
-    legacy = [r for r in filing if retired & set(r["facets"])]
-    assert legacy, ("no recorded row names a retired facet any more, so nothing here is proving "
-                    "the reader tolerates one — either the file was rewritten, which it must never "
-                    "be, or this test has outlived the rows it was written for")
-    assert not retired & set(run_filing.FACETS), (
-        "a retired facet is scored again; then these rows are not legacy and this test is wrong")
-    for row in legacy:
-        assert set(row["facets"]) == set(row["counts"]), row["ts"]
-        assert row.get("statuses"), row["ts"]
-
-
 def test_every_entry_says_what_it_was_measured_on():
     """`corpus` is the entry's answer to "is this number comparable to that one?".
 

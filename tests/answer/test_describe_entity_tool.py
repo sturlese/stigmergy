@@ -1,17 +1,4 @@
-"""`describe_entity` as `ask`'s third tool.
-
-Three layers, mirroring how the other two tools are pinned:
-
-  * `AnswerBrain.entity_text` — the renderer, over a duck-typed service double (the
-    `test_synthesize_entity_topology.py` `_FakeService` pattern): layout, absence shape, and
-    the `SynthesisContext` bookkeeping (`searched` + surfaced pages) the refusal composer and
-    the verifier read.
-  * the agent wiring — a real `Agent.run()` driven by `FunctionModel` through the PUBLIC path
-    (the discipline recorded in `test_synthesize_entity_topology.py`'s docstring: never a
-    private pydantic_ai attribute).
-  * the live seam — `entity_text` over a REAL `BrainService` + Postgres (the conftest fixture
-    corpus), where "globex" resolves by scoped-id membership with no registry file at all.
-"""
+"""The reader-scoped entity projection exposed to the answer agent."""
 import asyncio
 
 import pytest
@@ -22,7 +9,7 @@ from stigmergy.answer import brain as brain_mod
 from stigmergy.answer.brain import AnswerBrain
 from stigmergy.answer.synthesize import ANSWER_SYS, SynthesisContext, build_synthesizer
 from stigmergy.server.settings import Settings
-from tests.answer.conftest import brain_service
+from tests.answer.conftest import GLOBEX_ID, brain_service
 
 
 @pytest.fixture(autouse=True)
@@ -33,25 +20,22 @@ def _dummy_openai_key(monkeypatch):
 # ── the renderer over a service double ─────────────────────────────────────────────────────────
 
 _DESCRIBED = {
-    "entity": {"id": "vantage", "name": "Vantage", "type": "organization",
-               "aliases": ["vantage.com"],
-               "page": {"path": "wiki/entities/Vantage.md", "title": "Vantage"}},
-    "timeline": [
+    "found": True,
+    "entity": {"id": "ent_40000000-0000-4000-8000-000000000001", "name": "Vantage",
+               "type": "organization", "aliases": ["vantage.com"], "claims": []},
+    "knowledge": [
         {"path": "wiki/notes/Vantage June 2026 Investor Update.md",
          "title": "Vantage June 2026 Investor Update", "type": "note",
-         "status": "developing", "as_of": "2026-06-30"},
+         "status": "developing", "updated": "2026-06-30"},
         {"path": "wiki/notes/Vantage Hiring.md", "title": "Vantage Hiring", "type": "note",
-         "status": "developing", "as_of": ""},
+         "status": "developing", "updated": ""},
     ],
-    "timeline_note": "2 page(s) anchored to this entity — showing all 2.",
+    "knowledge_note": "2 page(s) anchored to this entity — showing all 2.",
+    "sources": [{"path": "sources/2026/08/vantage.md", "title": "Vantage source"}],
 }
 
 
 class _FakeDescribeService:
-    """Stands in for the `BrainService` at the seam `entity_text` actually calls
-    (`self.service.describe_entity`) — the `_FakeService` pattern from
-    `test_synthesize_entity_topology.py`, one seam down."""
-
     def __init__(self, result):
         self.result = result
         self.calls = []
@@ -61,52 +45,55 @@ class _FakeDescribeService:
         return self.result
 
 
-def test_entity_text_lays_out_identity_page_and_dated_timeline():
+def test_entity_text_lays_out_identity_knowledge_and_sources():
     text = AnswerBrain(_FakeDescribeService(_DESCRIBED)).entity_text("Vantage")
 
-    assert "entity: vantage" in text
+    assert "entity: ent_40000000-0000-4000-8000-000000000001" in text
     assert "name: Vantage" in text
     assert "aliases: vantage.com" in text
-    assert "page: wiki/entities/Vantage.md — Vantage" in text
-    assert "timeline: 2 page(s) anchored to this entity — showing all 2." in text
+    assert "knowledge: 2 page(s) anchored to this entity — showing all 2." in text
     assert "2026-06-30 · wiki/notes/Vantage June 2026 Investor Update.md" in text
     assert "(undated) · wiki/notes/Vantage Hiring.md" in text
+    assert "sources/2026/08/vantage.md — Vantage source" in text
 
 
 def test_entity_text_records_the_lookup_and_every_shown_page_as_surfaced():
-    """The bookkeeping the rest of the loop depends on: the verifier accepts citations only to
-    surfaced pages (`read_paths`), and the refusal composer names what was searched and what
-    came back — both must see what this tool showed the agent."""
     ctx = SynthesisContext(service=None)
     AnswerBrain(_FakeDescribeService(_DESCRIBED)).entity_text("Vantage", ctx)
 
     assert ctx.searched == ["Vantage"]
-    assert ctx.read_paths == {"wiki/entities/Vantage.md",
-                              "wiki/notes/Vantage June 2026 Investor Update.md",
-                              "wiki/notes/Vantage Hiring.md"}
-    assert ctx.read_paths_order[0] == "wiki/entities/Vantage.md"
+    assert ctx.read_paths == {"wiki/notes/Vantage June 2026 Investor Update.md",
+                              "wiki/notes/Vantage Hiring.md",
+                              "sources/2026/08/vantage.md"}
+    assert ctx.read_paths_order[0] == "wiki/notes/Vantage June 2026 Investor Update.md"
 
 
 def test_entity_text_absence_is_one_line_and_surfaces_nothing():
-    """Unknown and out-of-scope arrive as the service's byte-identical absence shape — the
-    renderer keeps them one repairable line and records no page."""
     ctx = SynthesisContext(service=None)
-    brain = AnswerBrain(_FakeDescribeService({"error": "unknown entity: ghost-corp"}))
+    brain = AnswerBrain(_FakeDescribeService({
+        "found": False,
+        "entity": None,
+        "knowledge": [],
+        "knowledge_note": "No visible entity was found.",
+        "sources": [],
+    }))
     text = brain.entity_text("ghost-corp", ctx)
 
     assert text == brain_mod.UNKNOWN_ENTITY
     assert ctx.read_paths == set()
-    assert ctx.searched == ["ghost-corp"]     # the lookup itself is still a recorded fact
+    assert ctx.searched == ["ghost-corp"]
 
 
-def test_entity_text_renders_registry_gaps_honestly():
-    bare = {"entity": {"id": "acme", "name": "", "type": "", "aliases": [], "page": None},
-            "timeline": [], "timeline_note": "No anchored pages."}
-    text = AnswerBrain(_FakeDescribeService(bare)).entity_text("acme")
+def test_entity_text_renders_empty_knowledge_and_sources_honestly():
+    bare = {"found": True,
+            "entity": {"id": "ent_40000000-0000-4000-8000-000000000002",
+                       "name": "Acme", "type": "organization", "aliases": [], "claims": []},
+            "knowledge": [], "knowledge_note": "No anchored pages.", "sources": []}
+    text = AnswerBrain(_FakeDescribeService(bare)).entity_text("Acme")
 
-    assert "name: (unregistered)" in text
-    assert "page: (none)" in text
-    assert "timeline: No anchored pages." in text
+    assert "name: Acme" in text
+    assert "knowledge: No anchored pages." in text
+    assert "sources:\n  (none)" in text
 
 
 # ── the agent wiring, through the public path ──────────────────────────────────────────────────
@@ -148,33 +135,31 @@ def test_the_real_agent_carries_a_describe_entity_tool_wired_to_entity_text():
         if isinstance(part, ToolReturnPart) and part.tool_name == "describe_entity")
     assert tool_return == "entity territory for Vantage"
     assert service.calls == ["Vantage"]
-    assert deps.evidence == ["entity territory for Vantage"]   # recorded — the verifier's corpus
+    assert deps.evidence == ["entity territory for Vantage"]
 
 
 def test_answer_sys_names_the_third_tool():
     assert "describe_entity(<name or id>)" in ANSWER_SYS
-    assert "maps the territory in one call" in ANSWER_SYS
+    assert "maps the reader-visible territory in one call" in ANSWER_SYS
 
 
-# ── the live seam: a real BrainService over the fixture corpus (no registry file) ──────────────
+def test_answer_sys_requires_false_premises_to_be_corrected_explicitly():
+    assert "explicitly correct it" in ANSWER_SYS
+    assert "false premise" in ANSWER_SYS
 
 
-def test_entity_text_over_the_real_service_resolves_a_scoped_id(answer_indexed):
-    """"globex" is anchored in the fixture corpus but registered nowhere (the fixture repo has
-    no ops/entity-registry.json) — exactly the anchored-but-unregistered case `describe_entity`
-    resolves by scoped-id membership. The timeline must show the globex pages and
-    the hostile title must arrive neutralized by the service, never re-fenced here."""
+def test_entity_text_over_the_real_service_resolves_a_scoped_name(answer_indexed):
     conn, fx = answer_indexed
     brain = AnswerBrain(brain_service(conn, fx, "steward"))
     ctx = SynthesisContext(service=brain)
 
     text = brain.entity_text("globex", ctx)
 
-    assert "entity: globex" in text
-    assert "name: (unregistered)" in text
+    assert f"entity: {GLOBEX_ID}" in text
+    assert "name: Globex" in text
     assert fx.GLOBEX_FINAL in text
     assert fx.GLOBEX_FINAL in ctx.read_paths
-    assert "UNTRUSTED-DATA;end" not in text          # the hostile title arrived neutralized
+    assert "UNTRUSTED-DATA;end" not in text
 
 
 def test_entity_text_over_the_real_service_absence_for_the_unknown(answer_indexed):

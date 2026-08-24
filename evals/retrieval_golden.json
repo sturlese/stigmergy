@@ -1,170 +1,89 @@
 {
-  "_comment": "Retrieval golden set: natural-language questions over the frozen reference corpus at evals/corpus/, scoring Recall@5 per arm (lexical, vector, RRF, final) so a ranking change shows which arm moved. Run with --embedder fake for a keyless plumbing check and --embedder openai for the real measurement.",
-  "_filters_comment": "The questions whose SUBJECT is a named entity declare filters.entity, so the run exercises the entity-membership clause of the query rather than being structurally blind to it. Each value is the entity: frontmatter of that question's expected page(s), and tests/evals/test_golden_corpus_fixture.py asserts that every filtered question's expected pages really carry that entity — a filter naming an entity its own answer does not have would delete its own answer from both arms and score 0 forever while reading as a retrieval regression.",
+  "_comment": "Hybrid retrieval golden set over the canonical team-wiki corpus.",
   "questions": [
     {
-      "id": "real: git canonical store",
-      "q": "Why do we use a git repository as the canonical store of our knowledge?",
-      "expect": {
-        "pages": [
-          "Git as the Canonical Store"
-        ]
-      }
+      "id": "git-canonical",
+      "q": "Why is Git the canonical store for current team knowledge?",
+      "expect": {"pages": ["page_eval_git"]}
     },
     {
-      "id": "real: evidence plane",
-      "q": "Where are the original documents that serve as evidence kept?",
-      "expect": {
-        "pages": [
-          "The Evidence Plane"
-        ]
-      }
+      "id": "immutable-evidence",
+      "q": "Where are the exact original submitted bytes retained?",
+      "expect": {"pages": ["page_eval_evidence"]}
     },
     {
-      "id": "real: ownership zones",
-      "q": "Who owns each zone of the knowledge repository?",
-      "expect": {
-        "pages": [
-          "Two Ownership Zones"
-        ]
-      }
+      "id": "serialized-writer",
+      "q": "How are concurrent knowledge mutations serialized?",
+      "expect": {"pages": ["page_eval_writer"]}
     },
     {
-      "id": "benchmark: aurora arr",
-      "q": "What was the final ARR for Aurora Systems in the first quarter of 2026?",
-      "expect": {
-        "pages": [
-          "drive:local-07f593861c43"
-        ]
-      },
-      "filters": {
-        "entity": "aurora-systems"
-      }
+      "id": "nightly-index",
+      "q": "When does the full search-index reconciliation run?",
+      "expect": {"pages": ["page_eval_index"]}
     },
     {
-      "id": "benchmark: delta active users",
-      "q": "How many active users did Delta Robotics have each month of 2026?",
-      "expect": {
-        "pages": [
-          "drive:local-12f20646c1f1"
-        ]
-      },
-      "filters": {
-        "entity": "delta-robotics"
-      }
+      "id": "honest-contradictions",
+      "q": "What happens when two credible sources contradict each other?",
+      "expect": {"pages": ["page_eval_contradictions"]}
     },
     {
-      "id": "benchmark: cascade nps",
-      "q": "What NPS does Cascade Foods have?",
-      "expect": {
-        "pages": [
-          "drive:local-ae1045d13e98"
-        ]
-      },
-      "filters": {
-        "entity": "cascade-foods"
-      }
+      "id": "slack-snapshot",
+      "q": "What information is preserved when a Slack thread is captured?",
+      "expect": {"pages": ["page_eval_slack"]}
     },
     {
-      "id": "benchmark: borealis february meeting",
-      "q": "What was discussed in the February meeting with Borealis Logistics?",
-      "expect": {
-        "pages": [
-          "drive:local-ae8cf07406d2"
-        ]
-      },
-      "filters": {
-        "entity": "borealis-logistics"
-      }
+      "id": "aurora-term",
+      "q": "What renewal term did Aurora Systems accept?",
+      "expect": {"pages": ["page_eval_aurora"]},
+      "filters": {"entity": "ent_11111111-1111-4111-8111-111111111111"}
     },
     {
-      "id": "benchmark: borealis growth",
-      "q": "How much did Borealis Logistics grow this quarter?",
-      "expect": {
-        "pages": [
-          "drive:local-a4a55507547d"
-        ]
-      },
-      "filters": {
-        "entity": "borealis-logistics"
-      }
+      "id": "aurora-budget",
+      "q": "What budget did Aurora Systems approve?",
+      "expect": {"pages": ["page_eval_aurora"]},
+      "filters": {"entity": "ent_11111111-1111-4111-8111-111111111111"}
     },
     {
-      "id": "benchmark: product roadmap",
-      "q": "What is on the product roadmap for 2026?",
-      "expect": {
-        "pages": [
-          "drive:local-f96ae2c17a19"
-        ]
-      }
+      "id": "aurora-start",
+      "q": "When does Aurora Systems' renewed term start?",
+      "expect": {"pages": ["page_eval_aurora"]},
+      "filters": {"entity": "ent_11111111-1111-4111-8111-111111111111"}
     },
     {
-      "id": "benchmark: sales strategy",
-      "q": "What is the sales strategy for 2026?",
-      "expect": {
-        "pages": [
-          "drive:local-49b6839cd6c6"
-        ]
-      }
+      "id": "borealis-regions",
+      "q": "How many regions are included in the Borealis Logistics rollout?",
+      "expect": {"pages": ["page_eval_borealis"]},
+      "filters": {"entity": "ent_22222222-2222-4222-8222-222222222222"}
     },
     {
-      "id": "benchmark: everest pitch",
-      "q": "What does the Everest Analytics pitch deck propose?",
-      "expect": {
-        "pages": [
-          "drive:local-dda43a7b849b"
-        ]
-      },
-      "filters": {
-        "entity": "everest-analytics"
-      }
+      "id": "borealis-date",
+      "q": "When will Borealis Logistics launch?",
+      "expect": {"pages": ["page_eval_borealis"]},
+      "filters": {"entity": "ent_22222222-2222-4222-8222-222222222222"}
     },
     {
-      "id": "benchmark: foxglove prospect",
-      "q": "What do we know about the prospect Foxglove Health?",
-      "expect": {
-        "pages": [
-          "drive:local-b4de5f2bcbfb",
-          "foxglove-health"
-        ]
-      },
-      "filters": {
-        "entity": "foxglove-health"
-      }
+      "id": "borealis-owner",
+      "q": "Who owns the Borealis Logistics migration checklist?",
+      "expect": {"pages": ["page_eval_borealis"]},
+      "filters": {"entity": "ent_22222222-2222-4222-8222-222222222222"}
     },
     {
-      "id": "demo: globex quarter",
-      "q": "How did the quarter go for Globex?",
-      "expect": {
-        "pages": [
-          "drive:local-8cb904b68e2b",
-          "drive:local-0bc40d64d4fb"
-        ]
-      },
-      "filters": {
-        "entity": "globex"
-      }
+      "id": "cascade-price",
+      "q": "What per-user price did Cascade Foods accept?",
+      "expect": {"pages": ["page_eval_cascade"]},
+      "filters": {"entity": "ent_33333333-3333-4333-8333-333333333333"}
     },
     {
-      "id": "demo: initech kpis",
-      "q": "What KPI metrics does Initech have in 2026?",
-      "expect": {
-        "pages": [
-          "drive:local-0811ce3ef594"
-        ]
-      },
-      "filters": {
-        "entity": "initech"
-      }
+      "id": "cascade-discount",
+      "q": "What annual-prepayment discount applies to Cascade Foods?",
+      "expect": {"pages": ["page_eval_cascade"]},
+      "filters": {"entity": "ent_33333333-3333-4333-8333-333333333333"}
     },
     {
-      "id": "demo: benchmark study",
-      "q": "What benchmark study did the product team run?",
-      "expect": {
-        "pages": [
-          "drive:local-8fc290749812"
-        ]
-      }
+      "id": "cascade-date",
+      "q": "When does Cascade Foods' new pricing take effect?",
+      "expect": {"pages": ["page_eval_cascade"]},
+      "filters": {"entity": "ent_33333333-3333-4333-8333-333333333333"}
     }
   ]
 }

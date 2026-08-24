@@ -23,14 +23,6 @@ from stigmergy.slack.mrkdwn import escape_mrkdwn, to_mrkdwn
 SHOW_IT_HERE_ACTION_ID = "slack_show_page"
 
 
-def _unbound_token(path: str, asker_slack_user_id: str) -> str:
-    """The default `mint_token` — production always passes `SlackContext.mint_show_it_here_token`.
-    Exists so a test exercising some other property of `render_answer` need not wire a token
-    store; deterministically unusable (no server-side entry behind it), so a caller that needs a
-    clickable button must pass a real `mint_token`."""
-    return uuid.uuid4().hex
-
-
 # Slack's own ceiling for one `section` block's text. Enforced on the FINAL string, after every
 # escape and interpolation, because that is the only length Slack measures.
 SECTION_TEXT_MAX = 3000
@@ -141,8 +133,7 @@ def _citation_blocks(citations: list[dict], link_resolver, asker_slack_user_id: 
     return blocks
 
 
-def render_answer(answer: dict, link_resolver, *, asker_slack_user_id: str = "",
-                  mint_token=_unbound_token) -> list[dict]:
+def render_answer(answer: dict, link_resolver, *, asker_slack_user_id: str, mint_token) -> list[dict]:
     """`answer` is the dict `AnswerService.ask()` returns — the SAME shape on every transport.
     `mint_token` (injected like `link_resolver`) is only invoked when a button is actually built.
     The answer BODY is the only `section` block here: the Sources block and the verdict line are
@@ -161,8 +152,7 @@ def render_answer(answer: dict, link_resolver, *, asker_slack_user_id: str = "",
 
 
 def render_dm_fuller_answer(*, channel_name: str, question: str, answer: dict, link_resolver,
-                            asker_slack_user_id: str = "",
-                            mint_token=_unbound_token) -> list[dict]:
+                            asker_slack_user_id: str, mint_token) -> list[dict]:
     """The DM's fuller answer: a header block, then `render_answer` reused unchanged — the DM is
     a wider scope, not a different dialect."""
     header = _section(escape_mrkdwn(copy.dm_fuller_answer_header(channel_name, question)))
@@ -205,24 +195,6 @@ def render_capture_failed() -> list[dict]:
 
 def render_private_channel_refusal() -> list[dict]:
     return [_section(copy.PRIVATE_CHANNEL_REFUSAL)]
-
-
-def render_not_in_this_channels_groups(channel_name: str) -> list[dict]:
-    """Escaped like every other channel-sourced string: a channel name is workspace-authored text
-    and reaches this card verbatim."""
-    return [_section(copy.not_in_this_channels_groups(escape_mrkdwn(channel_name)))]
-
-
-def render_filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
-                 anchor_reason: str = "", born: list[str] = ()) -> list[dict]:
-    """`anchor_reason` is the AGENT's sentence about a judged anchor, derived from captured
-    material, so it is escaped exactly like `anchor` — unescaped, a `<https://evil.example|text>`
-    inside it renders as a REAL live link in the card. `born` names the entities the librarian
-    created for this capture: names lifted from the material, escaped the same way."""
-    return [_section(copy.filed(page_path=page_path, commit=commit,
-                               anchor=escape_mrkdwn(anchor), source_page=source_page,
-                               anchor_reason=escape_mrkdwn(anchor_reason),
-                               born=[escape_mrkdwn(str(name)) for name in born or ()]))]
 
 
 def render_generic_report(status: str, raw_summary: str) -> list[dict]:

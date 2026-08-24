@@ -1,0 +1,7 @@
+{
+  "eval-master": {
+    "display_name": "Evaluation Master",
+    "groups": ["brain-admins", "finance", "product", "sales"],
+    "default_audience": null
+  }
+}

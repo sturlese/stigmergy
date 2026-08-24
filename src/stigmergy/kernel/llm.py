@@ -23,16 +23,7 @@ _MODEL_OVERRIDE = None
 
 @contextlib.contextmanager
 def model_override(model):
-    """An explicit pydantic-ai model OBJECT that `build_model` answers with (settings `None`)
-    until the block exits — the public seam a suite proves a tool-loop property through
-    (issue #81).
-
-    Any package can now drive its REAL agent — the `Agent`, the registered tools, pydantic-ai's
-    own `UsageLimits` enforcement — with a scripted `FunctionModel`/`TestModel`, no API key and no
-    reaching into this module's private functions. A double that counts its own tool calls proves
-    the test can count; a budget property is only real under the library that enforces it.
-    Composes with `CLEAN_LLM=openai`, which is what makes `build_processor` construct the real
-    `Agent` at all. Not re-entrant across threads, like the env vars beside it."""
+    """Temporarily inject a pydantic-ai model object for the current process."""
     global _MODEL_OVERRIDE
     previous = _MODEL_OVERRIDE
     _MODEL_OVERRIDE = model
@@ -46,7 +37,7 @@ def build_model(model_name: str | None = None, *, reasoning_effort: str | None =
     """Model + settings for the agents. Without an explicit name, CLEAN_MODEL is resolved HERE,
     at call time, never at import — this is the single place that reads it.
 
-    Two forms — and this function is the convention's ONE implementation (audit T1): a bare name
+    Two forms: a bare name
     ("gpt-5.6-terra") means the OpenAI Responses API with an EXPLICIT reasoning effort (never the
     API's implicit default; requires OPENAI_API_KEY); a provider-prefixed pydantic-ai string
     ("anthropic:claude-sonnet-5", "openrouter:z-ai/glm-5.2") is resolved by pydantic-ai, whose
@@ -62,9 +53,7 @@ def build_model(model_name: str | None = None, *, reasoning_effort: str | None =
 
     from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
-    # The pinned pydantic-ai reports zero tokens for OpenAI reasoning models — a zero that reads
-    # as free, the one direction a cost figure must never lie in. Every agent-construction site
-    # installs the repair. Idempotent — see `kernel.usage_repair`.
+    # Normalize missing reasoning-token usage before costs are calculated.
     ensure_usage_extraction_repaired()
 
     # `or` on both reads, so an exported-but-empty variable means "unset" instead of becoming a

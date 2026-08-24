@@ -42,21 +42,16 @@ def clean_tables(conn):
     """Each test gets empty `capture_queue`/`slack_submissions`/operational tables — mirrors
     `tests/capture/conftest.py::clean_queue`, extended to this module's own table."""
     with conn.cursor() as cur:
+        cur.execute("DELETE FROM capture_artifacts")
         cur.execute("DELETE FROM slack_submissions")
         cur.execute("DELETE FROM capture_queue")
         cur.execute("DELETE FROM job_runs")
-        cur.execute("DELETE FROM ingest_errors")
-        # The rewrite-notice ledger is an operational table like the rest, and it outlived this
-        # fixture once: `capture_queue` was emptied between tests while a notice keyed on
-        # `(submission_id, path)` stayed, so a later submission that reused the id read as already
-        # notified and the pass sent nothing. A ledger that records "told" must be cleaned wherever
-        # the thing it records is.
-        cur.execute("DELETE FROM page_rewrite_notices")
     return conn
 
 
 TEAM_ID = "T_STIGMERGY"
 FINANCE_CHANNEL = "C_FINANCE"     # scoped to ["finance"] in slack-channels.json
+PUBLIC_CHANNEL = "C_PUBLIC"
 UNLISTED_CHANNEL = "C_UNLISTED"   # not in slack-channels.json — the empty-set default
 
 
@@ -66,7 +61,7 @@ def fixture(tmp_path_factory) -> Fixture:
     fx = Fixture(str(tmp_path_factory.mktemp("slack-brain")))
     channels_path = os.path.join(fx.repo, "ops", "slack-channels.json")
     with open(channels_path, "w", encoding="utf-8") as f:
-        json.dump({FINANCE_CHANNEL: ["finance"]}, f)
+        json.dump({FINANCE_CHANNEL: ["finance"], PUBLIC_CHANNEL: None}, f)
     fx.channels_path = channels_path
     return fx
 

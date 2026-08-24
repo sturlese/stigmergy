@@ -3,14 +3,10 @@ to a live index.
 
 Golden format: a `questions` list of `q` + `expect.pages` (page ids — frontmatter `id`, or the
 file stem) plus an OPTIONAL `filters` object handed straight to `search.search_arms`. `filters`
-is carried, never interpreted: this module stays pure (no `search` import, no DB); an illegal
-column is `_filter_clause`'s `ValueError`, and `tests/index/test_golden.py` checks the shipped
-set keylessly.
+is carried, never interpreted: this module stays pure and has no database dependency.
 """
 import json
 from pathlib import Path
-
-from stigmergy.index.rank import chain_base
 
 # fts / vec / rrf are the individual arms, for comparable numbers; `final` is the product ranking
 # (RRF + contract factors) and the arm the R@5 >= 0.80 bar is read on.
@@ -31,16 +27,13 @@ def load_golden(path: str) -> list[dict]:
 
 
 def recall_at_k(expected: list[str], ranking: list[str], k: int) -> float:
-    """CHAIN-equivalent: surfacing a split document's part (`X-p3`) IS surfacing document `X` —
-    rank's top-k collapses a chain to its best-scoring member, and which member that is must not
-    decide a hit (the golden always expects the base id)."""
-    top = {chain_base(r) for r in ranking[:k]}
-    return sum(1 for e in expected if chain_base(e) in top) / len(expected)
+    top = set(ranking[:k])
+    return sum(1 for item in expected if item in top) / len(expected)
 
 
 def hit_at_k(expected: list[str], ranking: list[str], k: int) -> bool:
-    top = {chain_base(r) for r in ranking[:k]}
-    return any(chain_base(e) in top for e in expected)
+    top = set(ranking[:k])
+    return any(item in top for item in expected)
 
 
 def evaluate(questions: list[dict], arm_rankings_fn, k: int = 5) -> dict:

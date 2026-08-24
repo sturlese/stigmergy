@@ -1,14 +1,11 @@
-"""The result envelope every offline backend returns from `run()` — the shape `worker.py` reads
-back from any processor, real or fake. Nothing here is a backend or a test double.
-"""
+"""Result objects returned by offline processors."""
 import types
 from dataclasses import dataclass, field
 
 
 @dataclass
 class _Usage:
-    """Mirrors the attributes worker.py and the repair spend records read from pydantic-ai's
-    usage object."""
+    """Usage fields consumed by workers and repair spend records."""
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -18,6 +15,5 @@ class _Usage:
 
 
 def fake_result(output):
-    """The (.output, .usage) result shape every fake backend returns from run() — one definition
-    for all of them."""
+    """Return the common offline processor result shape."""
     return types.SimpleNamespace(output=output, usage=_Usage())

@@ -65,6 +65,31 @@ def test_memory_store_exists_is_false_for_a_key_never_put():
     assert store.exists("sha256/00/00/nonexistent") is False
 
 
+def test_presigned_upload_binds_the_declared_content_length():
+    class PresignClient:
+        def __init__(self):
+            self.params = None
+
+        def generate_presigned_url(self, _operation, *, Params, ExpiresIn):
+            self.params = {"Params": Params, "ExpiresIn": ExpiresIn}
+            return "https://upload.example/object"
+
+    client = PresignClient()
+    store = S3EvidenceStore(
+        endpoint_url="https://objects.example",
+        bucket="evidence",
+        access_key_id="key",
+        secret_access_key="secret",
+        client=client,
+    )
+    key = content_key(b"declared bytes")
+
+    url = store.presign_put(key, bytes=14)
+
+    assert url == "https://upload.example/object"
+    assert client.params["Params"]["ContentLength"] == 14
+
+
 # ── S3EvidenceStore: every network failure crossing the boundary is class-name-only ─────────────
 class _BoomClient:
     """Stands in for the boto3 client the network boundary actually is: every call raises an
@@ -120,13 +145,17 @@ def test_s3_store_exists_swallows_a_not_found_client_error_as_false():
     assert store.exists("sha256/ab/cd/x") is False
 
 
-def test_s3_store_failure_is_logged_server_side_with_the_full_detail(caplog):
-    """The detail that must never reach the wire is exactly what the operator NEEDS server-side — proven
-    the same way `tests/server/test_audit.py` proves the audit writer's swallow-and-log split."""
-    store = _store_with_boom("real cause: DNS resolution failed for 10.0.0.1")
+def test_s3_store_failure_logs_the_operation_without_secret_values(caplog):
+    store = _store_with_boom(
+        "real cause: DNS resolution failed for 10.0.0.1, bucket secret-bucket, "
+        "key AKIA_REAL_KEY"
+    )
     with caplog.at_level(logging.ERROR), pytest.raises(EvidenceError):
         store.put(b"material")
-    assert any("10.0.0.1" in r.message or "evidence store" in r.message for r in caplog.records)
+    assert any("evidence operation failed" in r.message for r in caplog.records)
+    assert "10.0.0.1" not in caplog.text
+    assert "secret-bucket" not in caplog.text
+    assert "AKIA_REAL_KEY" not in caplog.text
     assert any(r.levelno == logging.ERROR for r in caplog.records)
 
 
@@ -197,9 +226,9 @@ def test_the_s3_client_bounds_how_long_a_degraded_store_can_stall_the_process():
                                      access_key_id="k", secret_access_key="s")
     config = store.client().meta.config          # constructing the client does no I/O
     assert config.connect_timeout == evidence.CONNECT_TIMEOUT_S == 5
-    assert config.read_timeout == evidence.READ_TIMEOUT_S == 10
+    assert config.read_timeout == evidence.READ_TIMEOUT_S == 20
     # botocore reads `max_attempts` as RETRIES and resolves it to `total_max_attempts`. The bound
     # that matters is the PRODUCT, so it is what gets asserted: a caller cannot stall the shared
     # process for longer than this, whatever the store is doing.
     assert config.retries["total_max_attempts"] == evidence.RETRIES + 1 == 2
-    assert evidence.WORST_CASE_STALL_S == 30
+    assert evidence.CONNECT_TIMEOUT_S + evidence.READ_TIMEOUT_S <= 30

@@ -7,9 +7,8 @@ The matching is asymmetric by design: the ANSWER side claims the dimensioned val
 (`claimed`: `$2M` must trace to 2,000,000, `40%` to a percent — any-overlap lets `$2M` verify
 against a bare `2` anywhere in the evidence), while the EVIDENCE side pools both readings
 (`interpretations`), because prose writes magnitudes out ("2,3 millones") where no tokenizer
-reaches. Accepted residual: an answer's `$2M` does not trace to evidence saying "2 millones";
-any future fix is EVIDENCE-side word-magnitude parsing, never a wider answer-side claim —
-pinned as a named test in `tests/answer/test_numbers.py`.
+reaches. An answer's `$2M` does not trace to evidence saying "2 millones"; word-magnitude
+parsing belongs on the evidence side, never as a wider answer-side claim.
 """
 import re
 

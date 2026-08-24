@@ -1,17 +1,5 @@
-"""Integration against the REAL composed stack — a real postgres+pgvector, brought up with
-`docker compose up`, never a stand-in.
-
-Skips cleanly when no database is reachable, so `make test` stays green on a machine without
-docker; CI always brings the composition up, so these run there. The fake embedder keeps
-everything keyless.
-
-Skip guard: when `$STIGMERGY_TEST_DSN` is explicitly set — as CI does — an unreachable database is
-a FAILURE, not a skip. A check that stops running must be impossible to miss, and a green CI
-whose pg suites silently skipped is exactly that failure. Both that guard and the refusal to run
-against any database but `stigmergy_test` live in `tests.testdb`; this module just names itself
-to it.
-"""
-import json
+import shutil
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -19,280 +7,210 @@ import pytest
 
 from stigmergy.index import build, search, store
 from stigmergy.index.backends.embedder import build_embedder
+from stigmergy.index.errors import EmptyIndexError, StigmergyIndexError
 from tests import testdb
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "repo")
-# 4 wiki + 6 source — asserted against the fixture repo. The 4th wiki page,
-# `globex-initech-partnership.md`, carries `entity: [globex, initech]`: the fixture's only
-# multi-element `entity:` page, and so the plural `entity:` contract's only witness at the
-# Postgres level.
 FIXTURE_PAGES = 10
+GLOBEX_ID = "ent_30000000-0000-4000-8000-000000000001"
+INITECH_ID = "ent_30000000-0000-4000-8000-000000000002"
 
 
 def _connect_or_skip():
-    """This module's name for the shared seam (also imported by test_pg_search_edges.py)."""
     return testdb.connect_or_skip("index")
 
 
 @pytest.fixture(scope="module")
 def conn():
-    conn = _connect_or_skip()
-    stats = build.rebuild(conn, FIXTURE, build_embedder("fake"))
+    connection = _connect_or_skip()
+    stats = build.rebuild(connection, FIXTURE, build_embedder("fake"))
     assert stats["pages"] == FIXTURE_PAGES
-    yield conn
-    conn.close()
+    yield connection
+    connection.close()
 
 
-def test_rebuild_populates_exactly_the_included_zones(conn):
+def test_rebuild_populates_only_wiki_and_sources(conn):
     assert store.page_count(conn) == FIXTURE_PAGES
-    with conn.cursor() as cur:
-        cur.execute("SELECT zone, count(*) FROM pages_index GROUP BY zone ORDER BY zone")
-        assert dict(cur.fetchall()) == {"sources": 6, "wiki": 4}
-        cur.execute("SELECT count(*) FROM pages_index WHERE path LIKE '%excluded%'")
-        assert cur.fetchone()[0] == 0
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT zone, count(*) FROM pages_index GROUP BY zone ORDER BY zone")
+        assert dict(cursor.fetchall()) == {"sources": 6, "wiki": 4}
 
 
-def test_filter_and_acl_columns_land_in_the_schema(conn):
-    with conn.cursor() as cur:
-        cur.execute("SELECT status, owner, acl, inlinks, content_hash FROM pages_index"
-                    " WHERE path = 'wiki/notes/refund-policy.md'")
-        status, owner, acl, inlinks, content_hash = cur.fetchone()
-    assert status == "canonical" and owner == "steward"
-    assert acl is None                      # no acl -> NULL (open); stored here, enforced on read
-    assert inlinks == 2
+def test_acl_links_and_hashes_are_stored(conn):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT acl, inlinks, links, content_hash FROM pages_index "
+            "WHERE path = 'wiki/concepts/Support refunds.md'"
+        )
+        acl, inlinks, links, content_hash = cursor.fetchone()
+    assert acl is None
+    assert inlinks == 1
+    assert links == []
     assert content_hash.startswith("sha256:")
-    with conn.cursor() as cur:
-        cur.execute("SELECT acl FROM pages_index"
-                    " WHERE path = 'sources/general/legacy-pricing-2023-ffffff.md'")
-        assert cur.fetchone()[0] == ["sales"]    # text[] — labels survive verbatim, no CSV
 
 
-def test_links_column_and_its_gin_index_land_in_the_schema(conn):
-    """`links` is resolved repo-relative paths (never stems), and a GIN index exists so
-    `read_page`'s backlinks query is a containment lookup, never a scan."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT links FROM pages_index"
-                    " WHERE path = 'wiki/notes/refund-policy.md'")
-        assert cur.fetchone()[0] == ["wiki/playbooks/support-playbook.md"]
-        cur.execute("SELECT indexdef FROM pg_indexes"
-                    " WHERE tablename = 'pages_index' AND indexname = 'pages_index_links_gin'")
-        indexdef = cur.fetchone()
-    assert indexdef is not None, "pages_index_links_gin is missing from the rebuilt schema"
-    assert "using gin" in indexdef[0].lower()
-    assert "links" in indexdef[0]
+def test_lexical_and_vector_indexes_exist(conn):
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'pages_index'")
+        indexes = {name: definition.lower() for name, definition in cursor.fetchall()}
+    assert "using gin" in indexes["pages_index_tsv_gin"]
+    assert "using hnsw" in indexes["pages_index_embedding_hnsw"]
+    assert "halfvec_cosine_ops" in indexes["pages_index_embedding_hnsw"]
+    assert "links" in indexes["pages_index_links_gin"]
 
 
-def test_the_two_retrieval_indexes_exist_and_match_the_operators_the_arms_use(conn):
-    """GIN for the lexical arm, HNSW for the semantic one. Both arms once seq-scanned — only the
-    links GIN existed — and a cold-start rebuild is what made that visible.
+def test_schema_supports_the_production_embedding_dimension(conn):
+    class Rollback(Exception):
+        pass
 
-    The opclass is the half worth asserting by name. `search.VEC_SQL` orders by `embedding <=>
-    ...` (cosine) on a `halfvec` column; an HNSW built with an L2 opclass — or with `vector_*`
-    against a `halfvec` column — would be a perfectly valid index the planner never uses for that
-    operator: decoration that looks like coverage."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'pages_index'")
-        by_name = {n: d.lower() for n, d in cur.fetchall()}
-
-    assert "pages_index_tsv_gin" in by_name, f"missing; have {sorted(by_name)}"
-    assert "using gin" in by_name["pages_index_tsv_gin"] and "tsv" in by_name["pages_index_tsv_gin"]
-
-    assert "pages_index_embedding_hnsw" in by_name, f"missing; have {sorted(by_name)}"
-    hnsw = by_name["pages_index_embedding_hnsw"]
-    assert "using hnsw" in hnsw
-    assert "halfvec_cosine_ops" in hnsw, (
-        "the HNSW opclass must match the column type AND `<=>` (cosine), or the planner ignores it")
+    with pytest.raises(Rollback), conn.transaction():
+        store.init_schema(conn, dim=3072, model="text-embedding-3-large", fts_config="english")
+        store.create_search_indexes(conn)
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT format_type(atttypid, atttypmod) FROM pg_attribute "
+                "WHERE attrelid = 'pages_index'::regclass AND attname = 'embedding'"
+            )
+            assert cursor.fetchone()[0] == "halfvec(3072)"
+        raise Rollback()
 
 
-def test_the_schema_and_its_indexes_build_at_the_PRODUCTION_embedding_dimension(conn):
-    """The test the previous one could not be. Every other test here runs the FAKE embedder at
-    256 dimensions, so `create_search_indexes` passed locally and then failed on the first real
-    rebuild: pgvector refuses HNSW above 2000 dimensions and `text-embedding-3-large` is 3072.
-    A suite that only ever sees 256 cannot see that ceiling.
-
-    So this builds the schema at the production dimension explicitly. It is the cheapest possible
-    guard — no embedder, no corpus, no API key — against a class of defect that otherwise only
-    surfaces in CI against a real database.
-    """
-    from stigmergy.index import store as _store
-
-    with pytest.raises(_Rollback), conn.transaction():
-        _store.init_schema(conn, dim=3072, model="text-embedding-3-large", fts_config="english")
-        _store.create_search_indexes(conn)
-        with conn.cursor() as cur:
-            cur.execute("SELECT indexdef FROM pg_indexes"
-                        " WHERE indexname = 'pages_index_embedding_hnsw'")
-            assert "halfvec_cosine_ops" in cur.fetchone()[0].lower()
-            cur.execute("SELECT format_type(atttypid, atttypmod) FROM pg_attribute"
-                        " WHERE attrelid = 'pages_index'::regclass AND attname = 'embedding'")
-            assert cur.fetchone()[0] == "halfvec(3072)"
-        raise _Rollback()      # leave the fixture's own index untouched — see the class below
-
-
-class _Rollback(Exception):
-    """Rolls the probe out of the SESSION-scoped fixture connection.
-
-    The probe has to DROP and recreate `pages_index` (that is what `init_schema` does), and every
-    other test in this module reads the fixture's own built index. Raising out of
-    `conn.transaction()` rolls the whole thing back — the schema, the indexes, everything — so the
-    probe costs the fixture nothing. `pytest.raises` catches it at the call site."""
-
-
-def test_a_natural_language_query_returns_hits_with_factors(conn):
-    """A whole question, not a keyword bag, returns top-k hits with their factors attached."""
-    hits = search.search(conn, "How did the quarter go for Globex? quarterly revenue impact",
-                         today=date(2026, 7, 19))
-    assert hits and len(hits) <= 5
-    for h in hits:
-        assert isinstance(h["factors"], list)
-        assert h["arms"] and h["score"] > 0 and "snippet" in h
-
-
-def test_superseded_draft_ranks_below_its_successor_end_to_end(conn):
-    # TOLD, not inferred: this layer never infers "globex" from the query — the hint is what the
-    # service resolves and passes down. The boost lands on both globex pages equally, so the
-    # supersession ordering this test pins is measured with the factor live.
-    hits = search.search(conn, "globex quarterly revenue impact report", k=10,
-                         today=date(2026, 7, 19), entity_hint="globex")
-    paths = [h["path"] for h in hits]
-    draft = "sources/entities/globex/quarterly-report-q1-2026-draft-aaaaaa.md"
-    final = "sources/entities/globex/quarterly-report-q1-2026-final-bbbbbb.md"
-    assert final in paths and draft in paths
-    assert paths.index(final) < paths.index(draft)
-    assert "superseded" in next(h for h in hits if h["path"] == draft)["factors"]
-
-
-def test_frontmatter_filters_scope_both_arms(conn):
-    hits = search.search(conn, "quarterly revenue report", k=10,
-                         filters={"entity": "globex"})
+def test_hybrid_search_returns_explainable_hits(conn):
+    hits = search.search(
+        conn,
+        "How did Globex quarterly revenue perform?",
+        today=date(2026, 8, 24),
+    )
     assert hits
-    # `entity` is a LIST, matched by MEMBERSHIP — a page anchored to SEVERAL entities
-    # (`globex-initech-partnership.md`) still passes this filter without that entity being the
-    # only one on the page. Asserting equality here would re-test "equivalent to equality", not
-    # the membership contract this filter actually promises.
-    assert all("globex" in h["entity"] for h in hits)
-    with pytest.raises(ValueError):
-        search.search(conn, "q", filters={"body": "x"})   # not a filter column
+    assert all(hit["score"] > 0 and hit["arms"] and "snippet" in hit for hit in hits)
 
 
-def test_the_plural_entity_page_is_found_by_either_of_its_two_entities(conn):
-    """The structural witness the plural `entity:` contract needs at the Postgres level — every
-    OTHER exercise of the `entity` filter in this suite uses a single-element page, where
-    membership is indistinguishable from equality."""
-    page = "wiki/notes/globex-initech-partnership.md"
-    for entity_filter in ("globex", "initech"):
-        hits = search.search(conn, "cross-account renewal coordination", k=10,
-                             filters={"entity": entity_filter})
-        assert page in [h["path"] for h in hits], entity_filter
+def test_filters_apply_to_both_search_arms(conn):
+    hits = search.search(conn, "renewal coordination", k=10, filters={"entity": GLOBEX_ID})
+    assert hits
+    assert all(GLOBEX_ID in hit["entity"] for hit in hits)
+    with pytest.raises(ValueError, match="unknown filter"):
+        search.search(conn, "query", filters={"body": "value"})
 
 
-def test_an_fts_query_naming_only_the_second_entity_finds_the_plural_page(conn):
-    """Proves `array_to_string` folding, not merely storage: "initech" appears NOWHERE in this
-    page's title, body or tags — only in its `entity:` frontmatter — so finding it by that word
-    alone proves the second array element reached the `tsv` column."""
-    hits = search.search(conn, "initech", k=10)
-    assert "wiki/notes/globex-initech-partnership.md" in [h["path"] for h in hits]
+def test_acl_filters_both_rankings_before_candidate_fusion(conn):
+    hidden = "wiki/notes/Globex and Initech renewal.md"
+
+    engineering = search.search_arms(
+        conn,
+        "renewal coordination",
+        k=10,
+        audiences={"engineering"},
+    )
+    finance = search.search_arms(
+        conn,
+        "renewal coordination",
+        k=10,
+        audiences={"finance"},
+    )
+
+    assert hidden not in engineering["fts"]
+    assert hidden not in engineering["vec"]
+    assert hidden in set(finance["fts"]) | set(finance["vec"])
 
 
-def test_url_bearing_query_does_not_crash_the_lexical_arm(conn):
-    """Lexemes can retain tsquery syntax characters (':' and '/' in URLs); each lexeme is
-    quoted before to_tsquery, so a URL-bearing question must not crash the FTS arm."""
-    meta = store.read_meta(conn)
-    ranking = search.fts_ranking(conn, "see https://example.com/globex/q1-final.pdf report",
-                                 meta["fts_config"])
+def test_multi_entity_page_is_found_by_either_anchor(conn):
+    expected = "wiki/notes/Globex and Initech renewal.md"
+    for entity_id in (GLOBEX_ID, INITECH_ID):
+        hits = search.search(conn, "renewal coordination", k=10, filters={"entity": entity_id})
+        assert expected in [hit["path"] for hit in hits]
+
+
+def test_entity_ids_are_part_of_the_lexical_document(conn):
+    hits = search.search(conn, INITECH_ID, k=10)
+    assert "wiki/notes/Globex and Initech renewal.md" in [hit["path"] for hit in hits]
+
+
+def test_url_text_does_not_break_full_text_search(conn):
+    ranking = search.fts_ranking(
+        conn,
+        "see https://example.com/globex/report.pdf",
+        store.read_meta(conn)["fts_config"],
+    )
     assert isinstance(ranking, list)
-    hits = search.search(conn, "revenue at https://example.com/globex", k=5)
-    assert isinstance(hits, list)
 
 
-def test_current_only_drops_the_superseded_page(conn):
-    hits = search.search(conn, "globex quarterly revenue impact report", k=10,
-                         include_superseded=False)
-    assert all(not h["superseded_by"] for h in hits)
-
-
-def test_rebuild_reuses_the_embedding_cache_and_is_idempotent(conn):
-    """The economics: an unchanged corpus re-embeds nothing, and an in-place rebuild returns
-    identical hit lists (the full-wipe variant is scripts/e2e.sh)."""
-    before = search.search(conn, "refund policy annual plans", k=10)
+def test_unchanged_rebuild_reuses_embedding_cache(conn):
+    before = search.search(conn, "refund annual plans", k=10)
     stats = build.rebuild(conn, FIXTURE, build_embedder("fake"))
     assert stats["embedded"] == 0
     assert stats["cached"] == FIXTURE_PAGES
-    after = search.search(conn, "refund policy annual plans", k=10)
-    assert [(h["path"], h["score"]) for h in before] == [(h["path"], h["score"]) for h in after]
+    after = search.search(conn, "refund annual plans", k=10)
+    assert [(hit["path"], hit["score"]) for hit in before] == [
+        (hit["path"], hit["score"]) for hit in after
+    ]
 
 
-def test_cli_end_to_end_json(capsys):
-    """The two console entry points, against the running database."""
-    from stigmergy.index import cli
-    _connect_or_skip().close()
-    cli.index_main(["--rebuild", "--repo", FIXTURE, "--embedder", "fake"])
-    out = capsys.readouterr().out
-    assert f"indexed {FIXTURE_PAGES} pages" in out
-    cli.search_main(["How much was the deposit on the Kestrel Lodge booking?", "--json"])
-    hits = json.loads(capsys.readouterr().out)
-    assert hits and all("factors" in h for h in hits)
-    assert any("kestrel" in h["path"] for h in hits)
-
-
-def test_search_on_an_empty_index_fails_loudly():
-    from stigmergy.index.errors import EmptyIndexError
-    conn = _connect_or_skip()
+def test_rebuild_removes_deleted_pages_from_search(conn, tmp_path):
+    repo = tmp_path / "brain"
+    shutil.copytree(FIXTURE, repo)
+    victim = "wiki/notes/Globex and Initech renewal.md"
+    embedder = build_embedder("fake")
     try:
-        with conn.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS index_meta")
-        with pytest.raises(EmptyIndexError):
-            search.search(conn, "anything")
+        build.rebuild(conn, str(repo), embedder)
+        assert victim in {
+            hit["path"] for hit in search.search(conn, "Globex Initech renewal", k=20)
+        }
+
+        (repo / victim).unlink()
+        build.rebuild(conn, str(repo), embedder)
+
+        assert victim not in store.existing_paths(conn)
+        assert victim not in {
+            hit["path"] for hit in search.search(conn, "Globex Initech renewal", k=20)
+        }
     finally:
-        conn.close()
+        build.rebuild(conn, FIXTURE, embedder)
 
 
-# ── index_meta records the embedding HOST (issue #112) ────────────────────────────────────────
-# Each of the three rebuilds for itself: the empty-index test above DROPS index_meta and a test
-# that inherits its neighbour's wreckage fails about ordering, not about hosts.
-def test_rebuild_records_the_embedders_host_in_index_meta(conn):
-    """The same model name on two hosts is not provably the same vector space, so the rebuild
-    records WHERE it embedded beside model and dim. The fake embedder's `host` is its own
-    name-space marker, exactly as its model string is."""
+def test_rebuild_cli(capsys, tmp_path):
+    from stigmergy.index import cli
+
+    repo = tmp_path / "brain"
+    shutil.copytree(FIXTURE, repo)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Index Test",
+            "-c",
+            "user.email=index@example.invalid",
+            "commit",
+            "-qm",
+            "test fixture",
+        ],
+        cwd=repo,
+        check=True,
+    )
+
+    cli.index_main(["--rebuild", "--repo", str(repo), "--embedder", "fake"])
+    assert f"indexed {FIXTURE_PAGES} pages" in capsys.readouterr().out
+
+
+def test_empty_index_fails_loudly_and_can_be_rebuilt(conn):
+    with conn.cursor() as cursor:
+        cursor.execute("DROP TABLE IF EXISTS index_meta")
+    with pytest.raises(EmptyIndexError):
+        search.search(conn, "anything")
     build.rebuild(conn, FIXTURE, build_embedder("fake"))
-    meta = store.read_meta(conn)
-    assert meta["host"] == "fake"
 
 
-class _MustNotEmbed:
-    """An embedder whose host disagrees with the index: embedding through it IS the bug."""
+class _WrongHostEmbedder:
     host = "https://other.example/v1"
     model = "fake-hashed-bow-256"
 
-    def embed(self, texts):
-        raise AssertionError("the host-mismatch refusal must fire BEFORE any embedding")
+    def embed(self, _texts):
+        raise AssertionError("host mismatch must be checked before embedding")
 
 
-def test_a_host_mismatch_refuses_before_embedding_anything(conn):
-    """OLD BEHAVIOUR: nothing compared hosts, so moving $EMBED_BASE_URL under a standing index
-    embedded every query into whatever the new host serves under the same name — noise without
-    an error, the failure mode `backends/embedder.py`'s own docstring calls the worst one."""
-    from stigmergy.index.errors import StigmergyIndexError
-
+def test_embedding_host_mismatch_fails_before_query_embedding(conn):
     build.rebuild(conn, FIXTURE, build_embedder("fake"))
-    with pytest.raises(StigmergyIndexError) as ex:
-        search.search_arms(conn, "globex", embedder=_MustNotEmbed())
-
-    msg = str(ex.value)
-    assert "fake" in msg and "https://other.example/v1" in msg
-    assert "--rebuild" in msg
-
-
-def test_an_index_without_a_recorded_host_skips_the_check(conn):
-    """The benign twin, and the upgrade path: an index built before the column existed carries
-    no host, and refusing every query until the next rebuild would turn an upgrade into an
-    outage. Restored in `finally` — the fixture connection is module-scoped."""
-    build.rebuild(conn, FIXTURE, build_embedder("fake"))
-    with conn.cursor() as cur:
-        cur.execute("UPDATE index_meta SET host = ''")
-    try:
-        hits = search.search_arms(conn, "globex")
-        assert hits
-    finally:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE index_meta SET host = %s", ("fake",))
+    with pytest.raises(StigmergyIndexError, match="not provably the same vector space"):
+        search.search_arms(conn, "globex", embedder=_WrongHostEmbedder())

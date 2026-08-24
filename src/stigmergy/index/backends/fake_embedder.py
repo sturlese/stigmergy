@@ -1,9 +1,4 @@
-"""Deterministic offline embedder — the CI double, because CI must never need API keys.
-
-Hashed bag-of-words: no ES<->EN semantics, but byte-for-byte deterministic — the idempotency
-proof and the embedding-cache tests rely on it. Tests/CI only; `build_embedder` imports it
-deferred.
-"""
+"""Deterministic keyless embedder for offline validation."""
 import hashlib
 import math
 

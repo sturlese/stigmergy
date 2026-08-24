@@ -39,9 +39,9 @@ def test_entity_is_membership_not_equality():
 
 
 def test_entity_combined_with_an_ordinary_filter_mixes_both_shapes():
-    clause, params = search._filter_clause({"entity": "stigmergy", "status": "canonical"})
+    clause, params = search._filter_clause({"entity": "stigmergy", "status": "mature"})
     assert clause == " AND %(filter_entity)s = ANY(entity) AND status = %(filter_status)s"
-    assert params == {"filter_entity": "stigmergy", "filter_status": "canonical"}
+    assert params == {"filter_entity": "stigmergy", "filter_status": "mature"}
 
 
 def test_an_unknown_filter_column_raises():

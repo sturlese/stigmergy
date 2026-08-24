@@ -1,11 +1,10 @@
-"""`SlackGateway` — the one seam every Slack Web API call in this package crosses: a narrow
-interface, the real `bolt_gateway` implementation, and `FakeSlackGateway`, the offline double
-`tests/slack/` drives. Every handler takes a gateway as an argument and never imports `slack_sdk`.
+"""The narrow Slack Web API boundary used by handlers and offline execution.
 
 `SlackApiError` is the ONE exception every method raises on failure, collapsed at the real
 gateway's boundary. That collapse is what lets `identity.py` distinguish "the API had a problem"
 from "this person is unmapped" one layer up.
 """
+
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -51,9 +50,7 @@ class SlackGateway(Protocol):
         ...
 
     async def conversations_replies(self, channel_id: str, thread_ts: str) -> list[dict]:
-        """Every message in the thread rooted at `thread_ts`, oldest first, Slack's own verbatim
-        shape. For a message in no thread Slack still returns exactly that one message — the 🧠
-        path relies on this to treat "a single message" and "a thread of one" identically."""
+        """The complete thread containing `thread_ts`, oldest first."""
         ...
 
     async def get_permalink(self, channel_id: str, message_ts: str) -> str:
@@ -61,19 +58,24 @@ class SlackGateway(Protocol):
         on Slack's free plan the link can outlive the message it points at."""
         ...
 
-    async def chat_post_message(self, channel_id: str, *, text: str = "",
-                               blocks: list | None = None, thread_ts: str | None = None) -> dict:
+    async def download_file(self, url: str, *, max_bytes: int) -> bytes:
+        """Download one authenticated Slack attachment with a strict byte limit."""
+        ...
+
+    async def chat_post_message(
+        self, channel_id: str, *, text: str = "", blocks: list | None = None, thread_ts: str | None = None
+    ) -> dict:
         """Post a new message. Returns Slack's own response shape (`ts` is the message's id)."""
         ...
 
-    async def chat_update(self, channel_id: str, ts: str, *, text: str = "",
-                         blocks: list | None = None) -> dict:
+    async def chat_update(self, channel_id: str, ts: str, *, text: str = "", blocks: list | None = None) -> dict:
         """Edit a message in place — the placeholder is EDITED into the answer, never replaced,
         except on `mention._edit_or_fallback`'s retry-then-post-anyway path."""
         ...
 
-    async def chat_post_ephemeral(self, channel_id: str, user_id: str, *, text: str = "",
-                                 blocks: list | None = None, thread_ts: str | None = None) -> dict:
+    async def chat_post_ephemeral(
+        self, channel_id: str, user_id: str, *, text: str = "", blocks: list | None = None, thread_ts: str | None = None
+    ) -> dict:
         """Post a message visible only to `user_id` — every refusal and the "show it here"
         affordance use this."""
         ...
@@ -154,19 +156,15 @@ def _raise_if_invalid_blocks(blocks: list | None, *, fail_any_blocks: bool) -> N
 
 
 class FakeSlackGateway:
-    """The offline double every test in `tests/slack/` drives: every call RECORDED, every failure
-    SCRIPTED (sets of ids that always raise, or countdowns of failures before success) — a fake
-    that silently "just works" would prove nothing about the retry/fallback logic it exists to
-    exercise. The one exception: the block_id-uniqueness rule is enforced unconditionally, like
-    the real API (`_raise_if_invalid_blocks`).
-    """
+    """Offline Slack implementation with recorded calls and scripted failures."""
 
     def __init__(self) -> None:
-        self.users: dict[str, str | None] = {}          # user_id -> email (None = no email set)
-        self.display_names: dict[str, str] = {}          # user_id -> display name (capture hints)
-        self.channels: dict[str, dict] = {}              # channel_id -> {"is_private","is_im","is_mpim","name"}
-        self.threads: dict[tuple[str, str], list[dict]] = {}   # (channel_id, thread_ts) -> messages
+        self.users: dict[str, str | None] = {}  # user_id -> email (None = no email set)
+        self.display_names: dict[str, str] = {}  # user_id -> display name (capture hints)
+        self.channels: dict[str, dict] = {}  # channel_id -> {"is_private","is_im","is_mpim","name"}
+        self.threads: dict[tuple[str, str], list[dict]] = {}  # (channel_id, thread_ts) -> messages
         self.permalinks: dict[tuple[str, str], str] = {}
+        self.files: dict[str, bytes] = {}
 
         # Scripted failures: `fail_users_info`/`fail_conversations_info` are ids that ALWAYS
         # raise; `fail_*_count` are countdowns (that many calls raise, then success);
@@ -183,8 +181,7 @@ class FakeSlackGateway:
         self.fail_update_code = ""
         self.fail_ephemeral_count = 0
         self.fail_any_blocks = False
-        # The progress-reaction lifecycle's own countdowns, so "the reactions API is down, the
-        # capture still works" is testable in isolation.
+        # Reaction failures are independent from capture delivery failures.
         self.fail_reactions_add_count = 0
         self.fail_reactions_remove_count = 0
 
@@ -195,19 +192,22 @@ class FakeSlackGateway:
         self.reactions_removed: list[_Reaction] = []
         self._next_ts = 1000
 
-    # ── seeding helpers (tests set these up, then drive a handler) ───────────
+    # ── seeding helpers ────────────────────────────────────────────────────
     def seed_user(self, user_id: str, email: str | None, *, display_name: str = "") -> None:
         self.users[user_id] = email
         if display_name:
             self.display_names[user_id] = display_name
 
-    def seed_channel(self, channel_id: str, *, is_private: bool = False, is_im: bool = False,
-                     is_mpim: bool = False, name: str = "") -> None:
-        self.channels[channel_id] = {"is_private": is_private, "is_im": is_im,
-                                     "is_mpim": is_mpim, "name": name}
+    def seed_channel(
+        self, channel_id: str, *, is_private: bool = False, is_im: bool = False, is_mpim: bool = False, name: str = ""
+    ) -> None:
+        self.channels[channel_id] = {"is_private": is_private, "is_im": is_im, "is_mpim": is_mpim, "name": name}
 
     def seed_thread(self, channel_id: str, thread_ts: str, messages: list[dict]) -> None:
         self.threads[(channel_id, thread_ts)] = messages
+
+    def seed_file(self, url: str, data: bytes) -> None:
+        self.files[url] = data
 
     def _new_ts(self) -> str:
         self._next_ts += 1
@@ -241,14 +241,33 @@ class FakeSlackGateway:
         return {"channel": {"id": channel_id, **meta}}
 
     async def conversations_replies(self, channel_id: str, thread_ts: str) -> list[dict]:
-        return list(self.threads.get((channel_id, thread_ts), []))
+        messages = self.threads.get((channel_id, thread_ts))
+        if messages is not None:
+            return list(messages)
+        for (candidate_channel, _), candidate_messages in self.threads.items():
+            if candidate_channel == channel_id and any(
+                str(message.get("ts") or "") == thread_ts for message in candidate_messages
+            ):
+                return list(candidate_messages)
+        return []
 
     async def get_permalink(self, channel_id: str, message_ts: str) -> str:
-        return self.permalinks.get((channel_id, message_ts),
-                                   f"https://example.slack.com/archives/{channel_id}/p{message_ts}")
+        return self.permalinks.get(
+            (channel_id, message_ts), f"https://example.slack.com/archives/{channel_id}/p{message_ts.replace('.', '')}"
+        )
 
-    async def chat_post_message(self, channel_id: str, *, text: str = "",
-                               blocks: list | None = None, thread_ts: str | None = None) -> dict:
+    async def download_file(self, url: str, *, max_bytes: int) -> bytes:
+        try:
+            data = self.files[url]
+        except KeyError as error:
+            raise SlackApiError("Slack file is unavailable") from error
+        if len(data) > max_bytes:
+            raise SlackApiError("Slack file exceeds the configured limit")
+        return data
+
+    async def chat_post_message(
+        self, channel_id: str, *, text: str = "", blocks: list | None = None, thread_ts: str | None = None
+    ) -> dict:
         if self.fail_post_count > 0:
             self.fail_post_count -= 1
             raise SlackApiError("chat.postMessage failed")
@@ -257,8 +276,7 @@ class FakeSlackGateway:
         self.posted.append(_Posted(channel_id, text, blocks, thread_ts, ts))
         return {"ok": True, "channel": channel_id, "ts": ts}
 
-    async def chat_update(self, channel_id: str, ts: str, *, text: str = "",
-                         blocks: list | None = None) -> dict:
+    async def chat_update(self, channel_id: str, ts: str, *, text: str = "", blocks: list | None = None) -> dict:
         if self.fail_update_count > 0:
             self.fail_update_count -= 1
             raise SlackApiError("chat.update failed", code=self.fail_update_code)
@@ -266,8 +284,9 @@ class FakeSlackGateway:
         self.updated.append(_Updated(channel_id, ts, text, blocks))
         return {"ok": True, "channel": channel_id, "ts": ts}
 
-    async def chat_post_ephemeral(self, channel_id: str, user_id: str, *, text: str = "",
-                                 blocks: list | None = None, thread_ts: str | None = None) -> dict:
+    async def chat_post_ephemeral(
+        self, channel_id: str, user_id: str, *, text: str = "", blocks: list | None = None, thread_ts: str | None = None
+    ) -> dict:
         if self.fail_ephemeral_count > 0:
             self.fail_ephemeral_count -= 1
             raise SlackApiError("chat.postEphemeral failed")

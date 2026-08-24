@@ -17,9 +17,7 @@ from stigmergy.librarian import githubapp
 from stigmergy.librarian.errors import LibrarianError
 
 # git's own protocol: the helper reads `key=value` lines on stdin and, for `get`, writes back
-# the fields it can supply. `x-access-token` as the username with the installation token as the
-# password is GitHub's documented form for App authentication over https — the same pair
-# `githubapp.push_config` base64-encodes into its `Authorization: Basic` header.
+# the fields it can supply. GitHub App authentication uses `x-access-token` as the username.
 USERNAME = "x-access-token"
 
 # The three operations git may ask for. Only `get` does anything: `store` and `erase` are about
@@ -50,11 +48,7 @@ def _request_fields(text: str) -> dict[str, str]:
 
 
 def credential_lines(env: dict | None = None) -> list[str]:
-    """The two lines git expects for a `get`, with a freshly minted installation token.
-
-    `env` is injectable so the whole path — App id, private key, JWT, the token exchange — can
-    be driven in a test against `githubapp.installation_token`'s own `opener` stub.
-    """
+    """The two lines git expects for a `get`, with a fresh installation token."""
     return [f"username={USERNAME}", f"password={githubapp.installation_token(env)}"]
 
 

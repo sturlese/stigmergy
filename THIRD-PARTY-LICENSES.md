@@ -49,6 +49,5 @@ to certifi's own files, and so places no condition on this project.
 
 ## Tools, not dependencies
 
-[`gitleaks`](https://github.com/gitleaks/gitleaks) (MIT) is executed as an external binary by the
-librarian's secrets gate and by CI. It is never linked or vendored; it is pinned by SHA-256 digest
-where it is downloaded.
+[`gitleaks`](https://github.com/gitleaks/gitleaks) (MIT) is used by CI for the repository secret
+scan. It is not linked, vendored, or shipped in the runtime image.

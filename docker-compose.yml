@@ -1,170 +1,31 @@
-# The platform composition — one `docker compose up` brings the testable system:
-# postgres+pgvector (the derived index), minio (the evidence plane), a bare git remote, and the
-# librarian itself, from the same image staging runs.
-#
-# The librarian is a SERVICE here rather than a host process because the worker has a deployment
-# artifact (`fly.toml`'s `worker` process group, one image shared with the server), and an artifact
-# nothing exercises locally is an artifact whose first real run is on staging. So the service below
-# builds THAT image, runs THAT entry point, and files against the bare remote from empty volumes —
-# container to remote, keyless, with the offline double.
-#
-# No named volume ON PURPOSE: the index is a disposable cache (D10) and every e2e run starts
-# from empty state — `docker compose down -v` wipes everything, `up` starts clean. That applies
-# to MinIO too: the LOCAL evidence plane is throwaway test data, and an e2e that inherited last
-# run's objects could not prove that identical material produces exactly one object. Staging's
-# evidence plane is R2, which is durable and has its own retention policy.
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
     environment:
       POSTGRES_USER: stigmergy
       POSTGRES_PASSWORD: stigmergy
-      POSTGRES_DB: stigmergy       # the one a running brain serves: index + the DURABLE capture queue
+      POSTGRES_DB: stigmergy
     volumes:
-      # TWO databases in this instance: `stigmergy` above, and `stigmergy_test` created by
-      # the init script — the suites truncate `capture_queue` at fixture setup, and until they had
-      # a database of their own a `make test` could (and did) delete real captures out from under a
-      # live demo. Read-only mount: the container must never be able to rewrite its own bootstrap.
       - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "127.0.0.1:54321:5432"   # loopback only — a dev database must never listen LAN-wide
+      - "127.0.0.1:54321:5432"
     healthcheck:
-      # Both databases, on purpose. `pg_isready` alone reports "accepting connections" even for a
-      # database that does not exist (the server answered), so it would have let `up --wait` return
-      # green with the init script silently unapplied — and every Postgres suite would then SKIP
-      # instead of run. The `psql` probe is what makes the gate mean "the whole stack is usable".
       test: ["CMD-SHELL", "pg_isready -U stigmergy -d stigmergy && psql -U stigmergy -d stigmergy_test -c 'SELECT 1' >/dev/null"]
       interval: 2s
       timeout: 2s
       retries: 30
 
-  # The evidence plane: every capture's raw material, content-addressed. MinIO stands in
-  # for the Cloudflare R2 bucket staging uses — same S3 API, same code path
-  # (`stigmergy.capture.evidence`), only four environment values differ. The defaults below ARE the
-  # defaults that module falls back to, so `make db-up` plus a submit works with no configuration.
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z   # pinned like pgvector:pg16 — an e2e that
-    # silently changed object-store version between runs would be an e2e you cannot bisect.
-    # Bucket bootstrap without an init container: in MinIO's single-node backend a top-level
-    # directory in the data dir IS a bucket, so creating it before `minio server` starts leaves
-    # the composition with the evidence bucket already present. One service, one readiness gate,
-    # and `docker compose up --wait` keeps meaning "the whole stack is usable".
-    entrypoint: ["/bin/sh", "-c",
-                 "mkdir -p /data/stigmergy-evidence && exec minio server /data --console-address ':9001'"]
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /data/stigmergy-evidence && exec minio server /data --console-address ':9001'"]
     environment:
-      MINIO_ROOT_USER: minioadmin          # not a secret: the local stack's equivalent of the
-      MINIO_ROOT_PASSWORD: minioadmin      # stigmergy:stigmergy DSN above. Staging uses R2 + Fly secrets.
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "127.0.0.1:9000:9000"   # S3 API — loopback only, same rule as postgres above
-      - "127.0.0.1:9001:9001"   # web console, for eyeballing an archived object by hand
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
       interval: 2s
       timeout: 2s
       retries: 30
-
-  # The bare git remote: what the real knowledge repo is to a real run, in the
-  # composition. It exists so the e2e can assert on the thing that actually matters — a COMMIT
-  # arriving at a remote nobody's working copy can have polluted — rather than on a local branch the
-  # driver could have moved itself. A faked git proves nothing about the property being claimed
-  # (spec Notes for Tester).
-  #
-  # `git daemon` over the git:// protocol, with `--enable=receive-pack` because the default daemon is
-  # read-only and this remote exists to be PUSHED to. Anonymous and unauthenticated, which is exactly
-  # right here and would be catastrophic anywhere else — hence the loopback-only publish below, the
-  # same rule postgres and minio already follow. The real remote's authentication is the librarian
-  # GitHub App, and `githubapp.configured()` being false is a supported configuration precisely so
-  # this case works (see that module's docstring).
-  git-remote:
-    image: alpine/git:2.49.1   # pinned like the two above; an e2e that changed git version between
-    # runs would be an e2e you cannot bisect, and this one asserts on diff and rebase behavior.
-    #
-    # `apk add git-daemon`: the image ships the git CLI and NOT the daemon (Alpine packages it
-    # separately), so without this the container starts, initializes the repo, prints "git: 'daemon'
-    # is not a git command" and exits 1 — which `up --wait` reports as an unhealthy service.
-    #
-    # **The image digest does not pin this, and the comment used to imply it did.** What is pinned is
-    # the git CLI beside it; `apk add` resolves against Alpine's live repository at every `up`, so the
-    # daemon's exact build can change under a fixed image tag and the composition is not hermetic —
-    # an `up` with no network fails outright. alpine/git:2.49.1's repository serves git-daemon
-    # 2.49.1-r0 today, the same upstream version as the CLI, so this is a supply-chain and
-    # reproducibility residual rather than a version skew. Closing it means baking a small image (or
-    # pinning `git-daemon=2.49.1-r0` and accepting that the pin breaks when Alpine rebuilds the
-    # package), which is a change to how the e2e is built and is deliberately not made here.
-    #
-    # Bare-repo bootstrap in the same entrypoint, for the reason MinIO creates its bucket there:
-    # there is NO NAMED VOLUME by design, so the repo has to be created on every `up`, and doing it
-    # before the daemon starts keeps `up --wait` meaning "the whole stack is usable" with one service
-    # and one readiness gate. `--initial-branch=main` matches what every other repo here uses.
-    entrypoint: ["/bin/sh", "-c",
-                 "apk add --no-cache git-daemon >/dev/null &&
-                  git init --bare --initial-branch=main /srv/git/stigmergy.git &&
-                  exec git daemon --verbose --reuseaddr --export-all --enable=receive-pack
-                       --base-path=/srv/git --listen=0.0.0.0 --port=9418 /srv/git"]
-    ports:
-      - "127.0.0.1:9418:9418"   # git:// — loopback only, and it accepts anonymous pushes
-    healthcheck:
-      # `ls-remote` against the repo itself, not a port probe: the daemon can be listening while the
-      # bare repo it serves does not exist yet, and `up --wait` returning green on that would send the
-      # e2e into a clone failure it would report as a librarian defect. Same lesson as the postgres
-      # healthcheck above, where `pg_isready` alone let a missing `stigmergy_test` through.
-      test: ["CMD-SHELL", "git ls-remote git://localhost:9418/stigmergy.git >/dev/null"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-
-  # The librarian worker, from the SAME image staging's `worker` process group
-  # runs and through the SAME entry point (`stigmergy-librarian-boot`: clone, verify checkout == base
-  # ref, exec the loop). That is the whole point of the service — not "a worker in docker" but the
-  # deployed artifact, exercised somewhere a person can watch it fail.
-  #
-  # **Behind a profile**, so `make db-up`, `make e2e` and `make e2e-write` are untouched: this
-  # service must not start before the bare remote has a `main` to clone (the e2e seeds it first),
-  # and a service that crash-loops during every other target's `up --wait` would be noise at best.
-  # `scripts/e2e_librarian_container.sh` starts it by name after seeding.
-  librarian:
-    profiles: ["librarian"]
-    build:
-      context: .
-      dockerfile: Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      git-remote:
-        condition: service_healthy
-    # `--poll-interval 0.5` is passed through to `stigmergy-librarian run` by the boot entry point.
-    # Everything else is the DEFAULT configuration on purpose: the lease, the
-    # per-item budget and the max-attempts count are what a real deployment gets, so what this
-    # proves is what staging does rather than what a test-friendly value does.
-    command: ["stigmergy-librarian-boot", "--poll-interval", "0.5"]
-    environment:
-      # Service names, not loopback: inside the network these are the composition's own addresses.
-      STIGMERGY_INDEX_DSN: postgresql://stigmergy:stigmergy@postgres:5432/stigmergy
-      STIGMERGY_EVIDENCE_ENDPOINT: http://minio:9000
-      # The bare remote stands in for github.com. Anonymous git://, so no App and no credential
-      # helper — `githubapp.configured()` being false is a supported configuration, and this is the
-      # case it was kept supported for.
-      STIGMERGY_LIBRARIAN_REPO_URL: git://git-remote:9418/stigmergy.git
-      # KEYLESS, and both halves matter. The offline double means no model is ever called, so this
-      # runs in CI and costs nothing; the absent OPENAI_API_KEY is the same property the deployed
-      # worker asserts (`bootstrap.READ_PATH_ONLY_ENV`) — the write path does not use the read
-      # path's embedder, here or on Fly.
-      STIGMERGY_LIBRARIAN_BACKEND: double
-      # ...and `double` alone did NOT make that true. It switches the LIBRARIAN agent only. The
-      # view synthesis agent that `_file_meeting` triggers after a meeting files goes through
-      # `kernel.settings.resolve_backend()`, which reads CLEAN_LLM and DEFAULTS TO "openai" — so
-      # every meeting in this container built a real OpenAI agent with no key, raised, and (being
-      # best-effort by design) logged a full traceback instead of failing loudly. Found by the
-      # container e2e's own "no traceback on clean shutdown" check, which is not in CI and had
-      # rotted unnoticed. The comment above was a promise this line is what actually keeps.
-      CLEAN_LLM: fake
-    # >= config.DEFAULT_VISIBILITY_TIMEOUT_S (900s: 2 agent attempts x 300s + 120s for the gates,
-    # the commit and the push, + 180s headroom) — derived there, not retyped here. `Worker` cannot
-    # abort a `process_item` already running; SIGTERM stops the NEXT claim, so compose's ~10s
-    # default would SIGKILL the worker mid-item every time and turn an orderly drain into the crash
-    # path (the row returns only after the visibility timeout, with an attempt burned). Fly's own
-    # `kill_timeout` is capped at 300s and therefore CANNOT make this promise — see fly.toml, which
-    # documents redelivery as the accepted recovery there.
-    stop_grace_period: 900s

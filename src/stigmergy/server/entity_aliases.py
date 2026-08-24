@@ -1,168 +1,285 @@
-"""Entity-alias resolution for entity-first retrieval over `ops/entity-registry.json`:
-`stigmergy.server` may not import `stigmergy.entities` (packages talk through files).
+from __future__ import annotations
 
-READING and PARSING are separate here, and that is the point: the registry reaches the service
-from two places — the index's snapshot (refreshed by the push webhook, so a freshly minted entity
-is served immediately) and the file a process was started with (the fallback) — and both must mean
-exactly the same thing. So the TEXT is the unit: `aliases_from_text`/`registry_from_text` are the
-one parser, and the path-taking `load_aliases`/`load_registry` are `read_file` plus that parser.
-
-`_norm` is deliberately NOT `kernel.normalize.normalize`: that one is the registry's stricter
-folding for resolve-before-mint collision detection, where a false negative lets a duplicate
-through a gate. A false negative HERE only costs a fallback to ordinary semantic search.
-
-It IS `kernel.normalize.resolution_key`, the narrow fold #77 split out of that stricter one — the
-key that folds only how a keyboard and a locale render a name. `resolve_exact` asks the question
-`Registry.canonical_id` asks, "which entity does this text name?", and two implementations of one
-fold is how the MCP server and the librarian come to disagree about which entity a name means: the
-worker anchors a page to an id this service would never resolve back, and nothing anywhere reports
-a mismatch. Imported rather than re-derived; `stigmergy.kernel` is the bottom of the stack and
-depends on nothing, so the edge costs this package nothing it did not already have.
-"""
+import datetime as dt
 import json
 import os
 import re
 
 from stigmergy.kernel.normalize import resolution_key
+from stigmergy.server.acl import visible
 
-# POSIX, because a webhook's changed-path list is POSIX — `server.webhook` matches this string
-# against it verbatim. `default_path` re-splits it for the local filesystem.
 ENTITY_REGISTRY_RELPATH = "ops/entity-registry.json"
+ENTITY_ID_RE = re.compile(
+    r"^ent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
 
 
 def default_path(repo_dir: str | None) -> str:
-    """Same `--repo` convention as `identity.default_path`. The PATH is resolved once at startup,
-    and it is the FALLBACK source: wherever the index carries a registry snapshot, that snapshot is
-    what the service answers from (see `service.BrainService._registry_source`)."""
     return os.path.join(repo_dir, *ENTITY_REGISTRY_RELPATH.split("/")) if repo_dir else ""
 
 
-# Lowercase, accent-folded, punctuation-collapsed — matching inside a question, not a claim about
-# entity identity (see module docstring). One name inside this module for the ONE fold, so every
-# reader here and `Registry.canonical_id` cannot answer differently.
-_norm = resolution_key
-
-
 def read_file(path: str | None) -> str | None:
-    """The registry file's TEXT, or `None` when there is no file to read (an unset path, or a path
-    nothing exists at). `None` is the "no registry here" answer every reader fails open on, and it
-    is what lets a caller choosing between sources — snapshot or file — do so without knowing how
-    either one is parsed."""
     if not path or not os.path.exists(path):
         return None
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
 
 
-def _entities_from_text(text: str | None, origin: str) -> dict:
-    """`id -> raw registry record dict` — the ONE parse every reader shares, so a snapshot and a
-    file behave identically for both readers. No registry at all (`None`) -> `{}` (fail-open:
-    resolution finds nothing). Malformed JSON or a top level that is not `{"entities": {...}}`
-    RAISES: silently degrading retrieval has no signal anywhere an operator or a golden run would
-    see it. `origin` only names the source in that message, for the operator who has to fix it —
-    it is why the message must not reach a tool caller (`errors.RegistryError`)."""
+def registry_payload(text: str | None, origin: str) -> dict:
     if text is None:
-        return {}
-    data = json.loads(text)
-    # Wording mirrored from `kernel.registry.load_registry`, deliberately: two parsers over one
-    # file format must not disagree about what a registry IS. Without this, valid JSON whose top
-    # level is a list/string/number/null reached `.get` and raised `AttributeError`, which the
-    # service converts to nothing — so the ONE malformed shape that skipped `RegistryError` was
-    # also the one a truncated snapshot is likeliest to produce.
-    if not isinstance(data, dict):
-        raise ValueError(f"entity registry {origin}: top level must be an object")
-    entities = data.get("entities")
-    if not isinstance(entities, dict):
-        raise ValueError(f"entity registry {origin}: top-level 'entities' object is required")
-    return entities
-
-
-def _record_name(record: dict) -> str:
-    """One record's display name as TEXT, `""` when absent or null — shared by both readers.
-    Guards `"name": null`: `str(None)` would mint a real alias spelled `none`, resolving every
-    question containing that ordinary word."""
-    return str(record.get("name", "") or "")
-
-
-def _record_aliases(record: dict) -> list[str]:
-    """One record's `aliases` as a list of TEXT, `[]` for any non-list shape. The list-ness
-    matters: `aliases` is unpacked with `*`, and a bare STRING would unpack one character at a
-    time into single-letter aliases."""
-    aliases = record.get("aliases")
-    if not isinstance(aliases, list):
-        return []
-    return [str(a) for a in aliases if isinstance(a, str | int | float)]
-
-
-def aliases_from_text(text: str | None, origin: str) -> dict[str, str]:
-    """Normalized alias/name/id text -> canonical entity id. Shares `_entities_from_text` and the
-    per-field helpers with `registry_from_text`, so neither reader can be hardened without the
-    other."""
-    aliases: dict[str, str] = {}
-    for cid, e in _entities_from_text(text, origin).items():
-        if not isinstance(e, dict):
-            continue
-        for alias in (cid, _record_name(e), *_record_aliases(e)):
-            key = _norm(str(alias))
-            if key:
-                aliases[key] = cid
-    return aliases
+        return {"version": 1, "entities": {}, "redirects": {}}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"entity registry {origin}: malformed JSON") from error
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise ValueError(f"entity registry {origin}: version 1 object is required")
+    entities = payload.get("entities")
+    redirects = payload.get("redirects")
+    if not isinstance(entities, dict) or not isinstance(redirects, dict):
+        raise ValueError(f"entity registry {origin}: entities and redirects objects are required")
+    for entity_id, record in entities.items():
+        _validate_record(entity_id, record, origin)
+    expected_redirects = {}
+    for entity_id, record in entities.items():
+        for absorbed in record["absorbed_ids"]:
+            if absorbed in entities or absorbed in expected_redirects:
+                raise ValueError(f"entity registry {origin}: absorbed entity id is ambiguous")
+            expected_redirects[absorbed] = entity_id
+    for absorbed, canonical in redirects.items():
+        if not isinstance(absorbed, str) or not isinstance(canonical, str):
+            raise ValueError(f"entity registry {origin}: redirects must map strings to strings")
+        if absorbed in entities or canonical not in entities:
+            raise ValueError(f"entity registry {origin}: redirect target is invalid")
+    if redirects != expected_redirects:
+        raise ValueError(f"entity registry {origin}: redirects do not match absorbed_ids")
+    return payload
 
 
 def registry_from_text(text: str | None, origin: str) -> dict[str, dict]:
-    """`id -> {id, name, type, aliases, approved_by}` — the full records
-    `list_entities`/`describe_entity` serve. Same parse and per-field helpers as
-    `aliases_from_text`; a non-mapping record is skipped."""
-    out: dict[str, dict] = {}
-    for cid, e in _entities_from_text(text, origin).items():
-        if not isinstance(e, dict):
+    payload = registry_payload(text, origin)
+    return {
+        entity_id: {"id": entity_id, **record}
+        for entity_id, record in payload["entities"].items()
+    }
+
+
+def redirects_from_text(text: str | None, origin: str) -> dict[str, str]:
+    return dict(registry_payload(text, origin)["redirects"])
+
+
+def aliases_from_text(
+    text: str | None,
+    origin: str,
+    *,
+    audiences: set[str] | None = None,
+) -> dict[str, str]:
+    records = registry_from_text(text, origin)
+    candidates: dict[str, set[str]] = {}
+    for entity_id, record in records.items():
+        claims = visible_claims(record, audiences)
+        if not claims:
             continue
-        out[cid] = {
-            "id": cid,
-            "name": _record_name(e),
-            "type": str(e.get("type", "") or ""),
-            "aliases": _record_aliases(e),
-            # The one lifecycle fact the generator writes: who introduced the identity.
-            # Absent on a registry from before the key existed.
-            "approved_by": str(e.get("approved_by", "") or ""),
-        }
-    return out
+        for value in (entity_id, *(claim["value"] for claim in claims)):
+            key = resolution_key(value)
+            if key:
+                candidates.setdefault(key, set()).add(entity_id)
+    return {
+        key: next(iter(entity_ids))
+        for key, entity_ids in candidates.items()
+        if len(entity_ids) == 1
+    }
 
 
-def load_aliases(path: str | None) -> dict[str, str]:
-    """`aliases_from_text` over a FILE — for a caller that holds only a path (`evals/run_qa.py`,
-    and any process with no index connection to ask for a snapshot)."""
-    return aliases_from_text(read_file(path), path or "")
+def load_aliases(path: str | None, *, audiences: set[str] | None = None) -> dict[str, str]:
+    return aliases_from_text(read_file(path), path or "", audiences=audiences)
 
 
 def load_registry(path: str | None) -> dict[str, dict]:
-    """`registry_from_text` over a FILE, the path-only half of `load_aliases` above."""
     return registry_from_text(read_file(path), path or "")
 
 
-def resolve_entity(aliases: dict[str, str], question: str) -> str | None:
-    """The LONGEST registered alias/name/id appearing as a whole-word phrase in `question`, or
-    None. Longest-first so "Acme Corp" beats "Acme"; whole-word so a short alias cannot match
-    inside an unrelated word. Resolves a name to an id only — query expansion happens elsewhere."""
-    if not aliases or not question:
+def visible_claims(record: dict, audiences: set[str] | None) -> list[dict]:
+    return [claim for claim in record.get("claims", ()) if visible(claim.get("acl"), audiences)]
+
+
+def display_claim(record: dict, audiences: set[str] | None) -> dict | None:
+    claims = visible_claims(record, audiences)
+    preferred = [claim for claim in claims if claim.get("kind") == "preferred"]
+    pool = preferred or [claim for claim in claims if claim.get("kind") == "alias"]
+    if not pool:
         return None
-    q_norm = _norm(question)
+    return max(
+        pool,
+        key=lambda claim: (claim.get("introduced_at", ""), claim.get("claim_id", "")),
+    )
+
+
+def project_record(record: dict, audiences: set[str] | None) -> dict | None:
+    display = display_claim(record, audiences)
+    if display is None:
+        return None
+    claims = sorted(
+        visible_claims(record, audiences),
+        key=lambda claim: (claim.get("introduced_at", ""), claim.get("claim_id", "")),
+        reverse=True,
+    )
+    aliases = []
+    for claim in claims:
+        value = claim["value"]
+        if value != display["value"] and value not in aliases:
+            aliases.append(value)
+    return {
+        "id": record["id"],
+        "name": display["value"],
+        "type": record["entity_type"],
+        "aliases": aliases,
+        "claims": claims,
+    }
+
+
+def resolve_entity(aliases: dict[str, str], question: str) -> str | None:
+    q_norm = resolution_key(question)
     if not q_norm:
         return None
-    best_key = ""
-    best_cid = None
-    for key, cid in aliases.items():
-        if len(key) <= len(best_key):
+    best = (0, None)
+    for key, entity_id in aliases.items():
+        if len(key) <= best[0]:
             continue
         if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", q_norm):
-            best_key, best_cid = key, cid
-    return best_cid
+            best = (len(key), entity_id)
+    return best[1]
 
 
-def resolve_exact(aliases: dict[str, str], text: str) -> str | None:
-    """The canonical id for `text` when it IS (after normalization) a registered id, name or
-    alias — the input already NAMES one entity, unlike `resolve_entity`'s substring search. Same
-    loader, same `_norm`: one resolution mechanism, a different question asked of it."""
-    if not aliases or not text:
+def resolve_exact(aliases: dict[str, str], value: str) -> str | None:
+    return aliases.get(resolution_key(value)) if value else None
+
+
+def _validate_record(entity_id: str, record, origin: str) -> None:
+    if not isinstance(entity_id, str) or not ENTITY_ID_RE.fullmatch(entity_id):
+        raise ValueError(f"entity registry {origin}: entity id is invalid")
+    if not isinstance(record, dict):
+        raise ValueError(f"entity registry {origin}: entity records must be objects")
+    required = {
+        "entity_type",
+        "created_at",
+        "updated_at",
+        "claims",
+        "external_ids",
+        "absorbed_ids",
+    }
+    if (
+        set(record) != required
+        or not isinstance(record["entity_type"], str)
+        or not record["entity_type"].strip()
+        or not isinstance(record["claims"], list)
+        or not record["claims"]
+    ):
+        raise ValueError(f"entity registry {origin}: entity record is invalid")
+    if not isinstance(record["external_ids"], list) or not isinstance(record["absorbed_ids"], list):
+        raise ValueError(f"entity registry {origin}: entity collections must be lists")
+    created_at = _timestamp(record["created_at"], origin)
+    updated_at = _timestamp(record["updated_at"], origin)
+    if updated_at < created_at:
+        raise ValueError(f"entity registry {origin}: entity timestamps are out of order")
+    claim_ids = set()
+    preferred_scopes = set()
+    for claim in record["claims"]:
+        if not isinstance(claim, dict) or set(claim) != {
+            "claim_id",
+            "value",
+            "normalized",
+            "kind",
+            "acl",
+            "source",
+            "actor",
+            "introduced_at",
+        }:
+            raise ValueError(f"entity registry {origin}: name claim is invalid")
+        if (
+            claim["kind"] not in {"preferred", "alias"}
+            or not isinstance(claim["claim_id"], str)
+            or not claim["claim_id"].strip()
+            or claim["claim_id"] in claim_ids
+            or not isinstance(claim["value"], str)
+            or not claim["value"].strip()
+            or claim["normalized"] != resolution_key(claim["value"])
+        ):
+            raise ValueError(f"entity registry {origin}: name claim is invalid")
+        claim_ids.add(claim["claim_id"])
+        scope = _acl(claim["acl"], origin)
+        if claim["kind"] == "preferred":
+            if scope in preferred_scopes:
+                raise ValueError(f"entity registry {origin}: duplicate preferred name scope")
+            preferred_scopes.add(scope)
+        _provenance(claim, origin)
+    if not preferred_scopes:
+        raise ValueError(f"entity registry {origin}: entity requires a preferred name claim")
+    external_keys = set()
+    for external in record["external_ids"]:
+        if not isinstance(external, dict) or set(external) != {
+            "namespace",
+            "value",
+            "acl",
+            "source",
+            "actor",
+            "introduced_at",
+        }:
+            raise ValueError(f"entity registry {origin}: external id claim is invalid")
+        key = (
+            external["namespace"],
+            external["value"],
+            _acl(external["acl"], origin),
+            external["source"],
+            external["actor"],
+        )
+        if not all(isinstance(value, str) and value.strip() for value in key[:2]) or key in external_keys:
+            raise ValueError(f"entity registry {origin}: external id claim is invalid")
+        external_keys.add(key)
+        _provenance(external, origin)
+    absorbed = record["absorbed_ids"]
+    if (
+        any(not isinstance(value, str) or not ENTITY_ID_RE.fullmatch(value) for value in absorbed)
+        or len(set(absorbed)) != len(absorbed)
+        or entity_id in absorbed
+    ):
+        raise ValueError(f"entity registry {origin}: absorbed_ids is invalid")
+
+
+def _timestamp(value, origin: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise ValueError(f"entity registry {origin}: timestamp is invalid")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"entity registry {origin}: timestamp is invalid") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"entity registry {origin}: timestamp is invalid")
+    return parsed.astimezone(dt.UTC)
+
+
+def _acl(value, origin: str) -> tuple[str, ...] | None:
+    if value is None:
         return None
-    return aliases.get(_norm(text))
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(group, str) and group.strip() for group in value)
+        or len(set(value)) != len(value)
+    ):
+        raise ValueError(f"entity registry {origin}: claim ACL is invalid")
+    return tuple(value)
+
+
+def _provenance(value: dict, origin: str) -> None:
+    source = value["source"]
+    actor = value["actor"]
+    if (
+        not isinstance(source, str)
+        or not source.startswith("sources/")
+        or not source.endswith(".md")
+        or not isinstance(actor, str)
+        or not actor.strip()
+    ):
+        raise ValueError(f"entity registry {origin}: claim provenance is invalid")
+    _timestamp(value["introduced_at"], origin)

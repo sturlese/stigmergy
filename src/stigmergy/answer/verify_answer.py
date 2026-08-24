@@ -26,9 +26,9 @@ from stigmergy.answer.numbers import unverified_figures
 # widening `_STRIKE`'s bound is a decision with its own cost argument, not a casual tightening.
 #
 # Digits are never touched, and the property preserved is "the quote exists in what the tools
-# returned" — it must not soften into "the quote resembles something in the page"
-# (`tests/answer/test_verify.py`'s adversarial twins hold that line). Every pattern is BOUNDED and
-# newline-free: bodies are attacker-influenced in size, an unbounded `[^\]]+` restarting at every
+# returned" — it must not soften into "the quote resembles something in the page". Every pattern
+# is bounded and newline-free: bodies are attacker-influenced in size, and an unbounded
+# `[^\]]+` restarting at every
 # `[` is quadratic (6 KB of `[` measured 436 ms), and this runs synchronously inside `async def ask`.
 _SPAN = 200          # a delimiter pair spanning more than this is not emphasis, it is a false pair
 _WIKILINK = re.compile(rf"\[\[([^\]|\n]{{1,{_SPAN}}})(?:\|([^\]\n]{{1,{_SPAN}}}))?\]\]")
@@ -75,8 +75,8 @@ def _derender_pairs(s: str) -> str:
 # This layer carries no payload in either direction (NFC and curly-quote/ellipsis substitution are
 # spelling variants of the same text), so it applies to both sides; one-sided would let the quote
 # assert a character the page lacks. DASHES ARE DELIBERATELY ABSENT: `-` reads as minus and as a
-# range separator, so folding it changes what a quote ASSERTS — pinned as an adversarial twin in
-# `tests/answer/test_verify.py`. NFKC is NOT used: compatibility folding maps `①`→`1` and `ﬁ`→`fi`,
+# range separator, so folding it changes what a quote asserts. NFKC is not used because
+# compatibility folding maps `①`→`1` and `ﬁ`→`fi`,
 # letting a quote claim a digit the page never wrote — canonical equivalence only. Whitespace needs
 # no entry: `\s` is Unicode-aware, so the collapse in the normalizers below eats NBSP already.
 _FOLD = str.maketrans({

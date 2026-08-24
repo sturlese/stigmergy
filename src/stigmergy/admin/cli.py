@@ -1,9 +1,4 @@
-"""`stigmergy-admin-token` — mint the console's one credential.
-
-Prints the plaintext ONCE and the `STIGMERGY_ADMIN_TOKEN_HASH=` line to configure the server
-with; nothing is written anywhere. Lost token = set a new hash. No email argument: the console
-has ONE credential, and `admin_actions.actor` carries attribution per action instead.
-"""
+"""Issue a master backoffice token and its server-side digest."""
 import argparse
 import secrets
 

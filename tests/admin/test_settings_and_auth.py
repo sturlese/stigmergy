@@ -11,19 +11,11 @@ from stigmergy.server.identity import hash_token
 def test_unset_env_means_not_configured():
     settings = AdminSettings.from_env({})
     assert not settings.configured()
-    assert settings.actor == "admin-console"
+    assert settings.actor == "marc"
 
 
 def test_the_console_holds_no_credential_for_another_service():
-    """The console's whole credential surface is its own token hash, and that is a property worth
-    a test rather than an observation: it used to carry a fine-grained GitHub PAT with Actions
-    read+write, so that a browser could dispatch the nightly crons. the capture-is-the-approval
-    change moved those passes
-    into the librarian worker, and the PAT went with them — a token that can start a workflow in
-    somebody's repository is not a credential to keep for a page that now only reads rows.
-
-    Written over the resolved settings rather than over the source file, so a re-added field fails
-    here whatever it is named."""
+    """The master token hash is the backoffice's only credential."""
     settings = AdminSettings.from_env({TOKEN_HASH_ENV: hash_token("t"),
                                        "STIGMERGY_ADMIN_GITHUB_TOKEN": "ghp_x",
                                        "STIGMERGY_ADMIN_GITHUB_REPO": "acme/brain"})

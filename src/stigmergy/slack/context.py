@@ -7,6 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from stigmergy.server import ops_files
 from stigmergy.server.service import SLACK_DOOR, BrainService
 from stigmergy.slack.gateway import SlackApiError, SlackGateway
 from stigmergy.slack.identity import UsersInfoCache, resolve_slack_identity
@@ -24,8 +25,7 @@ SHOW_IT_HERE_MAX_TOKENS = 10_000
 
 
 def short_ref() -> str:
-    """An opaque correlation token for the server-error copy: logged alongside the real exception
-    so an operator can find it, safe to show a user (no path, no DSN, no traceback)."""
+    """Return an opaque correlation token safe for logs and user-facing errors."""
     return uuid.uuid4().hex[:8]
 
 
@@ -45,7 +45,7 @@ class SlackContext:
     # cleartext — the token is an IDENTIFIER, not a credential, and `handle_show_it_here`
     # re-resolves the clicker independently.
     _show_it_here_tokens: dict = field(default_factory=dict)
-    # Injectable so a test can bound it small without minting thousands of real tokens.
+    # Injectable to support smaller deployments without changing the process-wide default.
     _show_it_here_max_tokens: int = SHOW_IT_HERE_MAX_TOKENS
     # Injectable clock, the same seam `UsersInfoCache(clock=...)` uses.
     _clock: object = time.monotonic
@@ -54,8 +54,7 @@ class SlackContext:
         """The ONE identity call every handler makes before building a `BrainService`, with the
         configured workspace and the identities file taken off these settings. `event_team_id` is
         the EVENT's own workspace and is the caller's to source: passing the configured
-        `settings.team_id` here would make the workspace check `configured == configured`, a
-        tautology that can never fail (pinned in `tests/test_architecture.py`)."""
+        `settings.team_id` here would bypass the workspace boundary."""
         return await resolve_slack_identity(
             self.gateway, self.cache, identities_path=self.settings.server.identities_path,
             configured_team_id=self.settings.team_id, event_team_id=event_team_id,
@@ -70,13 +69,19 @@ class SlackContext:
         for whom content was withheld observably likelier to hit the rate-limit message on their
         next real question. `identity=email` is unchanged either way, so audit attribution stays
         the same."""
-        aud = set(audiences) if audiences is not None else None
+        principal = ops_files.resolve_identity_principal(
+            self.conn,
+            self.settings.server.identities_path,
+            email,
+        )
+        aud = None if audiences is None else set(audiences)
         # `door`: the Slack transport is the one door whose `source_*` hints are composed by
         # server code from Slack's API responses — `_submit` accepts them here and refuses them
         # from every client-facing service (`capture.schema.reject_source_provenance_hints`).
         return BrainService(self.settings.server, self.conn, self.embedder, aud, identity=email,
                             rate_limiter=self.rate_limiter if rate_limited else None,
-                            audit=self.audit, evidence=self.evidence, door=SLACK_DOOR)
+                            audit=self.audit, evidence=self.evidence, door=SLACK_DOOR,
+                            principal=principal)
 
     async def decline(self, *, channel_id: str, slack_user_id: str, is_dm: bool, blocks: list,
                       text: str, thread_ts: str | None = None) -> None:
@@ -103,8 +108,8 @@ class SlackContext:
         own policy and does not use this seam (`mention._edit_or_fallback`)."""
         try:
             return await coro
-        except SlackApiError:
-            log.error("slack: %s failed", what, exc_info=True)
+        except SlackApiError as error:
+            log.error("slack: %s failed (%s)", what, error.__class__.__name__)
             return None
 
     def mint_show_it_here_token(self, path: str, owner_slack_user_id: str) -> str:

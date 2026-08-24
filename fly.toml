@@ -1,147 +1,38 @@
-# The ONE Fly.io staging app, with THREE process groups:
-#
-#   app     stigmergy-server's HTTP transport
-#   worker  the librarian, draining the capture queue into commits on the knowledge repo
-#   slack   the Slack transport (stigmergy-slack), Socket Mode, no HTTP service of its own
-#
-# One `fly.toml`, one image, one deploy, one secrets set, one place to read logs. The ceiling is
-# THREE PROCESS GROUPS (server · worker · Slack bot) — the worker and the bot always on, the
-# server auto-stopping when idle (see `[http_service]`) — and it counts process groups, not
-# machines: everything scheduled runs in GitHub Actions and never as a machine, and a FOURTH
-# permanent process GROUP is a deliberate decision, not a default. Scaling an EXISTING group to
-# more than one machine is ordinary — except the `slack` group (see its VM block below for why),
-# and the `worker` group is deliberately PINNED to one machine by the deploy script. Fly's
-# default second machine for a service-less group is a STANDBY — created stopped, claiming
-# nothing (the runbook's scaling note) — so the pin is not about a phantom second bill: it
-# removes the machine an operator could `fly machine start` into a second PAID poller without
-# noticing. Nothing refuses that start — the queue's leases keep two workers CORRECT, and only
-# the invoice notices — and the price of the pin is the standby's host-failure failover, which
-# the runbook records.
-#
-# `app` and `primary_region` are yours to set at first `fly launch` — see the operator runbook
-# (docs/reference/operator-runbook.md). Put `primary_region` nearest to your Postgres, not
-# nearest to you: every request pays the database round trip and almost none pay yours.
-app = "CHANGEME-your-fly-app"
+# One image serves the HTTP app, serialized writer, and Slack Socket Mode adapter.
+app = "stigmergy"
 primary_region = "fra"
 
-# ── shutdown, and the one promise this app does not make ──────────────────────────────────────
-# SIGTERM is what a deploy, a `fly machine stop` and a scale-down all send. The server exits on it
-# immediately. The worker CANNOT abort an item already in flight — there is no cancellation point
-# inside an agent turn, a gitleaks run or a push — so SIGTERM stops it claiming the NEXT item and
-# it exits once the current one reaches a terminal state (`librarian/worker.py`'s docstring).
-#
-# 300s is Fly's ceiling for `kill_timeout`, and one item's worst case is 1710s (2 agent
-# attempts x 600s — `STIGMERGY_LIBRARIAN_TIMEOUT_S` below — + 120s for the gates, the commit and
-# the push + 390s for a drive conversion's bounded worst case —
-# `config.minimum_visibility_timeout_s`). So the platform's window is deliberately
-# SHORTER than the work it is waiting for, and pretending otherwise would be the lie: an item
-# still running at 300s is SIGKILLed, and the recovery is the queue's own — the row returns to
-# the queue after the (derived, 1890s) visibility timeout with an attempt burned, and the next
-# worker files it. That is the documented behaviour, not an accident; the runbook says so, and
-# says to drain the queue before a deploy if you would rather not exercise it.
+# In-flight writer work recovers through the queue lease if Fly reaches this timeout.
 kill_signal = "SIGTERM"
 kill_timeout = "300s"
 
 [build]
 
 [processes]
-  # Byte-identical to the image's own CMD: `[processes]` overrides it, so the server's command is
-  # written here rather than inherited, and the two must not drift. `--entity-registry` is an
-  # EXPLICIT path for the same reason `--identities` already is one:
-  # this process never receives `--repo`, so `ask`'s entity-first resolution would silently never
-  # fire without it (`scripts/deploy_staging.sh` bakes the file to this exact path).
+  # Byte-identical to the Dockerfile CMD.
   app = "stigmergy-server --transport http --host 0.0.0.0 --port 8080 --identities /app/identities.json --entity-registry /app/entity-registry.json"
-  # NOT `stigmergy-librarian run` directly. A container starts with no knowledge repo in it, so
-  # `stigmergy-librarian-boot` clones it with the App's identity, verifies the checkout IS
-  # `origin/main` — the worker reads the ACL config, the entity registry and the contract linter
-  # at that commit — strips the read path's secrets, and then EXECS the
-  # loop so PID 1 is the process SIGTERM has to reach.
+  # Boot clones and verifies the knowledge repository before execing the writer loop.
   worker = "stigmergy-librarian-boot"
-  # The Slack transport, Socket Mode — no inbound HTTP at all, so it needs no
-  # [http_service] entry (see below) and no public port. `--identities`/`--entity-registry`
-  # mirror the `app` command above; the three Slack secrets
-  # (SLACK_APP_TOKEN/SLACK_BOT_TOKEN/SLACK_TEAM_ID) and $STIGMERGY_INDEX_DSN come from the
-  # environment, never from a flag here.
-  slack = "stigmergy-slack --identities /app/identities.json --entity-registry /app/entity-registry.json"
+  slack = "stigmergy-slack --identities /app/identities.json --entity-registry /app/entity-registry.json --channels /app/slack-channels.json"
 
 [env]
-  # Non-secret only. OPENAI_API_KEY, STIGMERGY_INDEX_DSN, STIGMERGY_TOKEN_STORE, the STIGMERGY_EVIDENCE_*
-  # group, the librarian GitHub App triple and ANTHROPIC_API_KEY are Fly secrets
-  # (`fly secrets set ...`, operator runbook) — never here, never in this repo.
-  #
-  # Fly secrets are APP-WIDE. That is accepted in one direction (the public server's environment
-  # also carries the App private key and the Anthropic key — bounded, revocable, with a drill in
-  # the runbook) and closed by `stigmergy-librarian-boot` in the other: OPENAI_API_KEY is set for
-  # the server's embedder and is stripped from the worker's environment before exec, so the write
-  # path stays independent of the read path's embedder.
+  # Credentials and DSNs are Fly secrets. This section contains non-secret defaults only.
   PORT = "8080"
-  # The real deployed hostname, allowlisted alongside localhost for the MCP SDK's DNS-rebinding
-  # Host-header check (the pilot's own 421 bug) — without this, EVERY real client 421s.
-  # Not a secret; comma-separated if the app is ever reachable at more than one hostname.
-  # MUST match the deployed hostname — if it drifts from `app` above, every real client 421s.
-  STIGMERGY_PUBLIC_HOST = "CHANGEME-your-fly-app.fly.dev"
-  # ── the worker group's configuration ─────────────────────────────────────────────────────────
-  # `[env]` is app-wide, so every process group sees these — and the server group
-  # READS none of them. It holds no git credential and writes nothing to the corpus: a removal is
-  # queued at `brain_delete` and performed by the worker, which is the one writer there is.
-  # The knowledge repo it clones and files into — yours to set. https, not ssh: the App
-  # authenticates over https through `stigmergy-librarian-credential`, and an ssh key would be a
-  # second credential to manage.
-  STIGMERGY_LIBRARIAN_REPO_URL = "https://github.com/CHANGEME/stigmergy-brain.git"
-  # `pydantic` runs the REAL agent. The default everywhere else is the offline double, which files
-  # fabricated pages — this is the one deployment where that default would be catastrophic, so it
-  # is explicit here exactly as it is explicit in `make librarian-walk`.
+  # Must match the deployed hostname for MCP Host-header validation.
+  STIGMERGY_PUBLIC_HOST = "stigmergy.fly.dev"
+  STIGMERGY_LIBRARIAN_REPO_URL = "https://github.com/sturlese/stigmergy-brain.git"
   STIGMERGY_LIBRARIAN_BACKEND = "pydantic"
-  # This backend resolves model strings through pydantic-ai, where a BARE name means the OpenAI
-  # Responses API — so the id must carry its provider, and a worker configured without one is
-  # refused at startup rather than left to file through a provider nobody chose. Explicit here
-  # rather than inherited from `config.DEFAULT_MODEL` for the same reason the backend is: this is
-  # the deployment where the value actually spends money, and it should be readable in the file an
-  # operator opens. It authenticates with the app-wide ANTHROPIC_API_KEY secret. A deployment that
-  # files through another provider overrides this with a Fly SECRET of the same name — secrets take
-  # precedence over `[env]` — plus that provider's own key (for example `openrouter:z-ai/glm-5.2`
-  # with OPENROUTER_API_KEY), leaving this template pristine.
   STIGMERGY_LIBRARIAN_MODEL = "anthropic:claude-sonnet-5"
-  # Tuned BY MEASUREMENT: the default 300s was calibrated for paste-sized captures; a
-  # real figure-dense Drive deck (7.7 KB extracted, overlapping an entity with existing coverage)
-  # exceeded it twice while a simpler deck filed just under it. Deck-sized documents earn a
-  # document-sized budget. The visibility timeout DERIVES from this value
-  # (`config.Settings.from_args`: 2×600 + 120 gate budget + 390 conversion + 180 headroom =
-  # 1890s), so the lease
-  # still outlives one item's worst case. `stigmergy-queue reclaim` has no default horizon — it
-  # refuses without `--visibility-timeout`, and the refusal names 1290s, the lease a worker gets
-  # when it is NOT given this longer agent timeout. Sweeping this group with anything below 1890s
-  # redelivers an item that is still being filed — safe (the attempts fence makes the loser
-  # discard) but wasteful, so pass this group's own 1890s.
   STIGMERGY_LIBRARIAN_TIMEOUT_S = "600"
-  # STIGMERGY_REPO (where the clone lives) comes from the image, so the composition and staging share
-  # one default; override it here if a machine ever needs the checkout somewhere else.
 
 [http_service]
-  # `processes = ["app"]` is what keeps the worker AND the Slack bot off the public internet: EACH
-  # of them exposes no ports, takes no HTTP traffic, and has no service block of its own. Without
-  # this line either group would inherit this one and Fly would health-check a machine that
-  # listens on nothing — the same reason applies to `slack` as it always has to `worker`.
+  # The writer and Slack adapter expose no network service.
   processes = ["app"]
   internal_port = 8080
   force_https = true
-  # The server SLEEPS when idle, deliberately: MCP clients and an operator opening /admin wait
-  # out the cold start, and Slack Q&A never touches this group at all — the `slack` process
-  # answers in-process against Postgres, not over HTTP. The ONE caller that will not wait is
-  # GitHub's webhook sender (~10s delivery timeout, no automatic retry): a push landing exactly
-  # in a cold start can be dropped — bounded by the nightly index-rebuild, visible in GitHub's
-  # Recent Deliveries and in the `webhook-index-upsert` job runs (runbook: the webhook section).
-  # The trade is seconds of latency on the first request after an idle gap, bought for the
-  # machine's idle hours; the two groups that cannot tolerate a stop (the worker mid-filing,
-  # the bot's socket) have no `[http_service]` and are untouched by this.
   auto_stop_machines = true
   auto_start_machines = true
   min_machines_running = 0
-  # No explicit [[http_service.checks]] on purpose: EVERY HTTP path on this app goes through the
-  # per-user bearer-auth middleware (fail-closed by design — spec acceptance 3), so an
-  # unauthenticated HTTP health probe would always get 401 and Fly would flap the machine.
-  # Fly's default passive TCP reachability check on internal_port is enough for a single-machine
-  # staging app; revisit with an auth-exempt /healthz route only if flapping is observed.
 
 [[vm]]
   processes = ["app"]
@@ -151,40 +42,11 @@ kill_timeout = "300s"
 [[vm]]
   processes = ["worker"]
   size = "shared-cpu-1x"
-  # More than the server's 512mb because one item runs gitleaks and two whole-repo linter passes
-  # over a git worktree, and the structured flow additionally walks and tokenizes the whole checkout
-  # per agent pass (`librarian/gather.py`). Raise it if the machine OOMs mid-item — the symptom is a
-  # capture that keeps coming back with an attempt burned and nothing in its report.
-  #
-  # **This figure is now generous and is deliberately NOT being lowered here.** It was sized for a
-  # worker that also ran a Node process beside the Python one — the retired filing backend drove an
-  # agent CLI as a subprocess — and that process is gone. Resizing is a separate, measured change:
-  # the honest input is observed RSS on the deployed worker over a spread of captures, not
-  # subtraction on paper, and being wrong downward costs a capture that keeps coming back with an
-  # attempt burned.
+  # Filing runs extraction, the model, Git gates, and full-tree lint passes.
   memory = "1gb"
 
 [[vm]]
   processes = ["slack"]
   size = "shared-cpu-1x"
   memory = "512mb"
-  # Socket Mode has NO LEADER ELECTION. A second machine in this group
-  # would BOTH hold a live connection and BOTH handle every event Slack delivers — a mention
-  # answered twice, a 🧠 capture attempted twice (the `slack_submissions` UNIQUE key catches the
-  # DUPLICATE ROW, but not the doubled Slack API traffic: two placeholders, two acks, two "thinking…").
-  # `min_machines_running` for this group is 1, always, and it is NOT autoscaled — scaling an
-  # EXISTING group's machine count is an ordinary operator act for every other group in this
-  # app, and this is the one group where `fly scale count slack=2` is a bug, not a scale-up.
-  # `scripts/deploy_staging.sh` pins the count to 1 explicitly after every `fly deploy` (which
-  # creates two machines by default for a NEW process group) — see the operator runbook — because
-  # Fly's `[http_service]` autoscaling keys (`min_machines_running`, `auto_start_machines`) apply
-  # only to a group that HAS an http service, and this group deliberately has none.
-  #
-  # THE MECHANISM, not just the intention: `fly.toml` and the deploy script are the operational
-  # guard, but the guarantee that actually holds under a mistake (a manual `fly scale count
-  # slack=2`, an operator skipping the deploy script) is `stigmergy.slack.app.acquire_singleton_lock`
-  # — a session-scoped `pg_try_advisory_lock` taken at process startup on the same Postgres
-  # connection the process already holds for everything else. A second process refuses to start
-  # (`StartupError`, non-zero exit) rather than double-handling events; the lock dies the instant
-  # the holder's connection closes, so failover after a crash, a deploy, or `fly machine stop` is
-  # automatic and needs no operator step at all.
+  # Socket Mode has no leader election; a Postgres advisory lock enforces one active process.

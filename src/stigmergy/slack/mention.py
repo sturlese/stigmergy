@@ -50,23 +50,29 @@ async def _edit_or_fallback(ctx, *, channel_id: str, ts: str, thread_ts: str, bl
         try:
             await ctx.gateway.chat_update(channel_id, ts, text=text, blocks=blocks)
             return
-        except SlackApiError:
-            log.warning("slack: chat.update failed (attempt %d) for %s/%s", attempt + 1,
-                       channel_id, ts, exc_info=True)
+        except SlackApiError as error:
+            log.warning(
+                "slack: chat.update failed (attempt %d) for %s/%s (%s)",
+                attempt + 1,
+                channel_id,
+                ts,
+                error.__class__.__name__,
+            )
     try:
         await ctx.gateway.chat_post_message(channel_id, text=text, blocks=blocks,
                                             thread_ts=thread_ts)
         return
-    except SlackApiError:
+    except SlackApiError as error:
         log.warning("slack: chat.postMessage (with blocks) failed for %s/%s — degrading to a "
                    "text-only send (invalid_blocks or another blocks-shaped rejection) so the "
-                   "answer still reaches the asker", channel_id, ts, exc_info=True)
+                   "answer still reaches the asker (%s)", channel_id, ts,
+                   error.__class__.__name__)
     try:
         await ctx.gateway.chat_post_message(channel_id, text=text, thread_ts=thread_ts)
-    except SlackApiError:
+    except SlackApiError as error:
         log.error("slack: could not deliver the answer at all (edit, fallback post, and the "
-                 "text-only degrade all failed) for %s/%s — log-only incident", channel_id, ts,
-                 exc_info=True)
+                 "text-only degrade all failed) for %s/%s — log-only incident (%s)", channel_id, ts,
+                  error.__class__.__name__)
 
 
 async def _run_ask(service, question: str) -> dict:
@@ -143,11 +149,15 @@ async def handle_mention(ctx, *, event_team_id: str, channel_id: str, thread_ts:
         try:
             effective_audiences = channels.channel_audiences_live(
                 ctx.conn, ctx.settings.channels_path, channel_id)
-        except IdentityError:
+        except IdentityError as error:
             # Fail-closed is right; total silence is not — the same honest server-error copy every
             # other unexpected failure gets, with a correlation ref.
             ref = short_ref()
-            log.error("slack: malformed slack-channels.json (ref=%s)", ref, exc_info=True)
+            log.error(
+                "slack: malformed slack-channels.json (ref=%s error=%s)",
+                ref,
+                error.__class__.__name__,
+            )
             await ctx.post_or_log(
                 ctx.gateway.chat_post_message(channel_id, blocks=render.render_server_error(ref),
                                               text=copy.server_error(ref), thread_ts=thread_ts),
@@ -158,16 +168,20 @@ async def handle_mention(ctx, *, event_team_id: str, channel_id: str, thread_ts:
         placeholder = await ctx.gateway.chat_post_message(
             channel_id, blocks=render.render_placeholder(), text=copy.PLACEHOLDER,
             thread_ts=thread_ts)
-    except SlackApiError:
+    except SlackApiError as error:
         # The FIRST post has no `ts` yet to edit a server-error copy into, so log-only is the
         # floor — a Slack outage here must degrade, not raise out of the listener.
-        log.error("slack: could not post the placeholder for %s/%s", channel_id, thread_ts,
-                 exc_info=True)
+        log.error(
+            "slack: could not post the placeholder for %s/%s (%s)",
+            channel_id,
+            thread_ts,
+            error.__class__.__name__,
+        )
         return
     placeholder_ts = placeholder["ts"]
 
-    service = ctx.build_service(email, effective_audiences)
     try:
+        service = ctx.build_service(email, effective_audiences)
         service.require_embedder()
         answer = await _run_ask(service, question)
     except TimeoutError:
@@ -181,7 +195,7 @@ async def handle_mention(ctx, *, event_team_id: str, channel_id: str, thread_ts:
     except Exception as ex:
         ref = short_ref()
         level = log.error if not isinstance(ex, CapabilityUnavailableError) else log.warning
-        level("slack ask failed (ref=%s)", ref, exc_info=True)
+        level("slack ask failed (ref=%s error=%s)", ref, ex.__class__.__name__)
         await _edit_or_fallback(ctx, channel_id=channel_id, ts=placeholder_ts, thread_ts=thread_ts,
                                 blocks=render.render_server_error(ref), text=copy.server_error(ref))
         return
@@ -217,18 +231,22 @@ async def _maybe_dm_fuller_answer(ctx, *, email: str, asker_audiences, asker_sla
                          channel_service.search(question, max_results=COMPARISON_MAX_RESULTS)["hits"]}
         asker_paths = {h["path"] for h in
                       asker_service.search(question, max_results=COMPARISON_MAX_RESULTS)["hits"]}
-    except Exception:
-        log.error("slack: the DM comparison search() failed; the channel answer already shipped",
-                 exc_info=True)
+    except Exception as error:
+        log.error(
+            "slack: the DM comparison search() failed; the channel answer already shipped (%s)",
+            error.__class__.__name__,
+        )
         return
     if not (asker_paths - channel_paths):
         return   # nothing the asker's scope surfaces that the channel's could not
 
     try:
         fuller = await _run_ask(asker_service, question)
-    except Exception:
-        log.error("slack: the DM fuller-answer ask() failed; the channel answer already shipped",
-                 exc_info=True)
+    except Exception as error:
+        log.error(
+            "slack: the DM fuller-answer ask() failed; the channel answer already shipped (%s)",
+            error.__class__.__name__,
+        )
         return
 
     channel_name = ""
@@ -247,6 +265,9 @@ async def _maybe_dm_fuller_answer(ctx, *, email: str, asker_audiences, asker_sla
         # `chat.postMessage` behavior, so no separate `conversations.open` call.
         await ctx.gateway.chat_post_message(asker_slack_user_id, blocks=blocks,
                                             text=_answer_fallback_text(fuller))
-    except SlackApiError:
-        log.error("slack: could not DM the fuller answer to %s", asker_slack_user_id,
-                 exc_info=True)
+    except SlackApiError as error:
+        log.error(
+            "slack: could not DM the fuller answer to %s (%s)",
+            asker_slack_user_id,
+            error.__class__.__name__,
+        )

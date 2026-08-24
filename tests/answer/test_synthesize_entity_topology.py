@@ -142,17 +142,12 @@ def test_answer_limits_builds_a_usage_limits_object_with_the_pinned_budgets():
 def test_answer_sys_carries_the_topology_paragraph():
     assert "resolves known entity names automatically" in ANSWER_SYS
     assert 'filters={"entity": <id>}' in ANSWER_SYS
-    assert "type: entity" in ANSWER_SYS
-    assert "links/backlinks" in ANSWER_SYS
-    assert "one hop" in ANSWER_SYS
+    assert "reader-visible territory" in ANSWER_SYS
+    assert "knowledge and source pages" in ANSWER_SYS
+    assert "type: entity" not in ANSWER_SYS
 
 
 def test_the_entity_filter_is_taught_as_enumeration_with_its_cost_named():
-    """OLD BEHAVIOUR (batch audit F2): the prompt said "Prefer search(filters={"entity": <id>})
-    once an id is known" — which told the agent to reapply, on every turn after it learned an id,
-    exactly the scoping that was removed one layer down. A company-wide page (`entity: []`) is
-    excluded by that filter and is often the best answer, so the fix has to reach the layer that
-    was telling the agent to undo it."""
     assert "ENUMERATES" in ANSWER_SYS, "the filter is a tool for one job, not the default"
     assert "entity: []" in ANSWER_SYS, "the cost of the filter must be named where it is offered"
     assert "Prefer search(filters=" not in ANSWER_SYS

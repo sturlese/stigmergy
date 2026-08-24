@@ -23,7 +23,7 @@ def _res(answer="", *, refused=False, cites=(), verdict="verified", retried=Fals
             "reason": "", "suppressed": False, "retried": retried}
 
 
-PAGE = "sources/entities/aurora-systems/kpi-metrics-2026-42501c.md"
+PAGE = "sources/2026/08/20000000-0000-4000-8000-000000000002.md"
 
 
 def _exact(expect, cites=PAGE):
@@ -49,6 +49,21 @@ def test_a_figure_scores_as_found_when_it_is_numerically_equivalent(expected, an
     question set does not, which is why these equivalences survive an English golden."""
     scored = run_qa._score(_exact(expected), _res(answer, cites=[PAGE]))
     assert scored["ok"], scored.get("miss")
+
+
+@pytest.mark.parametrize("expected, answer", [
+    ("3", "The rollout covers three regions."),
+    ("10", "The agreement covers ten locations."),
+    ("42", "The accepted price was forty-two euros."),
+])
+def test_a_small_integer_scores_as_found_when_written_in_words(expected, answer):
+    scored = run_qa._score(_exact(expected), _res(answer, cites=[PAGE]))
+    assert scored["ok"], scored.get("miss")
+
+
+def test_a_different_number_word_remains_a_miss():
+    scored = run_qa._score(_exact("3"), _res("The rollout covers five regions.", cites=[PAGE]))
+    assert not scored["ok"]
 
 
 @pytest.mark.parametrize("expected, answer", [
@@ -81,12 +96,10 @@ def test_a_literal_prose_expectation_still_matches_literally():
 # -------------------------------------------------------------------------------- chains
 
 def test_cites_accepts_a_chain_and_any_page_in_it_counts_as_the_citation():
-    """An entity-shaped answer may legitimately cite ANY of the several source documents that
-    back the same claim (`qa_golden.json`'s `aurora-dossier-count`, four documents, one chain).
-    Pinning one of them scored the others as uncited."""
-    first = "sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md"
-    second = "sources/entities/aurora-systems/kpi-metrics-2026-42501c.md"
-    case = {"id": "aurora-dossier-summary", "kind": "prose", "family": "entity-shaped",
+    """Any explicitly accepted supporting page counts as a valid citation."""
+    first = "wiki/notes/Aurora renewal.md"
+    second = "sources/2026/08/20000000-0000-4000-8000-000000000002.md"
+    case = {"id": "aurora-renewal-summary", "kind": "prose", "family": "entity-shaped",
             "expect_contains": "SSO", "cites": [first, second]}
 
     assert run_qa._score(case, _res("Pendiente el SSO.", cites=[first]))["ok"]
@@ -95,8 +108,14 @@ def test_cites_accepts_a_chain_and_any_page_in_it_counts_as_the_citation():
 
 def test_a_citation_outside_the_chain_is_still_a_miss():
     case = {"id": "x", "kind": "prose", "family": "entity-shaped", "expect_contains": "SSO",
-            "cites": ["sources/entities/aurora-systems/meeting-notes-2026-02-10-a59d7b.md"]}
-    scored = run_qa._score(case, _res("Pendiente el SSO.", cites=["sources/units/product/roadmap-2026-9e7390.md"]))
+            "cites": ["wiki/notes/Aurora renewal.md"]}
+    scored = run_qa._score(
+        case,
+        _res(
+            "Pendiente el SSO.",
+            cites=["sources/2026/08/30000000-0000-4000-8000-000000000003.md"],
+        ),
+    )
     assert not scored["ok"]
     assert scored["miss"]["cited_expected_page"] is False
 
@@ -110,8 +129,8 @@ def test_cites_as_a_plain_string_still_works():
 
 REFUTE = {"id": "benchmark-5x-premise", "kind": "refute", "family": "false-premise",
           "refutes": "5x", "expect_contains": "2.3x",
-          "cites": "sources/units/product/benchmark-study-15f21e.md"}
-BENCH = "sources/units/product/benchmark-study-15f21e.md"
+          "cites": PAGE}
+BENCH = PAGE
 
 
 def test_a_false_premise_question_passes_when_the_brain_refuses():
@@ -149,8 +168,8 @@ def test_a_refutation_whose_verdict_failed_is_a_miss():
 # ----------------------------------------------------------- mixed-entity disambiguation
 
 DISAMB = {"id": "northwind-mrr", "kind": "disambiguate", "family": "mixed-entity",
-          "expect_contains": "23500", "cites": "wiki/notes/Vantage June 2026 Investor Update.md"}
-UPDATE = "wiki/notes/Vantage June 2026 Investor Update.md"
+          "expect_contains": "23500", "cites": "wiki/notes/Cascade pricing.md"}
+UPDATE = "wiki/notes/Cascade pricing.md"
 
 
 def test_a_mixed_entity_question_passes_when_the_brain_refuses():
@@ -252,7 +271,7 @@ def test_the_golden_set_size_is_pinned():
     import json
 
     golden = json.loads((run_qa.ROOT / "evals" / "qa_golden.json").read_text(encoding="utf-8"))
-    assert len(golden["questions"]) == 26
+    assert len(golden["questions"]) == 15
 
 
 # ------------------------------------------------------------------------ date equivalence

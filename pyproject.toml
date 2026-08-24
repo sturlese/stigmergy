@@ -5,49 +5,45 @@ description = "A team's knowledge, captured where the work happens, filed by an 
 requires-python = ">=3.12"
 readme = "README.md"
 authors = [{ name = "The Stigmergy contributors" }]
-# SPDX expression + the files that carry it. `THIRD-PARTY-LICENSES.md` is listed because the
-# Dockerfile bundles psycopg, which is LGPL-3.0-only: shipping the image without the dependency
-# notices beside the licence is the part of §4/§6 that a published wheel would otherwise miss.
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD-PARTY-LICENSES.md"]
 dependencies = [
   "pydantic>=2.0",
-  "pydantic-ai==2.13.0",      # the agents (answer synthesizer, filing, the removal sweep writer) — pinned exactly: the agent framework's API drives tool wiring and output schemas, so a float would let a minor bump silently change behavior between CI and dev
-  "anthropic>=0.108.0,<1",    # pulled in by pydantic-ai; bounded below 1.0 because anthropic 1.0 takes an `httpx2.AsyncClient` as `http_client`, which the offline MockTransport tests (and pydantic-ai 2.13's provider wiring) do not speak yet — CI resolved 1.0.0 the day it shipped and went red on main's own green suite
+  "pydantic-ai==2.13.0",
+  "anthropic>=0.108.0,<1",
   "httpx>=0.27",
-  "pyyaml>=6.0",              # kernel/page.py frontmatter emitter: round-trip plain-scalar validation
-  "psycopg[binary]>=3.2",     # the hybrid derived index: Postgres + pgvector
-  "mcp>=1.28,<2",             # the single MCP server: FastMCP stdio adapter (major-pinned)
-  "starlette>=0.37",          # the streamable HTTP transport + the per-user auth ASGI middleware (already an mcp[http] transitive dep — declared explicitly since transport_http.py imports it directly)
-  "uvicorn>=0.29",            # the HTTP transport's ASGI server (same rationale as starlette above)
-  "boto3>=1.34",              # the evidence plane's real store (stigmergy.capture.evidence) and its smoke check (scripts/r2_smoke.py) — S3-compatible, MinIO locally and R2 in staging
-  "pyjwt>=2.8",               # the librarian GitHub App's RS256 assertion (githubapp.py) — already present transitively, declared explicitly because this repo imports it directly (same posture as starlette above)
-  "slack-bolt==1.30.0",       # the Slack transport — pinned EXACTLY, same rationale as pydantic-ai above: the framework's API drives event dispatch, the socket-mode client and the ack contract, so a minor bump could silently change behaviour between CI and dev
-  "aiohttp>=3.9",             # slack-bolt's async Socket Mode handler needs it directly (already a slack-bolt[async] transitive dep — declared explicitly, same posture as starlette/pyjwt above: this repo imports the async handler directly)
+  "pyyaml>=6.0",
+  "psycopg[binary]>=3.2",
+  "mcp>=1.28,<2",
+  "starlette>=0.37",
+  "uvicorn>=0.29",
+  "boto3>=1.34",
+  "pyjwt>=2.8",
+  "slack-bolt==1.30.0",
+  "aiohttp>=3.9",
+  "pymupdf>=1.26,<2",
+  "pillow>=10,<13",
+  "python-docx>=1.2,<2",
+  "python-pptx>=1.0,<2",
+  "google-api-python-client>=2.179,<3",
+  "google-auth-oauthlib>=1.2,<2",
+  "keyring>=25,<26",
+  "python-multipart>=0.0.20,<1",
 ]
 
 [project.optional-dependencies]
-# `pytest-timeout` is not optional tooling: this suite spawns real subprocesses (the librarian CLI,
-# the worker's signal tests), and a subprocess that never exits turns a test run into silence rather
-# than a failure. Nine CI runs died on GitHub's 6-hour ceiling before anyone noticed, because a
-# job-level kill names no test. A per-test timeout names one, with a traceback.
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-timeout>=2.3", "ruff>=0.6"]
 
 [project.scripts]
 stigmergy-index = "stigmergy.index.cli:index_main"
-stigmergy-search = "stigmergy.index.cli:search_main"
 stigmergy-server = "stigmergy.server.mcp_server:main"
+stigmergy-bridge = "stigmergy.bridge.server:main"
 stigmergy-issue-token = "stigmergy.server.issue_token:main"
-stigmergy-queue = "stigmergy.capture.cli:main"
 stigmergy-librarian = "stigmergy.librarian.cli:main"
-stigmergy-librarian-boot = "stigmergy.librarian.bootstrap:main"          # the DEPLOYED worker's entry point — clone the knowledge repo, verify checkout == base ref, strip the read path's secrets, exec `stigmergy-librarian run`
-stigmergy-librarian-credential = "stigmergy.librarian.gitcredential:main" # git credential helper backed by the GitHub App, so the fetch before every claim authenticates in a container with no operator git config
-stigmergy-slack = "stigmergy.slack.app:main"                             # the Slack transport — the third process group's entry point, Socket Mode, one process
-stigmergy-gardener = "stigmergy.gardener.cli:main"                       # eleven deterministic corpus-health checks plus three model passes, findings + job_runs persisted, severity-grouped report — posts nothing to anybody
-stigmergy-admin-token = "stigmergy.admin.cli:main"                       # admin console: mint the console's ONE bearer credential — prints plaintext once + the STIGMERGY_ADMIN_TOKEN_HASH line, stores nothing
-
-# Last table in `[project]` on purpose: a sub-table ENDS the parent's key/value section, so
-# `[project.urls]` placed above `dependencies` silently swallows every key after it.
+stigmergy-librarian-boot = "stigmergy.librarian.bootstrap:main"
+stigmergy-librarian-credential = "stigmergy.librarian.gitcredential:main"
+stigmergy-slack = "stigmergy.slack.app:main"
+stigmergy-admin-token = "stigmergy.admin.cli:main"
 [project.urls]
 Homepage = "https://github.com/sturlese/stigmergy"
 Repository = "https://github.com/sturlese/stigmergy"
@@ -62,9 +58,6 @@ packages = ["src/stigmergy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# "." makes `tests` importable (shared helpers like `tests.librarian.support`) under BARE `pytest`
-# too, not just `python -m pytest`: relying on the implicit cwd entry passes locally and breaks in
-# CI.
 pythonpath = ["src", "."]
 addopts = "--cov --cov-report=term-missing"
 

@@ -1,143 +1,206 @@
-"""The operational spine: `job_runs` and `ingest_errors` writers. One place that knows how a
-run is recorded; the DDL lives in `schema.py`.
+"""Operational run records and advisory locking."""
 
-`job_run` is a context manager so the finished/failed bookkeeping cannot be forgotten, and a
-failure to WRITE the bookkeeping never fails the work it was recording.
+from __future__ import annotations
 
-**`job_runs.status` vocabulary — convention only (plain TEXT, no CHECK), and this docstring is
-the shared spec: update it before adding a fourth value or reusing one.**
-
-- `'ok'` — the run completed; trustworthy end to end, including as a baseline for the next run.
-- `'error'` — the run aborted; `stats` is partial by accident, and no reader may treat the row
-  as a completed baseline.
-- `'partial'` — the run's PRIMARY work completed and committed, but an independent AUXILIARY
-  sub-pass inside the same run failed. Safe to read for the primary work; never safe as a
-  baseline for what the failed sub-pass was measuring (a sweep-failed run committing `'ok'` once
-  advanced a watermark past pages nothing had judged). `stigmergy.gardener` is the one live
-  user; it is not a generic "mostly fine" escape hatch.
-"""
 import contextlib
 import logging
+import uuid
+from dataclasses import dataclass, field
 
 from psycopg.types.json import Jsonb
 
 log = logging.getLogger(__name__)
 
-# `ingest_errors.source` for anything that failed inside the capture queue. `source_doc_id` is
-# then the queue row's id as text — the join back to `capture_queue`.
-SOURCE_CAPTURE_QUEUE = "capture_queue"
+RUNNING = "running"
+SUCCEEDED = "succeeded"
+FAILED = "failed"
+RUN_STATUSES = (RUNNING, SUCCEEDED, FAILED)
 
-_INSERT_JOB_RUN = """
-INSERT INTO job_runs (job, status, started_at, finished_at, stats, error)
-VALUES (%s, %s, now(), now(), %s, %s)
-RETURNING id
-"""
-_INSERT_INGEST_ERROR = """
-INSERT INTO ingest_errors (source, source_doc_id, stage, error, attempts, last_at)
-VALUES (%s, %s, %s, %s, %s, now())
-RETURNING id
-"""
-
-
-def record_job_run(conn, job: str, *, status: str = "ok", stats: dict | None = None,
-                   error: str = "") -> int | None:
-    """One `job_runs` row for a completed run. Returns its id, or None if the write failed (which
-    is logged loudly and swallowed — see the module docstring)."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_INSERT_JOB_RUN, (job, status, Jsonb(stats or {}), error))
-            return cur.fetchone()[0]
-    except Exception:  # noqa: BLE001 — bookkeeping must never fail the work it records
-        log.error("job_runs write failed (job=%s status=%s)", job, status, exc_info=True)
-        return None
+_RUN_COLUMNS = (
+    "id",
+    "job",
+    "status",
+    "started_at",
+    "finished_at",
+    "base_commit_sha",
+    "head_commit_sha",
+    "stats",
+    "error_category",
+    "error",
+)
+_RUN_SQL = ", ".join(_RUN_COLUMNS)
 
 
-def record_ingest_error(conn, *, source_doc_id: str, stage: str, error: str, attempts: int,
-                        source: str = SOURCE_CAPTURE_QUEUE) -> int | None:
-    """One `ingest_errors` row for a failed item: which item, which stage, how many attempts it
-    burned. `resolved` defaults to false — nothing in this system flips it; an operator does,
-    once the item is dealt with."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_INSERT_INGEST_ERROR, (source, source_doc_id, stage, error, attempts))
-            return cur.fetchone()[0]
-    except Exception:  # noqa: BLE001 — same reason as record_job_run
-        log.error("ingest_errors write failed (doc=%s stage=%s)", source_doc_id, stage,
-                  exc_info=True)
-        return None
+@dataclass
+class JobRun:
+    id: uuid.UUID
+    job: str
+    base_commit_sha: str = ""
+    head_commit_sha: str = ""
+    stats: dict = field(default_factory=dict)
 
 
-_LATEST_RUN = """
-SELECT id, status, started_at, finished_at, stats, error FROM job_runs
-WHERE job = %s ORDER BY started_at DESC LIMIT 1
-"""
+def start_job(conn, job: str, *, base_commit_sha: str = "") -> JobRun:
+    run = JobRun(id=uuid.uuid4(), job=job, base_commit_sha=base_commit_sha)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO job_runs (id, job, status, base_commit_sha) VALUES (%s, %s, %s, %s)",
+            (run.id, job, RUNNING, base_commit_sha),
+        )
+    return run
 
 
-def latest_run(conn, job: str) -> dict | None:
-    """The most recent `job_runs` row for `job`, whatever its status — or `None`.
+def finish_job(
+    conn,
+    run: JobRun,
+    *,
+    status: str,
+    error_category: str = "",
+    error: str = "",
+) -> None:
+    if status not in {SUCCEEDED, FAILED}:
+        raise ValueError("a finished job must be succeeded or failed")
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE job_runs
+            SET status = %s,
+                finished_at = now(),
+                head_commit_sha = %s,
+                stats = %s,
+                error_category = %s,
+                error = %s
+            WHERE id = %s AND status = %s
+            """,
+            (
+                status,
+                run.head_commit_sha,
+                Jsonb(run.stats),
+                _safe(error_category, 100),
+                _safe(error, 1000),
+                run.id,
+                RUNNING,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("job run is not active")
 
-    WHATEVER its status, deliberately: this answers "when did this job last run", which is the
-    question a watermark asks, and a job that ERRORED did run. Reading only successful runs would
-    make a failing pass re-attempt on every tick, and a pass that costs model calls must never
-    have that shape.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_LATEST_RUN, (job,))
-        row = cur.fetchone()
+
+def _safe(value: str, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def reconcile_job(
+    conn,
+    run_id: str | uuid.UUID,
+    *,
+    head_commit_sha: str,
+    stats: dict,
+) -> dict:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE job_runs
+            SET status = %s,
+                finished_at = now(),
+                head_commit_sha = %s,
+                stats = stats || %s,
+                error_category = '',
+                error = ''
+            WHERE id = %s
+            RETURNING {_RUN_SQL}
+            """,
+            (SUCCEEDED, head_commit_sha, Jsonb(stats), run_id),
+        )
+        row = cursor.fetchone()
     if row is None:
-        return None
-    return {"id": row[0], "status": row[1], "started_at": row[2], "finished_at": row[3],
-            "stats": row[4] or {}, "error": row[5] or ""}
+        raise RuntimeError("job run does not exist")
+    return _shape_run(row)
+
+
+@contextlib.contextmanager
+def job_run(conn, job: str, *, base_commit_sha: str = ""):
+    run = start_job(conn, job, base_commit_sha=base_commit_sha)
+    try:
+        yield run
+    except Exception as error:
+        finish_job(
+            conn,
+            run,
+            status=FAILED,
+            error_category=error.__class__.__name__,
+            error="job failed",
+        )
+        raise
+    else:
+        finish_job(conn, run, status=SUCCEEDED)
+
+
+def latest_run(conn, job: str, *, successful: bool = False) -> dict | None:
+    query = f"SELECT {_RUN_SQL} FROM job_runs WHERE job = %s"
+    params: list = [job]
+    if successful:
+        query += " AND status = %s"
+        params.append(SUCCEEDED)
+    query += " ORDER BY started_at DESC LIMIT 1"
+    with conn.cursor() as cursor:
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+    return _shape_run(row) if row else None
+
+
+def list_runs(conn, job: str | None = None, *, limit: int = 50) -> list[dict]:
+    query = (
+        f"SELECT {_RUN_SQL} FROM job_runs "
+        "WHERE (%s::text IS NULL OR job = %s) ORDER BY started_at DESC LIMIT %s"
+    )
+    with conn.cursor() as cursor:
+        cursor.execute(query, (job, job, max(1, min(int(limit), 200))))
+        rows = cursor.fetchall()
+    return [_shape_run(row) for row in rows]
+
+
+def _shape_run(row) -> dict:
+    item = dict(zip(_RUN_COLUMNS, row, strict=True))
+    item["id"] = str(item["id"])
+    item["started_at"] = item["started_at"].isoformat()
+    item["finished_at"] = (
+        item["finished_at"].isoformat() if item["finished_at"] else None
+    )
+    item["stats"] = item["stats"] or {}
+    return item
+
+
+def heartbeat(conn, state: str) -> None:
+    safe_state = _safe(state, 40) or "idle"
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "UPDATE worker_heartbeat SET heartbeat_at = now(), state = %s WHERE singleton",
+            (safe_state,),
+        )
+
+
+def read_heartbeat(conn) -> dict | None:
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT heartbeat_at, state FROM worker_heartbeat WHERE singleton")
+        row = cursor.fetchone()
+    return {"heartbeat_at": row[0].isoformat(), "state": row[1]} if row else None
 
 
 @contextlib.contextmanager
 def try_advisory_lock(conn, key: int):
-    """Hold a session-scoped advisory lock for the block if it is free, yielding whether it was
-    taken. NON-BLOCKING (`pg_try_advisory_lock`): a caller that cannot have it must be able to say
-    so and move on, never queue behind a run that may take minutes.
-
-    RELEASED on the way out rather than left to the connection, because the callers are
-    long-running processes: a worker that held its maintenance lock for the life of its connection
-    would lock every other worker out permanently, which is a different rule from the one it asked
-    for. Failure to release is logged and swallowed — the lock dies with the connection anyway, and
-    a cleanup error must not mask whatever the block raised.
-
-    Each caller owns its own `key`, declared beside its own use: two locks sharing one key
-    interfere silently. `capture.schema.startup_ddl_lock` is the BLOCKING sibling (a startup DDL
-    run must wait, not skip); `slack.app.acquire_singleton_lock` is a third spelling this module
-    cannot serve without a `slack -> capture` import that the layering does not have.
-    """
-    with conn.cursor() as cur:
-        cur.execute("SELECT pg_try_advisory_lock(%s::bigint)", (key,))
-        acquired = bool(cur.fetchone()[0])
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_try_advisory_lock(%s::bigint)", (key,))
+        acquired = bool(cursor.fetchone()[0])
     try:
         yield acquired
     finally:
         if acquired:
             try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT pg_advisory_unlock(%s::bigint)", (key,))
-            except Exception:  # noqa: BLE001 — see the docstring: never mask the block's own error
-                log.warning("could not release advisory lock %s; it is released when this "
-                            "connection closes", key, exc_info=True)
-
-
-@contextlib.contextmanager
-def job_run(conn, job: str):
-    """Record a `job_runs` row around a block of work, ok or error.
-
-        with job_run(conn, "capture-purge") as stats:
-            stats["purged"] = purge(...)
-
-    The yielded dict is the run's `stats` jsonb — mutate it in the block. An exception inside the
-    block writes `status='error'` with the exception CLASS name (never `str(ex)`: a raised message
-    can carry captured content, and content never reaches a log) and then re-raises.
-    """
-    stats: dict = {}
-    try:
-        yield stats
-    except Exception as ex:
-        record_job_run(conn, job, status="error", stats=stats, error=ex.__class__.__name__)
-        raise
-    else:
-        record_job_run(conn, job, status="ok", stats=stats)
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT pg_advisory_unlock(%s::bigint)", (key,))
+            except Exception as error:
+                log.warning(
+                    "could not release advisory lock (%s)",
+                    error.__class__.__name__,
+                )

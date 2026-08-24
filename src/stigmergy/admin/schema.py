@@ -1,8 +1,4 @@
-"""`admin_actions` — the console's own bookkeeping, the only state this package owns: one row
-per attempted mutation, the web equivalent of `--by`. The writer swallows and logs — bookkeeping
-must never fail the work it records. DDL runs behind `startup_ddl_lock`, and only from
-`routes.compose` when the console is configured: an inert console executes no DDL.
-"""
+"""Append-only audit records for master console mutations."""
 import logging
 
 from psycopg.types.json import Jsonb
@@ -44,20 +40,21 @@ def ensure_admin_schema(conn) -> None:
 
 def record_action(conn, *, actor: str, action: str, args: dict, outcome: str,
                   error_class: str = "") -> int | None:
-    """One row per attempted mutation; returns the id, or None when the write itself failed —
-    logged loudly, never raised."""
     try:
         with conn.cursor() as cur:
             cur.execute(_INSERT, (actor, action, Jsonb(args or {}), outcome, error_class))
             return cur.fetchone()[0]
-    except Exception:  # noqa: BLE001 — bookkeeping must never fail the work it records
-        log.error("admin_actions write failed (action=%s outcome=%s)", action, outcome,
-                  exc_info=True)
+    except Exception as error:  # noqa: BLE001 — bookkeeping must never fail the work it records
+        log.error(
+            "admin_actions write failed (action=%s outcome=%s error=%s)",
+            action,
+            outcome,
+            error.__class__.__name__,
+        )
         return None
 
 
 def recent_actions(conn, *, limit: int = 50) -> list[dict]:
-    """The console's own audit trail, newest first."""
     with conn.cursor() as cur:
         cur.execute(_RECENT, (max(1, min(int(limit), 500)),))
         rows = cur.fetchall()

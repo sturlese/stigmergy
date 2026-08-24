@@ -1,70 +1,69 @@
 {
   "entities": {
-    "aurora-systems": {
-      "name": "Aurora Systems",
-      "type": "organization",
-      "aliases": [
-        "Aurora"
-      ]
+    "ent_11111111-1111-4111-8111-111111111111": {
+      "absorbed_ids": [],
+      "claims": [
+        {
+          "acl": [
+            "sales"
+          ],
+          "actor": "eval-fixture",
+          "claim_id": "claim_11111111-1111-4111-8111-111111111111",
+          "introduced_at": "2026-08-10T10:00:00+00:00",
+          "kind": "preferred",
+          "normalized": "aurora systems",
+          "source": "sources/2026/08/20000000-0000-4000-8000-000000000002.md",
+          "value": "Aurora Systems"
+        }
+      ],
+      "created_at": "2026-08-10T10:00:00+00:00",
+      "entity_type": "organization",
+      "external_ids": [],
+      "updated_at": "2026-08-10T10:00:00+00:00"
     },
-    "borealis-logistics": {
-      "name": "Borealis Logistics",
-      "type": "organization",
-      "aliases": [
-        "Borealis"
-      ]
+    "ent_22222222-2222-4222-8222-222222222222": {
+      "absorbed_ids": [],
+      "claims": [
+        {
+          "acl": [
+            "product"
+          ],
+          "actor": "eval-fixture",
+          "claim_id": "claim_22222222-2222-4222-8222-222222222222",
+          "introduced_at": "2026-08-11T10:00:00+00:00",
+          "kind": "preferred",
+          "normalized": "borealis logistics",
+          "source": "sources/2026/08/30000000-0000-4000-8000-000000000003.md",
+          "value": "Borealis Logistics"
+        }
+      ],
+      "created_at": "2026-08-11T10:00:00+00:00",
+      "entity_type": "organization",
+      "external_ids": [],
+      "updated_at": "2026-08-11T10:00:00+00:00"
     },
-    "cascade-foods": {
-      "name": "Cascade Foods",
-      "type": "organization",
-      "aliases": [
-        "Cascade"
-      ]
-    },
-    "delta-robotics": {
-      "name": "Delta Robotics",
-      "type": "organization",
-      "aliases": [
-        "Delta"
-      ]
-    },
-    "globex": {
-      "name": "Globex",
-      "type": "organization",
-      "aliases": [
-        "Globex Corporation"
-      ]
-    },
-    "initech": {
-      "name": "Initech",
-      "type": "organization",
-      "aliases": []
-    },
-    "everest-analytics": {
-      "name": "Everest Analytics",
-      "type": "organization",
-      "aliases": [
-        "Everest"
-      ]
-    },
-    "foxglove-health": {
-      "name": "Foxglove Health",
-      "type": "organization",
-      "aliases": [
-        "Foxglove"
-      ]
-    },
-    "hooli": {
-      "name": "Hooli",
-      "type": "organization",
-      "aliases": []
-    },
-    "stigmergy": {
-      "name": "Stigmergy",
-      "type": "product",
-      "aliases": [
-        "the brain"
-      ]
+    "ent_33333333-3333-4333-8333-333333333333": {
+      "absorbed_ids": [],
+      "claims": [
+        {
+          "acl": [
+            "finance"
+          ],
+          "actor": "eval-fixture",
+          "claim_id": "claim_33333333-3333-4333-8333-333333333333",
+          "introduced_at": "2026-08-12T10:00:00+00:00",
+          "kind": "preferred",
+          "normalized": "cascade foods",
+          "source": "sources/2026/08/40000000-0000-4000-8000-000000000004.md",
+          "value": "Cascade Foods"
+        }
+      ],
+      "created_at": "2026-08-12T10:00:00+00:00",
+      "entity_type": "organization",
+      "external_ids": [],
+      "updated_at": "2026-08-12T10:00:00+00:00"
     }
-  }
+  },
+  "redirects": {},
+  "version": 1
 }

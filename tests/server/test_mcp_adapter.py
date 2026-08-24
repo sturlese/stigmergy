@@ -55,15 +55,7 @@ def fake_service():
 
 
 def test_the_mounted_tool_list_is_exactly_the_eight_supported_tools(fake_service):
-    """**The tool list, pinned.** Eight tools are supported, and this is the assertion that makes
-    that a fact rather than a claim: a ninth appearing (a surface added without a decision) or an
-    eighth vanishing (a surface removed without one) both turn this red by name.
-
-    `brain_reply` went with the parks: nothing a submitter captures ever waits on them.
-    `review_queue`/`review_decide` went when the capture became the approval — so there is no
-    inbox to read and no verdict to record. What is left of the write half is the two acts a person
-    performs: `brain_submit` (which now carries every kind, meetings and documents included) and
-    `brain_delete`, decided and applied in the same call."""
+    """Pin the supported MCP product surface."""
     mcp = build_mcp(fake_service)
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert names == {
@@ -81,12 +73,11 @@ def test_search_brain_forwards_arguments_and_returns_the_service_payload(fake_se
         "count": 0, "hits": []}
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "search_brain", query="q", filters={"entity": "acme"},
-               max_results=3, include_superseded=False)
+    out = _call(mcp, "search_brain", query="q", filters={"entity": "acme"}, max_results=3)
 
     assert out == fake_service.search.return_value
     fake_service.search.assert_called_once_with(
-        "q", filters={"entity": "acme"}, max_results=3, include_superseded=False)
+        "q", filters={"entity": "acme"}, max_results=3)
 
 
 @pytest.mark.parametrize("exc", [ValueError("unknown filter: body"), StigmergyIndexError("boom")])
@@ -100,19 +91,7 @@ def test_search_brain_maps_service_errors_to_a_clean_json_error(fake_service, ex
 
 
 def test_search_brain_does_not_echo_a_malformed_registrys_path(fake_service):
-    """OLD BEHAVIOUR: `search_brain` echoed this verbatim, filesystem path and all.
-
-    `entity_aliases._load_entities` names the registry PATH on purpose — that message is written
-    for the operator who has to fix the file — and it was a plain `ValueError`, which this closure
-    echoes because its OWN unknown-filter rejection is safe to show a caller. The two were
-    compatible until entity-first resolution moved inside the search path, and then
-    the loader's message started arriving at a branch chosen for a different error entirely.
-
-    `list_entities` has always refused to echo this exact exception
-    (`test_list_entities_maps_an_unanticipated_exception_to_class_name_only`, which uses the same
-    string); that asymmetry between two tools reading the same file is what made this a defect
-    rather than a judgement call. The service now raises `RegistryError` here instead.
-    """
+    """Registry failures never expose their filesystem origin."""
     fake_service.search.side_effect = RegistryError("the entity registry could not be read")
     mcp = build_mcp(fake_service)
 
@@ -243,28 +222,41 @@ def _marker_value_error(message: str) -> ValueError:
 
 # ── brain_submit / brain_submissions closures ──────────────────────────────────────────────────
 def test_brain_submit_forwards_arguments_and_returns_the_service_payload(fake_service):
-    fake_service.submit.return_value = {"id": 7, "status": "queued", "submitted_by": "steward@example.com",
-                                        "message": "queued as submission #7"}
+    fake_service.submit.return_value = {
+        "id": "capture-7",
+        "status": "queued",
+        "submitted_by": "steward@example.com",
+    }
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "brain_submit", kind="raw", material="a decision", hints={"title": "t"})
+    out = _call(
+        mcp,
+        "brain_submit",
+        text="a decision",
+        title="Decision",
+        occurred_at="2026-08-24",
+        audience=["finance"],
+    )
 
     assert out == fake_service.submit.return_value
-    fake_service.submit.assert_called_once_with("raw", "a decision", hints={"title": "t"},
-                                               audience=None,
-                                                submitted_by=None, verification=None, acl=None,
-                                                content_hash=None)
+    fake_service.submit.assert_called_once_with(
+        text="a decision",
+        path=None,
+        url=None,
+        title="Decision",
+        occurred_at="2026-08-24",
+        audience=["finance"],
+    )
 
 
 @pytest.mark.parametrize("exc", [SubmissionRejected("material is empty — there is nothing to capture"),
                                  EvidenceError("evidence store unavailable (ClientError)")])
 def test_brain_submit_maps_capture_errors_to_a_clean_json_error_echoed_verbatim(fake_service, exc):
-    """Every message in this family is safe to echo: it names the caller's own field/hint/kind or
-    a class-name-only summary, never a bucket/endpoint/credential."""
+    """Capture-layer messages are value-free public refusals."""
     fake_service.submit.side_effect = exc
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "brain_submit", kind="raw", material="x")
+    out = _call(mcp, "brain_submit", text="x")
 
     assert out == {"error": str(exc)}
 
@@ -274,7 +266,7 @@ def test_brain_submit_maps_a_rate_limit_refusal_to_a_clean_json_error(fake_servi
         "rate limited: 30 requests/min exceeded — wait a moment and retry")
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "brain_submit", kind="raw", material="x")
+    out = _call(mcp, "brain_submit", text="x")
 
     assert out == {"error": "rate limited: 30 requests/min exceeded — wait a moment and retry"}
 
@@ -283,7 +275,7 @@ def test_brain_submit_maps_an_unanticipated_exception_to_class_name_only(fake_se
     fake_service.submit.side_effect = RuntimeError("connection to 10.0.0.5 refused, key AKIA123")
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "brain_submit", kind="raw", material="x")
+    out = _call(mcp, "brain_submit", text="x")
 
     assert out == {"error": "brain_submit failed (RuntimeError)"}
     assert "10.0.0.5" not in json.dumps(out) and "AKIA123" not in json.dumps(out)
@@ -309,8 +301,8 @@ def test_brain_submissions_returns_the_service_payload_verbatim(fake_service):
     assert out == fake_service.submissions.return_value
 
 
-@pytest.mark.parametrize("exc", [ValueError("unknown status: bogus (allowed: queued, claimed, "
-                                            "filed, rejected, needs_input, triage, failed)"),
+@pytest.mark.parametrize("exc", [ValueError("unknown status: bogus (allowed: queued, processing, "
+                                            "landed, failed)"),
                                  CaptureError("some capture-layer refusal")])
 def test_brain_submissions_maps_value_and_capture_errors_to_a_clean_json_error(fake_service, exc):
     fake_service.submissions.side_effect = exc
@@ -330,74 +322,7 @@ def test_brain_submissions_maps_an_unanticipated_exception_to_class_name_only(fa
     assert out == {"error": "brain_submissions failed (RuntimeError)"}
 
 
-# ── adversarial: `submitted_by` in the arguments is explicitly refused (proven at the service
-# level, `tests/server/test_service_capture.py`), but what does FastMCP do with an arbitrary
-# UNNAMED extra argument the tool signature never declared at all? ─────────────────────────────
-def test_adversarial_an_undeclared_extra_argument_is_silently_dropped_before_reaching_the_service(
-        fake_service):
-    """FastMCP builds the tool's argument model with pydantic's default `extra='ignore'`
-    (`mcp_server.py`'s own docstring on `reject_server_owned_arguments`). FOUR fields —
-    `submitted_by`, `verification`, `acl`, `content_hash` — are declared ON THE SIGNATURE
-    precisely so each can be caught and refused (built from one list, so the four cannot drift
-    apart) — but any OTHER name the signature never declares (a typo, a client guessing at a
-    future field) is silently stripped by the SDK before `service.submit` is ever called, with NO
-    error and NO warning anywhere in the response. This is the honest, mechanically-verified
-    answer to 'what actually happens': the security property holds ONLY because these four
-    specifically were special-cased onto the signature — it is not
-    a general 'no argument is ever silently dropped' guarantee, and a FUTURE server-owned field
-    added to the queue contract without a matching named, refused parameter would be silently
-    swallowed here exactly like this one."""
-    fake_service.submit.return_value = {"id": 1, "status": "queued",
-                                        "submitted_by": "steward@example.com", "message": "queued"}
-    mcp = build_mcp(fake_service)
-
-    out = _call(mcp, "brain_submit", kind="raw", material="hello",
-               extra_unnamed_field="sneaky, never declared on the tool signature")
-
-    assert "error" not in out                          # no refusal, no warning — silent success
-    fake_service.submit.assert_called_once_with("raw", "hello", hints=None, audience=None,
-                                               submitted_by=None,
-                                                verification=None, acl=None, content_hash=None)
-    # the extra value never reached the service at all — not forwarded, not logged, not echoed
-    assert "sneaky" not in json.dumps(fake_service.submit.call_args.args) + json.dumps(
-        fake_service.submit.call_args.kwargs)
-
-
-def test_adversarial_submitted_by_by_contrast_DOES_reach_the_service_because_it_is_declared(
-        fake_service):
-    """The direct contrast to the test above: `submitted_by` — being ON the signature, one of the
-    four server-owned fields the tool declares — reaches `service.submit` intact, which is what
-    lets `BrainService._submit` refuse it explicitly. The refusal is possible ONLY because the
-    field is named; an arbitrary extra never gets that chance (see the test above)."""
-    fake_service.submit.side_effect = SubmissionRejected(
-        "submitted_by is set by the server, not by the caller")
-    mcp = build_mcp(fake_service)
-
-    out = _call(mcp, "brain_submit", kind="raw", material="hello", submitted_by="ceo@example.com")
-
-    fake_service.submit.assert_called_once_with("raw", "hello", hints=None, audience=None,
-                                                submitted_by="ceo@example.com", verification=None,
-                                                acl=None, content_hash=None)
-    assert out == {"error": "submitted_by is set by the server, not by the caller"}
-
-
-
-
-
-
-
-
-# ── the two tools that upload, and where they run ─────────────────────────────────────────────
-# `queue.submit` PUTs the material into the evidence store before it writes the queue row, so both
-# write tools make a network round trip to an object store — up to a megabyte of transcript. FastMCP
-# drives a SYNC tool on the event-loop thread, where that round trip stalls every other request the
-# process is serving, the read tools included (#136).
-#
-# #135 moved `brain_delete` off the loop for a different and now-extinct reason: it used to clone,
-# run a model, scan, lint and push inside this process, and the sweep writer's `asyncio.run` RAISED
-# on the loop. That work is the librarian worker's now — so the crash is gone, the
-# blocking is not, and this pair is what keeps the fix from being quietly undone with the crash it
-# was mistaken for.
+# ── blocking write tools ──────────────────────────────────────────────────────────────────────
 def _on_the_event_loop_probe(service, method: str):
     """Point one `BrainService` method at a probe reporting whether it was called ON the event
     loop. It answers a fact about its CALLER, so it reads the same for a closure that calls the
@@ -413,14 +338,11 @@ def _on_the_event_loop_probe(service, method: str):
 
 
 @pytest.mark.parametrize("tool, method, args", [
-    ("brain_submit", "submit", {"kind": "raw", "material": "something worth keeping"}),
+    ("brain_submit", "submit", {"text": "something worth keeping"}),
     ("brain_delete", "delete_pages", {"paths": ["wiki/notes/Old.md"], "why": "stale"}),
 ])
-def test_a_tool_that_uploads_never_runs_on_the_event_loop(fake_service, tool, method, args):
-    """Red before the fix for `brain_submit`, which called the service inline.
-
-    The payload is asserted through, not just the flag: moving a call to a worker thread must not
-    change the envelope a client reads, or every caller breaks in exchange for a latency fix."""
+def test_a_write_tool_never_runs_on_the_event_loop(fake_service, tool, method, args):
+    """Blocking writes run in a worker thread without changing their response."""
     _on_the_event_loop_probe(fake_service, method)
 
     out = _call(build_mcp(fake_service), tool, **args)

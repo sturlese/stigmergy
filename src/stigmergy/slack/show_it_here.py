@@ -56,12 +56,12 @@ async def handle_show_it_here(ctx, *, action_value: str, clicking_slack_user_id:
     service = ctx.build_service(identity_result.email, identity_result.audiences)
     try:
         result = service.read_page(path)
-    except Exception:
+    except Exception as error:
         # Silence is the DELIBERATE answer for a wrong clicker, an expired token and an identity
         # failure — which is exactly why a real fault must not borrow it. `RateLimitError` is an
         # ordinary, user-reachable raise through `BrainService._call`, and swallowed silence
         # would tell an asker over budget they were not the owner of their own answer.
-        log.error("slack show-it-here: read_page failed for %s", path, exc_info=True)
+        log.error("slack show-it-here: read_page failed (%s)", error.__class__.__name__)
         await ctx.post_or_log(
             ctx.gateway.chat_post_ephemeral(channel_id, clicking_slack_user_id,
                                             blocks=render.render_server_error(),
@@ -84,5 +84,8 @@ async def handle_show_it_here(ctx, *, action_value: str, clicking_slack_user_id:
         else:
             await ctx.gateway.chat_post_ephemeral(channel_id, clicking_slack_user_id, blocks=blocks,
                                                   text=text, thread_ts=thread_ts)
-    except SlackApiError:
-        log.error("slack: could not post the 'show it here' result", exc_info=True)
+    except SlackApiError as error:
+        log.error(
+            "slack: could not post the 'show it here' result (%s)",
+            error.__class__.__name__,
+        )

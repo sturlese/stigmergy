@@ -15,7 +15,7 @@ from stigmergy.slack.capture import DONE_REACTION, PROGRESS_REACTION
 from stigmergy.slack.context import SlackContext
 from stigmergy.slack.gateway import FakeSlackGateway
 from stigmergy.slack.settings import SlackSettings, no_link_resolver
-from tests.slack.conftest import FINANCE_CHANNEL, TEAM_ID, UNLISTED_CHANNEL
+from tests.slack.conftest import FINANCE_CHANNEL, TEAM_ID
 from tests.slack.conftest import build_context as build_slack_context
 
 pytestmark = pytest.mark.timeout(30)
@@ -461,15 +461,15 @@ def test_a_real_reaction_added_payload_carries_no_team_field_and_is_still_handle
     conn, fixture = indexed
     gw = FakeSlackGateway()
     gw.seed_user("U_ANA", "ana@example.com", display_name="Ana")
-    gw.seed_channel(UNLISTED_CHANNEL, name="unlisted")
-    gw.seed_thread(UNLISTED_CHANNEL, "1.1", [
+    gw.seed_channel(FINANCE_CHANNEL, name="finance")
+    gw.seed_thread(FINANCE_CHANNEL, "1.1", [
         {"ts": "1.1", "user": "U_ANA", "text": "drone AI in large enclosed spaces has real legs"}])
     ctx = build_slack_context(fixture, conn, gateway=gw)
     app = build_bolt_app(ctx)
     listener = _listener(app, "on_reaction_added")
 
     event = {"type": "reaction_added", "user": "U_ANA", "reaction": "brain",
-             "item": {"type": "message", "channel": UNLISTED_CHANNEL, "ts": "1.1"},
+             "item": {"type": "message", "channel": FINANCE_CHANNEL, "ts": "1.1"},
              "item_user": "U_ANA", "event_ts": "1.2"}
     assert "user_team" not in event and "team" not in event, (
         "the point of this test is the REAL payload shape — adding a team field to make it pass "

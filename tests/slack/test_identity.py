@@ -28,7 +28,22 @@ def _run(coro):
 @pytest.fixture()
 def identities_path(tmp_path):
     path = tmp_path / "identities.json"
-    path.write_text(json.dumps({"steward@example.com": ["brain-admins"], "ana@example.com": ["finance"]}))
+    path.write_text(
+        json.dumps(
+            {
+                "steward@example.com": {
+                    "display_name": "Steward",
+                    "groups": ["brain-admins"],
+                    "default_audience": None,
+                },
+                "ana@example.com": {
+                    "display_name": "Ana",
+                    "groups": ["finance"],
+                    "default_audience": ["finance"],
+                },
+            }
+        )
+    )
     return str(path)
 
 

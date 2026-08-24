@@ -1,7 +1,7 @@
 """The accounting that makes a leaked child process fail its own test.
 
-`tests/childwatch.py` explains why this matters: a surviving `stigmergy-librarian` or
-`stigmergy-queue` claims rows from `capture_queue` while a later test's fixture truncates it, and
+`tests/childwatch.py` explains why this matters: a surviving worker claims rows from
+`capture_queue` while a later test's fixture truncates it, and
 the resulting `LeaseLostError` storm lands in packages that never spawned anything. The point of
 the registry is attribution — moving the failure from wherever it surfaced back to whoever caused
 it.
