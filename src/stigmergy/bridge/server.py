@@ -28,7 +28,10 @@ def build_mcp(cloud: CloudClient, acquirer: Acquirer):
     @mcp.tool()
     async def search_brain(query: str, filters: dict | None = None, max_results: int = 5) -> str:
         """Search ACL-visible team knowledge with hybrid ranking."""
-        return await cloud.call_tool("search_brain", locals())
+        return await cloud.call_tool(
+            "search_brain",
+            {"query": query, "filters": filters, "max_results": max_results},
+        )
 
     @mcp.tool()
     async def read_page(path: str) -> str:

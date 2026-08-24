@@ -321,3 +321,37 @@ def test_local_tool_rejects_zero_or_multiple_inputs():
     assert asyncio.run(call({"text": "a", "path": "/tmp/a"})) == {
         "error": "provide exactly one of text, path, or url"
     }
+
+
+def test_local_search_forwards_only_the_public_search_arguments():
+    cloud = CloudClient("https://brain.example", "member-token")
+    forwarded = {}
+
+    async def call_tool(name, arguments):
+        forwarded["name"] = name
+        forwarded["arguments"] = arguments
+        return json.dumps({"hits": []})
+
+    cloud.call_tool = call_tool
+    mcp = build_mcp(cloud, Acquirer())
+
+    blocks, _ = asyncio.run(
+        mcp.call_tool(
+            "search_brain",
+            {
+                "query": "renewal cadence",
+                "filters": {"entity": "acme"},
+                "max_results": 3,
+            },
+        )
+    )
+
+    assert json.loads(blocks[0].text) == {"hits": []}
+    assert forwarded == {
+        "name": "search_brain",
+        "arguments": {
+            "query": "renewal cadence",
+            "filters": {"entity": "acme"},
+            "max_results": 3,
+        },
+    }
