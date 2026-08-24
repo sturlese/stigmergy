@@ -75,6 +75,12 @@ def test_checked_in_slack_manifest_declares_the_runtime_contract():
     manifest = json.loads(SLACK_APP_MANIFEST.read_text(encoding="utf-8"))
     bot_scopes = set(manifest["oauth_config"]["scopes"]["bot"])
 
+    assert manifest["display_information"] == {
+        "name": "synapse",
+        "description": "The company brain — ask it questions, react 🧠 to keep something",
+        "background_color": "#2C2D30",
+    }
+    assert manifest["features"]["bot_user"]["display_name"] == "brain"
     assert bot_scopes == REQUIRED_SLACK_BOT_SCOPES
     assert {"files:write", "im:write", "reactions:write"}.isdisjoint(bot_scopes)
     assert set(manifest["settings"]["event_subscriptions"]["bot_events"]) == REQUIRED_SLACK_BOT_EVENTS
