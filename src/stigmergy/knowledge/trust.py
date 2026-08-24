@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import subprocess
+import sys
 from dataclasses import dataclass
 
 WRITER_NAME = "Stigmergy Librarian"
@@ -71,3 +73,15 @@ def _git(repo: str, *args: str) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="check-trust-authorship")
+    parser.add_argument("--repo", default=".")
+    parser.add_argument("--base", required=True)
+    parser.add_argument("--head", required=True)
+    args = parser.parse_args(argv)
+    violations = check_range(args.repo, base=args.base, head=args.head)
+    for violation in violations:
+        print(f"{violation.commit} {violation.path}: {violation.message}", file=sys.stderr)
+    return int(bool(violations))

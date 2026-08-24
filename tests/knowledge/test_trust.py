@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-from stigmergy.knowledge.trust import WRITER_EMAIL, WRITER_NAME, check_range
+from stigmergy.knowledge.trust import WRITER_EMAIL, WRITER_NAME, check_range, main
 
 
 def _git(repo, *args, env=None):
@@ -28,7 +28,7 @@ def _commit(repo, message, *, name, email):
     return _git(repo, "rev-parse", "HEAD")
 
 
-def test_only_trusted_writer_can_change_model_owned_paths(tmp_path):
+def test_only_trusted_writer_can_change_model_owned_paths(tmp_path, capsys):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
@@ -39,6 +39,7 @@ def test_only_trusted_writer_can_change_model_owned_paths(tmp_path):
     (repo / "wiki" / "notes" / "Trusted.md").write_text("trusted\n")
     trusted = _commit(repo, "trusted", name=WRITER_NAME, email=WRITER_EMAIL)
     assert check_range(str(repo), base=base, head=trusted) == ()
+    assert main(["--repo", str(repo), "--base", base, "--head", trusted]) == 0
 
     (repo / "wiki" / "notes" / "Untrusted.md").write_text("untrusted\n")
     untrusted = _commit(repo, "untrusted", name="Operator", email="operator@example.com")
@@ -49,6 +50,8 @@ def test_only_trusted_writer_can_change_model_owned_paths(tmp_path):
             "model-owned knowledge requires the trusted writer identity",
         )
     ]
+    assert main(["--repo", str(repo), "--base", trusted, "--head", untrusted]) == 1
+    assert "wiki/notes/Untrusted.md" in capsys.readouterr().err
 
 
 def test_human_control_plane_changes_are_not_writer_owned(tmp_path):
