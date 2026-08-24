@@ -178,6 +178,31 @@ def test_every_promised_librarian_operation_exists_in_the_structured_contract():
     assert plan.entities and plan.contradictions and plan.resolved_contradictions
 
 
+@pytest.mark.parametrize(
+    "aliases",
+    [
+        ("ACME HOLDINGS",),
+        ("Acme", "ACME"),
+    ],
+)
+def test_entity_proposal_rejects_names_that_duplicate_the_preferred_or_an_alias(aliases):
+    with pytest.raises(ValidationError):
+        EntityProposal(
+            name="Acme Holdings",
+            entity_type="organization",
+            aliases=aliases,
+        )
+
+
+def test_entity_proposal_rejects_an_alias_without_searchable_text():
+    with pytest.raises(ValidationError):
+        EntityProposal(
+            name="Acme Holdings",
+            entity_type="organization",
+            aliases=("!!!",),
+        )
+
+
 @pytest.mark.parametrize("role", ["meeting", "document", "page", "raw", "source", "entity", "view"])
 def test_librarian_contract_rejects_retired_page_roles(role):
     with pytest.raises(ValidationError):
@@ -209,6 +234,13 @@ def test_librarian_preserves_existing_sourced_knowledge_during_rewrites():
     assert "every newly added or changed factual conclusion" in text
     assert "preserve existing sourced conclusions" in text
     assert "every conclusion must remain supported by the supplied source" not in text
+
+
+def test_librarian_groups_explicit_names_and_identifiers_into_one_entity_proposal():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "use one proposal per identity" in text
+    assert "every other explicitly asserted name, abbreviation, or acronym" in text
+    assert "include the paired `external_namespace` and `external_id`" in text
 
 
 def test_librarian_requires_exact_available_paths_for_contradiction_claims():

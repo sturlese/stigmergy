@@ -14,6 +14,7 @@ from stigmergy.changes.store import get_change_by_commit, record_change
 from stigmergy.entities.model import load_entities
 from stigmergy.entities.service import (
     EntityOperationError,
+    ProposalResolution,
     apply_proposals,
     delete_entity,
     merge_entities,
@@ -243,6 +244,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                 context=context,
                 envelope=envelope,
                 relative_source=relative_source,
+                readable_artifacts=tuple(item.result.text for item in extracted),
                 reasons=reasons,
                 visible_entity_ids=visible_entity_ids,
                 allowed_contradiction_sources=allowed_contradiction_sources,
@@ -401,6 +403,7 @@ def _apply_filing_plan(
     context: WriteContext,
     envelope: schema.CaptureEnvelope,
     relative_source: str,
+    readable_artifacts: tuple[str, ...],
     reasons: dict[str, str],
     visible_entity_ids: frozenset[str],
     allowed_contradiction_sources: frozenset[str],
@@ -411,20 +414,18 @@ def _apply_filing_plan(
             raise KnowledgeWriteError(
                 "contradiction cites evidence outside the supplied filing context"
             )
-    proposal_ids = {}
+    proposal_resolution = ProposalResolution.empty()
     if plan.entities:
-        try:
-            proposal_ids = apply_proposals(
-                root,
-                plan.entities,
-                acl=envelope.audience,
-                source=relative_source,
-                actor=envelope.actor.subject,
-                at=envelope.origin.captured_at,
-                allowed_same_as=visible_entity_ids,
-            )
-        except EntityOperationError:
-            proposal_ids = {}
+        proposal_resolution = apply_proposals(
+            root,
+            plan.entities,
+            acl=envelope.audience,
+            source=relative_source,
+            readable_artifacts=readable_artifacts,
+            actor=envelope.actor.subject,
+            at=envelope.origin.captured_at,
+            allowed_same_as=visible_entity_ids,
+        )
     for mutation in plan.mutations:
         try:
             _apply_page_mutation(
@@ -432,7 +433,7 @@ def _apply_filing_plan(
                 mutation,
                 context=context,
                 source=relative_source,
-                proposal_ids=proposal_ids,
+                proposal_resolution=proposal_resolution,
                 proposals=plan.entities,
                 at=envelope.origin.captured_at.date(),
                 reasons=reasons,
@@ -495,7 +496,7 @@ def _apply_page_mutation(
     *,
     context: WriteContext,
     source: str,
-    proposal_ids: dict[str, str],
+    proposal_resolution: ProposalResolution,
     proposals: tuple[EntityProposal, ...],
     at: dt.date,
     reasons: dict[str, str],
@@ -509,11 +510,15 @@ def _apply_page_mutation(
             _resolve_entities(
                 records,
                 mutation.entities,
-                proposal_ids,
+                proposal_resolution,
                 visible_entity_ids,
             )
             if mutation.entities is not None
-            else _matching_proposed_entities(mutation, proposals, proposal_ids)
+            else _matching_proposed_entities(
+                mutation,
+                proposals,
+                proposal_resolution,
+            )
         )
         body = mutation.body or ""
         try:
@@ -561,14 +566,21 @@ def _apply_page_mutation(
     entities = (
         tuple(
             dict.fromkeys(
-                (*page.entities, *_matching_proposed_entities(mutation, proposals, proposal_ids))
+                (
+                    *page.entities,
+                    *_matching_proposed_entities(
+                        mutation,
+                        proposals,
+                        proposal_resolution,
+                    ),
+                )
             )
         )
         if mutation.entities is None
         else _resolve_entities(
             records,
             mutation.entities,
-            proposal_ids,
+            proposal_resolution,
             visible_entity_ids,
         )
     )
@@ -630,7 +642,7 @@ def _preserve_contradictions(existing: str, proposed: str) -> str:
 def _resolve_entities(
     records,
     values,
-    proposal_ids,
+    proposal_resolution: ProposalResolution,
     visible_entity_ids: frozenset[str],
 ) -> tuple[str, ...]:
     visible_records = {
@@ -640,8 +652,10 @@ def _resolve_entities(
     }
     result = []
     for value in values:
-        resolved = proposal_ids.get(value) or proposal_ids.get(resolution_key(value))
-        resolved = resolved or resolve_reference(visible_records, value)
+        candidates = proposal_resolution.candidates(value)
+        resolved = proposal_resolution.resolve(value) if candidates else None
+        if not candidates:
+            resolved = resolve_reference(visible_records, value)
         if not resolved:
             raise KnowledgeWriteError("entity reference is not unambiguous")
         result.append(resolved)
@@ -651,14 +665,18 @@ def _resolve_entities(
 def _matching_proposed_entities(
     mutation: PageMutation,
     proposals: tuple[EntityProposal, ...],
-    proposal_ids: dict[str, str],
+    proposal_resolution: ProposalResolution,
 ) -> tuple[str, ...]:
+    if len(proposals) != len(proposal_resolution.proposal_ids):
+        raise KnowledgeWriteError("entity proposal resolution is incomplete")
     candidates = []
-    for index, proposal in enumerate(proposals):
-        name = tuple(resolution_key(proposal.name).split())
-        entity_id = proposal_ids.get(proposal.name) or proposal_ids.get(" ".join(name))
-        if name and entity_id:
-            candidates.append((index, name, entity_id))
+    for index, (proposal, entity_id) in enumerate(
+        zip(proposals, proposal_resolution.proposal_ids, strict=True)
+    ):
+        for value in (proposal.name, *proposal.aliases):
+            name = tuple(resolution_key(value).split())
+            if name and entity_id:
+                candidates.append((index, name, entity_id))
     matched = set()
     for text in (mutation.title or "", mutation.body or ""):
         tokens = resolution_key(text).split()

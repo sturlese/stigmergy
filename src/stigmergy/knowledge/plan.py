@@ -6,6 +6,10 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from stigmergy.kernel.normalize import resolution_key
+
+EntityName = Annotated[str, Field(min_length=1, max_length=300)]
+
 
 class PageMutation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -39,16 +43,26 @@ class PageMutation(BaseModel):
 class EntityProposal(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: Annotated[str, Field(min_length=1, max_length=300)]
+    name: EntityName
     entity_type: Annotated[str, Field(min_length=1, max_length=100)]
+    aliases: Annotated[tuple[EntityName, ...], Field(max_length=20)] = ()
     same_as: str | None = None
     external_namespace: str | None = None
     external_id: str | None = None
 
     @model_validator(mode="after")
-    def paired_external_id(self):
+    def valid_identity_evidence(self):
         if bool(self.external_namespace) != bool(self.external_id):
             raise ValueError("external namespace and id must be provided together")
+        preferred = resolution_key(self.name)
+        aliases = tuple(resolution_key(value) for value in self.aliases)
+        if any(
+            not any(character.isalnum() for character in value)
+            for value in (preferred, *aliases)
+        ):
+            raise ValueError("entity names must contain searchable text")
+        if preferred in aliases or len(set(aliases)) != len(aliases):
+            raise ValueError("entity aliases must be unique and differ from the preferred name")
         return self
 
 

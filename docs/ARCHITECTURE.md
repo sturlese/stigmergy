@@ -58,6 +58,13 @@ Names may be confidential. Entity files contain no facts or dossier body; facts 
 notes and concepts anchored to the ID. Reader projections choose only visible claims, while
 `describe_entity` composes visible anchored pages and sources.
 
+Each filing proposal represents one identity: one current name, source-explicit aliases, and an
+optional paired external namespace/ID. Alias claims are accepted only when one extracted readable
+artifact contains the complete normalized alias; generated source markup is excluded. Proposal IDs
+remain positional; textual names resolve to a set of candidate IDs and can anchor a page only when
+that set has one member. Shared aliases are therefore ambiguous regardless of proposal order. Two
+proposals that strongly match one identity reject the plan and preserve only the archived source.
+
 Strong evidence can reuse or merge an identity. An explicit merge accepts only a shared external ID
 verified on every selected record or an exact same-entity assertion verified in an immutable source.
 Source assertions must bind every record through complete, distinct, non-contained names; ambiguous

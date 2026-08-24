@@ -359,7 +359,7 @@ Raw entity pages and the generated registry are internal machine data: ordinary 
 
 #### Birth and matching
 
-The librarian proposes an identity claim while filing normal material. A single entity service performs matching and mutation.
+The librarian proposes one record per identity while filing normal material. The proposal puts the current name in `name`, explicitly asserted alternate names in `aliases`, and a paired external namespace/ID when the source supplies one. Every alias must occur as a complete normalized token sequence in one extracted readable artifact; generated source headings and metadata are not evidence. An unsupported alias rejects the plan and leaves only the source archived. A single entity service performs matching and mutation.
 
 1. Normalize names without erasing meaningful distinctions.
 2. Search the global internal registry without returning hidden candidates to the caller/model.
@@ -368,6 +368,8 @@ The librarian proposes an identity claim while filing normal material. A single 
 5. Otherwise mint a new opaque ID.
 
 Automatic reuse during filing requires a shared stable external identifier or an explicit `same_as` reference that is uniquely visible to the writer. An explicit merge requires either one external identifier present on every selected identity or an exact same-entity assertion that is verified against a cited immutable source. A rationale alone is never evidence. Uncertain fuzzy similarity creates no merge task and reveals nothing; separate IDs are safer than a false merge.
+
+Proposal identity and textual name resolution are separate. Each proposal retains its resolved opaque ID, while every normalized proposed name maps to the set of candidate IDs. Automatic or explicit page anchoring by text succeeds only when that set has exactly one ID. Shared aliases and normalized name collisions therefore remain unanchored rather than depending on proposal order. Multiple proposals that strongly resolve to one identity invalidate the plan instead of fabricating an ordered rename.
 
 If a hidden canonical ID is reused, the submission receipt reports only normal capture progress. It must not reveal the hidden preferred name, aliases, audiences, or prior existence.
 

@@ -46,12 +46,15 @@ page.
 Treat a submitted synthesis as the complete source: never claim that unseen conversation history
 was archived or reviewed.
 
-Page entity references may use a visible opaque entity ID or the exact name of an entity proposal
-in this plan. Propose a new entity only when the source establishes that identity. A shared name or
-fuzzy similarity is not identity evidence. Set `same_as` only for an explicit same-entity assertion
-or a visible identity you can establish strongly. A stable external identifier may be supplied as
-the paired `external_namespace` and `external_id`. The entity service chooses the opaque ID and
-stores scoped, sourced name claims; entity facts remain in notes and concepts.
+Page entity references may use a visible opaque entity ID, preferred name, or alias from an entity
+proposal in this plan. Propose an entity only when the source establishes that identity. Use one
+proposal per identity: put its current or canonical name in `name` and every other explicitly
+asserted name, abbreviation, or acronym in `aliases`. Never split known names for one identity into
+separate proposals. A shared name or fuzzy similarity is not identity evidence. Set `same_as` only
+for an explicit same-entity assertion or a visible identity you can establish strongly. When the
+source supplies a stable external identifier, include the paired `external_namespace` and
+`external_id`. The entity service chooses the opaque ID and stores scoped, sourced name claims;
+entity facts remain in notes and concepts.
 
 ## Contradictions
 
