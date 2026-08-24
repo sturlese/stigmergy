@@ -21,8 +21,9 @@ or product behavior. Active documentation lives in `docs/ARCHITECTURE.md`, `docs
 9. Product capabilities are available through Slack, MCP, or the backoffice. Installed CLI commands
    are service, bootstrap, security, index-operation, or local-bridge entry points.
 10. Every model-backed path is built by `kernel.llm` from its closed allowlist through the single
-    OpenRouter boundary (spec §4.1). No direct Anthropic, OpenAI, or Gemini credentials, no
-    provider fallback, no new model without updating the allowlist and the specification together.
+    OpenRouter boundary (spec §4.1). Same-model provider failover is allowed; model fallback and
+    direct Anthropic, OpenAI, or Gemini credentials are not. No new model without updating the
+    allowlist and the specification together.
 11. Comments and docstrings explain only a local non-obvious invariant or mechanism. History and
     design narration belong in Git and the specification.
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import os
 
+from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
+
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:deepseek/deepseek-v4-flash"
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
@@ -13,7 +15,7 @@ APPROVED_MODELS = frozenset(
 )
 
 OPENROUTER_PROVIDER_POLICY = {
-    "allow_fallbacks": False,
+    "allow_fallbacks": True,
     "require_parameters": True,
     "data_collection": "deny",
     "zdr": True,
@@ -44,18 +46,17 @@ def build_model(model_name: str = ANSWER_MODEL):
     if not key:
         raise RuntimeError("OPENROUTER_API_KEY is required")
 
-    from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
     from pydantic_ai.providers.openrouter import OpenRouterProvider
 
     from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
     ensure_usage_extraction_repaired()
-    settings = OpenRouterModelSettings(
+    model_settings = OpenRouterModelSettings(
         openrouter_provider=dict(OPENROUTER_PROVIDER_POLICY)
     )
     model = OpenRouterModel(
         model_name.removeprefix("openrouter:"),
         provider=OpenRouterProvider(api_key=key),
-        settings=settings,
+        settings=model_settings,
     )
-    return model, None
+    return model, model_settings

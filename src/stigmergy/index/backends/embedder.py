@@ -6,17 +6,14 @@ import os
 
 import httpx
 
+from stigmergy.kernel.llm import OPENROUTER_PROVIDER_POLICY
+
 DEFAULT_MODEL = "qwen/qwen3-embedding-8b"
 DEFAULT_DIMENSIONS = 2560
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 EMBED_BATCH = 128
 
-PROVIDER_POLICY = {
-    "allow_fallbacks": False,
-    "require_parameters": True,
-    "data_collection": "deny",
-    "zdr": True,
-}
+PROVIDER_POLICY = OPENROUTER_PROVIDER_POLICY
 
 MISSING_KEY_MESSAGE = (
     "OPENROUTER_API_KEY is not set, so Qwen embeddings are unavailable. "
