@@ -16,7 +16,7 @@ from stigmergy.server.service import EmptyIndexError, evidence_plane, open_scope
 from stigmergy.slack import capture, mention, poller, show_it_here
 from stigmergy.slack.context import SlackContext, short_ref
 from stigmergy.slack.gateway import SlackApiError
-from stigmergy.slack.identity import is_configured_workspace, is_ignorable_event
+from stigmergy.slack.identity import is_ignorable_event
 from stigmergy.slack.render import SHOW_IT_HERE_ACTION_ID
 from stigmergy.slack.settings import SlackSettings, no_link_resolver
 from stigmergy.slack.store import ensure_write_path_schema
@@ -183,34 +183,14 @@ def build_bolt_app(ctx: SlackContext):
             message_ts = item.get("ts", "")
             slack_user_id = event.get("user", "")
 
-            # Reject foreign workspaces before adding a progress reaction. Channel and audience
-            # authorization remain inside the capture handler.
-            reacted = is_configured_workspace(team_id, ctx.settings.team_id)
-            queued = False
-            try:
-                # Keep the progress lifecycle inside this try so the finally path always runs.
-                if reacted:
-                    await capture.mark_in_progress(ctx.gateway, channel_id=channel_id,
-                                                   message_ts=message_ts)
-                identity_result = await ctx.resolve_slack_identity(
-                    event_team_id=team_id, slack_user_id=slack_user_id)
-                queued = await capture.handle_reaction_added(
-                    ctx, reaction=event["reaction"], team_id=team_id, channel_id=channel_id,
-                    message_ts=message_ts, slack_user_id=slack_user_id,
-                    identity_result=identity_result)
-            finally:
-                # Every exit path clears the progress reaction — a refused/failed capture must
-                # never leave a dangling ⏳.
-                if reacted:
-                    await capture.finish_progress(ctx.gateway, channel_id=channel_id,
-                                                  message_ts=message_ts, ok=queued)
+            identity_result = await ctx.resolve_slack_identity(
+                event_team_id=team_id, slack_user_id=slack_user_id)
+            await capture.handle_reaction_added(
+                ctx, reaction=event["reaction"], team_id=team_id, channel_id=channel_id,
+                message_ts=message_ts, slack_user_id=slack_user_id,
+                identity_result=identity_result)
         except Exception as error:
             _log_listener_failure("on_reaction_added", error)
-
-    @app.event("reaction_removed")
-    async def on_reaction_removed(event, context, ack):
-        # Ignored outright — removing the 🧠 is not an undo the system can honour.
-        await ack()
 
     @app.action(SHOW_IT_HERE_ACTION_ID)
     async def on_show_it_here(ack, body, action):

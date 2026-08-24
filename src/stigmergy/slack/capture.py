@@ -39,63 +39,9 @@ from stigmergy.slack.store import (
 log = logging.getLogger(__name__)
 
 BRAIN_REACTION = "brain"
-PROGRESS_REACTION = "hourglass_flowing_sand"
-DONE_REACTION = "white_check_mark"
 CAPTURE_ACQUISITION_TIMEOUT_S = 60
 PROFILE_LOOKUP_CONCURRENCY = 8
 _SLACK_TIMESTAMP_RE = re.compile(r"^\d+\.\d+$")
-
-
-async def _react_or_log(
-    gateway,
-    *,
-    channel_id: str,
-    message_ts: str,
-    name: str,
-    add: bool,
-    what: str,
-) -> None:
-    try:
-        if add:
-            await gateway.reactions_add(channel_id, message_ts, name)
-        else:
-            await gateway.reactions_remove(channel_id, message_ts, name)
-    except SlackApiError as error:
-        log.error(
-            "Slack reaction update failed",
-            extra={"operation": what, "error_class": error.__class__.__name__},
-        )
-
-
-async def mark_in_progress(gateway, *, channel_id: str, message_ts: str) -> None:
-    await _react_or_log(
-        gateway,
-        channel_id=channel_id,
-        message_ts=message_ts,
-        name=PROGRESS_REACTION,
-        add=True,
-        what="progress_add",
-    )
-
-
-async def finish_progress(gateway, *, channel_id: str, message_ts: str, ok: bool) -> None:
-    await _react_or_log(
-        gateway,
-        channel_id=channel_id,
-        message_ts=message_ts,
-        name=PROGRESS_REACTION,
-        add=False,
-        what="progress_remove",
-    )
-    if ok:
-        await _react_or_log(
-            gateway,
-            channel_id=channel_id,
-            message_ts=message_ts,
-            name=DONE_REACTION,
-            add=True,
-            what="done_add",
-        )
 
 
 async def _display_name(gateway, cache: UsersInfoCache, team_id: str, user_id: str) -> str:

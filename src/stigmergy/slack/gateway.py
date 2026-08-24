@@ -80,19 +80,6 @@ class SlackGateway(Protocol):
         affordance use this."""
         ...
 
-    async def reactions_add(self, channel_id: str, message_ts: str, name: str) -> dict:
-        """Add an emoji reaction. `already_reacted` (reachable on any event redelivery) is
-        treated as success at the real gateway's boundary; a real API failure raises
-        `SlackApiError`."""
-        ...
-
-    async def reactions_remove(self, channel_id: str, message_ts: str, name: str) -> dict:
-        """Remove an emoji reaction. `no_reaction` (already gone — a previous cleanup, or a
-        redelivery) is treated as success the same way; a real API failure raises
-        `SlackApiError`."""
-        ...
-
-
 @dataclass
 class _Posted:
     channel_id: str
@@ -117,13 +104,6 @@ class _Updated:
     ts: str
     text: str
     blocks: list | None
-
-
-@dataclass
-class _Reaction:
-    channel_id: str
-    ts: str
-    name: str
 
 
 def _duplicate_block_id(blocks: list | None) -> str | None:
@@ -181,15 +161,9 @@ class FakeSlackGateway:
         self.fail_update_code = ""
         self.fail_ephemeral_count = 0
         self.fail_any_blocks = False
-        # Reaction failures are independent from capture delivery failures.
-        self.fail_reactions_add_count = 0
-        self.fail_reactions_remove_count = 0
-
         self.posted: list[_Posted] = []
         self.updated: list[_Updated] = []
         self.ephemeral: list[_Ephemeral] = []
-        self.reactions_added: list[_Reaction] = []
-        self.reactions_removed: list[_Reaction] = []
         self._next_ts = 1000
 
     # ── seeding helpers ────────────────────────────────────────────────────
@@ -295,18 +269,4 @@ class FakeSlackGateway:
         # `post_or_log`/`decline` swallow the error, so the live symptom is silence.
         _raise_if_invalid_blocks(blocks, fail_any_blocks=self.fail_any_blocks)
         self.ephemeral.append(_Ephemeral(channel_id, user_id, text, blocks, thread_ts))
-        return {"ok": True}
-
-    async def reactions_add(self, channel_id: str, message_ts: str, name: str) -> dict:
-        if self.fail_reactions_add_count > 0:
-            self.fail_reactions_add_count -= 1
-            raise SlackApiError("reactions.add failed")
-        self.reactions_added.append(_Reaction(channel_id, message_ts, name))
-        return {"ok": True}
-
-    async def reactions_remove(self, channel_id: str, message_ts: str, name: str) -> dict:
-        if self.fail_reactions_remove_count > 0:
-            self.fail_reactions_remove_count -= 1
-            raise SlackApiError("reactions.remove failed")
-        self.reactions_removed.append(_Reaction(channel_id, message_ts, name))
         return {"ok": True}
