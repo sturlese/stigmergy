@@ -17,7 +17,7 @@ class IdentityError(StigmergyServerError):
 
 class StartupError(StigmergyServerError):
     """A precondition for serving is missing (e.g. the real embedder is configured but
-    OPENAI_API_KEY is absent). Actionable, non-fatal-to-the-shell — the CLI reports and exits."""
+    OPENROUTER_API_KEY is absent). Actionable, non-fatal-to-the-shell — the CLI reports and exits."""
 
 
 class CapabilityUnavailableError(StigmergyServerError):

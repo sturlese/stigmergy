@@ -7,13 +7,16 @@ import signal
 import time
 from dataclasses import dataclass
 
-from pydantic_ai.exceptions import AgentRunError
+import psycopg
+from pydantic_ai.exceptions import AgentRunError, ModelHTTPError
 
 from stigmergy.capture import ops, queue, schema, uploads
 from stigmergy.capture.errors import CaptureError, QueueStateError, SubmissionRejected
+from stigmergy.kernel.deadline import hard_deadline
 from stigmergy.knowledge.planner import PydanticPlanner, ScriptedPlanner
 from stigmergy.knowledge.writer import (
     KnowledgeWriteError,
+    WriterDeadline,
     WriterDeps,
     process,
 )
@@ -24,6 +27,8 @@ log = logging.getLogger(__name__)
 GARDEN_JOB = "garden"
 GARDEN_CHECK_INTERVAL_S = 60
 UPLOAD_PURGE_INTERVAL_S = 300
+LEASE_ABORT_MARGIN_S = 60
+STATEMENT_TIMEOUT_MS = 10_000
 
 
 @dataclass(frozen=True)
@@ -32,16 +37,27 @@ class ProcessOutcome:
     report: dict
 
 
+class LeaseAbort(RuntimeError):
+    pass
+
+
+def configure_connection(conn) -> None:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT set_config('statement_timeout', %s, false)",
+            (f"{STATEMENT_TIMEOUT_MS}ms",),
+        )
+
+
 def startup_checks(settings) -> dict:
+    settings.check_domains()
+    if settings.backend == "pydantic" and not os.environ.get("OPENROUTER_API_KEY", "").strip():
+        raise LibrarianConfigError("OPENROUTER_API_KEY is required by the writer")
     repo = gitcmd.ensure_repo(settings.repo)
-    if settings.backend not in {"scripted", "pydantic"}:
-        raise LibrarianConfigError("librarian backend must be scripted or pydantic")
     if settings.backend == "pydantic":
         skill = os.path.join(repo, ".claude", "skills", "librarian", "SKILL.md")
         if not os.path.isfile(skill):
             raise LibrarianConfigError("the knowledge repository has no librarian skill")
-        if ":" not in settings.model:
-            raise LibrarianConfigError("the librarian model must include its provider prefix")
     base = gitcmd.base_ref(repo, settings.branch)
     if settings.require_remote_base and not base.remote:
         raise LibrarianConfigError("the deployed writer could not resolve the remote branch")
@@ -68,44 +84,51 @@ def process_next(conn, deps: WriterDeps):
     )
     if item is None:
         return None
-    ops.heartbeat(conn, "processing")
-    try:
-        result = process(conn, item, deps)
-        row = queue.finish_landed(
-            conn,
-            item["id"],
-            expected_attempts=item["attempts"],
-            source_path=result.source_path,
-            commit_sha=result.commit_sha,
-            change_id=result.change_id,
-            extraction=result.extraction,
-            report=result.report,
-        )
-    except QueueStateError:
-        raise
-    except Exception as error:
-        retryable = _retryable(error)
-        row = queue.fail_or_retry(
-            conn,
-            item["id"],
-            expected_attempts=item["attempts"],
-            category=getattr(error, "category", error.__class__.__name__),
-            error=_safe_error(error),
-            retryable=retryable,
-            max_attempts=settings.max_attempts,
-        )
-        if retryable:
-            log.error(
-                "knowledge operation %s will retry (%s)",
+    lease_budget_s = settings.visibility_timeout_s - LEASE_ABORT_MARGIN_S
+    with hard_deadline(
+        lease_budget_s,
+        lambda: LeaseAbort("knowledge operation could not finalize before lease expiry"),
+    ):
+        ops.heartbeat(conn, "processing")
+        try:
+            result = process(conn, item, deps)
+            row = queue.finish_landed(
+                conn,
                 item["id"],
-                error.__class__.__name__,
+                expected_attempts=item["attempts"],
+                source_path=result.source_path,
+                commit_sha=result.commit_sha,
+                change_id=result.change_id,
+                extraction=result.extraction,
+                report=result.report,
             )
-        else:
-            log.warning(
-                "knowledge operation %s failed: %s",
+        except LeaseAbort:
+            raise
+        except QueueStateError:
+            raise
+        except Exception as error:
+            retryable = _retryable(error)
+            row = queue.fail_or_retry(
+                conn,
                 item["id"],
-                error.__class__.__name__,
+                expected_attempts=item["attempts"],
+                category=getattr(error, "category", error.__class__.__name__),
+                error=_safe_error(error),
+                retryable=retryable,
+                max_attempts=settings.max_attempts,
             )
+            if retryable:
+                log.error(
+                    "knowledge operation %s will retry (%s)",
+                    item["id"],
+                    error.__class__.__name__,
+                )
+            else:
+                log.warning(
+                    "knowledge operation %s failed: %s",
+                    item["id"],
+                    error.__class__.__name__,
+                )
     return row, ProcessOutcome(status=row["status"], report=row.get("report") or {})
 
 
@@ -114,9 +137,20 @@ def _retryable(error: Exception) -> bool:
         return False
     if isinstance(error, KnowledgeWriteError):
         return bool(error.retryable)
+    if isinstance(error, ModelHTTPError):
+        return error.status_code in {408, 409, 425, 429} or error.status_code >= 500
     return isinstance(
         error,
-        (AgentRunError, CaptureError, GitError, TimeoutError, ConnectionError, OSError),
+        (
+            AgentRunError,
+            CaptureError,
+            GitError,
+            WriterDeadline,
+            psycopg.OperationalError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ),
     )
 
 

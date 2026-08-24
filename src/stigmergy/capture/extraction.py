@@ -8,7 +8,9 @@ import math
 import multiprocessing
 import re
 import sys
+import time
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
@@ -17,13 +19,15 @@ from pydantic import BaseModel, ConfigDict
 from stigmergy.capture import artifacts, schema
 from stigmergy.capture import evidence as evidence_module
 from stigmergy.capture.errors import ArtifactRejected, CaptureError, ExtractionError
+from stigmergy.kernel.deadline import hard_deadline
+from stigmergy.kernel.llm import OCR_MODEL
 
 EXTRACTOR_VERSION = "1"
 MAX_PAGES = 200
 MAX_IMAGE_PIXELS = 50_000_000
 MAX_CAPTURE_EXTRACTED_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT_S = 120
-DEFAULT_OCR_LANGUAGES = "eng"
+CAPTURE_TIMEOUT_S = 180
 OCR_DPI = 200
 MAX_CHILD_ADDRESS_SPACE_BYTES = 1024 * 1024 * 1024
 
@@ -66,21 +70,32 @@ def extract_artifact(
     data: bytes,
     media_type: str,
     *,
-    ocr_languages: str = DEFAULT_OCR_LANGUAGES,
+    ocr_model: str = OCR_MODEL,
+    vision_ocr: Callable[[bytes, str], str] | None = None,
 ) -> ExtractionResult:
+    _validate_ocr_model(ocr_model)
     detected = artifacts.detect_media(data, declared=media_type)
     if detected in {schema.MEDIA_TEXT, schema.MEDIA_MARKDOWN}:
         result = _text(data, detected)
     elif detected == schema.MEDIA_HTML:
         result = _html(data)
     elif detected == schema.MEDIA_PDF:
-        result = _pdf(data, ocr_languages=ocr_languages)
+        result = _pdf(
+            data,
+            ocr_model=ocr_model,
+            vision_ocr=vision_ocr,
+        )
     elif detected == schema.MEDIA_DOCX:
         result = _docx(data)
     elif detected == schema.MEDIA_PPTX:
         result = _pptx(data)
     elif detected in {schema.MEDIA_PNG, schema.MEDIA_JPEG}:
-        result = _image(data, detected, ocr_languages=ocr_languages)
+        result = _image(
+            data,
+            detected,
+            ocr_model=ocr_model,
+            vision_ocr=vision_ocr,
+        )
     elif detected == schema.MEDIA_SLACK:
         result = _slack(data)
     else:
@@ -94,13 +109,19 @@ def extract_bounded(
     media_type: str,
     *,
     timeout_s: int = DEFAULT_TIMEOUT_S,
-    ocr_languages: str = DEFAULT_OCR_LANGUAGES,
+    ocr_model: str = OCR_MODEL,
 ) -> ExtractionResult:
     context = multiprocessing.get_context("spawn")
     parent, child = context.Pipe(duplex=False)
     process = context.Process(
         target=_extract_child,
-        args=(child, data, media_type, ocr_languages, max(1, int(timeout_s))),
+        args=(
+            child,
+            data,
+            media_type,
+            ocr_model,
+            max(1, int(timeout_s)),
+        ),
         daemon=True,
     )
     process.start()
@@ -130,12 +151,16 @@ def _extract_child(
     connection,
     data: bytes,
     media_type: str,
-    ocr_languages: str,
+    ocr_model: str,
     timeout_s: int,
 ) -> None:
     try:
         _apply_resource_limits(timeout_s)
-        result = extract_artifact(data, media_type, ocr_languages=ocr_languages)
+        result = extract_artifact(
+            data,
+            media_type,
+            ocr_model=ocr_model,
+        )
         connection.send({"ok": True, "result": result.model_dump(mode="json")})
     except CaptureError as error:
         connection.send(
@@ -158,15 +183,54 @@ def extract_capture(
     envelope: schema.CaptureEnvelope,
     *,
     bounded: bool = True,
-    timeout_s: int = DEFAULT_TIMEOUT_S,
-    ocr_languages: str = DEFAULT_OCR_LANGUAGES,
+    timeout_s: int = CAPTURE_TIMEOUT_S,
+    ocr_model: str = OCR_MODEL,
+    vision_ocr: Callable[[bytes, str], str] | None = None,
+) -> tuple[ExtractedArtifact, ...]:
+    _validate_ocr_model(ocr_model)
+    if bounded and vision_ocr is not None:
+        raise ExtractionError("custom OCR handlers require unbounded extraction")
+    with hard_deadline(
+        timeout_s if bounded else None,
+        lambda: ExtractionError("capture extraction timed out"),
+    ):
+        return _extract_capture(
+            store,
+            envelope,
+            bounded=bounded,
+            timeout_s=timeout_s,
+            ocr_model=ocr_model,
+            vision_ocr=vision_ocr,
+        )
+
+
+def _extract_capture(
+    store,
+    envelope: schema.CaptureEnvelope,
+    *,
+    bounded: bool,
+    timeout_s: int,
+    ocr_model: str,
+    vision_ocr: Callable[[bytes, str], str] | None,
 ) -> tuple[ExtractedArtifact, ...]:
     pending = []
     readable_total = 0
+    deadline = time.monotonic() + max(1, int(timeout_s)) if bounded else None
+
+    def remaining() -> int:
+        if deadline is None:
+            return DEFAULT_TIMEOUT_S
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise ExtractionError("capture extraction timed out")
+        return min(DEFAULT_TIMEOUT_S, max(1, math.ceil(seconds)))
+
     for artifact in envelope.artifacts:
+        remaining()
         if store.head(artifact.blob_ref).bytes != artifact.bytes:
             raise ExtractionError("original artifact failed its digest or size check")
         data = store.get_limited(artifact.blob_ref, max_bytes=artifact.bytes)
+        remaining()
         if (
             len(data) != artifact.bytes
             or evidence_module.sha256(data) != artifact.sha256
@@ -177,11 +241,15 @@ def extract_capture(
             data,
             artifact.media_type,
             **(
-                {"timeout_s": timeout_s, "ocr_languages": ocr_languages}
+                {
+                    "timeout_s": remaining(),
+                    "ocr_model": ocr_model,
+                }
                 if bounded
-                else {"ocr_languages": ocr_languages}
+                else {"ocr_model": ocr_model, "vision_ocr": vision_ocr}
             ),
         )
+        remaining()
         readable = result.text.encode("utf-8")
         if not readable:
             raise ExtractionError("readable extraction is empty")
@@ -192,11 +260,13 @@ def extract_capture(
 
     extracted = []
     for artifact, readable, result in pending:
+        remaining()
         readable_ref = (
             artifact.blob_ref
             if artifact.media_type in {schema.MEDIA_TEXT, schema.MEDIA_MARKDOWN}
             else store.put(readable)
         )
+        remaining()
         extracted.append(
             ExtractedArtifact(
                 original=artifact,
@@ -299,7 +369,12 @@ def _html(data: bytes) -> ExtractionResult:
     return ExtractionResult(text=text, media_type=schema.MEDIA_HTML, extractor="html")
 
 
-def _pdf(data: bytes, *, ocr_languages: str) -> ExtractionResult:
+def _pdf(
+    data: bytes,
+    *,
+    ocr_model: str,
+    vision_ocr: Callable[[bytes, str], str] | None,
+) -> ExtractionResult:
     import pymupdf
 
     try:
@@ -319,12 +394,9 @@ def _pdf(data: bytes, *, ocr_languages: str) -> ExtractionResult:
             if _needs_ocr(text):
                 _guard_pdf_ocr_geometry(page.rect.width, page.rect.height)
                 try:
-                    text_page = page.get_textpage_ocr(
-                        language=ocr_languages,
-                        dpi=OCR_DPI,
-                        full=True,
-                    )
-                    ocr_text = page.get_text("text", sort=True, textpage=text_page)
+                    handler = _vision_handler(ocr_model, vision_ocr)
+                    pixmap = page.get_pixmap(dpi=OCR_DPI, alpha=False)
+                    ocr_text = handler(pixmap.tobytes("png"), schema.MEDIA_PNG)
                 except Exception as error:
                     raise ExtractionError(
                         f"OCR failed for PDF page {index} ({error.__class__.__name__})"
@@ -342,7 +414,11 @@ def _pdf(data: bytes, *, ocr_languages: str) -> ExtractionResult:
         return ExtractionResult(
             text=combined,
             media_type=schema.MEDIA_PDF,
-            extractor="pymupdf",
+            extractor=(
+                f"pymupdf+{ocr_model.removeprefix('openrouter:')}"
+                if ocr_pages
+                else "pymupdf"
+            ),
             pages=document.page_count,
             ocr_pages=tuple(ocr_pages),
             decisions=tuple(decisions),
@@ -437,8 +513,13 @@ def _pptx(data: bytes) -> ExtractionResult:
     )
 
 
-def _image(data: bytes, media_type: str, *, ocr_languages: str) -> ExtractionResult:
-    import pymupdf
+def _image(
+    data: bytes,
+    media_type: str,
+    *,
+    ocr_model: str,
+    vision_ocr: Callable[[bytes, str], str] | None,
+) -> ExtractionResult:
     from PIL import Image
 
     try:
@@ -452,20 +533,9 @@ def _image(data: bytes, media_type: str, *, ocr_languages: str) -> ExtractionRes
         raise ArtifactRejected("image exceeds the pixel safety limit")
 
     try:
-        pixmap = pymupdf.Pixmap(data)
-    except Exception as error:
-        raise ArtifactRejected("image is corrupt") from error
-    if pixmap.width * pixmap.height > MAX_IMAGE_PIXELS:
-        raise ArtifactRejected("image exceeds the pixel safety limit")
-    if pixmap.alpha:
-        pixmap = pymupdf.Pixmap(pixmap, 0)
-    if pixmap.colorspace is None or pixmap.colorspace.n != 3:
-        pixmap = pymupdf.Pixmap(pymupdf.csRGB, pixmap)
-    try:
-        ocr_pdf = pixmap.pdfocr_tobytes(language=ocr_languages)
-        document = pymupdf.open(stream=ocr_pdf, filetype="pdf")
-        with document:
-            text = document[0].get_text("text", sort=True).strip()
+        text = _vision_handler(ocr_model, vision_ocr)(data, media_type).strip()
+    except ArtifactRejected:
+        raise
     except Exception as error:
         raise ExtractionError(f"image OCR failed ({error.__class__.__name__})") from error
     if not text:
@@ -473,10 +543,26 @@ def _image(data: bytes, media_type: str, *, ocr_languages: str) -> ExtractionRes
     return ExtractionResult(
         text=text,
         media_type=media_type,
-        extractor="pymupdf-tesseract",
+        extractor=ocr_model.removeprefix("openrouter:"),
         ocr_pages=(1,),
         decisions=("image: OCR",),
     )
+
+
+def _vision_handler(
+    ocr_model: str,
+    vision_ocr: Callable[[bytes, str], str] | None,
+) -> Callable[[bytes, str], str]:
+    if vision_ocr is not None:
+        return vision_ocr
+    from stigmergy.capture.vision import transcribe_image
+
+    return lambda image, media: transcribe_image(image, media, model_name=ocr_model)
+
+
+def _validate_ocr_model(ocr_model: str) -> None:
+    if ocr_model != OCR_MODEL:
+        raise ExtractionError(f"OCR model must be {OCR_MODEL}")
 
 
 def _guard_pdf_ocr_geometry(width_points: float, height_points: float) -> None:

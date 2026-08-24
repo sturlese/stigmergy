@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import datetime as dt
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from stigmergy.capture.schema import AcquisitionProvenance
 from stigmergy.entities.model import (
     REGISTRY_PATH,
     EntityContractError,
@@ -17,13 +14,9 @@ from stigmergy.index.corpus import link_targets, split_frontmatter_checked
 from stigmergy.kernel.acl import flows_into
 from stigmergy.knowledge.contradictions import ContradictionContractError, parse_all
 from stigmergy.knowledge.pages import PageContractError, parse_page
+from stigmergy.knowledge.sources import SourceContractError, parse_source
 from stigmergy.server.controls import PATHS as CONTROL_PATHS
 from stigmergy.server.controls import ControlError, validate_root
-
-_SOURCE_PATH_RE = re.compile(
-    r"^sources/(?P<year>\d{4})/(?P<month>0[1-9]|1[0-2])/"
-    r"(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$"
-)
 
 
 @dataclass(frozen=True, order=True)
@@ -53,7 +46,12 @@ def check(root: str) -> tuple[Violation, ...]:
         text = Path(root, *path.split("/")).read_text(encoding="utf-8")
         try:
             page = _parse_corpus_page(path, text)
-        except (PageContractError, EntityContractError, ValueError) as error:
+        except (
+            PageContractError,
+            SourceContractError,
+            EntityContractError,
+            ValueError,
+        ) as error:
             violations.append(Violation(path, "page-contract", str(error)))
             continue
         pages[path] = page
@@ -108,44 +106,9 @@ def _parse_corpus_page(path: str, text: str) -> CorpusPage:
         parse_entity(path, text)
         return CorpusPage(path, "entity", None, (), (), text)
     if path.startswith("sources/"):
-        return _parse_source(path, text)
+        source = parse_source(path, text)
+        return CorpusPage(path, "source", source.acl, (), (), source.text)
     raise PageContractError("Markdown is outside an allowed corpus folder")
-
-
-def _parse_source(path: str, text: str) -> CorpusPage:
-    match = _SOURCE_PATH_RE.fullmatch(path)
-    metadata, body, malformed = split_frontmatter_checked(text)
-    if not match or malformed or metadata.get("type") != "source":
-        raise PageContractError("source path or frontmatter is invalid")
-    if str(metadata.get("id") or "") != match.group("id") or not body.strip():
-        raise PageContractError("source id or body is invalid")
-    captured_at = dt.datetime.fromisoformat(str(metadata.get("captured_at")).replace("Z", "+00:00"))
-    if captured_at.tzinfo is None or captured_at.utcoffset() is None:
-        raise PageContractError("source captured_at must include a timezone")
-    captured_at = captured_at.astimezone(dt.UTC)
-    if captured_at.year != int(match.group("year")) or captured_at.month != int(match.group("month")):
-        raise PageContractError("source path does not match captured_at")
-    artifacts = metadata.get("artifacts")
-    if not isinstance(artifacts, list) or not artifacts:
-        raise PageContractError("source artifacts must be a non-empty list")
-    for artifact in artifacts:
-        if not isinstance(artifact, dict) or not {
-            "sha256",
-            "bytes",
-            "media_type",
-            "readable_sha256",
-            "extractor",
-            "extractor_version",
-        } <= set(artifact):
-            raise PageContractError("source artifact metadata is incomplete")
-    acquisition = metadata.get("acquisition")
-    if acquisition is not None:
-        try:
-            AcquisitionProvenance.model_validate(acquisition)
-        except ValueError as error:
-            raise PageContractError("source acquisition provenance is invalid") from error
-    acl = _acl(metadata.get("acl"))
-    return CorpusPage(path, "source", acl, (), (), text)
 
 
 def _registry_violations(root: str, records) -> list[Violation]:
@@ -268,16 +231,6 @@ def _relationship_violations(pages, records) -> list[Violation]:
                         )
                     )
     return violations
-
-
-def _acl(value) -> tuple[str, ...] | None:
-    if value is None:
-        return None
-    if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
-        raise PageContractError("acl is invalid")
-    if len(value) != len(set(value)):
-        raise PageContractError("acl contains duplicates")
-    return tuple(value)
 
 
 def _list(value: tuple[str, ...] | None) -> list[str] | None:

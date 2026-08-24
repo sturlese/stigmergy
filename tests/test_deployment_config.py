@@ -3,6 +3,9 @@ import pathlib
 import re
 import tomllib
 
+from stigmergy.kernel import llm
+from stigmergy.librarian import config as librarian_config
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FLY_TOML = ROOT / "fly.toml"
 DOCKERFILE = ROOT / "Dockerfile"
@@ -92,12 +95,54 @@ def test_static_environment_contains_no_credentials():
     forbidden = {
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
         "STIGMERGY_INDEX_DSN",
         "STIGMERGY_TOKEN_STORE",
         "STIGMERGY_EVIDENCE_ACCESS_KEY_ID",
         "STIGMERGY_EVIDENCE_SECRET_ACCESS_KEY",
     }
     assert not forbidden.intersection(_fly_config().get("env", {}))
+
+
+def test_deployed_librarian_uses_the_supported_default_model():
+    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MODEL"] == librarian_config.DEFAULT_MODEL
+    assert librarian_config.DEFAULT_MODEL == llm.LIBRARIAN_MODEL
+
+
+def test_deployed_answer_uses_the_approved_glm_model():
+    env = _fly_config()["env"]
+    assert env["ANSWER_LLM"] == "openrouter"
+    assert env["ANSWER_MODEL"] == llm.ANSWER_MODEL
+
+
+def test_deployed_scanned_ocr_uses_the_approved_qwen_model():
+    assert _fly_config()["env"]["STIGMERGY_OCR_MODEL"] == llm.OCR_MODEL
+
+
+def test_deployed_writer_shutdown_outlives_its_operation_budget():
+    fly = _fly_config()
+    model_timeout = int(fly["env"]["STIGMERGY_LIBRARIAN_TIMEOUT_S"])
+    visibility = librarian_config.resolved_visibility_timeout_s(timeout_s=model_timeout)
+    kill_timeout = int(fly["kill_timeout"].removesuffix("s"))
+
+    assert kill_timeout > visibility
+
+
+def test_static_model_configuration_names_no_disallowed_provider():
+    text = FLY_TOML.read_text(encoding="utf-8").casefold()
+    assert "anthropic" not in text
+    assert "claude" not in text
+    assert "gemini" not in text
+    assert "gpt-" not in text
+
+
+def test_runtime_installs_only_the_openrouter_model_extra():
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        dependencies = tomllib.load(handle)["project"]["dependencies"]
+
+    assert "pydantic-ai-slim[openrouter]==2.13.0" in dependencies
+    assert not any(dependency.startswith("pydantic-ai==") for dependency in dependencies)
+    assert not any(dependency.startswith("anthropic") for dependency in dependencies)
 
 
 def test_vm_blocks_cover_all_process_groups():
@@ -123,9 +168,9 @@ def test_package_metadata_is_copied_before_install():
     assert "uv.lock" in before_install
 
 
-def test_deployment_image_installs_the_ocr_engine():
+def test_deployment_image_does_not_install_a_local_ocr_engine():
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    assert re.search(r"(?:^|\s)tesseract-ocr=\S+", dockerfile, re.MULTILINE)
+    assert "tesseract" not in dockerfile.lower()
 
 
 def test_deploy_script_pins_each_staging_process_group_to_one_machine():

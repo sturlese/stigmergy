@@ -94,6 +94,23 @@ The following rules are non-negotiable.
 12. **No hidden product surface.** Every user capability is reachable through Slack, the official local MCP bridge, or the backoffice. CLI-only commands are operational or development tooling, never a separate product.
 13. **Code prose is local and durable.** Comments and docstrings explain only a non-obvious invariant, contract, or mechanism visible in the code they accompany. Change history, rejected designs, migration narration, and implementation justification belong in this specification, tests, and Git rather than production code.
 
+### 4.1 Runtime model boundary
+
+Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a closed allowlist:
+
+| Runtime purpose | Model |
+|---|---|
+| librarian filing and semantic repair | `deepseek/deepseek-v4-flash` |
+| cited answers | `z-ai/glm-5.2` |
+| vector embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
+| scanned-page and image OCR | `qwen/qwen3-vl-8b-instruct` |
+
+Deterministic linting is the gardener's detection step and makes no model call. Semantic repair is
+the only model-backed part of a garden run and uses the librarian's DeepSeek model. OpenRouter
+routing disables provider fallback, requires requested parameters, denies data collection, and
+requires zero-data-retention processing. The application never reads, forwards, or falls back to
+Anthropic, OpenAI, Gemini, or another direct model-provider credential.
+
 ## 5. Target system
 
 ### 5.1 One writer, three adapters

@@ -30,6 +30,12 @@ master backoffice ┘                                      │
 - The gardener is one scheduled `lint-and-fix` operation inside the writer. It creates no task
   backlog for people.
 
+All model-backed runtime paths use one OpenRouter credential with provider fallback disabled,
+zero-data-retention routing required, and a closed model allowlist: DeepSeek V4 Flash for filing
+and semantic repair, GLM 5.2 for answers, Qwen3 Embedding 8B at 2560 dimensions for search, and
+Qwen3 VL 8B for OCR. Direct Anthropic, OpenAI, and Gemini credentials are neither accepted nor
+forwarded to runtime processes.
+
 The full implementation contract is [the team-wiki specification](./specs/karpathy-team-wiki.md).
 
 ## Supported capture surfaces

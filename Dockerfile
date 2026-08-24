@@ -15,9 +15,6 @@ RUN sed -i \
  && apt-get install -y --no-install-recommends \
       ca-certificates=20250419 \
       git=1:2.47.3-0+deb13u1 \
-      tesseract-ocr=5.5.0-1+b1 \
-      tesseract-ocr-eng=1:4.1.0-2 \
-      tesseract-ocr-spa=1:4.1.0-2 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock README.md LICENSE THIRD-PARTY-LICENSES.md ./

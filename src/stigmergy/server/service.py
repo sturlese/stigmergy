@@ -942,19 +942,21 @@ def missing_embedder_reason(detail: str) -> str:
 
 def _resolve_embedder(settings: Settings, model: str):
     """The query embedder must embed in the same space the documents did, so it defaults to the
-    model the index was built with. A missing OPENAI_API_KEY yields an `UnavailableEmbedder`; an
+    model the index was built with. A missing OPENROUTER_API_KEY yields an `UnavailableEmbedder`; an
     unknown embedder NAME raises, so a typo never presents as a missing credential."""
-    if settings.embedder not in (None, "", "fake", "openai"):
-        raise StartupError(f"unknown embedder {settings.embedder!r} (use 'openai' or 'fake')")
+    if settings.embedder not in (None, "", "fake", "openrouter"):
+        raise StartupError(
+            f"unknown embedder {settings.embedder!r} (use 'openrouter' or 'fake')"
+        )
     try:
         if settings.embedder == "fake":
             from stigmergy.index.backends.embedder import build_embedder
             return build_embedder("fake")
-        if settings.embedder == "openai":
+        if settings.embedder == "openrouter":
             from stigmergy.index.backends.embedder import build_embedder
-            return build_embedder("openai", model)
+            return build_embedder("openrouter", model)
         return embedder_for_model(model)          # match the built index (the usual path)
-    except RuntimeError as ex:                     # e.g. OPENAI_API_KEY is not set
+    except RuntimeError as ex:
         log.warning(
             "starting without a query embedder; search_brain and ask will refuse (%s)",
             ex.__class__.__name__,

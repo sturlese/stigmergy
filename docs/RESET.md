@@ -21,8 +21,8 @@ python -m stigmergy.ops.reset \
   --database "$STAGING_DATABASE" \
   --bucket "$STIGMERGY_EVIDENCE_BUCKET" \
   --repo "$STIGMERGY_REPO" \
-  --embedding-dim 3072 \
-  --embedding-model text-embedding-3-large \
+  --embedding-dim 2560 \
+  --embedding-model qwen/qwen3-embedding-8b \
   --confirm "staging:$STAGING_DATABASE:$STIGMERGY_EVIDENCE_BUCKET:$STIGMERGY_REPO"
 ```
 

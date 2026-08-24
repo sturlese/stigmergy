@@ -5,6 +5,7 @@ path is DB-backed (a forged index_meta model) and skips without postgres.
 
 import pytest
 
+from stigmergy.index.backends.embedder import DEFAULT_MODEL
 from stigmergy.server.errors import CapabilityUnavailableError, StartupError
 from stigmergy.server.mcp_server import main
 from stigmergy.server.service import UnavailableEmbedder, _resolve_embedder
@@ -36,22 +37,12 @@ def test_malformed_identities_file_exits_nonzero_with_message(tmp_path, monkeypa
     assert "stigmergy-server:" in err and "malformed" in err
 
 
-# ── no OPENAI_API_KEY is a DEGRADED START, not a refusal to start ──────────────────────────────
-# A real embedder configured with no OPENAI_API_KEY used to be a clean StartupError with exit 2.
-# It degrades instead now: the property that behaviour protected — no traceback, an actionable
-# message — still holds; what changed is WHERE it surfaces.
-#
-# Why: under the old behaviour an expired embedding key, a spent quota or an OpenAI outage took
-# `brain_submit` down together with `search_brain`, and capture is the one thing that must
-# survive. The old exit path is not preserved in parallel (no expand-contract) because the two
-# behaviors are mutually exclusive at one code point — a process either starts or it does not —
-# and the only consumers are this repo's own CLI and its tests.
 def test_resolve_embedder_missing_key_degrades_instead_of_refusing_to_start(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    embedder = _resolve_embedder(Settings(embedder=None), "text-embedding-3-large")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    embedder = _resolve_embedder(Settings(embedder=None), DEFAULT_MODEL)
 
     assert isinstance(embedder, UnavailableEmbedder)
-    assert "OPENAI_API_KEY" in embedder.unavailable_reason
+    assert "OPENROUTER_API_KEY" in embedder.unavailable_reason
     # it names the missing CAPABILITY and says the write path is fine, so a reader does not
     # conclude the brain is down and stop capturing
     assert "cannot search" in embedder.unavailable_reason
@@ -65,12 +56,12 @@ def test_an_unknown_embedder_name_is_still_a_clean_startup_error(monkeypatch):
     """The half that does NOT degrade. A typo is not an outage: degrading a server whose operator
     believes they configured an embedder would hide the mistake behind a refusal message about a
     missing key that is not the problem."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     with pytest.raises(StartupError, match="unknown embedder"):
-        _resolve_embedder(Settings(embedder="voyage"), "text-embedding-3-large")
+        _resolve_embedder(Settings(embedder="voyage"), DEFAULT_MODEL)
 
 
-def test_startup_without_openai_key_starts_and_serves_the_write_path(indexed, fixture, monkeypatch):
+def test_startup_without_openrouter_key_starts_and_serves_the_write_path(indexed, fixture, monkeypatch):
     """Full startup path: an index built with the real model and no key STARTS.
 
     Asserted through `build_service`, the same function `main` calls, rather than through `main`
@@ -80,9 +71,9 @@ def test_startup_without_openai_key_starts_and_serves_the_write_path(indexed, fi
     from stigmergy.server.service import build_service
 
     conn, _ = indexed
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with conn.cursor() as cur:
-        cur.execute("UPDATE index_meta SET model = 'text-embedding-3-large'")
+        cur.execute("UPDATE index_meta SET model = %s", (DEFAULT_MODEL,))
     try:
         service = build_service(
             Settings(identity=fixture.STEWARD, identities_path=fixture.identities_path), conn=conn)

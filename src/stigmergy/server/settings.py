@@ -3,6 +3,7 @@ import os
 from dataclasses import dataclass
 
 from stigmergy.index import store
+from stigmergy.kernel.llm import ANSWER_MODEL
 from stigmergy.server import entity_aliases, identity
 
 
@@ -16,9 +17,8 @@ class Settings:
     knowledge_branch: str = "main"
     dsn: str | None = None
     embedder: str | None = None
-    llm: str = "openai"
-    model: str = "gpt-5.6-terra"
-    reasoning_effort: str = "medium"
+    llm: str = "openrouter"
+    model: str = ANSWER_MODEL
 
     @classmethod
     def from_args(cls, args) -> "Settings":
@@ -40,5 +40,4 @@ class Settings:
             embedder=args.embedder,
             llm=(getattr(args, "answer_llm", None) or os.environ.get("ANSWER_LLM", cls.llm)).lower(),
             model=os.environ.get("ANSWER_MODEL", cls.model),
-            reasoning_effort=os.environ.get("ANSWER_REASONING_EFFORT", cls.reasoning_effort),
         )

@@ -129,47 +129,21 @@ def test_worker_env_exports_the_require_remote_base_flag():
     assert env[bootstrap.config.REQUIRE_REMOTE_BASE_ENV] == "1"
 
 
-def test_worker_env_strips_the_read_paths_openai_key():
-    """The CONSTRUCTED environment, not a run through the double. `bootstrap.worker_env({})` — an
-    EMPTY input — proves the key is stripped even in the degenerate case, and the populated case
-    below proves it is stripped rather than merely absent by coincidence."""
-    assert "OPENAI_API_KEY" not in bootstrap.worker_env({})
+def test_worker_env_keeps_only_the_approved_model_provider_key():
+    source = {
+        "ANTHROPIC_API_KEY": "anthropic",
+        "OPENAI_API_KEY": "openai",
+        "GEMINI_API_KEY": "gemini",
+        "EMBED_API_KEY": "legacy",
+        "OPENROUTER_API_KEY": "approved",
+        "PATH": "/usr/bin",
+    }
 
-    populated = bootstrap.worker_env({"OPENAI_API_KEY": "sk-should-not-reach-the-worker",
-                                      "ANTHROPIC_API_KEY": "keep-me", "PATH": "/usr/bin"})
-    assert "OPENAI_API_KEY" not in populated
-    assert populated["ANTHROPIC_API_KEY"] == "keep-me"
+    populated = bootstrap.worker_env(source)
+
+    assert not set(bootstrap.DISALLOWED_PROVIDER_ENV).intersection(populated)
+    assert populated["OPENROUTER_API_KEY"] == "approved"
     assert populated["PATH"] == "/usr/bin"
-
-
-def test_shared_credentials_names_a_value_that_survives_under_another_name():
-    """The case the NAME-level strip cannot see (audit S2): one OpenRouter key doing both jobs
-    is stripped as EMBED_API_KEY and survives as OPENROUTER_API_KEY. `main` says it out loud
-    rather than refusing — a small deployment may have chosen exactly that — and the answer is
-    a list of NAMES, because a log line must never carry a secret's value."""
-    shared = bootstrap.shared_credentials({"EMBED_API_KEY": "sk-or-one-key",
-                                           "OPENROUTER_API_KEY": "sk-or-one-key",
-                                           "PATH": "/usr/bin"})
-    assert shared == ["OPENROUTER_API_KEY"]
-
-
-def test_shared_credentials_is_silent_for_genuinely_separate_keys():
-    """The benign twin: distinct credentials — the separation the notice asks for — produce no
-    notice, so the warning cannot become furniture."""
-    assert bootstrap.shared_credentials({"EMBED_API_KEY": "sk-or-embed-only",
-                                         "OPENROUTER_API_KEY": "sk-or-filing-only",
-                                         "OPENAI_API_KEY": "sk-openai"}) == []
-
-
-def test_worker_env_strips_the_embedders_own_key_and_keeps_the_providers(monkeypatch):
-    """`EMBED_API_KEY` is the read path's embedder credential under its own name (the key for an
-    `$EMBED_BASE_URL` host), so it is stripped exactly as `OPENAI_API_KEY` is — while
-    `OPENROUTER_API_KEY`, a PROVIDER key the filing model may authenticate with, must pass
-    through: stripping it would make `openrouter:` models undeployable with nothing to say why."""
-    populated = bootstrap.worker_env({"EMBED_API_KEY": "sk-embed-host",
-                                      "OPENROUTER_API_KEY": "sk-or-keep-me"})
-    assert "EMBED_API_KEY" not in populated
-    assert populated["OPENROUTER_API_KEY"] == "sk-or-keep-me"
 
 
 def test_worker_env_keeps_everything_else_from_the_source_environment():

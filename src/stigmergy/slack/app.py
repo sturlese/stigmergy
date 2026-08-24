@@ -285,14 +285,21 @@ def main(argv=None) -> int:
                         help="path to entity-registry.json for ask's entity-first resolution "
                             "(default: <repo>/ops/entity-registry.json)")
     parser.add_argument("--dsn", default=None, help="Postgres DSN (default: $STIGMERGY_INDEX_DSN)")
-    parser.add_argument("--embedder", choices=["openai", "fake"], default=None)
-    parser.add_argument("--answer-llm", dest="answer_llm", choices=["openai", "fake"], default=None)
+    parser.add_argument("--embedder", choices=["openrouter", "fake"], default=None)
+    parser.add_argument(
+        "--answer-llm",
+        dest="answer_llm",
+        choices=["openrouter", "fake"],
+        default=None,
+    )
     args = parser.parse_args(argv)
 
     try:
         settings = SlackSettings.from_args(args)
-        if settings.server.llm not in ("openai", "fake"):
-            raise StartupError(f"invalid ANSWER_LLM: {settings.server.llm!r} (use 'openai' or 'fake')")
+        if settings.server.llm not in ("openrouter", "fake"):
+            raise StartupError(
+                f"invalid ANSWER_LLM: {settings.server.llm!r} (use 'openrouter' or 'fake')"
+            )
         asyncio.run(_async_main(settings))
     except (StigmergyServerError, EmptyIndexError) as ex:
         print(f"stigmergy-slack: {ex}", file=sys.stderr)

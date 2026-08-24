@@ -9,8 +9,12 @@ from stigmergy.librarian.errors import GitError, LibrarianConfigError, Librarian
 
 EXIT_CONFIG = 2
 
-# These read-path credentials must not reach the writer process.
-READ_PATH_ONLY_ENV = ("OPENAI_API_KEY", "EMBED_API_KEY")
+DISALLOWED_PROVIDER_ENV = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "EMBED_API_KEY",
+)
 
 CREDENTIAL_HELPER = "!stigmergy-librarian-credential"
 
@@ -120,19 +124,14 @@ def prepare(*, repo: str, url: str, branch: str, env: dict | None = None) -> git
     return verify_checkout_at_base(repo, branch)
 
 
-def shared_credentials(environ: dict | None = None) -> list[str]:
-    """Return surviving variable names that reuse a stripped credential value."""
-    source = os.environ if environ is None else environ
-    stripped_values = {value for name, value in source.items()
-                       if name in READ_PATH_ONLY_ENV and value}
-    return sorted(name for name, value in source.items()
-                  if name not in READ_PATH_ONLY_ENV and value and value in stripped_values)
-
-
 def worker_env(environ: dict | None = None) -> dict:
-    """Return the deployed writer environment without read-path credentials."""
+    """Return the writer environment without credentials for disallowed providers."""
     source = os.environ if environ is None else environ
-    kept = {name: value for name, value in source.items() if name not in READ_PATH_ONLY_ENV}
+    kept = {
+        name: value
+        for name, value in source.items()
+        if name not in DISALLOWED_PROVIDER_ENV
+    }
     return {**kept, config.REQUIRE_REMOTE_BASE_ENV: "1"}
 
 
@@ -189,16 +188,13 @@ def main(argv=None, *, execute=os.execvpe) -> int:
         return 0
 
     argv_out, env_out = worker_launch(worker_args)
-    stripped = sorted(n for n in READ_PATH_ONLY_ENV if n in os.environ)
+    stripped = sorted(n for n in DISALLOWED_PROVIDER_ENV if n in os.environ)
     if stripped:
-        print(f"stigmergy-librarian-boot: not passing {', '.join(stripped)} to the worker — the "
-              f"write path does not use the read path's embedder", flush=True)
-    shared = shared_credentials()
-    if shared:
-        print(f"stigmergy-librarian-boot: {', '.join(shared)} carries the same value as a "
-              f"stripped read-path secret — a name-level strip cannot separate one credential "
-              f"wearing two names; give the embed host its own key to make the separation real",
-              flush=True)
+        print(
+            f"stigmergy-librarian-boot: not passing disallowed provider variables "
+            f"{', '.join(stripped)} to the worker",
+            flush=True,
+        )
     execute(argv_out[0], argv_out, env_out)
     return 0
 

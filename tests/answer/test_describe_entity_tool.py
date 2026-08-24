@@ -13,8 +13,8 @@ from tests.answer.conftest import GLOBEX_ID, brain_service
 
 
 @pytest.fixture(autouse=True)
-def _dummy_openai_key(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy-not-real")
+def _dummy_openrouter_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
 
 # ── the renderer over a service double ─────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ def _describe_then_refuse_model() -> FunctionModel:
 
 
 def test_the_real_agent_carries_a_describe_entity_tool_wired_to_entity_text():
-    agent = build_synthesizer(Settings(llm="openai", model="gpt-5.6-terra"))
+    agent = build_synthesizer(Settings())
     service = _FakeAnswerBrain()
     deps = SynthesisContext(service=service)
     result = asyncio.run(agent.run("What do we know about Vantage?", deps=deps,

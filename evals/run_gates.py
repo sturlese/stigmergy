@@ -11,7 +11,7 @@ fails is re-run ONCE — but only when every failing bar sits within ONE questio
 (the report's own denominators set the weight). A wider miss is a regression and fails on the first
 attempt; a runner exiting non-zero is an infra failure and fails immediately.
 
-Both golden halves are REAL measurements, so this needs the docker postgres and OPENAI_API_KEY and
+Both golden halves are REAL measurements, so this needs docker Postgres and OPENROUTER_API_KEY and
 never runs in CI — it is the operator's release gate, `make gates`.
 """
 import argparse
@@ -117,15 +117,15 @@ def main() -> int:
     retrieval_report = out / "retrieval.json"
     verdicts["retrieval"] = _instrument(
         "retrieval", [args.python, "evals/run_retrieval.py",
-                      "--golden", "evals/retrieval_golden.json", "--embedder", "openai",
+                      "--golden", "evals/retrieval_golden.json", "--embedder", "openrouter",
                       "--rebuild", "--repo", args.repo, "--report", retrieval_report],
         retrieval_report, judge_retrieval, "retrieval")
 
     qa_report = out / "qa.json"
     verdicts["qa"] = _instrument(
         "qa", [args.python, "evals/run_qa.py",
-               "--golden", "evals/qa_golden.json", "--embedder", "openai",
-               "--llm", "openai", "--rebuild", "--repo", args.repo, "--report", qa_report],
+               "--golden", "evals/qa_golden.json", "--embedder", "openrouter",
+               "--llm", "openrouter", "--rebuild", "--repo", args.repo, "--report", qa_report],
         qa_report, judge_qa, "qa")
 
     print("\n# release gates")

@@ -270,7 +270,7 @@ def build_test_http_app(fixture: Fixture, token_store: dict[str, str], *,
     `build_http_app` always opens its OWN Postgres connection (same DSN, so its writes are visible
     to any other connection on the same database, e.g. a test's `indexed` conn used to assert on
     `audit_log` afterwards). `llm` defaults to 'fake' (unlike `Settings`' own production default
-    'openai') so `ask` runs keyless here — the auth tests run with the fake embedder and no
+    'openrouter') so `ask` runs keyless here — the auth tests run with the fake embedder and no
     keys.
 
     **Gated on Postgres through the SAME seam every other suite uses.** `build_http_app` opens its

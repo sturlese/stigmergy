@@ -249,18 +249,20 @@ def test_contradiction_resolution_url_provenance_lands_in_its_source(admin_rig, 
             f"id: {source.stem}\n"
             "type: source\n"
             "submitted_by: ana\n"
-            "acl: [finance]\n"
-            "captured_at: 2026-08-01T12:00:00+00:00\n"
-            "origin: mcp\n"
-            "artifacts:\n"
+                "acl: [finance]\n"
+                "captured_at: 2026-08-01T12:00:00+00:00\n"
+                "origin: mcp\n"
+                "participants: []\n"
+                "artifacts:\n"
             f"  - sha256: {'a' * 64}\n"
             "    bytes: 1\n"
             "    media_type: text/plain\n"
             f"    readable_sha256: {'a' * 64}\n"
-            "    extractor: utf8\n"
-            "    extractor_version: '1'\n"
-            "---\n\n"
-            f"# Source\n\n{claim.text}\n",
+                "    extractor: utf8\n"
+                "    extractor_version: '1'\n"
+                "    ocr_pages: []\n"
+                "---\n\n"
+                f"# Captured source\n\n{claim.text}\n",
             encoding="utf-8",
         )
     _git(admin_rig.repo, "add", ".")

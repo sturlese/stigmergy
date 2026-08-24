@@ -8,8 +8,8 @@ committed and frozen so the series stays comparable.
   # keyless self-check / e2e arm:
   python evals/run_retrieval.py --embedder fake --rebuild --repo evals/corpus
 
-  # the real measurement (needs OPENAI_API_KEY):
-  python evals/run_retrieval.py --embedder openai --rebuild --repo evals/corpus \
+  # the real measurement (needs OPENROUTER_API_KEY):
+  python evals/run_retrieval.py --embedder openrouter --rebuild --repo evals/corpus \
       --report evals/out/retrieval-report.json
 
 Arms: fts / vec / rrf are the raw retrieval arms; `final` adds the contract factors and is the arm
@@ -46,9 +46,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--golden", default=str(ROOT / "evals" / "retrieval_golden.json"))
     ap.add_argument("--dsn", default=None)
-    ap.add_argument("--embedder", choices=["openai", "fake"], default=None,
+    ap.add_argument("--embedder", choices=["openrouter", "fake"], default=None,
                     help="default: whatever the built index was embedded with (index_meta)")
-    ap.add_argument("--model", default=None)
     ap.add_argument("--rebuild", metavar="", nargs="?", const=True, default=False,
                     help="rebuild the index first (requires --repo)")
     ap.add_argument("--repo", default=None, help="knowledge-repo checkout (with --rebuild)")
@@ -84,14 +83,14 @@ def make_arm_rankings(conn, embedder, k: int):
 def _run(args, questions) -> int:
     with store.connect(args.dsn) as conn:
         if args.rebuild:
-            embedder = build_embedder(args.embedder or "openai", args.model)
+            embedder = build_embedder(args.embedder or "openrouter")
             stats = build.rebuild(conn, args.repo, embedder)
             print(f"rebuilt: {stats['pages']} pages · {stats['embedded']} new embeddings, "
                   f"{stats['cached']} cached · model={stats['model']}")
         meta = store.read_meta(conn)
         if meta is None:
             sys.exit("the index is empty — pass --rebuild --repo <dir> or build it first")
-        embedder = (build_embedder(args.embedder, args.model) if args.embedder
+        embedder = (build_embedder(args.embedder) if args.embedder
                     else embedder_for_model(meta["model"]))
 
         report = golden.evaluate(questions, make_arm_rankings(conn, embedder, args.k), k=args.k)

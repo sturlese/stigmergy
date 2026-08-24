@@ -1,69 +1,70 @@
-"""Model policy: default gpt-5.6-terra; ANSWER_LLM ∈ {openai, fake}; an invalid
-value fails fast; the fake path is keyless; a missing key with openai gives a clean error.
+import argparse
 
-Pure and keyless — build_synthesizer is exercised directly (no service, no Postgres).
-"""
 import pytest
+from pydantic_ai import Agent
 
 from stigmergy.answer.synthesize import FakeSynthesizer, build_synthesizer
+from stigmergy.kernel.llm import ANSWER_MODEL, OPENROUTER_PROVIDER_POLICY
 from stigmergy.server.settings import Settings
 
 
-def test_default_model_is_terra():
-    assert Settings().model == "gpt-5.6-terra"
-    assert Settings().llm == "openai"
+def test_default_answer_model_is_glm_5_2():
+    assert Settings().model == ANSWER_MODEL
+    assert Settings().llm == "openrouter"
 
 
 def test_fake_backend_is_keyless(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert isinstance(build_synthesizer(Settings(llm="fake")), FakeSynthesizer)
 
 
 def test_invalid_answer_llm_fails_fast():
-    """A typo must raise — never silently pick the fake nor fall through to the real path."""
     with pytest.raises(RuntimeError, match="invalid ANSWER_LLM"):
-        build_synthesizer(Settings(llm="fakee"))
+        build_synthesizer(Settings(llm="anthropic"))
 
 
-def test_openai_without_key_is_a_clean_error(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY is required"):
-        build_synthesizer(Settings(llm="openai", model="gpt-5.6-terra"))
+def test_openrouter_without_key_is_a_clean_error(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        build_synthesizer(Settings())
 
 
-def test_a_provider_prefixed_model_builds_without_the_openai_key(monkeypatch):
-    """The two-form convention CLEAN_MODEL and the librarian's model already follow, applied to
-    ANSWER_MODEL: a provider-prefixed id is resolved by pydantic-ai, whose provider reads its OWN
-    env key — OPENAI_API_KEY stays the bare-name Responses path's credential and nothing else's.
-    OLD BEHAVIOUR: every ANSWER_LLM=openai model was built as an OpenAI Responses model, so `ask`
-    could not run on any provider the Responses API cannot name."""
-    from pydantic_ai import Agent
+def test_answer_agent_uses_glm_with_the_mandatory_provider_policy(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-fake")
-
-    agent = build_synthesizer(Settings(llm="openai", model="openrouter:z-ai/glm-5.2"))
+    agent = build_synthesizer(Settings())
 
     assert isinstance(agent, Agent)
     assert agent.model.model_name == "z-ai/glm-5.2"
+    assert agent.model.settings["openrouter_provider"] == OPENROUTER_PROVIDER_POLICY
 
 
-def test_a_prefixed_model_missing_its_own_key_is_refused_naming_that_key(monkeypatch):
-    """The benign twin of the keyless build above, from the other side: the refusal a
-    misconfigured deployment gets names the PROVIDER'S variable, never OPENAI_API_KEY — an
-    operator sent to export the wrong key would export it and still be broken."""
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake")   # present, and must not be the ask
-    with pytest.raises(Exception, match="OPENROUTER_API_KEY"):
-        build_synthesizer(Settings(llm="openai", model="openrouter:z-ai/glm-5.2"))
+def test_unapproved_answer_model_is_rejected(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    with pytest.raises(RuntimeError, match="answer model"):
+        build_synthesizer(Settings(model="openrouter:anthropic/claude-sonnet-5"))
+
+
+def test_other_approved_model_is_rejected_for_answers(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    with pytest.raises(RuntimeError, match="answer model"):
+        build_synthesizer(Settings(model="openrouter:deepseek/deepseek-v4-flash"))
 
 
 def test_answer_llm_env_fallback(monkeypatch):
-    """Settings.from_args reads ANSWER_LLM/ANSWER_MODEL when the flag is absent."""
     monkeypatch.setenv("ANSWER_LLM", "fake")
-    monkeypatch.setenv("ANSWER_MODEL", "gpt-5.6-luna")
-    import argparse
-    args = argparse.Namespace(identity=None, identities=None, repo=None,
-                              dsn=None, embedder=None, answer_llm=None)
+    monkeypatch.setenv("ANSWER_MODEL", ANSWER_MODEL)
+    args = argparse.Namespace(
+        identity=None,
+        identities=None,
+        repo=None,
+        entity_registry=None,
+        dsn=None,
+        embedder=None,
+        answer_llm=None,
+    )
+
     settings = Settings.from_args(args)
-    assert settings.llm == "fake" and settings.model == "gpt-5.6-luna"
+
+    assert settings.llm == "fake"
+    assert settings.model == ANSWER_MODEL

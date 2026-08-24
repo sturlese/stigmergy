@@ -1958,6 +1958,7 @@ def test_contradiction_and_resolution_are_ordinary_atomic_captures(clean_queue, 
     assert page.updated == dt.date(2026, 8, 21)
     assert set(page.sources) == {first_source, second_source}
     assert len(located) == 1
+    assert item["report"]["plan_rejected"] is False
     contradiction_id = located[0].record.contradiction_id
 
     resolution_plan = FilingPlan(
@@ -2074,6 +2075,112 @@ def test_invalid_contradiction_proposal_cannot_block_a_valid_capture(
             text=True,
         ),
     )
+    assert contradictions.parse_all(page.body) == ()
+
+
+def test_contradiction_cannot_cite_an_existing_source_not_supplied_to_the_planner(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    actor = Actor(subject="marc", display_name="Marc")
+    first_receipt, _first_item, first_outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="bounded-contradiction-first",
+        text="The signed renewal agreement says the renewal is annual.",
+        plan=FilingPlan(
+            summary="Recorded the signed renewal cadence",
+            mutations=(
+                PageMutation(
+                    action="create",
+                    role="note",
+                    title="Bounded renewal provenance",
+                    body=(
+                        "# Bounded renewal provenance\n\n"
+                        "The signed renewal agreement states an annual renewal."
+                    ),
+                    reason="The agreement establishes the renewal cadence",
+                ),
+            ),
+        ),
+    )
+    first_source = source_path(schema.parse_capture(first_receipt["request"]))
+    unrelated_receipt, _unrelated_item, unrelated_outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="bounded-contradiction-unrelated",
+        text="The lunch menu contains a seasonal soup.",
+        plan=FilingPlan(summary="Archived an unrelated source"),
+    )
+    unrelated_source = source_path(schema.parse_capture(unrelated_receipt["request"]))
+    service = CaptureService(clean_queue, store)
+    current_receipt = service.capture_text(
+        actor=actor,
+        audience=None,
+        adapter="mcp",
+        text="The current renewal billing schedule says the renewal is monthly.",
+        idempotency_key="bounded-contradiction-current",
+    )
+    current_source = source_path(schema.parse_capture(current_receipt["request"]))
+    plan = FilingPlan(
+        summary="Attempted to cite evidence outside the supplied context",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/notes/Bounded renewal provenance.md",
+                body=(
+                    "# Bounded renewal provenance\n\n"
+                    "This mutation must be rolled back."
+                ),
+                reason="The sources appear to conflict",
+            ),
+        ),
+        contradictions=(
+            ContradictionProposal(
+                page_path="wiki/notes/Bounded renewal provenance.md",
+                explanation="The proposed claims cite unrelated evidence.",
+                claims=(
+                    ContradictionClaim(
+                        text="The renewal is monthly.",
+                        source=current_source,
+                    ),
+                    ContradictionClaim(
+                        text="The renewal is annual.",
+                        source=unrelated_source,
+                    ),
+                ),
+            ),
+        ),
+    )
+    settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
+
+    item, outcome = worker.process_next(
+        clean_queue,
+        WriterDeps(settings, store, ScriptedPlanner(plan), str(target_repo)),
+    )
+
+    page = parse_page(
+        "wiki/notes/Bounded renewal provenance.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Bounded renewal provenance.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert first_outcome.status == schema.LANDED
+    assert unrelated_outcome.status == schema.LANDED
+    assert outcome.status == schema.LANDED
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["wiki_changes"] == 0
+    assert first_source in page.sources
+    assert "annual renewal" in page.body
+    assert "must be rolled back" not in page.body
     assert contradictions.parse_all(page.body) == ()
 
 

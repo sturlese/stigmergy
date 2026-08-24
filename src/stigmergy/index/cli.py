@@ -11,14 +11,12 @@ def index_main(argv=None) -> None:
     ap.add_argument("--repo", required=True, help="knowledge-repository checkout")
     ap.add_argument("--dsn", default=None,
                     help=f"Postgres DSN (default: ${store.DSN_ENV} or {store.DSN_DEFAULT})")
-    ap.add_argument("--embedder", choices=["openai", "fake"], default="openai",
+    ap.add_argument("--embedder", choices=["openrouter", "fake"], default="openrouter",
                     help="fake = deterministic offline double (tests/CI only)")
-    ap.add_argument("--model", default=None,
-                    help="embedding model (default: $EMBED_MODEL, then the embedder's own)")
     ap.add_argument("--fts-config", default="english", help="Postgres text-search config")
     args = ap.parse_args(argv)
 
-    embedder = build_embedder(args.embedder, args.model)
+    embedder = build_embedder(args.embedder)
     try:
         with store.connect(args.dsn) as conn:
             stats = build.rebuild(

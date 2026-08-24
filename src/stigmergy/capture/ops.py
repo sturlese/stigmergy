@@ -7,6 +7,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 
+import psycopg
 from psycopg.types.json import Jsonb
 
 log = logging.getLogger(__name__)
@@ -199,7 +200,7 @@ def try_advisory_lock(conn, key: int):
             try:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT pg_advisory_unlock(%s::bigint)", (key,))
-            except Exception as error:
+            except psycopg.Error as error:
                 log.warning(
                     "could not release advisory lock (%s)",
                     error.__class__.__name__,
