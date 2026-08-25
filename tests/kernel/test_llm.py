@@ -30,7 +30,8 @@ def test_every_approved_model_has_the_mandatory_provider_policy(monkeypatch):
         assert isinstance(model, OpenRouterModel)
         assert model.model_name == configured.removeprefix("openrouter:")
         assert settings is model.settings
-        assert model.settings["openrouter_provider"] == llm.OPENROUTER_PROVIDER_POLICY
+        assert model.settings["openrouter_provider"] == llm.provider_policy(configured)
+        assert llm.OPENROUTER_PROVIDER_POLICY.items() <= model.settings["openrouter_provider"].items()
 
 
 def test_approved_models_enable_provider_failover_without_relaxing_privacy(monkeypatch):
@@ -44,7 +45,25 @@ def test_approved_models_enable_provider_failover_without_relaxing_privacy(monke
         "require_parameters": True,
         "data_collection": "deny",
         "zdr": True,
+        "order": ["Sail Research"],
+        "ignore": ["CoreWeave", "DeepInfra"],
     }
+
+
+def test_only_the_librarian_model_is_routed_to_a_verified_host(monkeypatch):
+    """CoreWeave and DeepInfra mangle DeepSeek tool-call arguments (newlines dropped, arrays
+    double-encoded); the librarian's structured plans are the only path that pays for it."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    librarian, _ = llm.build_model(llm.LIBRARIAN_MODEL)
+    assert librarian.settings["openrouter_provider"]["order"] == ["Sail Research"]
+    assert librarian.settings["openrouter_provider"]["ignore"] == ["CoreWeave", "DeepInfra"]
+    assert librarian.settings["openrouter_provider"]["allow_fallbacks"] is True
+
+    for configured in (llm.ANSWER_MODEL, llm.OCR_MODEL):
+        model, _ = llm.build_model(configured)
+        assert "order" not in model.settings["openrouter_provider"]
+        assert "ignore" not in model.settings["openrouter_provider"]
 
 
 def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypatch):
@@ -81,11 +100,9 @@ def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypat
 
     model = asyncio.run(run_twice())
 
-    assert [payload["provider"] for payload in payloads] == [
-        llm.OPENROUTER_PROVIDER_POLICY,
-        llm.OPENROUTER_PROVIDER_POLICY,
-    ]
-    assert model.settings["openrouter_provider"] == llm.OPENROUTER_PROVIDER_POLICY
+    expected = llm.provider_policy(llm.LIBRARIAN_MODEL)
+    assert [payload["provider"] for payload in payloads] == [expected, expected]
+    assert model.settings["openrouter_provider"] == expected
 
 
 @pytest.mark.parametrize(

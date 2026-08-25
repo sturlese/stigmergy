@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -40,6 +41,8 @@ from stigmergy.knowledge.write_guard import (
     allow_explicit_master,
 )
 from stigmergy.librarian import config, gitcmd
+
+log = logging.getLogger(__name__)
 
 WRITER_LOCK_KEY = int.from_bytes(b"KNOWWRIT", "big", signed=True)
 
@@ -237,6 +240,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             raise CorpusUnavailable(_violation_summary(baseline))
         snapshot = _snapshot_mutable(worktree)
         plan_invalid = False
+        plan_rejection = ""
         try:
             _apply_filing_plan(
                 worktree,
@@ -255,12 +259,18 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             PageContractError,
             EntityOperationError,
             contradictions.ContradictionContractError,
-        ):
+        ) as error:
             plan_invalid = True
+            plan_rejection = str(error)
         violations = check(worktree) if not plan_invalid else ()
         if violations:
             plan_invalid = True
+            # Codes only: a violation's path names a page, and the report is read by the submitter.
+            codes = ", ".join(sorted({item.code for item in violations}))
+            plan_rejection = f"knowledge gates found {codes}"
         if plan_invalid:
+            # Gate messages are fixed sentences, never source or model text.
+            log.warning("filing plan rejected for %s: %s", envelope.capture_id, plan_rejection)
             _restore_mutable(worktree, snapshot)
             reasons = {relative_source: "Archived immutable readable evidence"}
             fallback = check(worktree)
@@ -299,6 +309,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             "wiki_changes": sum(1 for entry in entries if entry.path.startswith("wiki/")),
             "model_requests": plan_run.model_requests,
             "plan_rejected": plan_invalid,
+            "plan_rejection": plan_rejection,
         },
     )
 
