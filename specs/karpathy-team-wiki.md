@@ -301,6 +301,8 @@ The librarian returns a structured change set. It may:
 
 The librarian never rewrites `sources/`, emits a generated `view`, invents a meeting/document/page type, changes ACL to expose material more broadly, or waits for approval.
 
+It writes only figures its sources state. A later value from a source that is not the authority for that fact — the issuing party's own instrument or decision, a signed or reissued document, the system of record, or a named resolution — is filed as a contradiction, never applied as a correction.
+
 The target corpus has four roles:
 
 | Role | Location | Mutable by normal filing? | Meaning |
@@ -423,6 +425,8 @@ There is no inactive/deprecated entity state. Absorbed IDs are redirects, not vi
 A real contradiction between equally plausible sources is not repaired by choosing a convenient answer. The librarian preserves both claims, their dates, and their citations in a strict, reader-visible contradiction callout on the narrowest page whose audience may see both sources.
 
 The callout has a stable opaque contradiction ID, `unresolved` status, two or more claim/citation entries, and a short neutral explanation. Its Markdown schema is deterministic and lintable. A valid unresolved contradiction counts as a healthy corpus state.
+
+A contradiction exists only as this marker: prose that lists both claims is not one, and the librarian files the marker whenever supplied sources conflict without one. The filing context lists each candidate page's filed markers so the librarian judges by that list rather than by prose. A proposal the writer cannot place safely is dropped and recorded in the capture report while the rest of the plan lands.
 
 Contradictions never block capture or gardening. If the conflicting sources have different visibility, no broader page or reader is told that hidden evidence exists; the callout is placed only in a page visible to the intersection of permitted readers.
 

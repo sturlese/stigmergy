@@ -6,6 +6,7 @@ from pathlib import Path
 
 from stigmergy.entities.model import load_entities
 from stigmergy.kernel.acl import flows_into
+from stigmergy.knowledge import contradictions
 from stigmergy.knowledge.pages import parse_page
 from stigmergy.knowledge.sources import (
     SourceContractError,
@@ -87,6 +88,7 @@ def filing_context(
                             "entities": list(page.entities),
                             "sources": list(page.sources),
                             "body": page.body,
+                            "filed_contradictions": _filed_contradictions(page.body),
                             "capture_may_update": flows_into(_list(capture_acl), _list(page.acl)),
                         },
                     )
@@ -232,6 +234,21 @@ def _source_evidence(
     truncated = truncated or len(ordered) > MAX_CONTEXT_SOURCE_EVIDENCE
     result = [item for _score, item in ordered[:MAX_CONTEXT_SOURCE_EVIDENCE]]
     return result, truncated
+
+
+def _filed_contradictions(body: str) -> list[dict]:
+    try:
+        located = contradictions.parse_all(body)
+    except contradictions.ContradictionContractError:
+        return []
+    return [
+        {
+            "id": item.record.contradiction_id,
+            "explanation": item.record.explanation,
+            "claims": [claim.model_dump(mode="json") for claim in item.record.claims],
+        }
+        for item in located
+    ]
 
 
 def _list(value: tuple[str, ...] | None) -> list[str] | None:
