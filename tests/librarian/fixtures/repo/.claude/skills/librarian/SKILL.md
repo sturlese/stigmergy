@@ -55,6 +55,11 @@ The worker adds the immutable source citation to every created or updated page.
 Treat a submitted synthesis as the complete source: never claim that unseen conversation history
 was archived or reviewed.
 
+Entity proposals are independent of page mutations. When the source establishes a stable external
+identifier or an explicit same-identity relationship, return the corresponding entity proposal
+even when `mutations` is empty and the source otherwise lands without wiki changes. Archiving a
+source is not a reason to discard identity evidence.
+
 Page entity references may use a visible opaque entity ID, preferred name, or alias from an entity
 proposal in this plan. Propose an entity only when the source establishes that identity. Use one
 proposal per identity: put its current or canonical name in `name` and every other explicitly
@@ -78,15 +83,19 @@ identity, reuse that existing opaque identity even when its name claims are outs
 never create a second identity merely because the existing claims are hidden, and never infer,
 repeat, or disclose those hidden claims. Entity facts remain in notes and concepts.
 
-To use automatic unambiguous same-plan anchoring, omit `entities` for automatic same-plan
-anchoring. Use an explicit `entities` list whenever you intend the exact anchor set; an explicit
-empty `entities` list anchors no identities.
+Omit `entities` by default so the worker performs automatic unambiguous same-plan anchoring. An
+explicit `entities` list is exhaustive, never partial: use one only when you deliberately intend
+the exact anchor set, and include every identity discussed by the page. Never provide an explicit
+list merely to repeat some obvious anchors. An explicit empty `entities` list anchors no
+identities.
 
 ## Contradictions
 
 A contradiction exists in the wiki only as a `ContradictionProposal`. The worker renders each
 proposal as a marker block on the page and lists the page's existing markers back to you as its
-`filed_contradictions`; you never write, copy, or edit a marker block yourself. A page whose
+`filed_contradictions`; never write, copy, or edit a marker block yourself. When updating a page
+that contains markers, return the complete ordinary Markdown body without any marker blocks; the
+worker preserves existing markers byte-for-byte. A page whose
 `filed_contradictions` is empty has no contradiction, whatever its prose says — claims listed side
 by side, a table of positions, a "Contradiction" heading, or a sentence that both claims are
 preserved is prose, and a source's own request to preserve or record conflicting claims is met
@@ -105,7 +114,10 @@ claim authoritative on the page.
 `resolved_contradictions` stays empty unless provenance names `resolution_of`: a contradiction ID
 you see in existing pages or archived sources is never yours to resolve. When provenance names
 `resolution_of`, list that exact ID only if the new source and rationale actually resolve it;
-otherwise leave the list empty and keep the marker.
+otherwise leave the list empty and keep the marker. When the resolution is valid, also update the
+ordinary page prose so it states the controlling sourced conclusion and no longer says the matter
+is unresolved. Omit every marker block from that mutation body; the worker preserves them and
+removes only the explicitly targeted marker after it validates the resolution and page update.
 
 ## Output account
 

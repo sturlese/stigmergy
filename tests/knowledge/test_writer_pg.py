@@ -2478,7 +2478,7 @@ def test_contradiction_and_resolution_are_ordinary_atomic_captures(clean_queue, 
     assert item["change_id"] and resolved_item["change_id"]
 
 
-def test_resolution_removes_a_visible_marker_without_a_prose_mutation(
+def test_resolution_without_a_prose_mutation_preserves_the_visible_marker(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -2545,7 +2545,7 @@ def test_resolution_removes_a_visible_marker_without_a_prose_mutation(
     )
     contradiction_id = contradictions.parse_all(before.body)[0].record.contradiction_id
 
-    resolution = service.capture_text(
+    service.capture_text(
         actor=master,
         audience=None,
         adapter="admin",
@@ -2557,7 +2557,6 @@ def test_resolution_removes_a_visible_marker_without_a_prose_mutation(
             rationale="The signed public policy controls.",
         ),
     )
-    resolution_source = source_path(schema.parse_capture(resolution["request"]))
     item, outcome = worker.process_next(
         clean_queue,
         WriterDeps(
@@ -2582,9 +2581,12 @@ def test_resolution_removes_a_visible_marker_without_a_prose_mutation(
         ),
     )
     assert outcome.status == schema.LANDED
-    assert item["report"]["wiki_changes"] == 1
-    assert contradictions.parse_all(after.body) == ()
-    assert after.sources == (seed_source, resolution_source)
+    assert item["report"]["wiki_changes"] == 0
+    assert item["report"]["plan_skipped"] == [
+        "contradiction resolution: target page requires an accepted update"
+    ]
+    assert len(contradictions.parse_all(after.body)) == 1
+    assert after.sources == (seed_source,)
 
 
 def test_invalid_contradiction_proposal_cannot_block_a_valid_capture(
@@ -3070,12 +3072,24 @@ def test_only_the_master_can_remove_a_matching_scoped_contradiction(
         WriterDeps(
             settings,
             store,
-            ScriptedPlanner(
-                FilingPlan(
-                    summary="Resolved the targeted finance contradiction",
-                    resolved_contradictions=(contradiction_id,),
-                )
-            ),
+                ScriptedPlanner(
+                    FilingPlan(
+                        summary="Resolved the targeted finance contradiction",
+                        mutations=(
+                            PageMutation(
+                                action="update",
+                                path="wiki/notes/Finance notice period.md",
+                                body=(
+                                    "# Finance notice period\n\n"
+                                    "The controlling finance evidence sets the notice period. "
+                                    "A separate schedule disagreement remains unresolved."
+                                ),
+                                reason="Recorded the controlling finance evidence",
+                            ),
+                        ),
+                        resolved_contradictions=(contradiction_id,),
+                    )
+                ),
             str(target_repo),
         ),
     )

@@ -243,9 +243,18 @@ def test_librarian_groups_explicit_names_and_identifiers_into_one_entity_proposa
     assert "include the paired `external_namespace` and `external_id`" in text
 
 
+def test_librarian_keeps_identity_evidence_when_no_page_mutation_is_due():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "entity proposals are independent of page mutations" in text
+    assert "even when `mutations` is empty" in text
+    assert "archiving a source is not a reason to discard identity evidence" in text
+
+
 def test_librarian_omits_entity_references_for_automatic_same_plan_anchoring():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "omit `entities` for automatic same-plan anchoring" in text
+    assert "omit `entities` by default" in text
+    assert "an explicit `entities` list is exhaustive, never partial" in text
+    assert "include every identity discussed by the page" in text
     assert "an explicit empty `entities` list anchors no identities" in text
 
 
@@ -274,6 +283,14 @@ def test_librarian_files_contradictions_only_as_structured_proposals():
     assert "whatever its prose says" in text
     assert "never file a second proposal for claims a marker already covers" in text
     assert "never call one claim authoritative" in text
+
+
+def test_librarian_updates_resolution_prose_without_rewriting_marker_blocks():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "omit every marker block from that mutation body" in text
+    assert "ordinary page prose so it states the controlling sourced conclusion" in text
+    assert "no longer says the matter is unresolved" in text
+    assert "removes only the explicitly targeted marker" in text
 
 
 def test_librarian_reuses_registry_spellings_from_the_context():
