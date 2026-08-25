@@ -262,3 +262,24 @@ def test_librarian_files_contradictions_only_as_structured_proposals():
     assert "whatever its prose says" in text
     assert "never file a second proposal for claims a marker already covers" in text
     assert "never call one claim authoritative" in text
+
+
+def test_librarian_reuses_registry_spellings_from_the_context():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "never names a counterparty, project, deal, or the identifier value" in text
+    assert "reuse the exact spelling" in text
+    assert "copy the identifier value exactly as the source writes it" in text
+
+
+@pytest.mark.parametrize(
+    ("namespace", "identifier"),
+    [("x" * 65, "11820473"), ("companies_house", "9" * 201), ("", "11820473")],
+)
+def test_entity_proposal_bounds_its_external_identifier(namespace, identifier):
+    with pytest.raises(ValidationError):
+        EntityProposal(
+            name="Acme Holdings",
+            entity_type="organization",
+            external_namespace=namespace,
+            external_id=identifier,
+        )

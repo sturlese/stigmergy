@@ -330,7 +330,7 @@ Additional write rules:
 
 - the submitter must be able to read an existing page before their capture can affect it;
 - retrieval context for filing is scoped to the submitter and target visibility;
-- output visibility can never be broader than any source material actually used in that output;
+- output visibility can never be broader than any source material actually used in that output; the one exception is the set of external-id namespace strings, a shared spelling vocabulary shown to every filing context, which is why a namespace never encodes an entity, project, deal, or identifier value;
 - ACL changes are explicit structured operations and pass the same non-leakage gate;
 - gardening may inspect the whole corpus as a system identity, but each repair preserves claim/page visibility and cannot transfer content between scopes;
 - deletion may sweep links across scopes without copying surrounding content between them;
@@ -365,7 +365,7 @@ Raw entity pages and the generated registry are internal machine data: ordinary 
 
 #### Birth and matching
 
-The librarian proposes one record per identity while filing normal material. The proposal puts the current name in `name`, explicitly asserted alternate names in `aliases`, and a paired external namespace/ID when the source supplies one. Every alias must occur as a complete normalized token sequence in one extracted readable artifact; generated source headings and metadata are not evidence. An unsupported alias rejects the plan and leaves only the source archived. A single entity service performs matching and mutation.
+The librarian proposes one record per identity while filing normal material. The proposal puts the current name in `name`, explicitly asserted alternate names in `aliases`, and a paired external namespace/ID when the source supplies one. Every alias must occur as a complete normalized token sequence in one extracted readable artifact; generated source headings and metadata are not evidence. An unsupported alias rejects the plan and leaves only the source archived. A single entity service performs matching and mutation. The filing context shows the external identifiers of visible identities and the registry names already used anywhere in the registry — names only, without values, identities, or audiences — so the librarian reuses one spelling per registry; a shared identifier matches by exact namespace and value.
 
 1. Normalize names without erasing meaningful distinctions.
 2. Search the global internal registry without returning hidden candidates to the caller/model.
@@ -803,7 +803,7 @@ Secure erasure from all historical Git objects is not part of ordinary page dele
 31. **ENT-04:** `list_entities` returns only identities with a visible claim or anchored page and always chooses a visible display name.
 32. **ENT-05:** `describe_entity` composes current knowledge from visible anchored pages and sources rather than an entity-page body.
 33. **ENT-06:** Hidden, nonexistent, and unauthorized entity identifiers yield the same neutral external response.
-34. **ENT-07:** Reusing a hidden canonical ID cannot reveal its prior existence, names, aliases, facts, or audiences in the receipt or model context.
+34. **ENT-07:** Reusing a hidden canonical ID cannot reveal its prior existence, names, aliases, facts, or audiences in the receipt or model context; the model context shares registry namespace strings only, never a hidden identifier value.
 35. **ENT-08:** Name collision without strong identity evidence does not merge two ambiguous people/organizations.
 36. **ENT-09:** A scoped rename creates a new preferred claim, retains the previous name as a same-scope alias, and reveals neither to unauthorized readers.
 37. **ENT-10:** A merge rejects rationale-only requests, verifies either a shared external ID on every selected identity or an exact assertion in an existing immutable source, preserves every claim ACL/provenance, rewrites all anchors, emits redirects for absorbed IDs, removes absorbed pages, regenerates the registry, records the evidence, and lands atomically in one commit.

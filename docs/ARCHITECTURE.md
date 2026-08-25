@@ -30,8 +30,8 @@ provenance reach the cloud.
 
 Slack acquisition has one whole-capture deadline, bounds profile lookup concurrency, and derives
 message permalinks from one validated root permalink. Identical attachment bytes carried by several
-messages are one artifact that each of those messages references. Timeout cleanup releases the reservation so
-the same reaction can retry safely.
+messages are one artifact that each of those messages references. Timeout cleanup releases the
+reservation so the same reaction can retry safely.
 
 ## Filing and gates
 
@@ -60,7 +60,9 @@ notes and concepts anchored to the ID. Reader projections choose only visible cl
 `describe_entity` composes visible anchored pages and sources.
 
 Each filing proposal represents one identity: one current name, source-explicit aliases, and an
-optional paired external namespace/ID. Alias claims are accepted only when one extracted readable
+optional paired external namespace/ID. The filing context lists visible identities' external ids
+and every registry name already in use, so one registry keeps one spelling across captures and
+audiences. Alias claims are accepted only when one extracted readable
 artifact contains the complete normalized alias; generated source markup is excluded. Proposal IDs
 remain positional; textual names resolve to a set of candidate IDs and can anchor a page only when
 that set has one member. Shared aliases are therefore ambiguous regardless of proposal order. Two

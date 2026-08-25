@@ -71,9 +71,7 @@ def filing_context(
             relative = path.relative_to(root).as_posix()
             text = path.read_text(encoding="utf-8")
             page = parse_page(relative, text)
-            if not visible(page.acl, None if actor_groups is None else set(actor_groups)):
-                continue
-            if not flows_into(_list(page.acl), _list(capture_acl)):
+            if not _admits(page.acl, actor_groups=actor_groups, capture_acl=capture_acl):
                 continue
             overlap = len(terms & set(_WORD_RE.findall(f"{page.title}\n{page.body}".casefold())))
             if overlap:
@@ -104,13 +102,21 @@ def filing_context(
     )
 
     entity_claims = []
+    namespaces: set[str] = set()
     for entity_id, record in sorted(load_entities(root).items()):
+        namespaces.update(claim.namespace for claim in record.external_ids)
         claims = [
             claim
             for claim in record.claims
-            if visible(claim.acl, None if actor_groups is None else set(actor_groups))
-            and flows_into(_list(claim.acl), _list(capture_acl))
+            if _admits(claim.acl, actor_groups=actor_groups, capture_acl=capture_acl)
         ]
+        external_ids = list(
+            dict.fromkeys(
+                (claim.namespace, claim.value)
+                for claim in record.external_ids
+                if _admits(claim.acl, actor_groups=actor_groups, capture_acl=capture_acl)
+            )
+        )
         relevance = max(
             (len(terms & set(_WORD_RE.findall(claim.value.casefold()))) for claim in claims),
             default=0,
@@ -122,12 +128,18 @@ def filing_context(
                 (
                     relevance,
                     {
-                    "id": entity_id,
-                    "entity_type": record.entity_type,
-                    "names": [
-                        {"value": claim.value, "kind": claim.kind}
-                        for claim in sorted(claims, key=lambda item: item.introduced_at, reverse=True)
-                    ],
+                        "id": entity_id,
+                        "entity_type": record.entity_type,
+                        "names": [
+                            {"value": claim.value, "kind": claim.kind}
+                            for claim in sorted(
+                                claims, key=lambda item: item.introduced_at, reverse=True
+                            )
+                        ],
+                        "external_ids": [
+                            {"namespace": namespace, "value": value}
+                            for namespace, value in external_ids
+                        ],
                     },
                 )
             )
@@ -138,6 +150,8 @@ def filing_context(
         "entities": [
             value for _score, value in entity_claims[:MAX_CONTEXT_ENTITIES]
         ],
+        # Registry names only: a spelling convention shared across audiences, never a claim.
+        "namespaces": sorted(namespaces),
         "truncated": source_evidence_truncated or len(entity_claims) > MAX_CONTEXT_ENTITIES,
     }
     while _rendered_bytes(context) > MAX_PLANNER_CONTEXT_BYTES:
@@ -211,10 +225,7 @@ def _source_evidence(
         if len(source.body.encode("utf-8")) > MAX_CONTEXT_SOURCE_BYTES:
             truncated = True
             continue
-        acl = source.acl
-        if not visible(acl, None if actor_groups is None else set(actor_groups)):
-            continue
-        if not flows_into(_list(acl), _list(capture_acl)):
+        if not _admits(source.acl, actor_groups=actor_groups, capture_acl=capture_acl):
             continue
         source_terms = set(
             _WORD_RE.findall(f"{source.title}\n{source.body}".casefold())
@@ -249,6 +260,18 @@ def _filed_contradictions(body: str) -> list[dict]:
         }
         for item in located
     ]
+
+
+def _admits(
+    acl: tuple[str, ...] | None,
+    *,
+    actor_groups: frozenset[str] | None,
+    capture_acl: tuple[str, ...] | None,
+) -> bool:
+    """The one admission rule: the actor may read it and it flows into the capture audience."""
+    return visible(acl, None if actor_groups is None else set(actor_groups)) and flows_into(
+        _list(acl), _list(capture_acl)
+    )
 
 
 def _list(value: tuple[str, ...] | None) -> list[str] | None:

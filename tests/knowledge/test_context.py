@@ -610,3 +610,71 @@ def test_context_lists_each_candidates_filed_contradictions_not_its_prose(tmp_pa
         }
     ]
     assert by_path["wiki/notes/Prose only.md"]["filed_contradictions"] == []
+
+
+def test_context_lists_visible_external_ids_and_every_registry_name(tmp_path):
+    from stigmergy.entities.service import apply_proposals
+    from stigmergy.knowledge.plan import EntityProposal
+
+    public_source = _source(
+        tmp_path,
+        "00000000-0000-4000-8000-000000000001",
+        None,
+        "Registry source",
+        "Qaldris Dynamics Ltd is registered as 11820473.",
+    )
+    finance_source = _source(
+        tmp_path,
+        "00000000-0000-4000-8000-000000000002",
+        ("finance",),
+        "Vendor source",
+        "Velorum Signal Works GmbH is registered as HRB 991204.",
+    )
+    at = dt.datetime(2026, 8, 24, 9, tzinfo=dt.UTC)
+    apply_proposals(
+        str(tmp_path),
+        (
+            EntityProposal(
+                name="Qaldris Dynamics Ltd",
+                entity_type="company",
+                external_namespace="companies_house",
+                external_id="11820473",
+            ),
+        ),
+        acl=None,
+        source=public_source,
+        readable_artifacts=(),
+        actor="marc",
+        at=at,
+    )
+    apply_proposals(
+        str(tmp_path),
+        (
+            EntityProposal(
+                name="Velorum Signal Works GmbH",
+                entity_type="company",
+                external_namespace="de_handelsregister",
+                external_id="HRB 991204",
+            ),
+        ),
+        acl=("finance",),
+        source=finance_source,
+        readable_artifacts=(),
+        actor="marc",
+        at=at,
+    )
+
+    result = context.filing_context(
+        str(tmp_path),
+        source_text="Qaldris Dynamics Ltd ordered from Velorum Signal Works GmbH.",
+        capture_acl=None,
+        actor_groups=None,
+    )
+
+    assert [item["external_ids"] for item in result["entities"]] == [
+        [{"namespace": "companies_house", "value": "11820473"}]
+    ]
+    assert result["namespaces"] == ["companies_house", "de_handelsregister"]
+    rendered = context.render_context(result)
+    assert "HRB 991204" not in rendered
+    assert "Velorum" not in rendered
