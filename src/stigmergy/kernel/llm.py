@@ -21,6 +21,23 @@ OPENROUTER_PROVIDER_POLICY = {
     "zdr": True,
 }
 
+# The librarian's plans arrive as tool-call arguments, and two hosts serving DeepSeek V4 Flash
+# corrupt those: CoreWeave drops the newlines inside string values (a page body collapses to its
+# H1), DeepInfra double-encodes nested arrays (`mutations` arrives as a JSON string). Sail Research
+# returns them intact. Preference plus exclusion keeps same-model failover for the remaining hosts.
+LIBRARIAN_PROVIDER_ROUTING = {
+    "order": ["Sail Research"],
+    "ignore": ["CoreWeave", "DeepInfra"],
+}
+
+
+def provider_policy(model_name: str) -> dict:
+    """The OpenRouter provider policy one approved model is requested with."""
+    policy = dict(OPENROUTER_PROVIDER_POLICY)
+    if model_name == LIBRARIAN_MODEL:
+        policy.update({key: list(value) for key, value in LIBRARIAN_PROVIDER_ROUTING.items()})
+    return policy
+
 _MODEL_OVERRIDE = None
 
 
@@ -52,7 +69,7 @@ def build_model(model_name: str = ANSWER_MODEL):
 
     ensure_usage_extraction_repaired()
     model_settings = OpenRouterModelSettings(
-        openrouter_provider=dict(OPENROUTER_PROVIDER_POLICY)
+        openrouter_provider=provider_policy(model_name)
     )
     model = OpenRouterModel(
         model_name.removeprefix("openrouter:"),

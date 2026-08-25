@@ -259,7 +259,9 @@ Report vulnerabilities privately: [`SECURITY.md`](./SECURITY.md).
 
 One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, same-model provider failover only,
 no model fallback or direct alternate-provider credentials, zero-data
-retention. Direct Anthropic, OpenAI, or Gemini credentials are rejected.
+retention. Direct Anthropic, OpenAI, or Gemini credentials are rejected. The librarian's structured
+plans are routed to a host verified to return tool-call arguments intact, with the hosts known to
+corrupt them excluded from failover.
 
 | Purpose | Model |
 |---|---|

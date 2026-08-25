@@ -83,6 +83,33 @@ def test_resolution_plan_without_capture_resolution_intent_is_refused(clean_queu
         )
 
 
+def test_rejected_plan_records_why_in_the_capture_report(clean_queue, target_repo):
+    """The reason a plan was refused is operator evidence: without it a refused plan and a source
+    with no durable conclusion look identical in the backoffice."""
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Resolved a contradiction this capture never named",
+        resolved_contradictions=("con_00000000-0000-4000-8000-000000000001",),
+    )
+
+    _receipt, item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        key="rejected-plan-reason",
+        text="A plain capture whose plan overreaches.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["plan_rejection"] == (
+        "only the contradiction named by the capture can be resolved"
+    )
+
+
 def test_one_capture_lands_source_wiki_and_change_in_one_commit(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     material = "The support rotation changes to weekly on 1 September."
@@ -2292,6 +2319,7 @@ def test_contradiction_and_resolution_are_ordinary_atomic_captures(clean_queue, 
     assert set(page.sources) == {first_source, second_source}
     assert len(located) == 1
     assert item["report"]["plan_rejected"] is False
+    assert item["report"]["plan_rejection"] == ""
     contradiction_id = located[0].record.contradiction_id
 
     resolution_plan = FilingPlan(
