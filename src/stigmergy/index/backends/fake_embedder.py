@@ -12,7 +12,8 @@ class FakeEmbedder:
     dim = DIM
     host = "fake"    # its own name-space marker, recorded in index_meta like the real host
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], *, timeout_s: float | None = None) -> list[list[float]]:
+        del timeout_s
         out = []
         for text in texts:
             vec = [0.0] * DIM

@@ -268,6 +268,11 @@ retention. Direct Anthropic, OpenAI, or Gemini credentials are rejected.
 | embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |
 
+Query embeddings are bounded. A provider timeout degrades that request to ACL-scoped lexical
+ranking; indexing remains strict and never accepts an incomplete vector build. Serving connections
+— HTTP requests and the Slack adapter — bound every Postgres statement; workers and rebuilds keep
+the database default.
+
 ## Quality and tests
 
 The keyless suite — 1,100+ tests over real Postgres and Git, fake models, 75% coverage gate — is

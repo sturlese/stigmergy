@@ -15,6 +15,7 @@ import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
+from stigmergy.index import store
 from stigmergy.server.audit import ensure_audit_table
 from tests.server.conftest import (
     build_test_http_app,
@@ -190,6 +191,31 @@ def test_http_requests_use_distinct_closed_database_connections(monkeypatch):
     assert seen == created
     assert created[0] is not created[1]
     assert all(connection.closed for connection in created)
+
+
+def test_http_request_factory_bounds_postgres_statements_but_worker_connections_do_not(indexed):
+    """Request connections need a database deadline without constraining index workers."""
+    conn, fixture = indexed
+    token, digest = issue_test_token(fixture.ENG)
+    app = build_test_http_app(fixture, {digest: fixture.ENG})
+    from stigmergy.server.transport_http import _BearerAuthMiddleware
+
+    entry = next(m for m in app.user_middleware if m.cls is _BearerAuthMiddleware)
+    serving_conn = entry.kwargs["connection_factory"]()
+    worker_conn = store.connect()
+    try:
+        with serving_conn.cursor() as cursor:
+            cursor.execute("SHOW statement_timeout")
+            serving_timeout = cursor.fetchone()[0]
+        with worker_conn.cursor() as cursor:
+            cursor.execute("SHOW statement_timeout")
+            worker_timeout = cursor.fetchone()[0]
+    finally:
+        serving_conn.close()
+        worker_conn.close()
+
+    assert serving_timeout not in {"0", "0ms", "0s"}
+    assert worker_timeout in {"0", "0ms", "0s"}
 
 
 def test_identities_fixture_is_keyed_by_email(fixture):

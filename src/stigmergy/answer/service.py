@@ -14,6 +14,8 @@ identity — no per-call identity parameter a client could spoof.
 import asyncio
 import logging
 
+from psycopg.errors import QueryCanceled
+
 from stigmergy.answer.brain import AnswerBrain
 from stigmergy.answer.numbers import unverified_figures
 from stigmergy.answer.synthesize import (
@@ -229,7 +231,11 @@ class AnswerService:
                 agent.run(question, deps=ctx, usage_limits=limits),
                 timeout=timeout,
             )
-        except (UsageLimitExceeded, TimeoutError):
+        # `QueryCanceled` joins the two budget exceptions because a serving connection's statement
+        # deadline is the same KIND of event: the run died before an `AnswerOutput` existed. It
+        # reaches here from a tool call the agent made, so `ctx` still holds whatever earlier tools
+        # returned, and the recovery below closes over exactly that.
+        except (UsageLimitExceeded, TimeoutError, QueryCanceled):
             completed = await self._complete_budget_exhaustion(question, ctx, deadline)
             if completed is not None:
                 return completed
@@ -271,7 +277,7 @@ class AnswerService:
                     ),
                     timeout=timeout,
                 )
-            except (UsageLimitExceeded, TimeoutError):
+            except (UsageLimitExceeded, TimeoutError, QueryCanceled):
                 # Keep the first run's outcome. The killed retry's spend is unrecoverable (the
                 # exception carries no usage object), so `usage` undercounts exactly this case.
                 pass
@@ -298,11 +304,24 @@ class AnswerService:
         """Close one budget-exhausted run over a fixed, reader-scoped evidence set."""
         from pydantic_ai.exceptions import AgentRunError
 
-        paths = tuple(ctx.read_paths_order[:_EVIDENCE_PAGE_CAP])
-        if not paths:
+        mark = ctx.mark()
+        try:
+            # A run whose model never reached a tool leaves nothing to close over; ONE scoped
+            # search, run by the server rather than the model, is what makes this path possible.
+            if not ctx.read_paths_order:
+                ctx.record(self.brain.search_text(question, ctx))
+            paths = tuple(ctx.read_paths_order[:_EVIDENCE_PAGE_CAP])
+            if not paths:
+                return None
+            for path in paths:
+                ctx.record(self.brain.page_text(path, ctx))
+        except QueryCanceled:
+            # The statement deadline cut the recovery itself, leaving a HALF-gathered ledger. The
+            # refusal composed next may only report what the primary run established, so the
+            # partial gathering is rewound rather than shipped as `searched`/`surfaced` facts.
+            ctx.rewind(mark)
+            log.warning("evidence recovery cancelled by the database statement deadline")
             return None
-        for path in paths:
-            ctx.record(self.brain.page_text(path, ctx))
         try:
             timeout = _phase_timeout(deadline)
             result = await asyncio.wait_for(

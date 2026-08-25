@@ -92,4 +92,8 @@ under continuous queue load as well as while idle.
 Full rebuild and webhook indexing share the same canonical corpus selector. Notes, concepts, and
 sources are indexed; raw entity pages are not. Search combines Postgres full-text and embeddings
 with reciprocal-rank fusion and contract factors. `search`, `read`, `ask`, `list_entities`, and
-`describe_entity` all apply the same visibility policy.
+`describe_entity` all apply the same visibility policy. A timed-out query embedding degrades that
+request to the same ACL-filtered full-text arm; indexing remains strict and never stores a partial
+vector state. HTTP request and Slack connections bound each Postgres statement; a statement
+cancelled while `ask` recovers evidence ends in the ordinary budget refusal and discloses nothing
+the cancelled recovery gathered.

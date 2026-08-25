@@ -15,7 +15,7 @@ from stigmergy.capture.service import CaptureService
 from stigmergy.capture.source import source_path
 from stigmergy.changes.store import list_changes
 from stigmergy.index.corpus import split_frontmatter_checked
-from stigmergy.knowledge import contradictions
+from stigmergy.knowledge import contradictions, writer
 from stigmergy.knowledge.pages import parse_page, render_page
 from stigmergy.knowledge.plan import (
     ContradictionClaim,
@@ -24,7 +24,8 @@ from stigmergy.knowledge.plan import (
     PageMutation,
 )
 from stigmergy.knowledge.planner import ScriptedPlanner
-from stigmergy.knowledge.writer import WriterDeps
+from stigmergy.knowledge.write_guard import WriteContext
+from stigmergy.knowledge.writer import KnowledgeWriteError, WriterDeps
 from stigmergy.librarian import config, worker
 
 
@@ -52,6 +53,34 @@ def _process_capture(
         WriterDeps(settings, store, ScriptedPlanner(plan), str(repo)),
     )
     return receipt, item, outcome
+
+
+def test_resolution_plan_without_capture_resolution_intent_is_refused(clean_queue, target_repo):
+    store = evidence.MemoryEvidenceStore()
+    receipt = CaptureService(clean_queue, store).capture_text(
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        adapter="admin",
+        text="A purported contradiction resolution.",
+        idempotency_key="resolution-without-intent",
+    )
+    envelope = schema.parse_capture(receipt["request"])
+
+    with pytest.raises(KnowledgeWriteError, match="only the contradiction named"):
+        writer._apply_filing_plan(
+            str(target_repo),
+            FilingPlan(
+                summary="Resolved an existing contradiction",
+                resolved_contradictions=("con_00000000-0000-4000-8000-000000000001",),
+            ),
+            context=WriteContext(actor_groups=None, content_acl=None, unrestricted=True),
+            envelope=envelope,
+            relative_source="sources/2026/08/00000000-0000-4000-8000-000000000001.md",
+            readable_artifacts=(),
+            reasons={},
+            visible_entity_ids=frozenset(),
+            allowed_contradiction_sources=frozenset(),
+        )
 
 
 def test_one_capture_lands_source_wiki_and_change_in_one_commit(clean_queue, target_repo):

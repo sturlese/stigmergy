@@ -2,12 +2,15 @@
 import json
 from datetime import date
 
+import httpx
+
 from stigmergy.index import rank
 from stigmergy.index.backends.embedder import embedder_for_model
 from stigmergy.index.errors import EmptyIndexError, StigmergyIndexError
 from stigmergy.index.store import PAGE_COLUMNS, read_meta
 
 FILTER_COLUMNS = ("zone", "type", "status", "entity")
+QUERY_EMBED_TIMEOUT_S = 10
 
 # Build an OR query from escaped normalized lexemes so natural-language questions retain recall.
 _FTS_SQL = """
@@ -121,7 +124,6 @@ def search_arms(conn, query: str, *, embedder=None, k: int = rank.TOP_K,
             f"is configured for {live_host} — the same model name on two hosts is not provably "
             f"the same vector space. Rebuild the index against the configured OpenRouter "
             f"embedding endpoint (`stigmergy-index --rebuild --repo <dir>`)")
-    q_emb = embedder.embed([query])[0]
     fts_query = " ".join((query, *fts_expansion)) if fts_expansion else query
     fts = fts_ranking(
         conn,
@@ -130,7 +132,12 @@ def search_arms(conn, query: str, *, embedder=None, k: int = rank.TOP_K,
         filters,
         audiences=audiences,
     )
-    vec = vec_ranking(conn, q_emb, filters, audiences=audiences)
+    try:
+        q_emb = embedder.embed([query], timeout_s=QUERY_EMBED_TIMEOUT_S)[0]
+    except httpx.TimeoutException:
+        vec = []
+    else:
+        vec = vec_ranking(conn, q_emb, filters, audiences=audiences)
     candidates = fetch_pages(conn, sorted(set(fts) | set(vec)))
     hits = rank.rank(candidates, fts, vec, query, k=k, today=today, entity_hint=entity_hint)
     return {"fts": fts, "vec": vec, "hits": hits,

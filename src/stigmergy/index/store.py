@@ -103,6 +103,25 @@ def connect(conninfo: str | None = None) -> psycopg.Connection:
             attempt += 1
 
 
+# Serving connections answer inside an event loop, so one stuck statement must fail rather than
+# hold the process; workers and rebuilds keep the database default and run to completion.
+SERVING_STATEMENT_TIMEOUT_MS = 30_000
+
+
+def bound_statements(conn: psycopg.Connection,
+                     timeout_ms: int = SERVING_STATEMENT_TIMEOUT_MS) -> psycopg.Connection:
+    """Bound every statement on one connection. `connect` is autocommit, so `is_local=false`
+    applies for the whole session rather than one transaction."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('statement_timeout', %s, false)", (f"{timeout_ms}ms",))
+    return conn
+
+
+def connect_serving(conninfo: str | None = None) -> psycopg.Connection:
+    """The connection every request-scoped reader opens."""
+    return bound_statements(connect(conninfo))
+
+
 def init_schema(conn: psycopg.Connection, dim: int, model: str, fts_config: str,
                 host: str = "") -> None:
     with conn.transaction(), conn.cursor() as cur:

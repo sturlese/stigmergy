@@ -9,6 +9,7 @@ import asyncio
 import logging
 import sys
 
+from stigmergy.index import store
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import StartupError, StigmergyServerError
 from stigmergy.server.ratelimit import RateLimiter
@@ -28,6 +29,7 @@ def build_context(settings: SlackSettings, *, gateway=None, conn=None) -> SlackC
     """Wire the process-wide resources ONCE — conn, embedder, rate limiter, audit writer,
     evidence — exactly the shape `transport_http.build_http_app` uses for the HTTP transport."""
     conn, embedder = open_scoped_resources(settings.server, conn)
+    store.bound_statements(conn)   # the adapter serves reads; it never runs an index rebuild
     ensure_audit_table(conn)
     ensure_write_path_schema(conn)   # the capture-queue tables + this package's own, one DDL lock
     audit = AuditWriter(conn)

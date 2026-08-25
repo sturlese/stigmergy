@@ -253,7 +253,7 @@ def build_http_app(settings, *, token_store: dict[str, str]):
     store.ensure_webhook_dedupe_table(startup_conn)
     rate_limiter = RateLimiter()
     evidence = evidence_plane.store_from_env()
-    connection_factory = functools.partial(store.connect, settings.dsn)
+    connection_factory = functools.partial(store.connect_serving, settings.dsn)
 
     mcp = build_mcp(_ScopedServiceProxy(), stateless_http=True,
                     transport_security=_transport_security_for_env(), json_response=True)

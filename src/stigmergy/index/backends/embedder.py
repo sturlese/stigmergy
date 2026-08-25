@@ -41,9 +41,9 @@ class OpenRouterEmbedder:
         if not self._api_key:
             raise RuntimeError(MISSING_KEY_MESSAGE)
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], *, timeout_s: float = 120) -> list[list[float]]:
         vectors: list[list[float]] = []
-        with httpx.Client(timeout=120, transport=self._transport) as client:
+        with httpx.Client(timeout=timeout_s, transport=self._transport) as client:
             for index in range(0, len(texts), EMBED_BATCH):
                 response = client.post(
                     self._url,
