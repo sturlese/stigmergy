@@ -47,8 +47,8 @@ class EntityProposal(BaseModel):
     entity_type: Annotated[str, Field(min_length=1, max_length=100)]
     aliases: Annotated[tuple[EntityName, ...], Field(max_length=20)] = ()
     same_as: str | None = None
-    external_namespace: str | None = None
-    external_id: str | None = None
+    external_namespace: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+    external_id: Annotated[str, Field(min_length=1, max_length=200)] | None = None
 
     @model_validator(mode="after")
     def valid_identity_evidence(self):

@@ -1661,6 +1661,8 @@ def test_strong_external_id_reuses_hidden_identity_without_model_or_receipt_leak
     assert set(registry["entities"]) == {hidden_id}
     assert "Secret Finance Account" not in planner.context
     assert hidden_id not in planner.context
+    assert "account-7" not in planner.context
+    assert '"namespaces": [\n    "crm"\n  ]' in planner.context
     assert "Secret Finance Account" not in json.dumps(receipt)
     assert "finance" not in json.dumps(receipt)
     assert item["report"]["wiki_changes"] == 2

@@ -65,8 +65,15 @@ unambiguous (a full legal or registered name, a person carrying a distinguishing
 reference that opaque ID or set `same_as` to it; never propose a second identity with that name.
 A merely similar name is not identity evidence. Otherwise set `same_as` only for an explicit
 same-entity assertion or a visible identity you can establish strongly. When the source supplies
-a stable external identifier, include the paired `external_namespace` and `external_id`. The entity service chooses the opaque ID and stores scoped, sourced name claims;
-entity facts remain in notes and concepts.
+a stable external identifier — a registry number, tax or company id, employee or system id —
+include the paired `external_namespace` and `external_id`. The namespace names a public registry
+or an internal system class (`uk_companies_house`, `de_handelsregister`, `crm`, `hr_employee_id`);
+it never names a counterparty, project, deal, or the identifier value. Reuse the exact spelling
+from a visible identity's `external_ids` or from the context's `namespaces` whenever that registry
+already appears there; name a registry yourself only when it is new to the wiki, in lowercase with
+underscores. Copy the identifier value exactly as the source writes it, keeping any register or
+section prefix (`HRB 991204`, never `991204`). The entity service chooses the opaque ID and stores
+scoped, sourced name claims; entity facts remain in notes and concepts.
 
 ## Contradictions
 
