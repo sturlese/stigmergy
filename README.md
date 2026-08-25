@@ -142,7 +142,10 @@ page whose readers may see both:
 ```
 
 A master may later submit a resolution; it is an ordinary capture, and the marker goes away only
-when the new evidence actually resolves it.
+when the new evidence actually resolves it. Direct and local MCP submissions use the optional
+`resolution_of="con_<uuid>"` argument. The writer accepts it only from the master, only for that
+exact visible marker, and only at a safe audience; an unauthorized attempt still archives its source
+but applies none of the librarian plan.
 
 ## Using it
 
@@ -229,7 +232,7 @@ The cloud server and the local bridge expose the same surface:
 | `ask(question)` | a cited, verified answer — or an honest refusal |
 | `list_entities()` | identities with a name you may see |
 | `describe_entity(entity)` | knowledge composed from visible pages |
-| `brain_submit(text \| path \| url, title?, occurred_at?, audience?)` | capture one input |
+| `brain_submit(text \| path \| url, title?, occurred_at?, audience?, resolution_of?)` | capture one input; the optional contradiction ID is master-only |
 | `brain_submissions(limit?, status?)` | capture progress |
 | `brain_delete(paths, why)` | explicit deletion with reference sweep |
 

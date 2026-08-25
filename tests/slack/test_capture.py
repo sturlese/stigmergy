@@ -1,13 +1,24 @@
 import asyncio
 import dataclasses
 import datetime as dt
+import gc
 import json
+import subprocess
+import tracemalloc
 
 import pytest
 from pydantic import ValidationError
 
-from stigmergy.capture import schema
-from stigmergy.capture.errors import ArtifactRejected
+from stigmergy.capture import queue, schema
+from stigmergy.capture.errors import ArtifactRejected, QueueStateError
+from stigmergy.capture.source import source_path
+from stigmergy.index import build
+from stigmergy.index.backends.embedder import build_embedder
+from stigmergy.knowledge.plan import FilingPlan
+from stigmergy.knowledge.planner import ScriptedPlanner
+from stigmergy.knowledge.sources import parse_source
+from stigmergy.knowledge.writer import WriterDeps
+from stigmergy.librarian import config, worker
 from stigmergy.slack import copy, snapshot
 from stigmergy.slack.capture import (
     PROFILE_LOOKUP_CONCURRENCY,
@@ -21,6 +32,8 @@ from stigmergy.slack.snapshot import (
     canonical_bytes,
     validate_snapshot,
 )
+from tests.knowledge.conftest import target_repo as make_target_repo
+from tests.server.conftest import make_service
 from tests.slack.conftest import (
     FINANCE_CHANNEL,
     PUBLIC_CHANNEL,
@@ -30,6 +43,11 @@ from tests.slack.conftest import (
 )
 
 pytestmark = pytest.mark.timeout(30)
+
+
+@pytest.fixture(name="target_repo")
+def _target_repo(tmp_path):
+    return make_target_repo.__wrapped__(tmp_path)
 
 
 def run(coroutine):
@@ -81,6 +99,31 @@ def queue_rows(conn):
             "SELECT id, operation, request, submitted_by, actor, acl, status FROM capture_queue ORDER BY created_at, id"
         )
         return cursor.fetchall()
+
+
+class CountingGateway(FakeSlackGateway):
+    def __init__(self):
+        super().__init__()
+        self.downloads = 0
+
+    async def download_file(self, url, *, max_bytes):
+        self.downloads += 1
+        return await super().download_file(url, max_bytes=max_bytes)
+
+
+class RetentionMeasuringGateway(CountingGateway):
+    """Samples live allocations before each distinct Slack download returns."""
+
+    def __init__(self, payload):
+        super().__init__()
+        self.payload = payload
+        self.live_bytes = []
+
+    async def download_file(self, url, *, max_bytes):
+        self.downloads += 1
+        gc.collect()
+        self.live_bytes.append(tracemalloc.get_traced_memory()[0])
+        return bytes(bytearray(self.payload))
 
 
 def test_brain_reaction_queues_one_normalized_capture_with_canonical_snapshot(indexed, clean_tables):
@@ -268,6 +311,254 @@ def test_slack_attachments_are_exact_additional_artifacts(indexed, clean_tables)
     assert ctx.evidence.get(second["blob_ref"]) == b"exact attachment bytes"
 
 
+def test_identical_attachments_at_the_budget_boundary_share_one_artifact(indexed, clean_tables, monkeypatch):
+    """A repeated Slack upload cannot consume a second artifact or byte-budget allocation."""
+    monkeypatch.setattr(schema, "MAX_CAPTURE_BYTES", 3_000, raising=False)
+    conn, fixture = indexed
+    gateway = CountingGateway()
+    gateway.seed_channel(FINANCE_CHANNEL, name="finance-team")
+    gateway.seed_user("U_ANA", "ana@example.com", display_name="Ana")
+    payload = b"x" * 1_500
+    url = "https://slack.local/F-boundary"
+    attachment = {
+        "id": "F-boundary",
+        "name": "decision.txt",
+        "mimetype": "text/plain",
+        "url_private_download": url,
+    }
+    gateway.seed_file(url, payload)
+    gateway.seed_thread(
+        FINANCE_CHANNEL,
+        "100.1",
+        [
+            {
+                "ts": "100.1",
+                "thread_ts": "100.1",
+                "user": "U_ANA",
+                "text": "First message carries the file.",
+                "files": [attachment],
+            },
+            {
+                "ts": "100.2",
+                "thread_ts": "100.1",
+                "user": "U_ANA",
+                "text": "Slack repeats that exact file on the reply.",
+                "files": [attachment],
+            },
+        ],
+    )
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is True
+
+    request = queue_rows(conn)[0][2]
+    assert len(request["artifacts"]) == 2
+    captured_snapshot = validate_snapshot(ctx.evidence.get(request["artifacts"][0]["blob_ref"]))
+    assert [message.attachments[0].artifact_index for message in captured_snapshot.messages] == [2, 2]
+    assert request["artifacts"][1]["bytes"] == len(payload)
+    assert gateway.downloads == 1
+
+
+def test_unknown_duplicate_attachments_consume_one_bounded_acquisition_each(indexed, clean_tables):
+    conn, fixture = indexed
+    gateway = CountingGateway()
+    gateway.seed_channel(FINANCE_CHANNEL, name="finance-team")
+    gateway.seed_user("U_ANA", "ana@example.com", display_name="Ana")
+    first_url = "https://slack.local/F-unknown-1"
+    second_url = "https://slack.local/F-unknown-2"
+    gateway.seed_file(first_url, b"same bytes")
+    gateway.seed_file(second_url, b"same bytes")
+    gateway.seed_thread(
+        FINANCE_CHANNEL,
+        "100.1",
+        [
+            {
+                "ts": "100.1",
+                "thread_ts": "100.1",
+                "user": "U_ANA",
+                "text": "first",
+                "files": [
+                    {
+                        "id": "F-unknown-1",
+                        "name": "one.txt",
+                        "mimetype": "text/plain",
+                        "url_private_download": first_url,
+                    }
+                ],
+            },
+            {
+                "ts": "100.2",
+                "thread_ts": "100.1",
+                "user": "U_ANA",
+                "text": "second",
+                "files": [
+                    {
+                        "id": "F-unknown-2",
+                        "name": "two.txt",
+                        "mimetype": "text/plain",
+                        "url_private_download": second_url,
+                    }
+                ],
+            },
+        ],
+    )
+
+    assert capture(build_context(fixture, conn, gateway=gateway)) is True
+    assert gateway.downloads == 2
+    assert len(queue_rows(conn)[0][2]["artifacts"]) == 2
+
+
+def test_high_volume_unknown_duplicate_attachments_cannot_exceed_capture_work_budget(
+    indexed, clean_tables
+):
+    conn, fixture = indexed
+    gateway = CountingGateway()
+    gateway.seed_channel(FINANCE_CHANNEL, name="finance-team")
+    gateway.seed_user("U_ANA", "ana@example.com", display_name="Ana")
+    messages = []
+    for index in range(schema.MAX_ARTIFACTS + 5):
+        url = f"https://slack.local/F-repeat-{index}"
+        gateway.seed_file(url, b"repeated bytes")
+        messages.append(
+            {
+                "ts": f"100.{index + 1}",
+                "thread_ts": "100.1",
+                "user": "U_ANA",
+                "text": "Slack repeats an unknown upload.",
+                "files": [
+                    {
+                        "id": f"F-repeat-{index}",
+                        "name": f"repeat-{index}.txt",
+                        "mimetype": "text/plain",
+                        "url_private_download": url,
+                    }
+                ],
+            }
+        )
+    gateway.seed_thread(FINANCE_CHANNEL, "100.1", messages)
+
+    assert capture(build_context(fixture, conn, gateway=gateway)) is False
+    assert gateway.downloads == schema.MAX_ARTIFACTS - 1
+    assert queue_rows(conn) == []
+
+
+def test_distinct_attachment_keys_with_one_digest_do_not_retain_bytes_per_key(indexed, clean_tables):
+    """Deduplication may retain one artifact, never one raw byte buffer per stable Slack key."""
+    conn, fixture = indexed
+    payload = b"x" * (128 * 1024)
+    gateway = RetentionMeasuringGateway(payload)
+    gateway.seed_channel(FINANCE_CHANNEL, name="finance-team")
+    gateway.seed_user("U_ANA", "ana@example.com", display_name="Ana")
+    messages = []
+    for index in range(schema.MAX_ARTIFACTS - 1):
+        messages.append(
+            {
+                "ts": f"100.{index + 1}",
+                "thread_ts": "100.1",
+                "user": "U_ANA",
+                "text": "Slack repeats equivalent bytes under a distinct file key.",
+                "files": [
+                    {
+                        "id": f"F-retention-{index}",
+                        "name": f"retention-{index}.txt",
+                        "mimetype": "text/plain",
+                        "url_private_download": f"https://slack.local/F-retention-{index}",
+                    }
+                ],
+            }
+        )
+    gateway.seed_thread(FINANCE_CHANNEL, "100.1", messages)
+
+    tracemalloc.start()
+    try:
+        assert capture(build_context(fixture, conn, gateway=gateway)) is True
+    finally:
+        tracemalloc.stop()
+
+    assert gateway.downloads == schema.MAX_ARTIFACTS - 1
+    assert len(queue_rows(conn)[0][2]["artifacts"]) == 2
+    assert max(gateway.live_bytes) - min(gateway.live_bytes) < len(payload) * 3
+
+
+def test_recovered_slack_capture_keeps_its_archived_source_readable(
+    indexed, clean_tables, monkeypatch, target_repo
+):
+    """Acknowledgement loss must recover the committed Slack source without rewriting it."""
+    identities_path = target_repo / "ops" / "identities.json"
+    identities = json.loads(identities_path.read_text(encoding="utf-8"))
+    identities["ana@example.com"] = {
+        "display_name": "Ana",
+        "groups": ["finance"],
+        "default_audience": ["finance"],
+    }
+    identities_path.write_text(json.dumps(identities, sort_keys=True) + "\n", encoding="utf-8")
+    subprocess.run(["git", "add", "ops/identities.json"], cwd=target_repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "add Slack actor"],
+        cwd=target_repo,
+        check=True,
+    )
+    conn, fixture = indexed
+    gateway = FakeSlackGateway()
+    attachment = {
+        "id": "F-recovery",
+        "name": "decision.txt",
+        "mimetype": "text/plain",
+        "url_private_download": "https://slack.local/F-recovery",
+    }
+    gateway.seed_file(attachment["url_private_download"], b"The attachment preserves the decision.")
+    seed_thread(gateway, FINANCE_CHANNEL, attachments=[attachment])
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is True
+    capture_id, _operation, request, *_rest = queue_rows(conn)[0]
+    archived_path = source_path(schema.parse_capture(request))
+    deps = WriterDeps(
+        config.Settings(repo=str(target_repo), branch="main", backend="scripted"),
+        ctx.evidence,
+        ScriptedPlanner(FilingPlan(summary="Archived Slack evidence")),
+        str(target_repo),
+    )
+    original_finish_landed = queue.finish_landed
+
+    def acknowledgement_loss(*_args, **_kwargs):
+        raise QueueStateError("simulated acknowledgement loss")
+
+    monkeypatch.setattr(queue, "finish_landed", acknowledgement_loss)
+    with pytest.raises(QueueStateError, match="acknowledgement loss"):
+        worker.process_next(conn, deps)
+    monkeypatch.setattr(queue, "finish_landed", original_finish_landed)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "UPDATE capture_queue SET status = 'queued', processing_started_at = NULL, "
+            "next_attempt_at = now() WHERE id = %s",
+            (capture_id,),
+        )
+
+    item, outcome = worker.process_next(conn, deps)
+
+    assert outcome.status == schema.LANDED
+    assert item["source_path"] == archived_path
+    source_text = subprocess.check_output(
+        ["git", "show", f"main:{archived_path}"], cwd=target_repo, text=True
+    )
+    archived = parse_source(archived_path, source_text)
+    assert archived.title == "Slack thread in #finance-team"
+    assert "decision: ship it Friday" in archived.body
+    assert "Attachment 2: decision.txt" in archived.body
+
+    build.rebuild(conn, str(target_repo), build_embedder("fake"))
+    in_scope = make_service(fixture, conn, fixture.ANA).read_page(archived_path)
+    out_of_scope = make_service(fixture, conn, fixture.ENG).read_page(archived_path)
+
+    assert "body" in in_scope
+    assert "decision: ship it Friday" in in_scope["body"]
+    assert out_of_scope == {"error": f"unknown page: {archived_path}"}
+
+    # This module shares one index connection; restore its mapped-channel controls for later tests.
+    build.rebuild(conn, fixture.repo, build_embedder("fake"))
+
+
 def test_snapshot_plus_nineteen_attachments_is_the_hard_limit(indexed, clean_tables):
     conn, fixture = indexed
     gateway = FakeSlackGateway()
@@ -338,7 +629,7 @@ def test_snapshot_schema_rejects_bytes_over_the_snapshot_limit(monkeypatch):
         canonical_bytes(value)
 
 
-def test_slack_attachment_download_uses_the_remaining_capture_budget(indexed, clean_tables, monkeypatch):
+def test_new_slack_attachment_is_rejected_after_per_file_acquisition(indexed, clean_tables, monkeypatch):
     class BudgetGateway(FakeSlackGateway):
         def __init__(self):
             super().__init__()
@@ -362,9 +653,7 @@ def test_slack_attachment_download_uses_the_remaining_capture_budget(indexed, cl
     ctx = build_context(fixture, conn, gateway=gateway)
 
     assert capture(ctx) is False
-    assert gateway.download_limits and gateway.download_limits[0] < len(
-        gateway.files[attachment["url_private_download"]]
-    )
+    assert gateway.download_limits == [schema.MAX_ARTIFACT_BYTES]
     assert queue_rows(conn) == []
 
 

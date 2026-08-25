@@ -20,6 +20,7 @@ from stigmergy.knowledge.pages import parse_page, render_page
 from stigmergy.knowledge.plan import (
     ContradictionClaim,
     ContradictionProposal,
+    EntityProposal,
     FilingPlan,
     PageMutation,
 )
@@ -773,6 +774,67 @@ def test_exact_proposed_entity_name_anchors_a_mutated_page_when_omitted_from_mut
     assert page.entities == (entity_id,)
 
 
+def test_omitted_entity_references_auto_anchor_a_unique_proposed_identity(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded the Qaldris Dynamics Limited renewal",
+        entities=(
+            {
+                "name": "Qaldris Dynamics Limited",
+                "entity_type": "organization",
+                "external_namespace": "companies_house",
+                "external_id": "11820473",
+            },
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Qaldris renewal",
+                body=(
+                    "# Qaldris renewal\n\n"
+                    "Qaldris Dynamics Limited approved the annual renewal."
+                ),
+                entities=None,
+                reason="The source identifies the organization and its renewal",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="empty-entity-references-still-anchor",
+        text="Qaldris Dynamics Limited approved the annual renewal.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    entity_id = next(iter(registry["entities"]))
+    page = parse_page(
+        "wiki/notes/Qaldris renewal.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Qaldris renewal.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+
+    assert page.entities == (entity_id,)
+
+
 def test_proposed_entity_name_substrings_do_not_anchor_mutated_pages(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     plan = FilingPlan(
@@ -1383,7 +1445,9 @@ def test_omitted_update_entities_retains_existing_anchors_and_adds_exact_proposa
     assert page.entities == (entity_ids["Legacy Systems"], entity_ids["Northstar Research"])
 
 
-def test_explicit_entity_lists_do_not_add_matching_proposed_entities(clean_queue, target_repo):
+def test_entity_reference_modes_keep_empty_lists_distinct_from_omission(
+    clean_queue, target_repo
+):
     store = evidence.MemoryEvidenceStore()
     actor = Actor(subject="alice", display_name="Alice")
     plan = FilingPlan(
@@ -1413,7 +1477,7 @@ def test_explicit_entity_lists_do_not_add_matching_proposed_entities(clean_queue
                     "approved the renewal."
                 ),
                 entities=(),
-                reason="The source intentionally carries no entity anchor",
+                reason="The source identifies both uniquely proposed organizations",
             ),
         ),
     )
@@ -2830,7 +2894,7 @@ def test_restricted_contradiction_is_kept_only_on_a_safe_companion_page(
     assert safe_item["commit_sha"]
 
 
-def test_restricted_resolution_cannot_remove_a_public_contradiction(
+def test_only_the_master_can_remove_a_matching_scoped_contradiction(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -2840,16 +2904,16 @@ def test_restricted_resolution_cannot_remove_a_public_contradiction(
     settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
     seed = service.capture_text(
         actor=master,
-        audience=None,
         adapter="mcp",
-        text="Two public schedules disagree about the notice period.",
-        idempotency_key="public-resolution-seed",
+        audience=("finance",),
+        text="Two finance schedules disagree about the notice period.",
+        idempotency_key="finance-resolution-seed",
         captured_at=dt.datetime(2026, 8, 20, tzinfo=dt.UTC),
     )
     public_source = source_path(schema.parse_capture(seed["request"]))
     proposal = ContradictionProposal(
-        page_path="wiki/notes/Public notice period.md",
-        explanation="Two public schedules disagree.",
+        page_path="wiki/notes/Finance notice period.md",
+        explanation="Two finance schedules disagree.",
         claims=(
             ContradictionClaim(
                 text="Notice is 30 days.", source=public_source, date="2026-08-20"
@@ -2866,44 +2930,61 @@ def test_restricted_resolution_cannot_remove_a_public_contradiction(
             store,
             ScriptedPlanner(
                 FilingPlan(
-                    summary="Preserved a public contradiction",
+                    summary="Preserved finance contradictions",
                     mutations=(
                         PageMutation(
                             action="create",
                             role="note",
-                            title="Public notice period",
-                            body="# Public notice period\n\nThe schedules disagree.",
+                            title="Finance notice period",
+                            body="# Finance notice period\n\nThe schedules disagree.",
                             reason="Both claims remain credible",
                         ),
                     ),
-                    contradictions=(proposal,),
+                    contradictions=(
+                        proposal,
+                        ContradictionProposal(
+                            page_path="wiki/notes/Finance notice period.md",
+                            explanation="A separate finance schedule disagreement remains.",
+                            claims=(
+                                ContradictionClaim(
+                                    text="Notice is 45 days.", source=public_source, date="2026-08-20"
+                                ),
+                                ContradictionClaim(
+                                    text="Notice is 75 days.", source=public_source, date="2026-08-20"
+                                ),
+                            ),
+                        ),
+                    ),
                 )
             ),
             str(target_repo),
         ),
     )
     before = parse_page(
-        "wiki/notes/Public notice period.md",
+        "wiki/notes/Finance notice period.md",
         subprocess.check_output(
-            ["git", "show", "main:wiki/notes/Public notice period.md"],
+            ["git", "show", "main:wiki/notes/Finance notice period.md"],
             cwd=target_repo,
             text=True,
         ),
     )
-    contradiction_id = contradictions.parse_all(before.body)[0].record.contradiction_id
+    records = contradictions.parse_all(before.body)
+    contradiction_id = records[0].record.contradiction_id
+    retained_id = records[1].record.contradiction_id
 
-    service.capture_text(
+    scoped_receipt = service.capture_text(
         actor=bob,
         audience=("finance",),
         adapter="admin",
-        text="A finance-only email proposes one notice period.",
-        idempotency_key="restricted-public-resolution",
+        text="A finance email proposes one notice period.",
+        idempotency_key="scoped-finance-resolution",
         captured_at=dt.datetime(2026, 8, 21, tzinfo=dt.UTC),
         intent=schema.CaptureIntent(
             resolution_of=contradiction_id,
             rationale="The finance email was submitted as resolution evidence.",
         ),
     )
+    scoped_source = source_path(schema.parse_capture(scoped_receipt["request"]))
     item, outcome = worker.process_next(
         clean_queue,
         WriterDeps(
@@ -2911,7 +2992,33 @@ def test_restricted_resolution_cannot_remove_a_public_contradiction(
             store,
             ScriptedPlanner(
                 FilingPlan(
-                    summary="Archived restricted resolution evidence",
+                    summary="Performed unrelated non-master work while resolving",
+                    entities=(
+                        EntityProposal(name="Scoped resolution entity", entity_type="organization"),
+                    ),
+                    mutations=(
+                        PageMutation(
+                            action="create",
+                            role="note",
+                            title="Scoped resolution side effect",
+                            body="# Scoped resolution side effect\n\nThis must not be written.",
+                            reason="The non-master plan attempted an unrelated mutation",
+                        ),
+                    ),
+                    contradictions=(
+                        ContradictionProposal(
+                            page_path="wiki/notes/Finance notice period.md",
+                            explanation="This must not append another contradiction.",
+                            claims=(
+                                ContradictionClaim(
+                                    text="Notice is 30 days.", source=scoped_source, date="2026-08-21"
+                                ),
+                                ContradictionClaim(
+                                    text="Notice is 60 days.", source=scoped_source, date="2026-08-21"
+                                ),
+                            ),
+                        ),
+                    ),
                     resolved_contradictions=(contradiction_id,),
                 )
             ),
@@ -2919,9 +3026,9 @@ def test_restricted_resolution_cannot_remove_a_public_contradiction(
         ),
     )
     after = parse_page(
-        "wiki/notes/Public notice period.md",
+        "wiki/notes/Finance notice period.md",
         subprocess.check_output(
-            ["git", "show", "main:wiki/notes/Public notice period.md"],
+            ["git", "show", "main:wiki/notes/Finance notice period.md"],
             cwd=target_repo,
             text=True,
         ),
@@ -2929,7 +3036,63 @@ def test_restricted_resolution_cannot_remove_a_public_contradiction(
 
     assert outcome.status == schema.LANDED
     assert item["report"]["wiki_changes"] == 0
-    assert contradictions.parse_all(after.body)[0].record.contradiction_id == contradiction_id
+    assert item["report"]["plan_skipped"] == [
+        "contradiction resolution: this operation requires the master identity",
+    ]
+    changed_paths = subprocess.check_output(
+        ["git", "show", "--format=", "--name-only", item["commit_sha"]],
+        cwd=target_repo,
+        text=True,
+    ).splitlines()
+    assert changed_paths == [scoped_source]
+    registry = subprocess.check_output(
+        ["git", "show", "main:ops/entity-registry.json"], cwd=target_repo, text=True
+    )
+    assert "Scoped resolution entity" not in registry
+    assert {
+        record.record.contradiction_id for record in contradictions.parse_all(after.body)
+    } == {contradiction_id, retained_id}
+
+    service.capture_text(
+        actor=master,
+        audience=("finance",),
+        adapter="admin",
+        text="The master submitted controlling finance evidence.",
+        idempotency_key="master-finance-resolution",
+        captured_at=dt.datetime(2026, 8, 22, tzinfo=dt.UTC),
+        intent=schema.CaptureIntent(
+            resolution_of=contradiction_id,
+            rationale="The master selected the controlling finance evidence.",
+        ),
+    )
+    master_item, master_outcome = worker.process_next(
+        clean_queue,
+        WriterDeps(
+            settings,
+            store,
+            ScriptedPlanner(
+                FilingPlan(
+                    summary="Resolved the targeted finance contradiction",
+                    resolved_contradictions=(contradiction_id,),
+                )
+            ),
+            str(target_repo),
+        ),
+    )
+    resolved = parse_page(
+        "wiki/notes/Finance notice period.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Finance notice period.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+
+    assert master_outcome.status == schema.LANDED
+    assert master_item["report"]["wiki_changes"] == 1
+    assert [record.record.contradiction_id for record in contradictions.parse_all(resolved.body)] == [
+        retained_id,
+    ]
 
 
 def test_unsupported_resolution_lands_as_evidence_and_preserves_uncertainty(

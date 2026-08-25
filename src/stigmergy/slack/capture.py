@@ -99,22 +99,36 @@ async def _build_snapshot(
     # Slack lists one upload under every message it reached; identical bytes are one artifact
     # that each of those messages references.
     shared: dict[str, SnapshotAttachment] = {}
+    acquired: dict[tuple[str, str], str] = {}
+    acquisition_count = 0
     for order, message in enumerate(messages, start=1):
         message_ts = str(message.get("ts") or "")
         permalink = _message_permalink(root_permalink, channel_id, message_ts)
         snapshot_attachments = []
         for item in message.get("files") or ():
             url = item.get("url_private_download") or item.get("url_private") or ""
-            remaining = attachment_budget - attachment_bytes
-            if remaining <= 0:
-                raise CaptureError("Slack capture exceeds the capture-wide byte limit")
-            data = await gateway.download_file(
-                url,
-                max_bytes=min(schema.MAX_ARTIFACT_BYTES, remaining),
-            )
-            digest = evidence.sha256(data)
-            attachment = shared.get(digest)
+            file_id = str(item.get("id") or "")
+            acquisition_key = (file_id, url) if file_id and url else None
+            cached_digest = acquired.get(acquisition_key) if acquisition_key is not None else None
+            if cached_digest is None:
+                if acquisition_count >= schema.MAX_ARTIFACTS - 1:
+                    raise CaptureError("Slack capture exceeds the 20-artifact limit")
+                data = await gateway.download_file(
+                    url,
+                    max_bytes=schema.MAX_ARTIFACT_BYTES,
+                )
+                digest = evidence.sha256(data)
+                acquisition_count += 1
+                attachment = shared.get(digest)
+            else:
+                digest = cached_digest
+                attachment = shared.get(digest)
+                if attachment is None:
+                    raise CaptureError("Slack attachment cache is inconsistent")
             if attachment is None:
+                remaining = attachment_budget - attachment_bytes
+                if len(data) > remaining:
+                    raise CaptureError("Slack capture exceeds the capture-wide byte limit")
                 if artifact_index > schema.MAX_ARTIFACTS:
                     raise CaptureError("Slack capture exceeds the 20-artifact limit")
                 attachment_bytes += len(data)
@@ -135,6 +149,8 @@ async def _build_snapshot(
                 shared[digest] = attachment
                 attachment_values.append((data, media_type, filename, url))
                 artifact_index += 1
+            if acquisition_key is not None and cached_digest is None:
+                acquired[acquisition_key] = digest
             snapshot_attachments.append(attachment)
         user_id = message.get("user") or message.get("bot_id") or "slack-system"
         snapshot_messages.append(

@@ -236,6 +236,7 @@ def test_brain_submit_forwards_arguments_and_returns_the_service_payload(fake_se
         title="Decision",
         occurred_at="2026-08-24",
         audience=["finance"],
+        resolution_of="con_00000000-0000-4000-8000-000000000001",
     )
 
     assert out == fake_service.submit.return_value
@@ -246,6 +247,7 @@ def test_brain_submit_forwards_arguments_and_returns_the_service_payload(fake_se
         title="Decision",
         occurred_at="2026-08-24",
         audience=["finance"],
+        resolution_of="con_00000000-0000-4000-8000-000000000001",
     )
 
 

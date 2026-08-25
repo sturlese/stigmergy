@@ -206,6 +206,12 @@ intent:
   resolution_of: <optional contradiction id>
 ```
 
+`resolution_of` is an optional direct-server and local-bridge `brain_submit` argument. It names
+one exact `con_<uuid>` marker and is accepted only for the master. The writer, not the librarian,
+enforces that the target exists, is visible to the master, and can be safely changed at the
+resolution capture's audience. A non-master or otherwise unauthorized resolution request still
+lands its immutable source but skips every librarian plan effect.
+
 `origin.adapter` is provenance, never a behavioral switch in the librarian. One capture can contain multiple artifacts so a Slack thread and its supported attachments remain one unit of evidence. Identical attachment bytes carried by several messages are one artifact that each of those messages references. Public MCP and admin submissions normally contain one artifact.
 
 The durable queue stores this envelope and object references, not a second full copy of the submitted text or binary. Client retries with the same actor and idempotency key return the original receipt; equal content submitted at a different time remains a distinct capture with distinct provenance.
@@ -277,6 +283,10 @@ The source page and original object differ deliberately:
 - `wiki/` preserves the conclusions worth retrieving later.
 
 Filing never modifies the R2 original or an existing source page. If improved extraction is needed, it is a new capture with new provenance. An explicit master deletion may remove a current source page and its logical artifact references; a shared content-addressed object is collected only when no live capture references it.
+
+Recovery and full-index reconciliation treat committed source pages as corpus members. They restore
+the source projection required by ACL-aware `read_page`; recovery never invents a broader audience
+or rewrites the immutable source.
 
 ### 5.6 Librarian behavior and page model
 
@@ -437,7 +447,7 @@ The backoffice derives a deduplicated Contradictions view by parsing/indexing th
 - provide a required rationale;
 - optionally attach a supporting file or public URL.
 
-Submitting the form creates an ordinary capture with `intent.resolution_of`. It passes through the same evidence, queue, librarian, ACL, gates, commit, and change ledger. The original processing run is never waiting for this action. The librarian removes or revises the marker only when the new source actually resolves it; otherwise the uncertainty remains explicit.
+Submitting the form creates an ordinary capture with `intent.resolution_of`. It passes through the same evidence, queue, librarian, ACL, gates, commit, and change ledger. The original processing run is never waiting for this action. The librarian removes or revises the marker only when the new source actually resolves it; otherwise the uncertainty remains explicit. The direct-server and local-bridge submission path has the same contract: only the master may name one exact marker, only that marker may change, and visibility checks must preserve the marker's and source's audience. A rejected request archives its source and skips every plan effect.
 
 ### 5.10 Linter, repair primitives, and gardener
 
@@ -820,6 +830,8 @@ Secure erasure from all historical Git objects is not part of ordinary page dele
 45. **CON-04:** The backoffice Contradictions view is rebuilt from current Markdown/index data and deduplicates stable IDs without a task table.
 46. **CON-05:** Resolution form submission creates an ordinary capture with `resolution_of`, required rationale, and optional evidence, and produces a new commit/change record.
 47. **CON-06:** A resolution removes/revises a marker only when the new material supports it; otherwise the contradiction remains explicit and processing still completes.
+48. **CON-07:** Direct-server and local-bridge `brain_submit` accepts the optional `resolution_of` ID for the master only; unauthorized requests land their source while applying no plan effect.
+49. **CON-08:** A valid resolution can affect only its exact marker and never broadens a page, source, or claim beyond the resolution evidence's audience.
 
 ### Autonomous corpus health
 
@@ -838,7 +850,7 @@ Secure erasure from all historical Git objects is not part of ordinary page dele
 57. **OPS-02:** Each Changes entry renders a friendly summary and per-page diff, collapses large source bodies by default, and exposes the exact patch and commit SHAs on demand.
 58. **OPS-03:** Exact patch bytes are hash-verified; if their cache object is absent, the same patch can be reconstructed from Git.
 59. **OPS-04:** The backoffice is master-only and can inspect every capture, diff, contradiction, entity claim, gardener run, and index-health record.
-60. **OPS-05:** The incremental webhook marks deferred/overflow work dirty, and a successful full rebuild clears it only after indexing repository HEAD.
+60. **OPS-05:** The incremental webhook marks deferred/overflow work dirty, and a successful full rebuild clears it only after indexing committed repository HEAD. The rebuild rejects work over 50 MiB per page, 512 MiB in aggregate, 500,000 watched entries, or 250,000 eligible entries, and reconciles recovered source pages so ACL-aware `read_page` remains complete.
 61. **OPS-06:** The knowledge repository contains a pinned nightly `17 4 * * *` full-rebuild workflow plus manual dispatch, and a forced failure is visible rather than a successful no-op.
 62. **OPS-07:** The backoffice warns when full rebuild age exceeds 26 hours or index convergence exceeds its grace period.
 63. **OPS-08:** Hybrid lexical/vector search ranking remains covered by its current golden tests plus ACL and deletion/rebuild tests.
