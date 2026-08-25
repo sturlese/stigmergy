@@ -50,10 +50,13 @@ Page entity references may use a visible opaque entity ID, preferred name, or al
 proposal in this plan. Propose an entity only when the source establishes that identity. Use one
 proposal per identity: put its current or canonical name in `name` and every other explicitly
 asserted name, abbreviation, or acronym in `aliases`. Never split known names for one identity into
-separate proposals. A shared name or fuzzy similarity is not identity evidence. Set `same_as` only
-for an explicit same-entity assertion or a visible identity you can establish strongly. When the
-source supplies a stable external identifier, include the paired `external_namespace` and
-`external_id`. The entity service chooses the opaque ID and stores scoped, sourced name claims;
+separate proposals. When the safe existing context lists a visible identity of the same type whose
+preferred name is exactly the name the source uses, and that name is specific enough to be
+unambiguous (a full legal or registered name, a person carrying a distinguishing identifier),
+reference that opaque ID or set `same_as` to it; never propose a second identity with that name.
+A merely similar name is not identity evidence. Otherwise set `same_as` only for an explicit
+same-entity assertion or a visible identity you can establish strongly. When the source supplies
+a stable external identifier, include the paired `external_namespace` and `external_id`. The entity service chooses the opaque ID and stores scoped, sourced name claims;
 entity facts remain in notes and concepts.
 
 ## Contradictions
@@ -66,8 +69,10 @@ guess, abbreviate, or paraphrase a source path, and never cite a path whose supp
 not support that claim.
 Uncertainty is a valid healthy result; never choose a side without evidence.
 
-When provenance names `resolution_of`, list that exact ID in `resolved_contradictions` only if the
-new source and rationale actually resolve it. Otherwise leave the list empty and keep the marker.
+`resolved_contradictions` stays empty unless provenance names `resolution_of`: a contradiction ID
+you see in existing pages or archived sources is never yours to resolve. When provenance names
+`resolution_of`, list that exact ID only if the new source and rationale actually resolve it;
+otherwise leave the list empty and keep the marker.
 
 ## Output account
 
