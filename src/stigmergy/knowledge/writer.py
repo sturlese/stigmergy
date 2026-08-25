@@ -241,6 +241,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         snapshot = _snapshot_mutable(worktree)
         plan_invalid = False
         plan_rejection = ""
+        plan_skipped: list[str] = []
         try:
             _apply_filing_plan(
                 worktree,
@@ -252,6 +253,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                 reasons=reasons,
                 visible_entity_ids=visible_entity_ids,
                 allowed_contradiction_sources=allowed_contradiction_sources,
+                skipped=plan_skipped,
             )
             repair_deterministic(worktree)
         except (
@@ -310,6 +312,8 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             "model_requests": plan_run.model_requests,
             "plan_rejected": plan_invalid,
             "plan_rejection": plan_rejection,
+            # Empty when the plan was rejected outright: nothing of it was kept to drop from.
+            "plan_skipped": [] if plan_invalid else plan_skipped,
         },
     )
 
@@ -418,7 +422,11 @@ def _apply_filing_plan(
     reasons: dict[str, str],
     visible_entity_ids: frozenset[str],
     allowed_contradiction_sources: frozenset[str],
+    skipped: list[str] | None = None,
 ) -> None:
+    """`skipped` collects every plan item this function drops WITHOUT rejecting the plan, as
+    `"<item>: <gate sentence>"` — the plan still lands, so the report is the only place the
+    loss shows. Gate sentences only: never a title, path, or claim text from the plan."""
     for proposal in plan.contradictions:
         proposed_sources = {claim.source for claim in proposal.claims}
         if not proposed_sources <= allowed_contradiction_sources:
@@ -437,7 +445,7 @@ def _apply_filing_plan(
             at=envelope.origin.captured_at,
             allowed_same_as=visible_entity_ids,
         )
-    for mutation in plan.mutations:
+    for index, mutation in enumerate(plan.mutations):
         try:
             _apply_page_mutation(
                 root,
@@ -450,17 +458,20 @@ def _apply_filing_plan(
                 reasons=reasons,
                 visible_entity_ids=visible_entity_ids,
             )
-        except (KnowledgeWriteError, PageContractError, WriteRefused):
+        except (KnowledgeWriteError, PageContractError, WriteRefused) as error:
+            _note_skip(skipped, f"mutation[{index}] {mutation.action}: {error}")
             continue
-    for proposal in plan.contradictions:
+    for index, proposal in enumerate(plan.contradictions):
         target = _path(root, proposal.page_path)
         if not target.is_file():
+            _note_skip(skipped, f"contradiction[{index}]: page not found")
             continue
         original = target.read_text(encoding="utf-8")
         page = parse_page(proposal.page_path, original)
         try:
             allow_existing(context, page.acl)
-        except WriteRefused:
+        except WriteRefused as error:
+            _note_skip(skipped, f"contradiction[{index}]: {error}")
             continue
         before = set(check(root))
         try:
@@ -480,11 +491,15 @@ def _apply_filing_plan(
                 created=page.created,
                 updated=envelope.origin.captured_at.date(),
             )
-        except (contradictions.ContradictionContractError, PageContractError):
+        except (contradictions.ContradictionContractError, PageContractError) as error:
+            _note_skip(skipped, f"contradiction[{index}]: {error}")
             continue
         target.write_text(candidate, encoding="utf-8")
-        if set(check(root)) - before:
+        introduced = set(check(root)) - before
+        if introduced:
             target.write_text(original, encoding="utf-8")
+            codes = ", ".join(sorted({item.code for item in introduced}))
+            _note_skip(skipped, f"contradiction[{index}]: knowledge gates found {codes}")
             continue
         reasons[proposal.page_path] = proposal.explanation
     if plan.resolved_contradictions:
@@ -499,6 +514,12 @@ def _apply_filing_plan(
             resolution_source=relative_source,
         )
         reasons.update({path: envelope.intent.rationale or "Resolved contradiction" for path in removed})
+
+
+def _note_skip(skipped: list[str] | None, entry: str) -> None:
+    log.warning("filing plan item dropped: %s", entry)
+    if skipped is not None:
+        skipped.append(entry)
 
 
 def _apply_page_mutation(
