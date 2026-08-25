@@ -246,3 +246,19 @@ def test_librarian_groups_explicit_names_and_identifiers_into_one_entity_proposa
 def test_librarian_requires_exact_available_paths_for_contradiction_claims():
     text = " ".join(FROZEN.read_text().casefold().split())
     assert "exact source path supplied in provenance or source evidence" in text
+
+
+def test_librarian_treats_a_non_authoritative_later_value_as_a_contradiction():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "never derive one" in text
+    assert "only when it is itself the authority for that fact" in text
+    assert "a conflicting claim, not a correction" in text
+    assert "unless the new evidence corrects or supersedes them" not in text
+
+
+def test_librarian_files_contradictions_only_as_structured_proposals():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "exists in the wiki only as a `contradictionproposal`" in text
+    assert "whatever its prose says" in text
+    assert "never file a second proposal for claims a marker already covers" in text
+    assert "never call one claim authoritative" in text

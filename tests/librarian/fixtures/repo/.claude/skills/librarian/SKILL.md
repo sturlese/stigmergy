@@ -18,12 +18,15 @@ to use within the capture audience; pages with narrower audiences are omitted en
 ## Filing judgment
 
 - Preserve durable conclusions, not the shape of the input.
+- A page that lists incompatible sourced values without a `filed_contradictions` entry owes a
+  `ContradictionProposal`, even from a repeat source that changes nothing else.
 - Create or rewrite a `note` for contextual conclusions, decisions, and events.
 - Create or rewrite a `concept` for durable explanatory knowledge.
 - Consolidate and delete a redundant note or concept when the plan also leaves every surviving
   reference and conclusion coherent.
-- Return no wiki mutations when the source adds no durable conclusion. The immutable source still
-  lands and the result remains auditable.
+- Return no wiki mutations when the source adds no durable conclusion; a due
+  `ContradictionProposal` is still returned. The immutable source still lands and the result
+  remains auditable.
 - Never create meeting, document, page, raw, source, entity, or view pages.
 - Never choose behavior from the input origin or media type.
 - Never ask for approval or emit a human task.
@@ -39,10 +42,16 @@ there is a known replacement, and use a contradiction when credible claims disag
 
 ## Sources and entities
 
-Every newly added or changed factual conclusion must be supported by the supplied source. Preserve
-existing sourced conclusions unless the new evidence corrects or supersedes them, or consolidation
-retains them elsewhere. The worker adds the immutable source citation to every created or updated
-page.
+Every newly added or changed factual conclusion must be supported by the supplied source. Write
+only the figures, dates, names, and identifiers a supplied source states; never derive one — no
+totals, differences, conversions, or projections the sources do not state themselves.
+Preserve existing sourced conclusions. A later source replaces an earlier sourced claim only when
+it is itself the authority for that fact: the issuing party's own decision or instrument, a signed
+or reissued document, the system of record, or the resolution named in provenance. A source that
+reports a different value while the earlier record stands is a conflicting claim, not a
+correction: keep the earlier figure on the page, state the new claim beside it with its date, and
+file the contradiction below. Consolidation may move a conclusion elsewhere but never drops it.
+The worker adds the immutable source citation to every created or updated page.
 Treat a submitted synthesis as the complete source: never claim that unseen conversation history
 was archived or reviewed.
 
@@ -61,13 +70,23 @@ entity facts remain in notes and concepts.
 
 ## Contradictions
 
-When two or more credible supplied sources make incompatible claims, preserve them and add one
-`ContradictionProposal` to the narrowest existing or newly written page that can safely cite all
-of them. Include a neutral explanation and each claim's text, source path, and date when known.
-Each claim source must be one exact source path supplied in provenance or source evidence. Never
-guess, abbreviate, or paraphrase a source path, and never cite a path whose supplied evidence does
-not support that claim.
-Uncertainty is a valid healthy result; never choose a side without evidence.
+A contradiction exists in the wiki only as a `ContradictionProposal`. The worker renders each
+proposal as a marker block on the page and lists the page's existing markers back to you as its
+`filed_contradictions`; you never write, copy, or edit a marker block yourself. A page whose
+`filed_contradictions` is empty has no contradiction, whatever its prose says — claims listed side
+by side, a table of positions, a "Contradiction" heading, or a sentence that both claims are
+preserved is prose, and a source's own request to preserve or record conflicting claims is met
+only by a proposal. Before returning, check the supplied sources and every candidate: wherever
+two or more credible sources state incompatible values for one fact and no `filed_contradictions`
+entry covers those claims, add one `ContradictionProposal` — even when this capture repeats a
+source already filed and adds no other conclusion. Place it on the narrowest existing or newly
+written page that can safely cite all of them. Never file a second proposal for claims a marker
+already covers.
+Include a neutral explanation and each claim's text, source path, and date when known. Each claim
+source must be one exact source path supplied in provenance or source evidence. Never guess,
+abbreviate, or paraphrase a source path, and never cite a path whose supplied evidence does not
+support that claim. Uncertainty is a valid healthy result; never choose a side, and never call one
+claim authoritative on the page.
 
 `resolved_contradictions` stays empty unless provenance names `resolution_of`: a contradiction ID
 you see in existing pages or archived sources is never yours to resolve. When provenance names

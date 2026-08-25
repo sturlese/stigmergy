@@ -546,3 +546,67 @@ def test_context_is_trimmed_before_rendering(tmp_path, monkeypatch):
 
     assert result["truncated"] is True
     assert len(context.render_context(result).encode("utf-8")) <= 500
+
+
+def test_context_lists_each_candidates_filed_contradictions_not_its_prose(tmp_path):
+    from stigmergy.knowledge import contradictions
+    from stigmergy.knowledge.plan import ContradictionClaim, ContradictionProposal
+
+    first = _source(
+        tmp_path,
+        "00000000-0000-4000-8000-000000000001",
+        None,
+        "Vendor brief",
+        "The term is 12 months.",
+    )
+    second = _source(
+        tmp_path,
+        "00000000-0000-4000-8000-000000000002",
+        None,
+        "Board minutes",
+        "The term is 24 months.",
+    )
+    record = contradictions.from_proposal(
+        ContradictionProposal(
+            page_path="wiki/notes/Marked.md",
+            explanation="Two drafts disagree on the term.",
+            claims=(
+                ContradictionClaim(text="The term is 12 months.", source=first, date="2026-08-14"),
+                ContradictionClaim(text="The term is 24 months.", source=second, date="2026-08-18"),
+            ),
+        )
+    )
+    _page(
+        tmp_path,
+        "Marked",
+        None,
+        contradictions.append("Both term drafts are recorded here.", record),
+        sources=(first, second),
+    )
+    _page(
+        tmp_path,
+        "Prose only",
+        None,
+        "## Contradiction\n\nThe term is 12 months in one draft and 24 months in the other.",
+        sources=(first, second),
+    )
+
+    result = context.filing_context(
+        str(tmp_path),
+        source_text="The term drafts disagree: 12 months versus 24 months.",
+        capture_acl=None,
+        actor_groups=None,
+    )
+
+    by_path = {item["path"]: item for item in result["candidates"]}
+    assert by_path["wiki/notes/Marked.md"]["filed_contradictions"] == [
+        {
+            "id": record.contradiction_id,
+            "explanation": "Two drafts disagree on the term.",
+            "claims": [
+                {"text": "The term is 12 months.", "source": first, "date": "2026-08-14"},
+                {"text": "The term is 24 months.", "source": second, "date": "2026-08-18"},
+            ],
+        }
+    ]
+    assert by_path["wiki/notes/Prose only.md"]["filed_contradictions"] == []

@@ -78,7 +78,10 @@ substantive knowledge.
 ## Contradictions and gardening
 
 A strict Markdown marker stores an unresolved contradiction with a stable ID, explanation, dated
-claims, and source citations at the narrowest safe audience. It is a healthy corpus state. The
+claims, and source citations at the narrowest safe audience. It is a healthy corpus state. Prose
+listing both claims is not a contradiction; only the marker is, and the filing context lists each
+candidate page's markers so the librarian judges by that list. A proposal the writer cannot place
+safely is dropped and recorded in the capture report while the rest of the plan lands. The
 backoffice derives its list from current indexed Markdown; a resolution form queues ordinary new
 evidence.
 
