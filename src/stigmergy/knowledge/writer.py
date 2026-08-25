@@ -458,9 +458,10 @@ def _apply_filing_plan(
             at=envelope.origin.captured_at,
             allowed_same_as=visible_entity_ids,
         )
+    updated_pages: set[str] = set()
     for index, mutation in enumerate(plan.mutations):
         try:
-            _apply_page_mutation(
+            changed_path = _apply_page_mutation(
                 root,
                 mutation,
                 context=context,
@@ -474,6 +475,8 @@ def _apply_filing_plan(
         except (KnowledgeWriteError, PageContractError, WriteRefused) as error:
             _note_skip(skipped, f"mutation[{index}] {mutation.action}: {error}")
             continue
+        if mutation.action == "update" and changed_path:
+            updated_pages.add(changed_path)
     for index, proposal in enumerate(plan.contradictions):
         target = _path(root, proposal.page_path)
         if not target.is_file():
@@ -519,13 +522,18 @@ def _apply_filing_plan(
         expected = envelope.intent.resolution_of
         if not expected or tuple(plan.resolved_contradictions) != (expected,):
             raise KnowledgeWriteError("only the contradiction named by the capture can be resolved")
-        removed = _remove_contradiction(
-            root,
-            expected,
-            at=envelope.origin.captured_at.date(),
-            context=context,
-            resolution_source=relative_source,
-        )
+        try:
+            removed = _remove_contradiction(
+                root,
+                expected,
+                at=envelope.origin.captured_at.date(),
+                context=context,
+                resolution_source=relative_source,
+                updated_pages=frozenset(updated_pages),
+            )
+        except KnowledgeWriteError as error:
+            _note_skip(skipped, f"contradiction resolution: {error}")
+            return
         reasons.update({path: envelope.intent.rationale or "Resolved contradiction" for path in removed})
 
 
@@ -770,8 +778,9 @@ def _remove_contradiction(
     at: dt.date,
     context: WriteContext,
     resolution_source: str,
+    updated_pages: frozenset[str],
 ) -> tuple[str, ...]:
-    changed = []
+    candidates = []
     for folder in ("wiki/notes", "wiki/concepts"):
         base = _path(root, folder)
         if not base.is_dir():
@@ -785,24 +794,27 @@ def _remove_contradiction(
                 continue
             body, removed = contradictions.remove(page.body, contradiction_id)
             if removed:
-                path.write_text(
-                    render_page(
-                        path=page.path,
-                        role=page.role,
-                        title=page.title,
-                        body=body,
-                        acl=page.acl,
-                        entities=page.entities,
-                        sources=tuple(dict.fromkeys((*page.sources, resolution_source))),
-                        status=page.status,
-                        page_id=page.page_id,
-                        created=page.created,
-                        updated=at,
-                    ),
-                    encoding="utf-8",
-                )
-                changed.append(relative)
-    return tuple(changed)
+                candidates.append((path, relative, page, body))
+    if any(relative not in updated_pages for _path, relative, _page, _body in candidates):
+        raise KnowledgeWriteError("target page requires an accepted update")
+    for path, _relative, page, body in candidates:
+        path.write_text(
+            render_page(
+                path=page.path,
+                role=page.role,
+                title=page.title,
+                body=body,
+                acl=page.acl,
+                entities=page.entities,
+                sources=tuple(dict.fromkeys((*page.sources, resolution_source))),
+                status=page.status,
+                page_id=page.page_id,
+                created=page.created,
+                updated=at,
+            ),
+            encoding="utf-8",
+        )
+    return tuple(relative for _path, relative, _page, _body in candidates)
 
 
 def _sweep_deleted_references(root: str, deleted: set[str]) -> dict[str, str]:
