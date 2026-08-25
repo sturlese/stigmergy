@@ -559,19 +559,27 @@ def _apply_page_mutation(
     if mutation.action == "create":
         target_path = page_path(mutation.role or "", mutation.title or "")
         allow_create(context, context.content_acl)
+        matched_entities = _matching_proposed_entities(
+            mutation,
+            proposals,
+            proposal_resolution,
+        )
         entities = (
-            _resolve_entities(
-                records,
-                mutation.entities,
-                proposal_resolution,
-                visible_entity_ids,
+            tuple(
+                dict.fromkeys(
+                    (
+                        *_resolve_entities(
+                            records,
+                            mutation.entities,
+                            proposal_resolution,
+                            visible_entity_ids,
+                        ),
+                        *matched_entities,
+                    )
+                )
             )
             if mutation.entities is not None
-            else _matching_proposed_entities(
-                mutation,
-                proposals,
-                proposal_resolution,
-            )
+            else matched_entities
         )
         body = mutation.body or ""
         try:
@@ -616,25 +624,33 @@ def _apply_page_mutation(
 
     title = mutation.title or page.title
     destination = page_path(page.role, title)
+    matched_entities = _matching_proposed_entities(
+        mutation,
+        proposals,
+        proposal_resolution,
+    )
     entities = (
         tuple(
             dict.fromkeys(
                 (
                     *page.entities,
-                    *_matching_proposed_entities(
-                        mutation,
-                        proposals,
-                        proposal_resolution,
-                    ),
+                    *matched_entities,
                 )
             )
         )
         if mutation.entities is None
-        else _resolve_entities(
-            records,
-            mutation.entities,
-            proposal_resolution,
-            visible_entity_ids,
+        else tuple(
+            dict.fromkeys(
+                (
+                    *_resolve_entities(
+                        records,
+                        mutation.entities,
+                        proposal_resolution,
+                        visible_entity_ids,
+                    ),
+                    *matched_entities,
+                )
+            )
         )
     )
     body = _preserve_contradictions(page.body, mutation.body or "")
