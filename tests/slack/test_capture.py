@@ -609,3 +609,38 @@ def test_slack_acquisition_failure_is_reported_privately(indexed, clean_tables, 
     assert capture(ctx) is False
     assert queue_rows(conn) == []
     assert gateway.ephemeral[-1].text == copy.CAPTURE_FAILED
+
+
+def test_identical_attachment_bytes_across_messages_are_one_artifact(indexed, clean_tables):
+    """Slack lists one upload under every message it reached; the capture keeps each message's
+    reference but extracts the bytes once."""
+    conn, fixture = indexed
+    gateway = FakeSlackGateway()
+    gateway.seed_channel(FINANCE_CHANNEL, name="finance-team")
+    gateway.seed_user("U_ANA", "ana@example.com", display_name="Ana")
+    attachment = {
+        "id": "F1",
+        "name": "order.txt",
+        "mimetype": "text/plain",
+        "url_private_download": "https://slack.local/F1",
+    }
+    gateway.seed_file(attachment["url_private_download"], b"the same order bytes")
+    gateway.seed_thread(
+        FINANCE_CHANNEL,
+        "100.1",
+        [
+            {"ts": "100.1", "thread_ts": "100.1", "user": "U_ANA", "text": "attach it here", "files": [attachment]},
+            {"ts": "100.2", "thread_ts": "100.1", "user": "U_ANA", "text": "and it landed here", "files": [attachment]},
+        ],
+    )
+    ctx = build_context(fixture, conn, gateway=gateway)
+
+    assert capture(ctx) is True
+
+    request = queue_rows(conn)[0][2]
+    assert len(request["artifacts"]) == 2
+    parsed = validate_snapshot(ctx.evidence.get(request["artifacts"][0]["blob_ref"]))
+    assert [item.artifact_index for item in parsed.messages[0].attachments] == [2]
+    assert [item.artifact_index for item in parsed.messages[1].attachments] == [2]
+    assert snapshot.render_snapshot(parsed).count("### Attachment 2: order.txt") == 2
+    assert ctx.evidence.get(request["artifacts"][1]["blob_ref"]) == b"the same order bytes"

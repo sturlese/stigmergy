@@ -206,7 +206,7 @@ intent:
   resolution_of: <optional contradiction id>
 ```
 
-`origin.adapter` is provenance, never a behavioral switch in the librarian. One capture can contain multiple artifacts so a Slack thread and its supported attachments remain one unit of evidence. Public MCP and admin submissions normally contain one artifact.
+`origin.adapter` is provenance, never a behavioral switch in the librarian. One capture can contain multiple artifacts so a Slack thread and its supported attachments remain one unit of evidence. Identical attachment bytes carried by several messages are one artifact that each of those messages references. Public MCP and admin submissions normally contain one artifact.
 
 The durable queue stores this envelope and object references, not a second full copy of the submitted text or binary. Client retries with the same actor and idempotency key return the original receipt; equal content submitted at a different time remains a distinct capture with distinct provenance.
 

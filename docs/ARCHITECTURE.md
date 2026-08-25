@@ -29,7 +29,8 @@ refresh tokens remain on the user's machine, while only exported bytes and typed
 provenance reach the cloud.
 
 Slack acquisition has one whole-capture deadline, bounds profile lookup concurrency, and derives
-message permalinks from one validated root permalink. Timeout cleanup releases the reservation so
+message permalinks from one validated root permalink. Identical attachment bytes carried by several
+messages are one artifact that each of those messages references. Timeout cleanup releases the reservation so
 the same reaction can retry safely.
 
 ## Filing and gates

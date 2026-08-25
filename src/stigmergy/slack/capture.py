@@ -96,13 +96,14 @@ async def _build_snapshot(
     attachment_budget = schema.MAX_CAPTURE_BYTES - snapshot_reserve
     snapshot_messages = []
     artifact_index = 2
+    # Slack lists one upload under every message it reached; identical bytes are one artifact
+    # that each of those messages references.
+    shared: dict[str, SnapshotAttachment] = {}
     for order, message in enumerate(messages, start=1):
         message_ts = str(message.get("ts") or "")
         permalink = _message_permalink(root_permalink, channel_id, message_ts)
         snapshot_attachments = []
         for item in message.get("files") or ():
-            if artifact_index > schema.MAX_ARTIFACTS:
-                raise CaptureError("Slack capture exceeds the 20-artifact limit")
             url = item.get("url_private_download") or item.get("url_private") or ""
             remaining = attachment_budget - attachment_bytes
             if remaining <= 0:
@@ -111,16 +112,19 @@ async def _build_snapshot(
                 url,
                 max_bytes=min(schema.MAX_ARTIFACT_BYTES, remaining),
             )
-            attachment_bytes += len(data)
-            filename = item.get("name") or f"slack-file-{artifact_index}"
-            media_type = artifacts.detect_media(
-                data,
-                declared=item.get("mimetype") or None,
-                original_name=filename,
-            )
             digest = evidence.sha256(data)
-            snapshot_attachments.append(
-                SnapshotAttachment(
+            attachment = shared.get(digest)
+            if attachment is None:
+                if artifact_index > schema.MAX_ARTIFACTS:
+                    raise CaptureError("Slack capture exceeds the 20-artifact limit")
+                attachment_bytes += len(data)
+                filename = item.get("name") or f"slack-file-{artifact_index}"
+                media_type = artifacts.detect_media(
+                    data,
+                    declared=item.get("mimetype") or None,
+                    original_name=filename,
+                )
+                attachment = SnapshotAttachment(
                     artifact_index=artifact_index,
                     file_id=str(item.get("id") or f"file-{artifact_index}"),
                     filename=filename,
@@ -128,9 +132,10 @@ async def _build_snapshot(
                     bytes=len(data),
                     sha256=digest,
                 )
-            )
-            attachment_values.append((data, media_type, filename, url))
-            artifact_index += 1
+                shared[digest] = attachment
+                attachment_values.append((data, media_type, filename, url))
+                artifact_index += 1
+            snapshot_attachments.append(attachment)
         user_id = message.get("user") or message.get("bot_id") or "slack-system"
         snapshot_messages.append(
             SnapshotMessage(
