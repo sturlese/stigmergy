@@ -8,6 +8,7 @@ import types
 from dataclasses import replace
 
 import pytest
+from psycopg.errors import QueryCanceled
 from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import FunctionModel
@@ -692,6 +693,168 @@ def test_primary_answer_timeout_returns_an_honest_refusal_when_completion_refuse
     assert result["refused"] is True
     assert result["refusal_case"] == "budget_exceeded"
     assert result["answer_markdown"] == ""
+    assert result["citations"] == []
+
+
+def test_timed_primary_without_tool_calls_completes_from_scoped_prefetched_evidence(
+        ask_service, monkeypatch):
+    class StalledPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            await asyncio.Event().wait()
+
+    class EvidenceOnly:
+        async def run(self, question, *, evidence):
+            assert "Revenue impact was $1.2M ARR" in evidence
+            assert "Revenue impact was $1.3M ARR" in evidence
+            return types.SimpleNamespace(output=AnswerOutput(
+                answer_markdown=(
+                    "The draft reports $1.2M ARR; the final report states $1.3M ARR."
+                ),
+                citations=[
+                    Citation(
+                        path="wiki/notes/globex-q1-report.md",
+                        quote="Revenue impact was $1.2M ARR",
+                    ),
+                    Citation(
+                        path="wiki/notes/globex-q1-report-final.md",
+                        quote="Revenue impact was $1.3M ARR",
+                    ),
+                ],
+            ))
+
+    monkeypatch.setattr(service_mod, "ANSWER_PHASE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: StalledPrimary())
+    monkeypatch.setattr(
+        service_mod,
+        "build_evidence_synthesizer",
+        lambda settings: EvidenceOnly(),
+        raising=False,
+    )
+
+    result = asyncio.run(asyncio.wait_for(
+        ask_service.ask("What revenue figures do the ranked Globex quarterly reports state?"),
+        timeout=0.2,
+    ))
+
+    assert result["refused"] is False
+    assert result["retried"] is True
+    assert result["verdict"]["verdict"] == "verified"
+    assert len(result["citations"]) == 2
+
+
+def test_timed_primary_without_tool_calls_refuses_without_synthesis_when_recovery_is_empty(
+        ask_service, monkeypatch):
+    class StalledPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            await asyncio.Event().wait()
+
+    class EvidenceOnly:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, question, *, evidence):
+            self.calls += 1
+            raise AssertionError("empty recovery must not invoke evidence synthesis")
+
+    searches = []
+
+    def no_results(question, ctx):
+        searches.append(question)
+        ctx.note_query(question)
+        return "no results"
+
+    completion = EvidenceOnly()
+    monkeypatch.setattr(service_mod, "ANSWER_PHASE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: StalledPrimary())
+    monkeypatch.setattr(
+        service_mod,
+        "build_evidence_synthesizer",
+        lambda settings: completion,
+        raising=False,
+    )
+    monkeypatch.setattr(ask_service.brain, "search_text", no_results)
+
+    question = "unmatched recovery question"
+    result = asyncio.run(asyncio.wait_for(ask_service.ask(question), timeout=0.2))
+
+    assert searches == [question]
+    assert completion.calls == 0
+    assert result["refused"] is True
+    assert result["refusal_case"] == "budget_exceeded"
+    assert result["answer_markdown"] == ""
+    assert result["citations"] == []
+
+
+@pytest.mark.parametrize("phase", ["prefetch", "hydrate"])
+def test_query_cancellation_during_budget_recovery_refuses_without_leaking_evidence(
+        ask_service, monkeypatch, phase):
+    class StalledPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            await asyncio.Event().wait()
+
+    class EvidenceOnly:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, question, *, evidence):
+            self.calls += 1
+            raise AssertionError("cancelled recovery must not synthesize evidence")
+
+    path = "wiki/notes/globex-q1-report-final.md"
+    title = "Globex Q1 Final Report"
+
+    def cancelled_prefetch(question, ctx):
+        raise QueryCanceled("statement timeout")
+
+    def surfaced_prefetch(question, ctx):
+        ctx.note_query(question)
+        ctx.note_page(path)
+        return "ranked evidence"
+
+    def cancelled_hydration(path, ctx):
+        raise QueryCanceled("statement timeout")
+
+    completion = EvidenceOnly()
+    monkeypatch.setattr(service_mod, "ANSWER_PHASE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: StalledPrimary())
+    monkeypatch.setattr(service_mod, "build_evidence_synthesizer", lambda settings: completion)
+    monkeypatch.setattr(
+        ask_service.brain,
+        "search_text",
+        cancelled_prefetch if phase == "prefetch" else surfaced_prefetch,
+    )
+    if phase == "hydrate":
+        monkeypatch.setattr(ask_service.brain, "page_text", cancelled_hydration)
+
+    result = asyncio.run(asyncio.wait_for(ask_service.ask("What is the Globex Q1 result?"), timeout=0.2))
+
+    assert completion.calls == 0
+    assert result["refused"] is True
+    assert result["refusal_case"] == "budget_exceeded"
+    assert result["citations"] == []
+    assert result["surfaced"] == []
+    assert path not in result["reason"]
+    assert title not in result["reason"]
+
+
+def test_query_cancellation_during_the_primary_run_ends_in_the_budget_refusal(
+        ask_service, monkeypatch):
+    """A statement the serving deadline cancels inside the agent's own tool call is a budget
+    event, not an unhandled error escaping `ask`."""
+    class CancelledPrimary:
+        async def run(self, question, *, deps=None, usage_limits=None, message_history=None):
+            raise QueryCanceled("statement timeout")
+
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: CancelledPrimary())
+
+    result = asyncio.run(asyncio.wait_for(
+        ask_service.ask("What revenue figures do the ranked Globex quarterly reports state?"),
+        timeout=5,
+    ))
+
+    assert result["refused"] is True
+    assert result["refusal_case"] == "budget_exceeded"
+    assert result["first_verdict"] is None
     assert result["citations"] == []
 
 

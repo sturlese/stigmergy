@@ -506,7 +506,7 @@ All captures and diffs are master-only. The backoffice continues to use one mast
 
 ### 5.12 Search and index reconciliation
 
-The existing hybrid full-text plus embedding search and ranking remain. Search, `ask`, filing retrieval, `list_entities`, and `describe_entity` all apply the same visibility policy.
+The existing hybrid full-text plus embedding search and ranking remain. Search, `ask`, filing retrieval, `list_entities`, and `describe_entity` all apply the same visibility policy. Query embeddings have a bounded timeout; only a provider timeout degrades that request to the ACL-filtered full-text arm. Corpus indexing remains strict and fails rather than writing a partial vector state. HTTP request and Slack connections bound each Postgres statement, while workers and rebuilds keep the database default; a statement cancelled while `ask` recovers evidence ends in the ordinary budget refusal and discloses nothing the cancelled recovery gathered.
 
 Incremental GitHub webhook indexing remains the fast path. A nightly full rebuild is restored in the private knowledge repository as the reconciliation path:
 

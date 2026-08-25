@@ -95,6 +95,21 @@ class SynthesisContext:
         if text and text not in self.searched:
             self.searched.append(text)
 
+    def mark(self) -> tuple[int, int, int]:
+        """Where the ledger stands now, so a failed server-side recovery can be undone."""
+        return (len(self.evidence), len(self.read_paths_order), len(self.searched))
+
+    def rewind(self, mark: tuple[int, int, int]) -> None:
+        """Drop everything noted after `mark`. `read_paths` is discarded through
+        `read_paths_order`, the same pairing `note_page` maintains, so the membership set the
+        verifier reads can never outlive the ordered facts a refusal is composed from."""
+        n_evidence, n_pages, n_queries = mark
+        del self.evidence[n_evidence:]
+        for path in self.read_paths_order[n_pages:]:
+            self.read_paths.discard(path)
+        del self.read_paths_order[n_pages:]
+        del self.searched[n_queries:]
+
 
 ANSWER_SYS = """You answer questions from a company knowledge base ("the brain"). You may use
 ONLY what your tools return this run — no outside knowledge, no memory, no estimates.

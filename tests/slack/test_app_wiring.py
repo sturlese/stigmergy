@@ -76,6 +76,22 @@ def test_build_context_wires_the_process_wide_resources(indexed):
     assert ctx.evidence is not None
 
 
+def test_build_context_bounds_postgres_statements_for_slack_serving(indexed):
+    conn, fixture = indexed
+    settings = SlackSettings(
+        app_token="xapp-test", bot_token="xoxb-test", team_id="T1",
+        channels_path=fixture.identities_path,
+        server=Settings(identities_path=fixture.identities_path,
+                        dsn=None, embedder="fake", llm="fake"))
+
+    build_context(settings, gateway=FakeSlackGateway(), conn=conn)
+
+    with conn.cursor() as cursor:
+        cursor.execute("SHOW statement_timeout")
+        statement_timeout = cursor.fetchone()[0]
+    assert statement_timeout not in {"0", "0ms", "0s"}
+
+
 # ── Slack credentials come from the environment, never the repo ────────────────────────────────
 def test_main_refuses_to_start_with_no_slack_app_token(monkeypatch):
     for var in ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_TEAM_ID"):

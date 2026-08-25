@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import httpx
 import pytest
 
 from stigmergy.index import build, search, store
@@ -35,6 +36,49 @@ def test_filter_excluding_lexical_hits_still_returns_filtered_vectors(conn):
     hits = search.search(conn, query, filters={"zone": "wiki"})
     assert hits
     assert all(hit["zone"] == "wiki" for hit in hits)
+
+
+def test_provider_query_timeout_degrades_to_acl_scoped_lexical_hits(conn):
+    class QueryTimeoutEmbedder:
+        model = "fake-hashed-bow-256"
+        host = ""
+
+        def embed(self, texts, *, timeout_s=None):
+            assert texts == ["renewal coordination"]
+            assert timeout_s is not None and timeout_s < 120
+            raise httpx.ReadTimeout("provider timed out")
+
+    result = search.search_arms(
+        conn,
+        "renewal coordination",
+        embedder=QueryTimeoutEmbedder(),
+        audiences={"finance"},
+    )
+
+    assert result["fts"]
+    assert result["vec"] == []
+    assert result["hits"]
+    assert all(hit["arms"] == ["fts"] for hit in result["hits"])
+
+
+def test_provider_query_http_error_does_not_degrade_to_lexical_only(conn):
+    class QueryHttpErrorEmbedder:
+        model = "fake-hashed-bow-256"
+        host = ""
+
+        def embed(self, texts, *, timeout_s=None):
+            request = httpx.Request("POST", "https://openrouter.ai/api/v1/embeddings")
+            response = httpx.Response(502, request=request)
+            raise httpx.HTTPStatusError("provider rejected the request", request=request,
+                                        response=response)
+
+    with pytest.raises(httpx.HTTPStatusError, match="provider rejected"):
+        search.search_arms(
+            conn,
+            "renewal coordination",
+            embedder=QueryHttpErrorEmbedder(),
+            audiences={"finance"},
+        )
 
 
 def test_identical_pages_share_an_embedding_but_keep_distinct_rows(conn, tmp_path):

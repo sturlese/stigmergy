@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 
+import stigmergy.index.backends.embedder as embedder_module
 from stigmergy.index.backends.embedder import (
     DEFAULT_BASE_URL,
     DEFAULT_DIMENSIONS,
@@ -65,6 +66,58 @@ def test_real_embedder_uses_only_qwen_and_the_private_provider_policy():
         "dimensions": DEFAULT_DIMENSIONS,
         "provider": PROVIDER_POLICY,
     }
+
+
+def test_query_embedding_uses_a_short_explicit_timeout(monkeypatch):
+    observed = []
+
+    class Client:
+        def __init__(self, *, timeout, transport):
+            observed.append(timeout)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            # `request=` so `raise_for_status()` has the request every real response carries.
+            return httpx.Response(
+                200,
+                json={"data": [{"index": 0, "embedding": [0.0] * DEFAULT_DIMENSIONS}]},
+                request=httpx.Request("POST", DEFAULT_BASE_URL),
+            )
+
+    monkeypatch.setattr(embedder_module.httpx, "Client", Client)
+    embedder = OpenRouterEmbedder(api_key="test-key")
+
+    assert len(embedder.embed(["renewal status"], timeout_s=3)[0]) == DEFAULT_DIMENSIONS
+    assert observed == [3]
+
+
+def test_batch_embedding_keeps_its_default_timeout_and_reraises_provider_timeouts(monkeypatch):
+    observed = []
+
+    class Client:
+        def __init__(self, *, timeout, transport):
+            observed.append(timeout)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            raise httpx.ReadTimeout("provider timed out")
+
+    monkeypatch.setattr(embedder_module.httpx, "Client", Client)
+    embedder = OpenRouterEmbedder(api_key="test-key")
+
+    with pytest.raises(httpx.ReadTimeout, match="provider timed out"):
+        embedder.embed(["index this corpus page"])
+    assert observed == [120]
 
 
 @pytest.mark.parametrize(
