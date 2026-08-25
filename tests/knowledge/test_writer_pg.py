@@ -1445,7 +1445,7 @@ def test_omitted_update_entities_retains_existing_anchors_and_adds_exact_proposa
     assert page.entities == (entity_ids["Legacy Systems"], entity_ids["Northstar Research"])
 
 
-def test_entity_reference_modes_keep_empty_lists_distinct_from_omission(
+def test_explicit_entity_lists_cannot_suppress_entities_named_in_page(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -1522,8 +1522,56 @@ def test_entity_reference_modes_keep_empty_lists_distinct_from_omission(
         ),
     )
 
-    assert listed.entities == (entity_ids["Northstar Research"],)
-    assert empty.entities == ()
+    expected = (entity_ids["Northstar Research"], entity_ids["Pinecone Labs"])
+    assert listed.entities == expected
+    assert empty.entities == expected
+
+    update = FilingPlan(
+        summary="Replaced the page with Cascade Works evidence",
+        entities=({"name": "Cascade Works", "entity_type": "organization"},),
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/notes/Empty entity page.md",
+                body="# Empty entity page\n\nCascade Works approved the revised renewal.",
+                entities=(),
+                reason="The new source replaces the prior page conclusion",
+            ),
+        ),
+    )
+    _receipt, _item, update_outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="explicit-empty-update-cannot-suppress-exact-match",
+        text="Cascade Works approved the revised renewal.",
+        plan=update,
+    )
+
+    assert update_outcome.status == schema.LANDED
+    updated_registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"],
+            cwd=target_repo,
+            text=True,
+        )
+    )
+    cascade_id = next(
+        entity_id
+        for entity_id, record in updated_registry["entities"].items()
+        if any(claim["value"] == "Cascade Works" for claim in record["claims"])
+    )
+    updated = parse_page(
+        "wiki/notes/Empty entity page.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Empty entity page.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert updated.entities == (cascade_id,)
 
 
 def test_guessed_hidden_page_and_entity_cannot_be_affected(clean_queue, target_repo):
