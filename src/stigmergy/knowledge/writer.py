@@ -218,8 +218,9 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             capture_acl=envelope.audience,
             actor_groups=groups,
         )
+        visible_entities = tuple(safe_context["entities"])
         visible_entity_ids = frozenset(
-            item["id"] for item in safe_context["entities"]
+            item["id"] for item in visible_entities
         )
         allowed_contradiction_sources = frozenset(
             {
@@ -251,6 +252,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                 relative_source=relative_source,
                 readable_artifacts=tuple(item.result.text for item in extracted),
                 reasons=reasons,
+                visible_entities=visible_entities,
                 visible_entity_ids=visible_entity_ids,
                 allowed_contradiction_sources=allowed_contradiction_sources,
                 skipped=plan_skipped,
@@ -424,6 +426,7 @@ def _apply_filing_plan(
     relative_source: str,
     readable_artifacts: tuple[str, ...],
     reasons: dict[str, str],
+    visible_entities: tuple[dict, ...],
     visible_entity_ids: frozenset[str],
     allowed_contradiction_sources: frozenset[str],
     skipped: list[str] | None = None,
@@ -470,6 +473,7 @@ def _apply_filing_plan(
                 proposals=plan.entities,
                 at=envelope.origin.captured_at.date(),
                 reasons=reasons,
+                visible_entities=visible_entities,
                 visible_entity_ids=visible_entity_ids,
             )
         except (KnowledgeWriteError, PageContractError, WriteRefused) as error:
@@ -553,16 +557,18 @@ def _apply_page_mutation(
     proposals: tuple[EntityProposal, ...],
     at: dt.date,
     reasons: dict[str, str],
+    visible_entities: tuple[dict, ...],
     visible_entity_ids: frozenset[str],
 ) -> str | None:
     records = load_entities(root)
     if mutation.action == "create":
         target_path = page_path(mutation.role or "", mutation.title or "")
         allow_create(context, context.content_acl)
-        matched_entities = _matching_proposed_entities(
+        matched_entities = _matching_entities(
             mutation,
             proposals,
             proposal_resolution,
+            visible_entities,
         )
         entities = (
             tuple(
@@ -624,10 +630,11 @@ def _apply_page_mutation(
 
     title = mutation.title or page.title
     destination = page_path(page.role, title)
-    matched_entities = _matching_proposed_entities(
+    matched_entities = _matching_entities(
         mutation,
         proposals,
         proposal_resolution,
+        visible_entities,
     )
     entities = (
         tuple(
@@ -731,10 +738,11 @@ def _resolve_entities(
     return tuple(dict.fromkeys(result))
 
 
-def _matching_proposed_entities(
+def _matching_entities(
     mutation: PageMutation,
     proposals: tuple[EntityProposal, ...],
     proposal_resolution: ProposalResolution,
+    visible_entities: tuple[dict, ...],
 ) -> tuple[str, ...]:
     if len(proposals) != len(proposal_resolution.proposal_ids):
         raise KnowledgeWriteError("entity proposal resolution is incomplete")
@@ -746,6 +754,12 @@ def _matching_proposed_entities(
             name = tuple(resolution_key(value).split())
             if name and entity_id:
                 candidates.append((index, name, entity_id))
+    for index, entity in enumerate(visible_entities, start=len(proposals)):
+        entity_id = entity["id"]
+        for claim in entity["names"]:
+            name = tuple(resolution_key(claim["value"]).split())
+            if name:
+                candidates.append((index, name, entity_id))
     matched = set()
     for text in (mutation.title or "", mutation.body or ""):
         tokens = resolution_key(text).split()
@@ -755,13 +769,13 @@ def _matching_proposed_entities(
             for start in range(len(tokens) - width + 1):
                 if tuple(tokens[start : start + width]) == name:
                     matches.append((start, start + width, index, entity_id))
-        matched.update(_longest_nonoverlapping_proposals(matches))
+        matched.update(_longest_nonoverlapping_entities(matches))
     return tuple(
         dict.fromkeys(entity_id for index, _name, entity_id in candidates if index in matched)
     )
 
 
-def _longest_nonoverlapping_proposals(matches: list[tuple[int, int, int, str]]) -> set[int]:
+def _longest_nonoverlapping_entities(matches: list[tuple[int, int, int, str]]) -> set[int]:
     selected = []
     for width in sorted({end - start for start, end, _index, _entity_id in matches}, reverse=True):
         candidates = [item for item in matches if item[1] - item[0] == width]

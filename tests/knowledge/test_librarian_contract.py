@@ -255,7 +255,7 @@ def test_librarian_omits_entity_references_for_automatic_same_plan_anchoring():
     assert "omit `entities` by default" in text
     assert "an explicit `entities` list is exhaustive, never partial" in text
     assert "include every identity discussed by the page" in text
-    assert "cannot suppress an unambiguous same-plan proposed identity" in text
+    assert "cannot suppress an unambiguous visible or same-plan proposed identity" in text
     assert "the explicit list controls all other identity anchors" in text
 
 
