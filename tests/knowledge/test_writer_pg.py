@@ -110,6 +110,53 @@ def test_rejected_plan_records_why_in_the_capture_report(clean_queue, target_rep
     )
 
 
+def test_silently_skipped_plan_items_are_recorded_in_the_capture_report(clean_queue, target_repo):
+    """A mutation or contradiction the writer drops without rejecting the plan must say so: a
+    plan that "landed" while losing half its items is otherwise indistinguishable from a thin one."""
+    store = evidence.MemoryEvidenceStore()
+    receipt = CaptureService(clean_queue, store).capture_text(
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        adapter="mcp",
+        text="A capture whose plan names a page that does not exist.",
+        idempotency_key="skipped-plan-items",
+    )
+    own_source = source_path(schema.parse_capture(receipt["request"]))
+    plan = FilingPlan(
+        summary="Touches a page that is not there",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/notes/Missing page.md",
+                body="# Missing page\n\nNew knowledge.",
+                reason="The source updates a page that was never written",
+            ),
+        ),
+        contradictions=(
+            ContradictionProposal(
+                page_path="wiki/notes/Missing page.md",
+                explanation="Two claims disagree.",
+                claims=(
+                    ContradictionClaim(text="It is annual.", source=own_source, date="2026-08-20"),
+                    ContradictionClaim(text="It is monthly.", source=own_source, date="2026-08-21"),
+                ),
+            ),
+        ),
+    )
+    settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
+    item, outcome = worker.process_next(
+        clean_queue,
+        WriterDeps(settings, store, ScriptedPlanner(plan), str(target_repo)),
+    )
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["plan_rejected"] is False
+    assert item["report"]["plan_skipped"] == [
+        "mutation[0] update: planned page does not exist",
+        "contradiction[0]: page not found",
+    ]
+
+
 def test_one_capture_lands_source_wiki_and_change_in_one_commit(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     material = "The support rotation changes to weekly on 1 September."
