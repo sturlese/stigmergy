@@ -61,8 +61,13 @@ def build_mcp(cloud: CloudClient, acquirer: Acquirer):
         title: str | None = None,
         occurred_at: str | None = None,
         audience: list[str] | None = None,
+        resolution_of: str | None = None,
     ) -> str:
-        """Submit exactly one text value, local file path, or URL to the team wiki."""
+        """Submit exactly one text value, local file path, or URL to the team wiki.
+
+        An explicit ``resolution_of`` target remains subject to the cloud writer's evidence and
+        ACL gates.
+        """
         present = [name for name, value in (("text", text), ("path", path), ("url", url)) if value is not None]
         if len(present) != 1:
             return _error(BridgeError("provide exactly one of text, path, or url"))
@@ -80,6 +85,7 @@ def build_mcp(cloud: CloudClient, acquirer: Acquirer):
                     title=title,
                     occurred_at=occurred_at,
                     audience=audience,
+                    resolution_of=resolution_of,
                 )
             )
             return json.dumps(receipt, **_DUMP)

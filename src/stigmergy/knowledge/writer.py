@@ -280,10 +280,14 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                 raise GateRefused(_violation_summary(fallback))
         entries = gitcmd.diff_entries(worktree)
         _gate_diff(entries, trigger=trigger, expected_source=relative_source)
+        wiki_changes = sum(1 for entry in entries if entry.path.startswith("wiki/"))
         summary = (
             "Archived source without wiki changes"
-            if plan_invalid
-            else plan_run.plan.summary
+            if plan_invalid or not wiki_changes
+            else (
+                f"Applied {wiki_changes} wiki change(s); "
+                f"skipped {len(plan_skipped)} plan operation(s)"
+            )
         )
         commit, change = _commit_and_record(
             conn,
@@ -308,7 +312,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         },
         report={
             "summary": summary,
-            "wiki_changes": sum(1 for entry in entries if entry.path.startswith("wiki/")),
+            "wiki_changes": wiki_changes,
             "model_requests": plan_run.model_requests,
             "plan_rejected": plan_invalid,
             "plan_rejection": plan_rejection,
@@ -427,6 +431,15 @@ def _apply_filing_plan(
     """`skipped` collects every plan item this function drops WITHOUT rejecting the plan, as
     `"<item>: <gate sentence>"` — the plan still lands, so the report is the only place the
     loss shows. Gate sentences only: never a title, path, or claim text from the plan."""
+    if envelope.intent.resolution_of:
+        try:
+            allow_explicit_master(context)
+        except WriteRefused:
+            _note_skip(
+                skipped,
+                "contradiction resolution: this operation requires the master identity",
+            )
+            return
     for proposal in plan.contradictions:
         proposed_sources = {claim.source for claim in proposal.claims}
         if not proposed_sources <= allowed_contradiction_sources:

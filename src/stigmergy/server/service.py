@@ -593,7 +593,10 @@ class BrainService:
         audience: list[str] | None = None,
         locator: str | None = None,
         acquisition: dict | None = None,
+        resolution_of: str | None = None,
     ) -> dict:
+        intent = _resolution_intent(resolution_of)
+
         def finalize():
             if self.evidence is None or not self.identity:
                 raise CaptureError("capture is unavailable for this identity")
@@ -634,6 +637,7 @@ class BrainService:
                         title=title,
                         occurred_at=_occurred_at(occurred_at),
                         locator=locator,
+                        intent=intent,
                         acquisition=provenance,
                     )
                     upload_sessions.consume_uploads(
@@ -663,7 +667,8 @@ class BrainService:
         return self._call(
             "brain_upload_finalize",
             {"uploads": len(upload_ids) if isinstance(upload_ids, list) else 0,
-             "audience": _audit_audience(audience)},
+             "audience": _audit_audience(audience),
+             **_resolution_audit_args(intent)},
             finalize,
         )
 
@@ -676,11 +681,16 @@ class BrainService:
         title: str | None = None,
         occurred_at: str | None = None,
         audience: list[str] | None = None,
+        resolution_of: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict:
         values = {"text": text, "path": path, "url": url}
         present = [name for name, value in values.items() if value is not None]
-        audit_args = _submit_audit_args(values, audience=audience)
+        intent = _resolution_intent(resolution_of)
+        audit_args = {
+            **_submit_audit_args(values, audience=audience),
+            **_resolution_audit_args(intent),
+        }
 
         def queue_capture():
             if len(present) != 1:
@@ -706,9 +716,9 @@ class BrainService:
                 "occurred_at": _occurred_at(occurred_at),
             }
             if text is not None:
-                receipt = service.capture_text(text=text, **common)
+                receipt = service.capture_text(text=text, intent=intent, **common)
             else:
-                receipt = service.capture_public_url(url=url or "", **common)
+                receipt = service.capture_public_url(url=url or "", intent=intent, **common)
             return {
                 "id": receipt["id"],
                 "status": receipt["status"],
@@ -875,6 +885,21 @@ def _submit_audit_args(values: dict, *, audience=None) -> dict:
         "text_sha256": hashlib.sha256(data).hexdigest() if data else "",
         "audience": _audit_audience(audience),
     }
+
+
+def _resolution_intent(resolution_of: str | None) -> capture_schema.CaptureIntent | None:
+    """Validate the optional target before it reaches capture storage or audit."""
+    if resolution_of is None:
+        return None
+    return capture_schema.CaptureIntent(
+        resolution_of=resolution_of,
+        rationale="The submitting agent explicitly targeted this contradiction.",
+    )
+
+
+def _resolution_audit_args(intent: capture_schema.CaptureIntent | None) -> dict:
+    """Expose only the validated contradiction identifier to audit storage."""
+    return {} if intent is None else {"resolution_of": intent.resolution_of}
 
 
 def _audit_audience(audience) -> list[str] | None:

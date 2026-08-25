@@ -112,13 +112,15 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         title: str | None = None,
         occurred_at: str | None = None,
         audience: list[str] | None = None,
+        resolution_of: str | None = None,
     ) -> str:
         """Capture exactly one text, local path, or URL through one filing flow.
 
         The cloud endpoint accepts text and public URLs. A local path or a private Drive URL
         requires the official local Stigmergy bridge, which uploads verified bytes without
         sending local or Google credentials to Stigmergy. Omitted audience uses the authenticated
-        principal's configured default.
+        principal's configured default. When ``resolution_of`` names a contradiction, the writer
+        may resolve only that target after the normal evidence and ACL gates pass.
         """
         try:
             return json.dumps(
@@ -131,6 +133,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
                         title=title,
                         occurred_at=occurred_at,
                         audience=audience,
+                        resolution_of=resolution_of,
                     )
                 ),
                 **_DUMP)

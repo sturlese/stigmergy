@@ -49,6 +49,7 @@ class CloudClient:
         title: str | None,
         occurred_at: str | None,
         audience: list[str] | None,
+        resolution_of: str | None = None,
     ) -> dict:
         submission_key = str(uuid.uuid4())
         upload_ids = []
@@ -77,22 +78,25 @@ class CloudClient:
                     raise BridgeError("evidence upload failed")
             upload_ids.append(upload["upload_id"])
         first = artifacts[0]
+        capture_request = {
+            "upload_ids": upload_ids,
+            "idempotency_key": submission_key,
+            "title": title,
+            "occurred_at": occurred_at,
+            "audience": audience,
+            "locator": first.locator,
+            "acquisition": (
+                first.acquisition.model_dump(mode="json")
+                if first.acquisition is not None
+                else None
+            ),
+        }
+        if resolution_of is not None:
+            capture_request["resolution_of"] = resolution_of
         response = self.client.post(
             self.api_root + "/bridge/captures",
             headers=self.headers,
-            json={
-                "upload_ids": upload_ids,
-                "idempotency_key": submission_key,
-                "title": title,
-                "occurred_at": occurred_at,
-                "audience": audience,
-                "locator": first.locator,
-                "acquisition": (
-                    first.acquisition.model_dump(mode="json")
-                    if first.acquisition is not None
-                    else None
-                ),
-            },
+            json=capture_request,
         )
         return self._json(response)
 

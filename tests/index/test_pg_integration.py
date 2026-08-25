@@ -1,13 +1,15 @@
 import shutil
 import subprocess
+import time
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from stigmergy.index import build, search, store
+from stigmergy.index import build, health, search, store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.index.errors import EmptyIndexError, StigmergyIndexError
+from stigmergy.server import webhook
 from tests import testdb
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "repo")
@@ -18,6 +20,51 @@ INITECH_ID = "ent_30000000-0000-4000-8000-000000000002"
 
 def _connect_or_skip():
     return testdb.connect_or_skip("index")
+
+
+def _commit_repo(repo, message):
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Index Test",
+            "-c",
+            "user.email=index@example.invalid",
+            "commit",
+            "-qm",
+            message,
+        ],
+        cwd=repo,
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _git_fixture(tmp_path):
+    repo = tmp_path / "brain"
+    shutil.copytree(FIXTURE, repo)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    return repo, _commit_repo(repo, "fixture")
+
+
+def _page(page_id, title, body):
+    return (
+        "---\n"
+        f"id: {page_id}\n"
+        "type: note\n"
+        f"title: {title}\n"
+        "status: developing\n"
+        "created: '2026-08-01'\n"
+        "updated: '2026-08-24'\n"
+        "acl: null\n"
+        "entity: []\n"
+        "sources: []\n"
+        "---\n\n"
+        f"# {title}\n\n{body}\n"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -214,3 +261,222 @@ def test_embedding_host_mismatch_fails_before_query_embedding(conn):
     build.rebuild(conn, FIXTURE, build_embedder("fake"))
     with pytest.raises(StigmergyIndexError, match="not provably the same vector space"):
         search.search_arms(conn, "globex", embedder=_WrongHostEmbedder())
+
+
+def test_committed_snapshot_within_the_input_bounds_rebuilds(conn, tmp_path):
+    repo, _head = _git_fixture(tmp_path)
+    try:
+        stats = build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
+        assert stats["pages"] == FIXTURE_PAGES
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_committed_snapshot_rejects_an_oversized_indexable_blob_before_replacement(
+    conn, tmp_path, monkeypatch
+):
+    repo, _head = _git_fixture(tmp_path)
+    victim = "wiki/notes/Oversized.md"
+    monkeypatch.setattr(build, "MAX_INDEXABLE_MARKDOWN_BYTES", 1_024)
+    (repo / victim).write_text(
+        _page(
+            "page_oversized_blob",
+            "Oversized",
+            "x" * 1_024,
+        )
+    )
+    _commit_repo(repo, "oversized page")
+    previous_paths = store.existing_paths(conn)
+    try:
+        with pytest.raises(StigmergyIndexError, match="size limit"):
+            build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
+        assert store.existing_paths(conn) == previous_paths
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_committed_snapshot_rejects_an_oversized_aggregate_before_replacement(
+    conn, tmp_path, monkeypatch
+):
+    repo, _head = _git_fixture(tmp_path)
+    body = "x" * 400
+    for index in range(3):
+        (repo / f"wiki/notes/Aggregate-{index}.md").write_text(
+            _page(f"page_aggregate_{index}", f"Aggregate {index}", body)
+        )
+    _commit_repo(repo, "oversized aggregate")
+    previous_paths = store.existing_paths(conn)
+    try:
+        with monkeypatch.context() as limits:
+            limits.setattr(build, "MAX_INDEXABLE_MARKDOWN_BYTES", 1_024)
+            limits.setattr(build, "MAX_COMMITTED_INDEX_BYTES", 1_024)
+            with pytest.raises(StigmergyIndexError, match="size limit"):
+                build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
+            assert store.existing_paths(conn) == previous_paths
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_rebuild_aborts_when_a_webhook_advances_index_health_after_its_snapshot(
+    conn, tmp_path, monkeypatch
+):
+    class Response:
+        def __init__(self, body):
+            self.body = body.encode()
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class InterleavingEmbedder:
+        model = "fake-hashed-bow-256"
+        host = ""
+
+        def __init__(self, callback):
+            self.callback = callback
+            self.delegate = build_embedder("fake")
+            self.fired = False
+
+        def embed(self, texts):
+            if not self.fired:
+                self.fired = True
+                self.callback()
+            return self.delegate.embed(texts)
+
+    repo, initial_head = _git_fixture(tmp_path)
+    concurrent = _connect_or_skip()
+    race_path = "wiki/notes/Webhook state.md"
+    race_text = _page("page_webhook_race", "Webhook state", "The webhook state must survive.")
+    callback_stats = None
+
+    def opener(request, timeout=30):
+        del timeout
+        assert request.full_url.endswith(f"/{race_path.replace(' ', '%20')}?ref=webhook-newer")
+        return Response(race_text)
+
+    def apply_webhook():
+        nonlocal callback_stats
+        callback_stats = webhook.process_push(
+            concurrent,
+            build_embedder("fake"),
+            {
+                "after": "webhook-newer",
+                "before": initial_head,
+                "commits": [{"added": [race_path], "modified": [], "removed": []}],
+            },
+            webhook.WebhookSettings(repo="acme/knowledge"),
+            opener=opener,
+        )
+
+    monkeypatch.setattr(
+        "stigmergy.librarian.githubapp.installation_token", lambda: "test-installation-token"
+    )
+    try:
+        build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
+        candidate = repo / "wiki" / "notes" / "Globex and Initech renewal.md"
+        candidate.write_text(
+            candidate.read_text().replace("renewal", f"rebuild candidate {time.monotonic_ns()}", 1)
+        )
+        _commit_repo(repo, "rebuild candidate")
+        rebuild_error = None
+        try:
+            build.rebuild(conn, str(repo), InterleavingEmbedder(apply_webhook), require_repository_head=True)
+        except StigmergyIndexError as error:
+            rebuild_error = error
+        assert callback_stats is not None
+        assert callback_stats["upserted"] == 1
+        assert isinstance(rebuild_error, StigmergyIndexError)
+        assert "index health changed" in str(rebuild_error)
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT body FROM pages_index WHERE path = %s", (race_path,))
+            assert "webhook state must survive" in cursor.fetchone()[0].lower()
+        state = health.read(conn)
+        assert state["indexed_commit_sha"] == "webhook-newer"
+        assert state["dirty"] is False
+    finally:
+        concurrent.close()
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_committed_snapshot_rejects_excessive_eligible_entries_before_replacement(
+    conn, tmp_path, monkeypatch
+):
+    repo, _head = _git_fixture(tmp_path)
+    for index in range(2):
+        (repo / f"wiki/notes/Eligible-{index}.md").write_text(
+            _page(f"page_eligible_{index}", f"Eligible {index}", "Indexable entry.")
+        )
+    _commit_repo(repo, "too many eligible entries")
+    previous_paths = store.existing_paths(conn)
+    try:
+        with monkeypatch.context() as limits:
+            limits.setattr(build, "MAX_COMMITTED_INDEX_ENTRIES", 1, raising=False)
+            with pytest.raises(StigmergyIndexError, match="entries exceed the limit"):
+                build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
+            assert store.existing_paths(conn) == previous_paths
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_committed_snapshot_rejects_excessive_watched_tree_entries_before_replacement(
+    conn, tmp_path, monkeypatch
+):
+    repo, _head = _git_fixture(tmp_path)
+    for index in range(2):
+        (repo / f"wiki/notes/ignored-{index}.txt").write_text("Not indexable, but watched.")
+    _commit_repo(repo, "too many watched entries")
+    previous_paths = store.existing_paths(conn)
+    try:
+        with monkeypatch.context() as limits:
+            limits.setattr(build, "MAX_COMMITTED_TREE_ENTRIES", 1, raising=False)
+            with pytest.raises(StigmergyIndexError, match="repository tree exceeds the limit"):
+                build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
+            assert store.existing_paths(conn) == previous_paths
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_committed_snapshot_does_not_capture_multi_blob_content_in_one_subprocess_result(
+    conn, tmp_path, monkeypatch
+):
+    repo, _head = _git_fixture(tmp_path)
+    original_popen = build.subprocess.Popen
+    writes: list[bytes] = []
+    flushes: list[None] = []
+
+    class TrackingWriter:
+        def __init__(self, stream):
+            self._stream = stream
+
+        def write(self, data):
+            writes.append(bytes(data))
+            return self._stream.write(data)
+
+        def flush(self):
+            flushes.append(None)
+            return self._stream.flush()
+
+        def __getattr__(self, name):
+            return getattr(self._stream, name)
+
+    def tracking_popen(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        if args[0][1:] == ["cat-file", "--batch"]:
+            assert process.stdin is not None
+            process.stdin = TrackingWriter(process.stdin)
+        return process
+
+    monkeypatch.setattr(build.subprocess, "Popen", tracking_popen)
+    try:
+        stats = build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
+        assert stats["pages"] == FIXTURE_PAGES
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+    assert len(writes) > 1
+    assert all(write.endswith(b"\n") and write.count(b"\n") == 1 for write in writes)
+    assert len(flushes) == len(writes)

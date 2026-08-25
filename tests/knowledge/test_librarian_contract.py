@@ -243,6 +243,18 @@ def test_librarian_groups_explicit_names_and_identifiers_into_one_entity_proposa
     assert "include the paired `external_namespace` and `external_id`" in text
 
 
+def test_librarian_omits_entity_references_for_automatic_same_plan_anchoring():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "omit `entities` for automatic same-plan anchoring" in text
+    assert "an explicit empty `entities` list anchors no identities" in text
+
+
+def test_librarian_reuses_a_stable_identifier_across_scopes_without_disclosing_hidden_claims():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "reuse that existing opaque identity even when its name claims are outside this audience" in text
+    assert "never create a second identity merely because the existing claims are hidden" in text
+
+
 def test_librarian_requires_exact_available_paths_for_contradiction_claims():
     text = " ".join(FROZEN.read_text().casefold().split())
     assert "exact source path supplied in provenance or source evidence" in text

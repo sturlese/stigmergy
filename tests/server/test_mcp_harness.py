@@ -33,8 +33,9 @@ def test_server_exposes_the_read_tools_and_ask_over_stdio(indexed):
                              "ask", "brain_submit", "brain_submissions", "brain_delete"}
             submit = next(tool for tool in tools if tool.name == "brain_submit")
             assert set(submit.inputSchema["properties"]) == {
-                "text", "path", "url", "title", "occurred_at", "audience"
+                "text", "path", "url", "title", "occurred_at", "audience", "resolution_of"
             }
+            assert "resolution_of" not in submit.inputSchema.get("required", ())
             # exactly eight tools and no more. The in-process mirror of this same closed set is
             # `test_mcp_adapter.py::test_the_mounted_tool_list_is_exactly_the_eight_supported_tools`
             # — that one proves `build_mcp()`'s own output; this one proves the REAL entry point

@@ -44,6 +44,10 @@ entity-registry, and Slack-channel controls into the image, deploys all process 
 single-writer/Slack process counts. The temporary copies are restored to empty tracked defaults on
 every exit path.
 
+Deploy the cloud server before publishing a bridge that depends on its MCP contract. During rollback,
+restore the compatible bridge first, then roll back the cloud server; this keeps local acquisition
+from calling an unavailable or newer server contract.
+
 ### Slack application
 
 `deploy/slack-app-manifest.json` is the Slack configuration contract. Import it from the app's
@@ -85,3 +89,8 @@ A production full rebuild accepts only the exact, clean knowledge-repository roo
 HEAD, with `ops/identities.json`, `ops/entity-registry.json`, and `ops/slack-channels.json` present.
 It verifies HEAD again before publishing the rebuilt index so concurrent repository movement leaves
 the previous index intact and the dirty marker visible.
+
+The rebuild reads committed HEAD only and fails closed above 50 MiB for one page, 512 MiB across the
+candidate corpus, 500,000 watched entries, or 250,000 eligible entries. It also reconciles recovered
+committed source pages into the ACL-aware source projection, so `read_page` can serve readable
+evidence after recovery without exposing it beyond its audience.

@@ -73,7 +73,14 @@ from a visible identity's `external_ids` or from the context's `namespaces` when
 already appears there; name a registry yourself only when it is new to the wiki, in lowercase with
 underscores. Copy the identifier value exactly as the source writes it, keeping any register or
 section prefix (`HRB 991204`, never `991204`). The entity service chooses the opaque ID and stores
-scoped, sourced name claims; entity facts remain in notes and concepts.
+scoped, sourced name claims. When a stable external identifier matches an existing opaque
+identity, reuse that existing opaque identity even when its name claims are outside this audience;
+never create a second identity merely because the existing claims are hidden, and never infer,
+repeat, or disclose those hidden claims. Entity facts remain in notes and concepts.
+
+To use automatic unambiguous same-plan anchoring, omit `entities` for automatic same-plan
+anchoring. Use an explicit `entities` list whenever you intend the exact anchor set; an explicit
+empty `entities` list anchors no identities.
 
 ## Contradictions
 

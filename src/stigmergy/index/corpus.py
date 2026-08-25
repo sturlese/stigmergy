@@ -197,18 +197,13 @@ def resolve_links(own_path: str, stems: list[str], by_stem: dict[str, list[str]]
     return sorted(resolved)
 
 
-def load_pages(repo_dir: str) -> list[PageRow]:
-    root = Path(repo_dir)
-    rows = []
-    for zone in ZONES:
-        folder = root / zone
-        if not folder.is_dir():
-            continue
-        for path in sorted(folder.rglob("*.md")):
-            rel_path = path.relative_to(root).as_posix()
-            if is_indexable_page(rel_path):
-                rows.append(page_row(rel_path, zone, path.read_text(encoding="utf-8")))
-
+def load_page_texts(pages: list[tuple[str, str]]) -> list[PageRow]:
+    """Build canonical derived rows from repository-relative Markdown text."""
+    rows = [
+        page_row(path, path.split("/", 1)[0], text)
+        for path, text in pages
+        if is_indexable_page(path)
+    ]
     rows.sort(key=lambda row: row.path)
     by_stem = by_stem_index([row.path for row in rows])
     inbound: dict[str, set[str]] = {}
@@ -219,3 +214,17 @@ def load_pages(repo_dir: str) -> list[PageRow]:
     for row in rows:
         row.inlinks = len(inbound.get(row.path, ()))
     return rows
+
+
+def load_pages(repo_dir: str) -> list[PageRow]:
+    root = Path(repo_dir)
+    pages = []
+    for zone in ZONES:
+        folder = root / zone
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.rglob("*.md")):
+            rel_path = path.relative_to(root).as_posix()
+            if is_indexable_page(rel_path):
+                pages.append((rel_path, path.read_text(encoding="utf-8")))
+    return load_page_texts(pages)
