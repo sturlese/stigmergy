@@ -39,10 +39,20 @@ make deploy-staging
 make rebuild-staging
 ```
 
-`scripts/deploy_staging.sh` validates and temporarily bakes the knowledge repository's identity,
-entity-registry, and Slack-channel controls into the image, deploys all process groups, and pins the
-single-writer/Slack process counts. The temporary copies are restored to empty tracked defaults on
-every exit path.
+Staging deployment and rebuild first refresh the configured knowledge checkout. The checkout must
+be clean, attached to a branch with a configured upstream, and able to fast-forward to that
+upstream; otherwise the operation fails closed. The refresh yields the checkout's canonical physical
+root and its verified commit SHA, and subsequent work is bound to that exact revision.
+
+`scripts/deploy_staging.sh` serializes staging deployments with a fail-closed lock. It materializes
+the identity, entity-registry, and Slack-channel JSON controls from committed blobs at the verified
+knowledge revision, rather than from the mutable working tree, validates them, deploys all process
+groups, and pins the single-writer/Slack process counts. The temporary copies are restored to empty
+tracked defaults on every exit path.
+
+`make rebuild-staging` uses the same refreshed physical checkout and verified revision. It passes
+`STAGING_DSN` only through the process environment, so the database credential is neither included
+in command arguments nor written to command output.
 
 Deploy the cloud server before publishing a bridge that depends on its MCP contract. During rollback,
 restore the compatible bridge first, then roll back the cloud server; this keeps local acquisition

@@ -67,6 +67,42 @@ def _page(page_id, title, body):
     )
 
 
+class _CallbackEmbedder:
+    model = "fake-hashed-bow-256"
+    host = ""
+
+    def __init__(self, callback):
+        self.callback = callback
+        self.delegate = build_embedder("fake")
+        self.fired = False
+
+    def embed(self, texts):
+        if not self.fired:
+            self.fired = True
+            self.callback()
+        return self.delegate.embed(texts)
+
+
+def _configured_upstream_checkout(tmp_path):
+    upstream = tmp_path / "upstream.git"
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "release", str(upstream)], check=True)
+    seed, _head = _git_fixture(tmp_path)
+    subprocess.run(["git", "remote", "add", "deploy", str(upstream)], cwd=seed, check=True)
+    subprocess.run(["git", "push", "-q", "-u", "deploy", "main:release"], cwd=seed, check=True)
+    checkout = tmp_path / "staging"
+    subprocess.run(["git", "clone", "-q", str(upstream), str(checkout)], check=True)
+    subprocess.run(["git", "branch", "-m", "main"], cwd=checkout, check=True)
+    subprocess.run(["git", "remote", "rename", "origin", "deploy"], cwd=checkout, check=True)
+    assert subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == "deploy/release"
+    return seed, checkout
+
+
 @pytest.fixture(scope="module")
 def conn():
     connection = _connect_or_skip()
@@ -268,6 +304,174 @@ def test_committed_snapshot_within_the_input_bounds_rebuilds(conn, tmp_path):
     try:
         stats = build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
         assert stats["pages"] == FIXTURE_PAGES
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_rebuild_refuses_a_clean_checkout_behind_its_remote_before_replacing_the_index(conn, tmp_path):
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(origin)], check=True)
+    seed, initial_head = _git_fixture(tmp_path)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=seed, check=True)
+    subprocess.run(["git", "push", "-q", "-u", "origin", "main"], cwd=seed, check=True)
+
+    checkout = tmp_path / "staging"
+    subprocess.run(["git", "clone", "-q", str(origin), str(checkout)], check=True)
+    (seed / "wiki" / "notes" / "Remote newer.md").write_text(
+        _page("page_remote_newer", "Remote newer", "Only the remote checkout has this page.")
+    )
+    remote_head = _commit_repo(seed, "remote newer page")
+    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
+    subprocess.run(["git", "fetch", "-q", "origin", "main"], cwd=checkout, check=True)
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=checkout, check=True, capture_output=True, text=True
+    ).stdout.strip() == initial_head
+    assert subprocess.run(
+        ["git", "rev-parse", "origin/main"], cwd=checkout, check=True, capture_output=True, text=True
+    ).stdout.strip() == remote_head
+
+    previous_paths = store.existing_paths(conn)
+    previous_health = health.read(conn)
+    try:
+        with pytest.raises(StigmergyIndexError, match="behind.*origin/main"):
+            build.rebuild(conn, str(checkout), build_embedder("fake"), require_repository_head=True)
+        assert store.existing_paths(conn) == previous_paths
+        assert health.read(conn) == previous_health
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_rebuild_refuses_a_clean_checkout_behind_its_configured_non_origin_upstream(conn, tmp_path):
+    seed, checkout = _configured_upstream_checkout(tmp_path)
+    (seed / "wiki" / "notes" / "Upstream newer.md").write_text(
+        _page("page_upstream_newer", "Upstream newer", "Only the configured upstream has this page.")
+    )
+    _commit_repo(seed, "upstream newer page")
+    subprocess.run(["git", "push", "-q", "deploy", "main:release"], cwd=seed, check=True)
+    subprocess.run(["git", "fetch", "-q", "deploy", "release"], cwd=checkout, check=True)
+
+    previous_paths = store.existing_paths(conn)
+    previous_health = health.read(conn)
+    try:
+        with pytest.raises(StigmergyIndexError, match="behind.*deploy/release"):
+            build.rebuild(conn, str(checkout), build_embedder("fake"), require_repository_head=True)
+        assert store.existing_paths(conn) == previous_paths
+        assert health.read(conn) == previous_health
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_rebuild_refuses_an_unresolved_configured_upstream_before_replacing_the_index(conn, tmp_path):
+    repo, _head = _git_fixture(tmp_path)
+    subprocess.run(["git", "config", "branch.main.remote", "deploy"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "branch.main.merge", "refs/heads/release"], cwd=repo, check=True)
+
+    previous_paths = store.existing_paths(conn)
+    previous_health = health.read(conn)
+    try:
+        with pytest.raises(StigmergyIndexError, match="configured repository upstream cannot be resolved"):
+            build.rebuild(conn, str(repo), build_embedder("fake"), require_repository_head=True)
+        assert store.existing_paths(conn) == previous_paths
+        assert health.read(conn) == previous_health
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_rebuild_refuses_when_its_remote_tracking_tip_moves_during_embedding(conn, tmp_path):
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(origin)], check=True)
+    seed, _head = _git_fixture(tmp_path)
+    (seed / "wiki" / "notes" / "Embedding baseline.md").write_text(
+        _page("page_embedding_baseline", "Embedding baseline", "This page triggers embedding.")
+    )
+    _commit_repo(seed, "embedding baseline")
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=seed, check=True)
+    subprocess.run(["git", "push", "-q", "-u", "origin", "main"], cwd=seed, check=True)
+    checkout = tmp_path / "staging"
+    subprocess.run(["git", "clone", "-q", str(origin), str(checkout)], check=True)
+
+    def advance_remote_tip():
+        (seed / "wiki" / "notes" / "Remote race.md").write_text(
+            _page("page_remote_race", "Remote race", "The remote advanced during embedding.")
+        )
+        _commit_repo(seed, "remote race")
+        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
+        subprocess.run(["git", "fetch", "-q", "origin", "main"], cwd=checkout, check=True)
+
+    previous_paths = store.existing_paths(conn)
+    previous_health = health.read(conn)
+    try:
+        with pytest.raises(StigmergyIndexError, match="behind.*origin/main"):
+            build.rebuild(
+                conn,
+                str(checkout),
+                _CallbackEmbedder(advance_remote_tip),
+                require_repository_head=True,
+            )
+        assert store.existing_paths(conn) == previous_paths
+        assert health.read(conn) == previous_health
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_rebuild_refuses_when_its_configured_non_origin_upstream_moves_during_embedding(
+    conn, tmp_path
+):
+    seed, checkout = _configured_upstream_checkout(tmp_path)
+    (seed / "wiki" / "notes" / "Embedding baseline.md").write_text(
+        _page("page_embedding_baseline", "Embedding baseline", "This page triggers embedding.")
+    )
+    _commit_repo(seed, "embedding baseline")
+    subprocess.run(["git", "push", "-q", "deploy", "main:release"], cwd=seed, check=True)
+    subprocess.run(["git", "fetch", "-q", "deploy", "release"], cwd=checkout, check=True)
+    subprocess.run(["git", "merge", "--ff-only", "deploy/release"], cwd=checkout, check=True)
+
+    def advance_upstream_tip():
+        (seed / "wiki" / "notes" / "Upstream race.md").write_text(
+            _page("page_upstream_race", "Upstream race", "The upstream advanced during embedding.")
+        )
+        _commit_repo(seed, "upstream race")
+        subprocess.run(["git", "push", "-q", "deploy", "main:release"], cwd=seed, check=True)
+        subprocess.run(["git", "fetch", "-q", "deploy", "release"], cwd=checkout, check=True)
+
+    previous_paths = store.existing_paths(conn)
+    previous_health = health.read(conn)
+    try:
+        with pytest.raises(StigmergyIndexError, match="behind.*deploy/release"):
+            build.rebuild(
+                conn,
+                str(checkout),
+                _CallbackEmbedder(advance_upstream_tip),
+                require_repository_head=True,
+            )
+        assert store.existing_paths(conn) == previous_paths
+        assert health.read(conn) == previous_health
+    finally:
+        build.rebuild(conn, FIXTURE, build_embedder("fake"))
+
+
+def test_rebuild_refuses_when_local_head_moves_during_embedding(conn, tmp_path):
+    repo, _head = _git_fixture(tmp_path)
+    candidate = repo / "wiki" / "notes" / "Embedding baseline.md"
+    candidate.write_text(_page("page_embedding_baseline", "Embedding baseline", "This page triggers embedding."))
+    _commit_repo(repo, "embedding baseline")
+
+    def advance_local_head():
+        candidate.write_text(_page("page_embedding_baseline", "Embedding baseline", "The local HEAD advanced."))
+        _commit_repo(repo, "local race")
+
+    previous_paths = store.existing_paths(conn)
+    previous_health = health.read(conn)
+    try:
+        with pytest.raises(StigmergyIndexError, match="HEAD changed during the rebuild"):
+            build.rebuild(
+                conn,
+                str(repo),
+                _CallbackEmbedder(advance_local_head),
+                require_repository_head=True,
+            )
+        assert store.existing_paths(conn) == previous_paths
+        assert health.read(conn) == previous_health
     finally:
         build.rebuild(conn, FIXTURE, build_embedder("fake"))
 

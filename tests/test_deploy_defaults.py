@@ -38,6 +38,22 @@ def test_deploy_directory_contains_only_known_artifacts():
     }
 
 
+def _git(cwd: pathlib.Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _commit(repo: pathlib.Path, message: str) -> str:
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
 def _run_deploy(
     tmp_path: pathlib.Path,
     *,
@@ -47,17 +63,30 @@ def _run_deploy(
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     shutil.copy2(DEPLOY_SCRIPT, scripts / DEPLOY_SCRIPT.name)
+    refresh_script = scripts / "refresh_staging_checkout.sh"
+    refresh_script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf "staging-refresh: root=%s head=%s\\n" "$1" "$STAGING_SHA"\n',
+        encoding="utf-8",
+    )
+    refresh_script.chmod(0o755)
 
     deploy = tmp_path / "deploy"
     probe = deploy / "unmanaged" / "tracked.txt"
     probe.parent.mkdir(parents=True)
     probe.write_text("keep\n", encoding="utf-8")
 
-    ops = tmp_path / "knowledge" / "ops"
+    knowledge = tmp_path / "knowledge"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(knowledge)], check=True)
+    _git(knowledge, "config", "user.email", "test@example.com")
+    _git(knowledge, "config", "user.name", "Test User")
+    ops = knowledge / "ops"
     ops.mkdir(parents=True)
     (ops / "identities.json").write_text(json.dumps(roster), encoding="utf-8")
     (ops / "entity-registry.json").write_text(json.dumps(REGISTRY), encoding="utf-8")
     (ops / "slack-channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
+    staging_sha = _commit(knowledge, "test controls")
 
     seen = tmp_path / "seen"
     bin_dir = tmp_path / "bin"
@@ -75,6 +104,7 @@ def _run_deploy(
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "STIGMERGY_REPO": str(ops.parent),
+        "STAGING_SHA": staging_sha,
         "SEEN": str(seen),
     }
     if python is not None:
@@ -124,11 +154,13 @@ def test_missing_control_file_stops_deploy(tmp_path, name):
     assert result.returncode == 0
     knowledge_file = tmp_path / "knowledge" / "ops" / f"{name}.json"
     knowledge_file.unlink()
+    staging_sha = _commit(tmp_path / "knowledge", "remove deployed control")
 
     env = {
         **os.environ,
         "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
         "STIGMERGY_REPO": str(tmp_path / "knowledge"),
+        "STAGING_SHA": staging_sha,
         "SEEN": str(seen),
         "STIGMERGY_PYTHON": sys.executable,
     }

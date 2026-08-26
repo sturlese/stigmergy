@@ -223,6 +223,35 @@ def _checked_repository_head(repo_dir: str) -> str:
     return head.stdout.strip()
 
 
+def _checked_upstream_tip(repo_dir: str, head: str) -> tuple[str, str] | None:
+    """Return the current branch's local upstream tip after requiring it matches HEAD."""
+    branch = _git(repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if branch.returncode != 0 or not (branch_name := branch.stdout.strip()):
+        return None
+    upstream = _git(
+        repo_dir,
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}",
+    )
+    if upstream.returncode != 0 or not (upstream_ref := upstream.stdout.strip()):
+        remote = _git(repo_dir, "config", "--get", f"branch.{branch_name}.remote")
+        merge = _git(repo_dir, "config", "--get", f"branch.{branch_name}.merge")
+        if remote.returncode == 1 and merge.returncode == 1:
+            return None
+        raise StigmergyIndexError("the configured repository upstream cannot be resolved")
+    tip = _git(repo_dir, "rev-parse", "--verify", "--quiet", upstream_ref)
+    if tip.returncode != 0 or not (tip_sha := tip.stdout.strip()):
+        raise StigmergyIndexError("the configured repository upstream cannot be resolved")
+    if tip_sha != head:
+        relation = _git(repo_dir, "merge-base", "--is-ancestor", head, tip_sha)
+        if relation.returncode == 0:
+            raise StigmergyIndexError(f"repository HEAD is behind {upstream_ref}")
+        raise StigmergyIndexError(f"repository HEAD does not match {upstream_ref}")
+    return upstream_ref, tip_sha
+
+
 def rebuild(
     conn,
     repo_dir: str,
@@ -234,6 +263,9 @@ def rebuild(
     """Atomically replace the page index and return rebuild statistics."""
     starting_health = _health_state(conn)
     expected_head = _checked_repository_head(repo_dir) if require_repository_head else ""
+    expected_tracking_tip = (
+        _checked_upstream_tip(repo_dir, expected_head) if require_repository_head else None
+    )
     snapshot = _committed_snapshot(repo_dir)
     committed_snapshot = snapshot is not None
     if not committed_snapshot:
@@ -279,7 +311,12 @@ def rebuild(
             raise StigmergyIndexError("repository HEAD changed during the rebuild")
         if require_repository_head:
             final_head = _checked_repository_head(repo_dir)
-            if final_head != expected_head or commit_sha != expected_head:
+            final_tracking_tip = _checked_upstream_tip(repo_dir, final_head)
+            if (
+                final_head != expected_head
+                or commit_sha != expected_head
+                or final_tracking_tip != expected_tracking_tip
+            ):
                 raise StigmergyIndexError("repository HEAD changed during the rebuild")
             if _control_files(repo_dir) != controls:
                 raise StigmergyIndexError("repository controls changed during the rebuild")
