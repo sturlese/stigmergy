@@ -9,9 +9,11 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from stigmergy.capture import artifacts, evidence, schema
 from stigmergy.capture.errors import CaptureError
+from stigmergy.kernel.blocking import run_blocking
 from stigmergy.server.errors import IdentityError
 from stigmergy.server.service import SubmitRefused
 from stigmergy.slack import channels, copy, render
+from stigmergy.slack.context import run_with_connection, run_with_service
 from stigmergy.slack.gateway import SlackApiError
 from stigmergy.slack.identity import (
     IdentityResult,
@@ -117,7 +119,7 @@ async def _build_snapshot(
                     url,
                     max_bytes=schema.MAX_ARTIFACT_BYTES,
                 )
-                digest = evidence.sha256(data)
+                digest = await run_blocking(evidence.sha256, data)
                 acquisition_count += 1
                 attachment = shared.get(digest)
             else:
@@ -133,7 +135,8 @@ async def _build_snapshot(
                     raise CaptureError("Slack capture exceeds the 20-artifact limit")
                 attachment_bytes += len(data)
                 filename = item.get("name") or f"slack-file-{artifact_index}"
-                media_type = artifacts.detect_media(
+                media_type = await run_blocking(
+                    artifacts.detect_media,
                     data,
                     declared=item.get("mimetype") or None,
                     original_name=filename,
@@ -173,7 +176,7 @@ async def _build_snapshot(
         permalink=root_permalink,
         messages=tuple(snapshot_messages),
     )
-    snapshot_data = canonical_bytes(snapshot)
+    snapshot_data = await run_blocking(canonical_bytes, snapshot)
     if len(snapshot_data) + attachment_bytes > schema.MAX_CAPTURE_BYTES:
         raise CaptureError("Slack capture exceeds the capture-wide byte limit")
     return snapshot_data, tuple(attachment_values), participants, thread_ts
@@ -247,13 +250,23 @@ async def handle_reaction_added(
         return False
 
     email, reader_audiences = identity_result.email, identity_result.audiences
+
+    def authorize(service):
+        channel_scope = channels.channel_scope_for_capture(
+            service.conn, ctx.settings.channels_path, channel_id
+        )
+        capture_acl = service.check_submit_audience(
+            None if channel_scope is None else list(channel_scope)
+        )
+        return capture_acl
+
     try:
         channel_meta = (await ctx.gateway.conversations_info(channel_id)).get("channel", {})
         if channel_meta.get("is_im") or channel_meta.get("is_mpim"):
             raise IdentityError("direct-message capture is not supported")
-        channel_scope = channels.channel_scope_for_capture(ctx.conn, ctx.settings.channels_path, channel_id)
-        service = ctx.build_service(email, reader_audiences)
-        capture_acl = service.check_submit_audience(None if channel_scope is None else list(channel_scope))
+        capture_acl = await run_blocking(
+            run_with_service, ctx, email, reader_audiences, authorize
+        )
     except (IdentityError, SubmitRefused):
         await ctx.post_or_log(
             ctx.gateway.chat_post_ephemeral(
@@ -271,19 +284,38 @@ async def handle_reaction_added(
         return False
 
     reservation_id = None
-    try:
-        with ctx.conn.transaction():
+    submission_attached = False
+
+    def reserve(conn):
+        nonlocal reservation_id
+        with conn.transaction():
             reservation_id = reserve_reaction(
-                ctx.conn,
+                conn,
                 team_id=team_id,
                 channel_id=channel_id,
                 message_ts=message_ts,
                 slack_user_id=slack_user_id,
                 submitted_by=email,
             )
+        return reservation_id
+
+    async def release_unbound_reservation() -> None:
+        if reservation_id is None or submission_attached:
+            return
+        await run_blocking(
+            run_with_connection,
+            ctx,
+            lambda conn: _release_reservation(conn, reservation_id),
+        )
+
+    try:
+        reservation_id = await run_blocking(run_with_connection, ctx, reserve)
         if reservation_id is None:
             return False
-    except Exception as error:  # noqa: BLE001
+    except BaseException as error:  # noqa: BLE001
+        await release_unbound_reservation()
+        if not isinstance(error, Exception):
+            raise
         log.error("Slack capture reservation failed (%s)", error.__class__.__name__)
         await _decline_server_error(ctx, channel_id, slack_user_id)
         return False
@@ -306,17 +338,19 @@ async def handle_reaction_added(
                 root_permalink=root_permalink,
                 messages=messages,
             )
-    except (SlackApiError, CaptureError, TimeoutError) as error:
-        with ctx.conn.transaction():
-            release_reservation(ctx.conn, reservation_id)
+    except BaseException as error:  # noqa: BLE001
+        await release_unbound_reservation()
+        if not isinstance(error, (SlackApiError, CaptureError, TimeoutError)):
+            raise
         log.error("Slack capture acquisition failed (%s)", error.__class__.__name__)
         await _decline_server_error(ctx, channel_id, slack_user_id)
         return False
 
-    try:
-        with ctx.conn.transaction():
+    def submit(service):
+        nonlocal submission_attached
+        with service.conn.transaction():
             if not bind_thread(
-                ctx.conn,
+                service.conn,
                 reservation_id,
                 team_id=team_id,
                 channel_id=channel_id,
@@ -341,10 +375,20 @@ async def handle_reaction_added(
                 locator=root_permalink,
                 participants=participants,
             )
-            attach_submission(ctx.conn, reservation_id, receipt["id"])
-    except Exception as error:  # noqa: BLE001
-        with ctx.conn.transaction():
-            release_reservation(ctx.conn, reservation_id)
+            attach_submission(service.conn, reservation_id, receipt["id"])
+        submission_attached = True
+        return True
+
+    try:
+        submitted = await run_blocking(
+            run_with_service, ctx, email, reader_audiences, submit
+        )
+        if not submitted:
+            return False
+    except BaseException as error:  # noqa: BLE001
+        await release_unbound_reservation()
+        if not isinstance(error, Exception):
+            raise
         log.error("Slack capture queueing failed (%s)", error.__class__.__name__)
         await _decline_server_error(ctx, channel_id, slack_user_id, thread_ts)
         return False
@@ -360,3 +404,8 @@ async def handle_reaction_added(
         what="capture acknowledgement",
     )
     return True
+
+
+def _release_reservation(conn, reservation_id) -> None:
+    with conn.transaction():
+        release_reservation(conn, reservation_id)

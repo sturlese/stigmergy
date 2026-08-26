@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 
 from stigmergy.capture import ops
 from stigmergy.index import corpus, health, store
+from stigmergy.kernel.blocking import run_blocking
 from stigmergy.librarian import githubapp
 from stigmergy.librarian.errors import LibrarianConfigError
 from stigmergy.server import controls as control_contract
@@ -311,15 +312,9 @@ async def _read_body_capped(request: Request, max_bytes: int) -> bytes | None:
     return b"".join(chunks)
 
 
-async def webhook_endpoint(request: Request, *, conn, embedder, settings: WebhookSettings) -> JSONResponse:
-    """Authenticate and process one configured repository push."""
-    raw_body = await _read_body_capped(request, MAX_BODY_BYTES)
-    if raw_body is None:
-        log.warning("webhook: body exceeded the %d-byte cap — refused before signature "
-                   "verification", MAX_BODY_BYTES)
-        return JSONResponse(_UNAUTHORIZED_BODY, status_code=401)
-
-    signature = request.headers.get("x-hub-signature-256")
+def _process_webhook(conn, embedder, settings: WebhookSettings, *, raw_body: bytes,
+                     signature: str | None, event: str, delivery_id: str) -> JSONResponse:
+    """Authenticate and process buffered webhook bytes on a worker-owned connection."""
     if not verify_signature(settings.secret, raw_body, signature):
         log.warning("webhook: signature check failed")
         return JSONResponse(_UNAUTHORIZED_BODY, status_code=401)
@@ -333,7 +328,6 @@ async def webhook_endpoint(request: Request, *, conn, embedder, settings: Webhoo
         log.warning("webhook: signature verified but the body is not a JSON object")
         return JSONResponse({"ok": True, "ignored": "body is not a JSON object"})
 
-    event = request.headers.get("x-github-event", "")
     if event != "push":
         return JSONResponse({"ok": True, "ignored": f"event={event!r}"})
 
@@ -345,7 +339,6 @@ async def webhook_endpoint(request: Request, *, conn, embedder, settings: Webhoo
     if ref != f"refs/heads/{settings.branch}":
         return JSONResponse({"ok": True, "ignored": f"ref={ref!r}"})
 
-    delivery_id = request.headers.get("x-github-delivery", "")
     if store.delivery_already_applied(conn, delivery_id):
         log.warning("webhook: delivery %s was already applied — acknowledged, not re-applied",
                     delivery_id)
@@ -366,6 +359,42 @@ async def webhook_endpoint(request: Request, *, conn, embedder, settings: Webhoo
         return JSONResponse({"error": "webhook processing failed"}, status_code=500)
 
     return JSONResponse({"ok": True, **stats})
+
+
+async def webhook_endpoint(
+    request: Request,
+    *,
+    embedder,
+    settings: WebhookSettings,
+    conn=None,
+    connection_factory=None,
+) -> JSONResponse:
+    """Buffer a webhook asynchronously, then process it in one bounded blocking unit."""
+    raw_body = await _read_body_capped(request, MAX_BODY_BYTES)
+    if raw_body is None:
+        log.warning("webhook: body exceeded the %d-byte cap — refused before signature "
+                   "verification", MAX_BODY_BYTES)
+        return JSONResponse(_UNAUTHORIZED_BODY, status_code=401)
+
+    kwargs = {
+        "raw_body": raw_body,
+        "signature": request.headers.get("x-hub-signature-256"),
+        "event": request.headers.get("x-github-event", ""),
+        "delivery_id": request.headers.get("x-github-delivery", ""),
+    }
+    if connection_factory is None:
+        if conn is None:
+            raise TypeError("webhook_endpoint requires conn or connection_factory")
+        return await run_blocking(_process_webhook, conn, embedder, settings, **kwargs)
+
+    def run():
+        worker_conn = connection_factory()
+        try:
+            return _process_webhook(worker_conn, embedder, settings, **kwargs)
+        finally:
+            worker_conn.close()
+
+    return await run_blocking(run)
 
 
 def _mark_dirty(conn, commit_sha: str) -> None:

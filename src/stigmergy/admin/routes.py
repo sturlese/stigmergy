@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
 from pathlib import Path
 
 from starlette.applications import Starlette
-from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
@@ -23,6 +23,7 @@ from stigmergy.admin.service import (
 from stigmergy.admin.settings import AdminSettings
 from stigmergy.capture.errors import CaptureError
 from stigmergy.capture.schema import MAX_ARTIFACT_BYTES
+from stigmergy.kernel.blocking import run_blocking
 
 log = logging.getLogger(__name__)
 
@@ -278,6 +279,10 @@ async def _upload_bytes(value) -> tuple[bytes, str | None, str | None]:
     return data, value.content_type, value.filename
 
 
+async def _service_call(method, /, *args, **kwargs):
+    return await run_blocking(functools.partial(method, *args, **kwargs))
+
+
 def _audience_from_form(value):
     if value in (None, "", "null"):
         return None
@@ -297,17 +302,18 @@ def _build_admin_app(service: AdminService) -> Starlette:
 
     @_endpoint
     async def meta(_request):
-        return service.meta()
+        return await _service_call(service.meta)
 
     @_endpoint
     async def overview(_request):
-        return service.overview()
+        return await _service_call(service.overview)
 
     @_endpoint
     async def captures(request):
         statuses = request.query_params.getlist("status") or None
         submitter = request.query_params.get("submitter") or None
-        return service.captures(
+        return await _service_call(
+            service.captures,
             statuses=statuses,
             submitter=submitter,
             limit=_integer(request.query_params.get("limit", "50"), "limit"),
@@ -316,16 +322,16 @@ def _build_admin_app(service: AdminService) -> Starlette:
 
     @_endpoint
     async def capture_detail(request):
-        return service.capture(request.path_params["capture_id"])
+        return await _service_call(service.capture, request.path_params["capture_id"])
 
     @_endpoint
     async def capture_retry(request):
-        return service.retry_capture(request.path_params["capture_id"])
+        return await _service_call(service.retry_capture, request.path_params["capture_id"])
 
     @_endpoint
     async def capture_text(request):
         data = await _json(request)
-        return await run_in_threadpool(
+        return await _service_call(
             service.submit_text,
             text=_text(data.get("text"), "text", required=True),
             title=_text(data.get("title"), "title"),
@@ -337,7 +343,7 @@ def _build_admin_app(service: AdminService) -> Starlette:
     @_endpoint
     async def capture_url(request):
         data = await _json(request)
-        return await run_in_threadpool(
+        return await _service_call(
             service.submit_url,
             url=_text(data.get("url"), "url", required=True),
             title=_text(data.get("title"), "title"),
@@ -350,7 +356,7 @@ def _build_admin_app(service: AdminService) -> Starlette:
     async def capture_file(request):
         form = await _form(request)
         data, media_type, filename = await _upload_bytes(form.get("file"))
-        return await run_in_threadpool(
+        return await _service_call(
             service.submit_file,
             data=data,
             filename=filename or "upload",
@@ -363,7 +369,8 @@ def _build_admin_app(service: AdminService) -> Starlette:
 
     @_endpoint
     async def changes(request):
-        return service.changes(
+        return await _service_call(
+            service.changes,
             trigger=request.query_params.get("trigger") or None,
             limit=_integer(request.query_params.get("limit", "50"), "limit"),
             offset=_integer(request.query_params.get("offset", "0"), "offset"),
@@ -371,16 +378,16 @@ def _build_admin_app(service: AdminService) -> Starlette:
 
     @_endpoint
     async def change_detail(request):
-        return await run_in_threadpool(service.change, request.path_params["change_id"])
+        return await _service_call(service.change, request.path_params["change_id"])
 
     @_endpoint
     async def contradictions_list(_request):
-        return service.contradictions()
+        return await _service_call(service.contradictions)
 
     @_endpoint
     async def contradiction_resolve(request):
         data = await _json(request)
-        return await run_in_threadpool(
+        return await _service_call(
             service.resolve_contradiction,
             contradiction_id=_text(data.get("contradiction_id"), "contradiction_id", required=True),
             decision=_text(data.get("decision"), "decision", required=True),
@@ -393,7 +400,7 @@ def _build_admin_app(service: AdminService) -> Starlette:
     async def contradiction_resolve_file(request):
         form = await _form(request)
         support = await _upload_bytes(form.get("file"))
-        return await run_in_threadpool(
+        return await _service_call(
             service.resolve_contradiction,
             contradiction_id=_text(form.get("contradiction_id"), "contradiction_id", required=True),
             decision=_text(form.get("decision"), "decision", required=True),
@@ -404,7 +411,7 @@ def _build_admin_app(service: AdminService) -> Starlette:
 
     @_endpoint
     async def entities(_request):
-        return service.entities()
+        return await _service_call(service.entities)
 
     @_endpoint
     async def entity_operation(request):
@@ -415,7 +422,8 @@ def _build_admin_app(service: AdminService) -> Starlette:
         evidence = data.get("evidence")
         if evidence is not None and not isinstance(evidence, dict):
             raise AdminBadRequest("evidence must be an object")
-        return service.entity_operation(
+        return await _service_call(
+            service.entity_operation,
             action=_text(data.get("action"), "action", required=True),
             entity_ids=entity_ids,
             rationale=_text(data.get("rationale"), "rationale", required=True),
@@ -428,31 +436,35 @@ def _build_admin_app(service: AdminService) -> Starlette:
         paths = data.get("paths")
         if not isinstance(paths, list):
             raise AdminBadRequest("paths must be a list")
-        return service.delete_pages(
+        return await _service_call(
+            service.delete_pages,
             paths=paths,
             rationale=_text(data.get("rationale"), "rationale", required=True),
         )
 
     @_endpoint
     async def gardener(_request):
-        return service.gardener()
+        return await _service_call(service.gardener)
 
     @_endpoint
     async def gardener_trigger(request):
         data = await _json(request)
-        return service.trigger_garden(rationale=_text(data.get("rationale"), "rationale"))
+        return await _service_call(
+            service.trigger_garden,
+            rationale=_text(data.get("rationale"), "rationale"),
+        )
 
     @_endpoint
     async def index_state(_request):
-        return service.index_state()
+        return await _service_call(service.index_state)
 
     @_endpoint
     async def worker(_request):
-        return service.worker_status()
+        return await _service_call(service.worker_status)
 
     @_endpoint
     async def activity(_request):
-        return service.activity()
+        return await _service_call(service.activity)
 
     routes = [
         Route(ADMIN_PREFIX, root, methods=["GET"]),

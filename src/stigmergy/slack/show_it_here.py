@@ -3,7 +3,9 @@ under the clicker's own identity — server-side scoped, because Slack has no pe
 """
 import logging
 
+from stigmergy.kernel.blocking import run_blocking
 from stigmergy.slack import copy, render
+from stigmergy.slack.context import run_with_service
 from stigmergy.slack.gateway import SlackApiError
 from stigmergy.slack.identity import Resolved
 
@@ -53,9 +55,14 @@ async def handle_show_it_here(ctx, *, action_value: str, clicking_slack_user_id:
     if not isinstance(identity_result, Resolved):
         return   # silently declined — including an identity failure of the clicking user
 
-    service = ctx.build_service(identity_result.email, identity_result.audiences)
     try:
-        result = service.read_page(path)
+        result = await run_blocking(
+            run_with_service,
+            ctx,
+            identity_result.email,
+            identity_result.audiences,
+            lambda service: service.read_page(path),
+        )
     except Exception as error:
         # Silence is the DELIBERATE answer for a wrong clicker, an expired token and an identity
         # failure — which is exactly why a real fault must not borrow it. `RateLimitError` is an

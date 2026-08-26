@@ -1,16 +1,17 @@
 """MCP tools shared by the stdio and authenticated HTTP transports."""
 import argparse
+import asyncio
 import functools
 import json
 import logging
 import sys
 
-import anyio.to_thread
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 from stigmergy.capture.errors import CaptureError
 from stigmergy.index.errors import StigmergyIndexError
+from stigmergy.kernel.blocking import run_blocking
 from stigmergy.server.errors import (
     CapabilityUnavailableError,
     RateLimitError,
@@ -50,11 +51,13 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
                   transport_security=transport_security, json_response=json_response)
 
     @mcp.tool()
-    def search_brain(query: str, filters: dict | None = None,
-                     max_results: int = DEFAULT_MAX_RESULTS) -> str:
+    async def search_brain(query: str, filters: dict | None = None,
+                           max_results: int = DEFAULT_MAX_RESULTS) -> str:
         """Search visible team knowledge with hybrid lexical and vector ranking."""
         try:
-            result = service.search(query, filters=filters, max_results=max_results)
+            result = await run_blocking(
+                service.search, query, filters=filters, max_results=max_results
+            )
             return json.dumps(result, **_DUMP)
         except (ValueError, StigmergyIndexError, RateLimitError,
                 CapabilityUnavailableError) as ex:
@@ -67,10 +70,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return _failure("search_brain", ex)
 
     @mcp.tool()
-    def read_page(path: str) -> str:
+    async def read_page(path: str) -> str:
         """Read one visible wiki or source page with its links and citations."""
         try:
-            return json.dumps(service.read_page(path), **_DUMP)
+            return json.dumps(await run_blocking(service.read_page, path), **_DUMP)
         except RateLimitError as ex:
             return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — no bare `except ValueError`: it would also catch
@@ -82,10 +85,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return _failure("read_page", ex)
 
     @mcp.tool()
-    def list_entities() -> str:
+    async def list_entities() -> str:
         """List entity identities with a name claim visible to the caller."""
         try:
-            return json.dumps(service.list_entities(), **_DUMP)
+            return json.dumps(await run_blocking(service.list_entities), **_DUMP)
         except RateLimitError as ex:
             return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — class name only: a malformed entity registry
@@ -93,10 +96,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return _failure("list_entities", ex)
 
     @mcp.tool()
-    def describe_entity(entity: str) -> str:
+    async def describe_entity(entity: str) -> str:
         """Compose visible knowledge for one entity ID, name, or alias."""
         try:
-            return json.dumps(service.describe_entity(entity), **_DUMP)
+            return json.dumps(await run_blocking(service.describe_entity, entity), **_DUMP)
         except RateLimitError as ex:
             return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — same narrowing as read_page above
@@ -124,7 +127,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         """
         try:
             return json.dumps(
-                await anyio.to_thread.run_sync(
+                await run_blocking(
                     functools.partial(
                         service.submit,
                         text=text,
@@ -143,14 +146,17 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return _failure("brain_submit", ex)
 
     @mcp.tool()
-    def brain_submissions(limit: int = DEFAULT_SUBMISSION_LIMIT, status: str = "") -> str:
+    async def brain_submissions(limit: int = DEFAULT_SUBMISSION_LIMIT, status: str = "") -> str:
         """List capture progress as queued, processing, landed, or failed.
 
         Members see their own submissions. The unrestricted identity sees all submissions.
         Artifact metadata is returned without document content.
         """
         try:
-            return json.dumps(service.submissions(limit=limit, status=status or None), **_DUMP)
+            return json.dumps(
+                await run_blocking(service.submissions, limit=limit, status=status or None),
+                **_DUMP,
+            )
         except (ValueError, CaptureError, RateLimitError) as ex:
             # ValueError here is the unknown-status rejection — the caller's own value plus a
             # static status list, safe to echo.
@@ -167,7 +173,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         """
         try:
             return json.dumps(
-                await anyio.to_thread.run_sync(
+                await run_blocking(
                     functools.partial(service.delete_pages, paths, why, source="mcp")),
                 **_DUMP)
         except (CaptureError, RateLimitError, CapabilityUnavailableError) as ex:
@@ -183,20 +189,30 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         """Answer from visible team knowledge with cited, verified evidence."""
         from stigmergy.answer.service import AnswerService, audit_summary
 
-        async def run():
+        async def run(actual_service):
             # Length-checked inside the rate-limited/audited call, before the expensive work.
             check_arg_length("question", question)
             # `ask` searches, so it needs `search_brain`'s capability — asserted HERE because
             # `ask` lives one layer up and `service.py` may never import `stigmergy.answer`;
             # before the agent, so a keyless server refuses in milliseconds.
-            service.require_embedder()
-            return await AnswerService(service).ask(question)
+            actual_service.require_embedder()
+            return await AnswerService(actual_service).ask(question)
+
+        def run_sync(actual_service):
+            return asyncio.run(
+                actual_service.call_async(
+                    "ask", {"question": question}, lambda: run(actual_service),
+                    summarize=audit_summary,
+                )
+            )
 
         try:
             # `summarize=audit_summary`: the same summary the Slack transport writes, so
             # `audit_log.result` means one thing for `ask` whichever transport called it.
-            result = await service.call_async("ask", {"question": question}, run,
-                                              summarize=audit_summary)
+            if hasattr(service, "run_scoped"):
+                result = await run_blocking(service.run_scoped, run_sync)
+            else:
+                result = await run_blocking(run_sync, service)
             # `usage` is operator telemetry, already recorded by `audit_summary` — the tool's
             # documented response shape does not grow a field for it.
             result.pop("usage", None)
