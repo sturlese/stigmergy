@@ -79,6 +79,7 @@ def test_resolution_plan_without_capture_resolution_intent_is_refused(clean_queu
             relative_source="sources/2026/08/00000000-0000-4000-8000-000000000001.md",
             readable_artifacts=(),
             reasons={},
+            visible_entities=(),
             visible_entity_ids=frozenset(),
             allowed_contradiction_sources=frozenset(),
         )
@@ -1533,7 +1534,10 @@ def test_explicit_entity_lists_cannot_suppress_entities_named_in_page(
             PageMutation(
                 action="update",
                 path="wiki/notes/Empty entity page.md",
-                body="# Empty entity page\n\nCascade Works approved the revised renewal.",
+                body=(
+                    "# Empty entity page\n\nNorthstar Research and Cascade Works "
+                    "approved the revised renewal."
+                ),
                 entities=(),
                 reason="The new source replaces the prior page conclusion",
             ),
@@ -1546,7 +1550,7 @@ def test_explicit_entity_lists_cannot_suppress_entities_named_in_page(
         actor=actor,
         audience=None,
         key="explicit-empty-update-cannot-suppress-exact-match",
-        text="Cascade Works approved the revised renewal.",
+        text="Northstar Research and Cascade Works approved the revised renewal.",
         plan=update,
     )
 
@@ -1571,7 +1575,7 @@ def test_explicit_entity_lists_cannot_suppress_entities_named_in_page(
             text=True,
         ),
     )
-    assert updated.entities == (cascade_id,)
+    assert updated.entities == (cascade_id, entity_ids["Northstar Research"])
 
 
 def test_guessed_hidden_page_and_entity_cannot_be_affected(clean_queue, target_repo):

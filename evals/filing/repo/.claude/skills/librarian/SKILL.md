@@ -87,8 +87,8 @@ Omit `entities` by default so the worker performs automatic unambiguous same-pla
 explicit `entities` list is exhaustive, never partial: use one only when you deliberately intend
 the exact anchor set, and include every identity discussed by the page. Never provide an explicit
 list merely to repeat some obvious anchors. Exact matches are additive: an explicit list,
-including an empty list, cannot suppress an unambiguous same-plan proposed identity named in the
-page title or body. The explicit list controls all other identity anchors.
+including an empty list, cannot suppress an unambiguous visible or same-plan proposed identity
+named in the page title or body. The explicit list controls all other identity anchors.
 
 ## Contradictions
 
