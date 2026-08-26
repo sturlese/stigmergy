@@ -9,15 +9,17 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from stigmergy.admin.routes import compose
+from stigmergy.admin.routes import MAX_ADMIN_BODY_BYTES, compose
 from stigmergy.admin.schema import ensure_admin_schema
 from stigmergy.admin.service import AdminRefused, AdminService
 from stigmergy.admin.settings import AdminSettings
 from stigmergy.capture import evidence, queue, schema, uploads
+from stigmergy.capture.errors import FetchRejected, FetchUnavailable
 from stigmergy.capture.fetch import FetchedArtifact
 from stigmergy.changes import store as change_store
 from stigmergy.entities.model import registry_bytes
 from stigmergy.index import build
+from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.index.corpus import split_frontmatter_checked
 from stigmergy.knowledge import contradictions
@@ -168,6 +170,189 @@ def test_admin_refuses_a_configured_actor_without_unrestricted_access(admin_rig)
             admin_settings=AdminSettings(token_hash=hash_token(TOKEN), actor="ana"),
             evidence=admin_rig.evidence,
         )
+
+
+def test_admin_route_marks_forbidden_configured_actor_as_forbidden(admin_rig, monkeypatch):
+    def refuse_actor(_service):
+        raise AdminRefused("the configured admin actor is not unrestricted")
+
+    monkeypatch.setattr(AdminService, "_principal", refuse_actor)
+
+    response = admin_rig.client.get("/admin/api/meta", headers=admin_rig.auth)
+
+    assert response.json() == {"error": "the configured admin actor is not unrestricted"}
+    assert TOKEN not in response.text
+    assert response.status_code != 409
+    assert response.status_code == 403
+
+
+def test_admin_route_marks_missing_evidence_service_as_unavailable(admin_rig):
+    server_settings = Settings(
+        identities_path=str(admin_rig.repo / "ops" / "identities.json"),
+        entity_registry_path=str(admin_rig.repo / "ops" / "entity-registry.json"),
+        knowledge_repo=str(admin_rig.repo),
+        knowledge_branch="main",
+        dsn=testdb.dsn(),
+        embedder="fake",
+        llm="fake",
+    )
+    app = compose(
+        Starlette(),
+        conn=admin_rig.conn,
+        server_settings=server_settings,
+        admin_settings=AdminSettings(token_hash=hash_token(TOKEN), actor=MASTER),
+        evidence=None,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/api/captures/text",
+            headers=admin_rig.auth,
+            json={"text": "capture-secret-must-not-leak", "audience": None},
+        )
+
+    assert response.json() == {"error": "evidence storage is unavailable"}
+    assert "capture-secret-must-not-leak" not in response.text
+    assert TOKEN not in response.text
+    assert response.status_code != 409
+    assert response.status_code == 503
+
+
+def test_admin_route_marks_public_url_fetch_unavailable_as_temporary_and_safe(
+    admin_rig, monkeypatch
+):
+    submitted_url = "https://submitted.example/private?access_token=query-secret"
+    raw_detail = "resolved 198.51.100.17 for submitted.example: socket timeout"
+
+    def unavailable(_url):
+        raise FetchUnavailable(raw_detail)
+
+    monkeypatch.setattr("stigmergy.admin.service.fetch.fetch_public", unavailable)
+
+    response = admin_rig.client.post(
+        "/admin/api/captures/url",
+        headers=admin_rig.auth,
+        json={"url": submitted_url, "audience": None},
+    )
+
+    assert response.json() == {"error": "public URL is temporarily unavailable"}
+    for forbidden in (submitted_url, "query-secret", "198.51.100.17", raw_detail):
+        assert forbidden not in response.text
+    assert response.status_code == 503
+
+
+def test_admin_route_keeps_public_url_fetch_rejection_as_safe_bad_request(admin_rig, monkeypatch):
+    submitted_url = "https://submitted.example/private?access_token=query-secret"
+    raw_detail = "resolved 198.51.100.17 for submitted.example: policy denied"
+
+    def rejected(_url):
+        raise FetchRejected(raw_detail)
+
+    monkeypatch.setattr("stigmergy.admin.service.fetch.fetch_public", rejected)
+
+    response = admin_rig.client.post(
+        "/admin/api/captures/url",
+        headers=admin_rig.auth,
+        json={"url": submitted_url, "audience": None},
+    )
+
+    assert response.status_code == 400
+    assert set(response.json()) == {"error"}
+    for forbidden in (submitted_url, "query-secret", "198.51.100.17", raw_detail):
+        assert forbidden not in response.text
+
+
+def test_admin_route_marks_corrupt_entity_registry_as_unavailable(admin_rig):
+    index_store.write_ops_file(
+        admin_rig.conn,
+        index_store.ENTITY_REGISTRY_RELPATH,
+        '{"registry-secret"',
+        "test corrupt registry",
+    )
+
+    response = admin_rig.client.get("/admin/api/entities", headers=admin_rig.auth)
+
+    assert response.json() == {"error": "entity registry could not be read"}
+    assert "registry-secret" not in response.text
+    assert TOKEN not in response.text
+    assert response.status_code != 409
+    assert response.status_code == 503
+
+
+def test_admin_route_marks_unavailable_git_patch_reconstruction_as_unavailable(admin_rig):
+    parent = _git(admin_rig.repo, "rev-parse", "HEAD")
+    path = admin_rig.repo / "wiki" / "notes" / "Patch recovery.md"
+    path.write_text(
+        render_page(
+            path="wiki/notes/Patch recovery.md",
+            role="note",
+            title="Patch recovery",
+            body="# Patch recovery\n\npatch-recovery-secret",
+            acl=None,
+            created=dt.date(2026, 8, 24),
+            updated=dt.date(2026, 8, 24),
+        )
+    )
+    _git(admin_rig.repo, "add", ".")
+    _git(admin_rig.repo, "commit", "-q", "-m", "add patch recovery")
+    commit = _git(admin_rig.repo, "rev-parse", "HEAD")
+    record = change_store.record_change(
+        admin_rig.conn,
+        admin_rig.evidence,
+        repo=str(admin_rig.repo),
+        trigger="capture",
+        actor=MASTER,
+        parent_commit_sha=parent,
+        commit_sha=commit,
+        summary="Recorded patch recovery",
+        reasons={"wiki/notes/Patch recovery.md": "Recorded the recovery procedure"},
+    )
+    assert admin_rig.evidence.delete(record.exact_patch_ref)
+    server_settings = Settings(
+        identities_path=str(admin_rig.repo / "ops" / "identities.json"),
+        entity_registry_path=str(admin_rig.repo / "ops" / "entity-registry.json"),
+        dsn=testdb.dsn(),
+        embedder="fake",
+        llm="fake",
+    )
+    app = compose(
+        Starlette(),
+        conn=admin_rig.conn,
+        server_settings=server_settings,
+        admin_settings=AdminSettings(token_hash=hash_token(TOKEN), actor=MASTER),
+        evidence=admin_rig.evidence,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/admin/api/changes/{record.id}", headers=admin_rig.auth)
+
+    assert response.json() == {
+        "error": "the exact patch cache is missing and Git reconstruction is unavailable"
+    }
+    assert "patch-recovery-secret" not in response.text
+    assert TOKEN not in response.text
+    assert response.status_code != 409
+    assert response.status_code == 503
+
+
+def test_admin_route_preserves_too_large_and_unexpected_error_mappings(admin_rig, monkeypatch):
+    too_large = admin_rig.client.post(
+        "/admin/api/captures/text",
+        headers={**admin_rig.auth, "Content-Length": str(MAX_ADMIN_BODY_BYTES + 1)},
+        content=b"",
+    )
+
+    def explode(_service):
+        raise RuntimeError("internal-secret")
+
+    monkeypatch.setattr(AdminService, "meta", explode)
+    unexpected = admin_rig.client.get("/admin/api/meta", headers=admin_rig.auth)
+
+    assert too_large.status_code == 413
+    assert too_large.json() == {"error": "request too large"}
+    assert unexpected.status_code == 500
+    assert unexpected.json() == {"error": "operation failed (RuntimeError)"}
+    assert "internal-secret" not in unexpected.text
 
 
 def test_text_file_and_public_url_use_one_normalized_capture_contract(admin_rig, monkeypatch):

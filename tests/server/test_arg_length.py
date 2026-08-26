@@ -10,7 +10,7 @@ echoed verbatim (it is server-authored and actionable), and any other `ValueErro
 `pydantic_core.ValidationError` arrives in — still collapses to a class name."""
 import pytest
 
-from stigmergy.server.errors import RateLimitError
+from stigmergy.server.errors import ArgumentLengthError, RateLimitError
 from stigmergy.server.service import MAX_ARG_CHARS, BrainService, check_arg_length
 from stigmergy.server.settings import Settings
 from tests.server.conftest import make_service
@@ -45,7 +45,7 @@ def test_check_arg_length_at_the_limit_passes():
 
 
 def test_check_arg_length_one_over_the_limit_raises():
-    with pytest.raises(ValueError, match=f"query too long \\(max {MAX_ARG_CHARS} characters\\)"):
+    with pytest.raises(ArgumentLengthError, match=f"query too long \\(max {MAX_ARG_CHARS} characters\\)"):
         check_arg_length("query", "x" * (MAX_ARG_CHARS + 1))
 
 
@@ -53,7 +53,7 @@ def test_check_arg_length_error_message_never_echoes_the_input():
     """Generic wording only: the error names the ARGUMENT, never the (potentially huge, or
     content-sensitive) VALUE itself."""
     huge = "SECRET-MARKER-" + "x" * MAX_ARG_CHARS
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ArgumentLengthError) as exc_info:
         check_arg_length("query", huge)
     assert "SECRET-MARKER" not in str(exc_info.value)
 
@@ -62,7 +62,7 @@ def test_check_arg_length_error_message_never_echoes_the_input():
 # ── `filters` VALUES are user-controlled too ───────────────────────────────────────────────────
 def test_over_limit_filters_value_is_rejected_before_touching_conn_or_embedder():
     svc = poisoned_service()
-    with pytest.raises(ValueError, match=r"filters\.entity too long"):
+    with pytest.raises(ArgumentLengthError, match=r"filters\.entity too long"):
         svc.search("ok query", filters={"entity": "x" * (MAX_ARG_CHARS + 1)})
 
 
@@ -70,7 +70,7 @@ def test_over_limit_filters_value_is_checked_even_when_query_itself_is_fine():
     """The `query` string alone passing its own check must not shadow a still-oversized `filters`
     value — both are independent guards over the SAME call."""
     svc = poisoned_service()
-    with pytest.raises(ValueError, match="too long"):
+    with pytest.raises(ArgumentLengthError, match="too long"):
         svc.search("a perfectly reasonable query", filters={"type": "x" * (MAX_ARG_CHARS + 1)})
 
 
@@ -78,7 +78,7 @@ def test_over_limit_filters_value_names_its_own_key_not_just_filters():
     """The error names WHICH filter overflowed (`filters.<key>`), not a generic 'filters too
     long' — actionable for the caller, and distinguishable from the `query`/`path` cases."""
     svc = poisoned_service()
-    with pytest.raises(ValueError, match=r"^filters\.owner too long"):
+    with pytest.raises(ArgumentLengthError, match=r"^filters\.owner too long"):
         svc.search("x", filters={"owner": "y" * (MAX_ARG_CHARS + 1)})
 
 
@@ -88,7 +88,7 @@ def test_over_limit_filters_key_is_rejected_before_touching_conn_or_embedder():
     every unrecognized key verbatim into its own ValueError, so a giant key was both wasted
     query-planner work and a reflection surface, never merely an unbounded value."""
     svc = poisoned_service()
-    with pytest.raises(ValueError, match="too long"):
+    with pytest.raises(ArgumentLengthError, match="too long"):
         svc.search("ok query", filters={"x" * (MAX_ARG_CHARS + 1): "acme"})
 
 
@@ -99,7 +99,7 @@ def test_over_limit_filters_key_error_never_echoes_the_key_itself():
     holds."""
     svc = poisoned_service()
     huge_key = "SECRET-MARKER-" + "x" * MAX_ARG_CHARS
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ArgumentLengthError) as exc_info:
         svc.search("ok query", filters={huge_key: "acme"})
     assert "SECRET-MARKER" not in str(exc_info.value)
 
@@ -108,7 +108,7 @@ def test_over_limit_filters_key_is_checked_even_when_its_own_value_is_fine():
     """An in-bounds VALUE must not shadow a still-oversized KEY on the same filter entry — both
     are independent guards over the same (key, value) pair."""
     svc = poisoned_service()
-    with pytest.raises(ValueError, match="too long"):
+    with pytest.raises(ArgumentLengthError, match="too long"):
         svc.search("ok query", filters={"y" * (MAX_ARG_CHARS + 1): "short"})
 
 
@@ -135,12 +135,12 @@ def test_over_limit_argument_still_writes_an_audit_row():
     any other service-layer error."""
     audit = FakeAudit()
     svc = poisoned_service(audit=audit)
-    with pytest.raises(ValueError):
+    with pytest.raises(ArgumentLengthError):
         svc.search("x" * (MAX_ARG_CHARS + 1))
 
     assert len(audit.rows) == 1
     assert audit.rows[0]["outcome"] == "error"
-    assert audit.rows[0]["error_class"] == "ValueError"
+    assert audit.rows[0]["error_class"] == "ArgumentLengthError"
     assert audit.rows[0]["tool"] == "search_brain"
 
 
@@ -148,10 +148,10 @@ def test_over_limit_argument_is_checked_before_the_rate_limiter_would_matter():
     """The length check and the rate limiter are independent guards — an identity with budget to
     spare still gets the clean ValueError, not confused with a RateLimitError."""
     svc = poisoned_service()
-    with pytest.raises(ValueError):
+    with pytest.raises(ArgumentLengthError):
         svc.search("x" * (MAX_ARG_CHARS + 1))
     # sanity: RateLimitError is a genuinely different exception type this call did NOT raise
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ArgumentLengthError) as exc_info:
         svc.search("x" * (MAX_ARG_CHARS + 1))
     assert not isinstance(exc_info.value, RateLimitError)
 
@@ -194,7 +194,7 @@ def test_ask_over_the_limit_never_constructs_the_answer_service(monkeypatch):
     out = _call_mcp(mcp, "ask", question="x" * (MAX_ARG_CHARS + 1))
     assert out == {"error": f"question too long (max {MAX_ARG_CHARS} characters)"}
     assert svc.audit.rows[-1]["outcome"] == "error"
-    assert svc.audit.rows[-1]["error_class"] == "ValueError"
+    assert svc.audit.rows[-1]["error_class"] == "ArgumentLengthError"
 
 
 def test_brain_delete_over_the_limit_reason_returns_the_checks_own_sentence():
@@ -218,7 +218,7 @@ def test_brain_delete_over_the_limit_reason_returns_the_checks_own_sentence():
     out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md"],
                     why="x" * (MAX_ARG_CHARS + 1))
     assert out == {"error": f"why too long (max {MAX_ARG_CHARS} characters)"}
-    assert svc.audit.rows[-1]["error_class"] == "ValueError"
+    assert svc.audit.rows[-1]["error_class"] == "ArgumentLengthError"
 
 
 def test_brain_delete_checks_every_path_it_was_handed_not_only_the_reason():
@@ -234,6 +234,33 @@ def test_brain_delete_checks_every_path_it_was_handed_not_only_the_reason():
     out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md", "x" * (MAX_ARG_CHARS + 1)],
                     why="a short reason")
     assert out == {"error": f"path too long (max {MAX_ARG_CHARS} characters)"}
+
+
+@pytest.mark.parametrize(
+    ("tool", "field", "make_args"),
+    [
+        ("search_brain", "query", lambda value: {"query": value}),
+        ("read_page", "path", lambda value: {"path": value}),
+        ("describe_entity", "entity", lambda value: {"entity": value}),
+        ("ask", "question", lambda value: {"question": value}),
+        ("brain_delete", "why", lambda value: {"paths": ["wiki/notes/Old.md"], "why": value}),
+    ],
+)
+def test_each_oversized_mcp_handler_returns_the_safe_message_and_audits_once(
+    tool, field, make_args
+):
+    from stigmergy.server.mcp_server import build_mcp
+
+    audit = FakeAudit()
+    mcp = build_mcp(poisoned_service(audit=audit))
+
+    out = _call_mcp(mcp, tool, **make_args("x" * (MAX_ARG_CHARS + 1)))
+
+    assert out == {"error": f"{field} too long (max {MAX_ARG_CHARS} characters)"}
+    assert len(audit.rows) == 1
+    assert audit.rows[0]["tool"] == tool
+    assert audit.rows[0]["outcome"] == "error"
+    assert audit.rows[0]["error_class"] == "ArgumentLengthError"
 
 
 def test_brain_delete_at_the_limit_reason_reaches_the_service():

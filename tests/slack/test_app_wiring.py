@@ -11,6 +11,7 @@ import pytest
 
 from stigmergy.server.settings import Settings
 from stigmergy.slack.app import _event_team_id, build_bolt_app, build_context, main
+from stigmergy.slack.bolt_gateway import API_TIMEOUT_S
 from stigmergy.slack.context import SlackContext
 from stigmergy.slack.gateway import FakeSlackGateway
 from stigmergy.slack.settings import SlackSettings, no_link_resolver
@@ -62,6 +63,16 @@ def test_build_bolt_app_registers_every_listener_with_no_network(indexed):
     assert app is not None
 
 
+def test_build_bolt_app_configures_its_internal_client_timeout(indexed):
+    conn, fixture = indexed
+    ctx = SlackContext(settings=_settings(), gateway=FakeSlackGateway(), conn=conn, embedder=None,
+                       link_resolver=no_link_resolver)
+
+    app = build_bolt_app(ctx)
+
+    assert app.client.timeout == API_TIMEOUT_S
+
+
 def test_build_context_wires_the_process_wide_resources(indexed):
     conn, fixture = indexed
     settings = SlackSettings(
@@ -90,6 +101,33 @@ def test_build_context_bounds_postgres_statements_for_slack_serving(indexed):
         cursor.execute("SHOW statement_timeout")
         statement_timeout = cursor.fetchone()[0]
     assert statement_timeout not in {"0", "0ms", "0s"}
+
+
+def test_build_context_uses_the_timeout_aware_gateway_factory(indexed, monkeypatch):
+    """Production Slack traffic must use the factory that configures SDK timeouts."""
+    conn, fixture = indexed
+    settings = SlackSettings(
+        app_token="xapp-test", bot_token="xoxb-test", team_id="T1",
+        channels_path=fixture.identities_path,
+        server=Settings(identities_path=fixture.identities_path,
+                        dsn=None, embedder="fake", llm="fake"))
+    expected_gateway = FakeSlackGateway()
+    tokens = []
+
+    def build_gateway(bot_token):
+        tokens.append(bot_token)
+        return expected_gateway
+
+    def direct_sdk_client(*args, **kwargs):
+        raise AssertionError("build_context bypassed the timeout-aware gateway factory")
+
+    monkeypatch.setattr("stigmergy.slack.bolt_gateway.build_gateway", build_gateway)
+    monkeypatch.setattr("slack_sdk.web.async_client.AsyncWebClient", direct_sdk_client)
+
+    ctx = build_context(settings, conn=conn)
+
+    assert ctx.gateway is expected_gateway
+    assert tokens == ["xoxb-test"]
 
 
 # ── Slack credentials come from the environment, never the repo ────────────────────────────────

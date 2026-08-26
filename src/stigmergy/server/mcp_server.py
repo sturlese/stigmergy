@@ -13,6 +13,7 @@ from stigmergy.capture.errors import CaptureError
 from stigmergy.index.errors import StigmergyIndexError
 from stigmergy.kernel.blocking import run_blocking
 from stigmergy.server.errors import (
+    ArgumentLengthError,
     CapabilityUnavailableError,
     RateLimitError,
     StartupError,
@@ -59,7 +60,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
                 service.search, query, filters=filters, max_results=max_results
             )
             return json.dumps(result, **_DUMP)
-        except (ValueError, StigmergyIndexError, RateLimitError,
+        except (ArgumentLengthError, ValueError, StigmergyIndexError, RateLimitError,
                 CapabilityUnavailableError) as ex:
             # All server-authored and safe to echo verbatim; `CapabilityUnavailableError`
             # especially — collapsed to a class name it would read as an unexplained outage
@@ -74,14 +75,11 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         """Read one visible wiki or source page with its links and citations."""
         try:
             return json.dumps(await run_blocking(service.read_page, path), **_DUMP)
-        except RateLimitError as ex:
+        except (ArgumentLengthError, RateLimitError) as ex:
             return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — no bare `except ValueError`: it would also catch
             # a `pydantic_core.ValidationError` (a ValueError subclass) whose message can carry
-            # untrusted LLM output or internal field paths. Only `check_arg_length`'s own marked
-            # rejection is known-safe to echo; everything else is class name only.
-            if getattr(ex, "is_arg_length_error", False):
-                return _error(str(ex))
+            # untrusted LLM output or internal field paths.
             return _failure("read_page", ex)
 
     @mcp.tool()
@@ -100,11 +98,9 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         """Compose visible knowledge for one entity ID, name, or alias."""
         try:
             return json.dumps(await run_blocking(service.describe_entity, entity), **_DUMP)
-        except RateLimitError as ex:
+        except (ArgumentLengthError, RateLimitError) as ex:
             return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — same narrowing as read_page above
-            if getattr(ex, "is_arg_length_error", False):
-                return _error(str(ex))
             return _failure("describe_entity", ex)
 
     @mcp.tool()
@@ -176,12 +172,9 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
                 await run_blocking(
                     functools.partial(service.delete_pages, paths, why, source="mcp")),
                 **_DUMP)
-        except (CaptureError, RateLimitError, CapabilityUnavailableError) as ex:
+        except (ArgumentLengthError, CaptureError, RateLimitError, CapabilityUnavailableError) as ex:
             return _error(str(ex))
-        except Exception as ex:  # noqa: BLE001 — narrow on purpose: only `check_arg_length`'s
-            # own marked rejection is known-safe to echo; anything else is a class name.
-            if getattr(ex, "is_arg_length_error", False):
-                return _error(str(ex))
+        except Exception as ex:  # noqa: BLE001 — only typed safe errors are echoed.
             return _failure("brain_delete", ex)
 
     @mcp.tool()
@@ -217,13 +210,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             # documented response shape does not grow a field for it.
             result.pop("usage", None)
             return json.dumps(result, **_DUMP)
-        except (RateLimitError, CapabilityUnavailableError) as ex:
+        except (ArgumentLengthError, RateLimitError, CapabilityUnavailableError) as ex:
             return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — never a traceback or a raw message (which can
-            # echo untrusted content): class name + a fixed actionable hint only. The one
-            # exception is check_arg_length's own marked rejection, same narrowing as read_page.
-            if getattr(ex, "is_arg_length_error", False):
-                return _error(str(ex))
+            # echo untrusted content): class name + a fixed actionable hint only.
             return _failure("ask", ex, "; check ANSWER_LLM / OPENROUTER_API_KEY and that the index "
                                        "is built")
 

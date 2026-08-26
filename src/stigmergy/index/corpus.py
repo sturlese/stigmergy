@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from stigmergy.index.errors import StigmergyIndexError
+
 ZONES = ("wiki", "sources")
 WIKILINK_RE = re.compile(r"!?\[\[([^\[\]]+?)\]\]")
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
@@ -20,7 +22,7 @@ _SOURCE_PATH_RE = re.compile(
 )
 
 
-class CorpusContractError(ValueError):
+class CorpusContractError(StigmergyIndexError):
     pass
 
 

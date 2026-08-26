@@ -10,6 +10,10 @@ class StigmergyServerError(RuntimeError):
     """Base class for server startup/domain errors."""
 
 
+class ArgumentLengthError(StigmergyServerError):
+    """A caller supplied an argument that exceeds the safe transport limit."""
+
+
 class IdentityError(StigmergyServerError):
     """Fail-closed identity resolution: no identity, unknown identity, or an unreadable/malformed
     identities file. The server never starts without a resolved audience scope."""

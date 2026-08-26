@@ -414,11 +414,15 @@ class AnswerService:
 
     def _compose_reason(self, case: str, question: str, searched: list[str],
                         surfaced: list[str]) -> str:
-        """`run_facts_reason` plus a backstop: a composed sentence carrying a figure the asker's
-        own question does not falls back to the generic no-surface sentence. Scanned against
-        `question`, never `evidence`, which is anything any tool returned this run."""
+        """`run_facts_reason` plus a backstop over the structured facts it may ship.
+
+        The composer names only question substrings, server-recorded counts, and ACL-filtered
+        titles. Those facts are not model-authored answer figures, so the defensive scan must
+        verify them against the structured facts rather than the question alone.
+        """
         reason = run_facts_reason(case, question, searched, surfaced)
-        if unverified_figures(reason, question):
+        refusal_facts = "\n".join((question, *surfaced, str(len(searched)), str(len(surfaced))))
+        if unverified_figures(reason, refusal_facts):
             log.warning("refusal composer: composed reason failed its own defensive figure scan "
                        "(case=%s) — falling back to the generic no-surface sentence", case)
             return run_facts_reason("no_surface", question, [], [])

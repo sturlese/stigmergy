@@ -16,7 +16,7 @@ trailing count clause ("and N other searches").
 """
 import pytest
 
-from stigmergy.answer.service import _titles_for, run_facts_reason
+from stigmergy.answer.service import AnswerService, _titles_for, run_facts_reason
 
 
 # ── the regression case that motivated the composer ─────────────────────────────────────────────
@@ -37,6 +37,34 @@ def test_the_borealis_arr_regression_case_makes_no_corpus_claim():
     # inside the QUERY text above (the asker's own words) is fine; a CLAIM about the corpus is not.
     assert "only a quarterly value exists" not in reason
     assert "exists" not in reason and "brain has" not in reason and "brain doesn't" not in reason
+
+
+def test_numbered_surfaced_title_keeps_the_no_match_refusal_contextual():
+    """A verified page title is a server fact, not an unverified answer figure.
+
+    Dropping from ``no_match`` to ``no_surface`` would falsely say that no tool call found
+    anything even though this run surfaced the titled page.
+    """
+    reason = AnswerService._compose_reason(
+        None, "no_match", "what was the classified revenue?", ["classified revenue"],
+        ["Quarterly Report Q1 2026 FINAL"],
+    )
+
+    assert reason == ('searched "classified revenue", surfaced Quarterly Report Q1 2026 FINAL '
+                      "— it doesn't answer that.")
+    assert "no tool call found anything" not in reason
+
+
+def test_multi_digit_derived_counts_keep_the_no_match_refusal_contextual():
+    """Capped list counts are server-derived facts, including values above nine."""
+    reason = AnswerService._compose_reason(
+        None, "no_match", "q", ["q", *[f"other-{i}" for i in range(13)]],
+        [f"Page {i}" for i in range(14)],
+    )
+
+    assert reason == ('searched "q" and 13 other searches, surfaced Page 0, Page 1, Page 2 '
+                      "and 11 more — none of them answer that.")
+    assert "no tool call found anything" not in reason
 
 
 # ── the four cases, worked examples pinned exactly (the question names every query verbatim, so

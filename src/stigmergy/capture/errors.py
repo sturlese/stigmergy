@@ -17,6 +17,10 @@ class FetchRejected(SubmissionRejected):
     category = "unsafe_url"
 
 
+class FetchUnavailable(CaptureError):
+    category = "fetch_unavailable"
+
+
 class ExtractionError(CaptureError):
     category = "extraction_failed"
 

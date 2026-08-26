@@ -1,7 +1,15 @@
 import socket
 
 import pytest
+from urllib3.exceptions import (
+    ConnectTimeoutError,
+    NewConnectionError,
+    ProtocolError,
+    ReadTimeoutError,
+    SSLError,
+)
 
+from stigmergy.capture import errors
 from stigmergy.capture.errors import FetchRejected
 from stigmergy.capture.fetch import fetch_public, resolve_url
 
@@ -30,6 +38,42 @@ class _Response:
 
     def release_conn(self):
         self.released = True
+
+
+class _StreamingFailureResponse(_Response):
+    def stream(self, chunk_size):
+        assert chunk_size > 0
+        yield b"partial"
+        raise OSError("stream failed for signature=secret")
+
+
+class _Urllib3StreamingFailureResponse(_Response):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def stream(self, chunk_size):
+        assert chunk_size > 0
+        yield b"partial"
+        raise self.error
+
+
+class _MissingFetchUnavailable(Exception):
+    """Makes each red case explicit until production provides the domain error."""
+
+
+def _raise(error):
+    def fail(*_args, **_kwargs):
+        raise error
+
+    return fail
+
+
+def _fetch_unavailable_type():
+    return getattr(errors, "FetchUnavailable", _MissingFetchUnavailable)
+
+
+_STREAMING_FAILURE_RESPONSE = _StreamingFailureResponse()
 
 
 @pytest.mark.parametrize(
@@ -123,3 +167,102 @@ def test_streaming_limit_is_enforced_without_trusting_content_length():
             requester=lambda resolved: response,
             max_bytes=10,
         )
+
+
+@pytest.mark.parametrize(
+    ("resolver", "requester", "response"),
+    [
+        pytest.param(
+            _raise(OSError("resolver unavailable for signature=secret")),
+            lambda _resolved: pytest.fail("requester must not run after DNS failure"),
+            None,
+            id="dns-oserror",
+        ),
+        pytest.param(
+            _resolver("93.184.216.34"),
+            _raise(TimeoutError("request timed out for signature=secret")),
+            None,
+            id="request-timeout",
+        ),
+        pytest.param(
+            _resolver("93.184.216.34"),
+            lambda _resolved: _STREAMING_FAILURE_RESPONSE,
+            _STREAMING_FAILURE_RESPONSE,
+            id="stream-oserror",
+        ),
+    ],
+)
+def test_transient_transport_failures_are_retryable_and_safe(resolver, requester, response):
+    with pytest.raises(_fetch_unavailable_type()) as raised:
+        fetch_public(
+            "https://files.example/report.pdf?signature=secret",
+            resolver=resolver,
+            requester=requester,
+        )
+
+    assert str(raised.value) == "public URL is temporarily unavailable"
+    assert len(str(raised.value)) <= 80
+    assert "files.example" not in str(raised.value)
+    assert "signature" not in str(raised.value)
+    assert "secret" not in str(raised.value)
+    if response is not None:
+        assert response.released is True
+
+
+@pytest.mark.parametrize(
+    ("stage", "error"),
+    [
+        pytest.param(
+            "request",
+            ConnectTimeoutError(None, "https://files.example", "connect signature=secret"),
+            id="connect-timeout",
+        ),
+        pytest.param(
+            "request",
+            NewConnectionError(None, "connect signature=secret"),
+            id="new-connection",
+        ),
+        pytest.param(
+            "stream",
+            ReadTimeoutError(None, "https://files.example", "read signature=secret"),
+            id="read-timeout",
+        ),
+        pytest.param(
+            "stream",
+            ProtocolError("stream", OSError("protocol signature=secret")),
+            id="protocol-error",
+        ),
+        pytest.param(
+            "request",
+            SSLError("TLS certificate signature=secret"),
+            id="tls-request",
+        ),
+        pytest.param(
+            "stream",
+            SSLError("TLS certificate signature=secret"),
+            id="tls-stream",
+        ),
+    ],
+)
+def test_urllib3_transport_failures_are_retryable_and_safe(stage, error):
+    response = None
+    if stage == "request":
+        requester = _raise(error)
+    else:
+        response = _Urllib3StreamingFailureResponse(error)
+
+        def requester(_resolved):
+            return response
+
+    with pytest.raises(_fetch_unavailable_type()) as raised:
+        fetch_public(
+            "https://files.example/report.pdf?signature=secret",
+            resolver=_resolver("93.184.216.34"),
+            requester=requester,
+        )
+
+    assert raised.value.category == "fetch_unavailable"
+    assert str(raised.value) == "public URL is temporarily unavailable"
+    assert raised.value.__cause__ is error
+    if response is not None:
+        assert response.released is True

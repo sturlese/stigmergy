@@ -2,6 +2,7 @@
 
 -include .env
 export
+export STAGING_DSN
 
 VENV := .venv
 PY := $(VENV)/bin/python
@@ -54,9 +55,7 @@ deploy-staging: venv ## Deploy all staging process groups
 	bash scripts/deploy_staging.sh
 
 rebuild-staging: venv ## Rebuild the staging index from repository HEAD
-	@test -n "$(STAGING_DSN)" || { echo "STAGING_DSN is required"; exit 2; }
-	$(VENV)/bin/stigmergy-index --rebuild --repo $${STIGMERGY_REPO:-../stigmergy-brain} \
-	  --dsn "$(STAGING_DSN)"
+	@set -eu; test -n "$${STAGING_DSN}" || { echo "STAGING_DSN is required" >&2; exit 2; }; refresh_record="$$(bash scripts/refresh_staging_checkout.sh "$${STIGMERGY_REPO:-../stigmergy-brain}")"; case "$$refresh_record" in staging-refresh:\ root=*\ head=*) ;; *) echo "staging-rebuild: invalid checkout refresh record" >&2; exit 2 ;; esac; root="$${refresh_record#staging-refresh: root=}"; sha="$${root##* head=}"; root="$${root% head=*}"; if [ -z "$$root" ] || [ -z "$$sha" ] || ! git -C "$$root" rev-parse --verify --quiet "$$sha^{commit}" >/dev/null 2>&1 || [ "$$(git -C "$$root" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" != "$$sha" ]; then echo "staging-rebuild: invalid checkout refresh record" >&2; exit 2; fi; STIGMERGY_INDEX_DSN="$${STAGING_DSN}" $(VENV)/bin/stigmergy-index --rebuild --repo "$$root"
 
 r2-smoke: venv ## Verify put, get, and delete against the configured evidence store
 	$(PY) scripts/r2_smoke.py

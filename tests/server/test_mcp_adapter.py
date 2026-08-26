@@ -16,15 +16,18 @@ Scope: this test is about `mcp_server.py`'s OWN logic (argument wiring, JSON env
 -> {"error": ...} mapping) — never about ACL enforcement or ranking, which stay proven for real
 elsewhere (`test_mcp_harness.py`, `test_service_acl.py`)."""
 import asyncio
+import datetime as dt
 import json
 import types
 from unittest.mock import create_autospec
 
 import pytest
 
+from stigmergy.capture import queue
 from stigmergy.capture.errors import CaptureError, EvidenceError, SubmissionRejected
 from stigmergy.index.errors import StigmergyIndexError
-from stigmergy.server.errors import RateLimitError, RegistryError
+from stigmergy.server import identity
+from stigmergy.server.errors import ArgumentLengthError, RateLimitError, RegistryError
 from stigmergy.server.mcp_server import build_mcp
 from stigmergy.server.service import BrainService
 from stigmergy.server.settings import Settings
@@ -172,8 +175,8 @@ def test_describe_entity_unknown_or_out_of_scope_returns_the_service_error_paylo
     assert out == {"error": "unknown entity: nope"}
 
 
-def test_describe_entity_a_marker_valueerror_is_echoed_verbatim(fake_service):
-    fake_service.describe_entity.side_effect = _marker_value_error(
+def test_describe_entity_an_argument_length_error_is_echoed_verbatim(fake_service):
+    fake_service.describe_entity.side_effect = ArgumentLengthError(
         "entity too long (max 8192 characters)")
     mcp = build_mcp(fake_service)
 
@@ -200,24 +203,6 @@ def test_describe_entity_maps_a_rate_limit_refusal_to_a_clean_json_error(fake_se
     out = _call(mcp, "describe_entity", entity="acme")
 
     assert out == {"error": "rate limited: 30 requests/min exceeded — wait a moment and retry"}
-
-
-# ── read_page/describe_entity/ask narrow their ValueError catch to ONLY check_arg_length's own
-# rejection (marked `is_arg_length_error`) — any OTHER ValueError (e.g. a stray
-# pydantic_core.ValidationError from the ask/answer stack, which genuinely subclasses ValueError
-# and could carry untrusted LLM output or an internal field path) falls through to the
-# class-name-only fallback, never echoing str(ex). search_brain is deliberately BROADER (it keeps
-# catching ValueError wholesale — its own carve-out, see mcp_server.py's docstring) and is
-# exercised by test_search_brain_maps_service_errors_to_a_clean_json_error above. ──────────────
-def _marker_value_error(message: str) -> ValueError:
-    """The exact shape `check_arg_length` raises — a plain ValueError with the marker attribute
-    set — WITHOUT depending on the real length-checking logic, so this file stays scoped to
-    mcp_server.py's own exception-to-JSON mapping (`tests/server/test_arg_length.py` owns the
-    length-checking logic itself)."""
-    ex = ValueError(message)
-    ex.is_arg_length_error = True
-    return ex
-
 
 
 # ── brain_submit / brain_submissions closures ──────────────────────────────────────────────────
@@ -281,6 +266,58 @@ def test_brain_submit_maps_an_unanticipated_exception_to_class_name_only(fake_se
 
     assert out == {"error": "brain_submit failed (RuntimeError)"}
     assert "10.0.0.5" not in json.dumps(out) and "AKIA123" not in json.dumps(out)
+
+
+def test_brain_submit_normalizes_occurred_at_and_refuses_naive_timestamps(monkeypatch):
+    """MCP matches admin's date and timezone contract before a capture reaches the queue."""
+    captured = []
+    receipt = {
+        "id": "capture-7",
+        "status": "queued",
+        "submitted_by": "steward@example.com",
+        "created_at": "2026-08-24T00:00:00Z",
+        "created": True,
+    }
+
+    def existing_capture(_conn, envelope):
+        captured.append(envelope)
+        return receipt
+
+    monkeypatch.setattr(queue, "find_capture", existing_capture)
+    service = BrainService(
+        Settings(),
+        object(),
+        None,
+        None,
+        identity="steward@example.com",
+        evidence=object(),
+        principal=identity.Principal(
+            subject="steward@example.com",
+            display_name="Steward",
+            groups=(),
+            default_audience=None,
+        ),
+    )
+    mcp = build_mcp(service)
+
+    assert _call(mcp, "brain_submit", text="bare date", occurred_at="2026-08-24")["status"] == "queued"
+    assert _call(
+        mcp,
+        "brain_submit",
+        text="aware timestamp",
+        occurred_at="2026-08-24T15:30:00+02:00",
+    )["status"] == "queued"
+    naive = _call(
+        mcp,
+        "brain_submit",
+        text="naive timestamp",
+        occurred_at="2026-08-24T15:30:00",
+    )
+
+    assert captured[0].origin.occurred_at == dt.date(2026, 8, 24)
+    assert captured[1].origin.occurred_at == dt.datetime(2026, 8, 24, 13, 30, tzinfo=dt.UTC)
+    assert naive == {"error": "occurred_at must be an ISO date or timezone-aware timestamp"}
+    assert len(captured) == 2
 
 
 def test_brain_submissions_forwards_blank_status_as_none(fake_service):
