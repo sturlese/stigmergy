@@ -9,9 +9,10 @@ import logging
 import re
 
 from stigmergy.answer.service import TOTAL_ANSWER_TIMEOUT_S
+from stigmergy.kernel.blocking import run_blocking
 from stigmergy.server.errors import CapabilityUnavailableError, IdentityError, RateLimitError
 from stigmergy.slack import channels, copy, render
-from stigmergy.slack.context import short_ref
+from stigmergy.slack.context import run_with_connection, run_with_service, short_ref
 from stigmergy.slack.gateway import SlackApiError
 from stigmergy.slack.identity import IdentityResult, NoAccess, Resolved, TransientFailure
 from stigmergy.slack.mrkdwn import escape_mrkdwn, to_mrkdwn
@@ -92,6 +93,12 @@ async def _run_ask(service, question: str) -> dict:
     return await service.call_async("ask", {"question": question}, run, summarize=audit_summary)
 
 
+def _run_ask_sync(service, question: str) -> dict:
+    """Keep one answer's synchronous reads and audit on its worker-owned connection."""
+    service.require_embedder()
+    return asyncio.run(_run_ask(service, question))
+
+
 def _answer_fallback_text(answer: dict) -> str:
     """The plain-text `text=` companion sent on every attempt — and the ONLY thing an asker sees
     on `_edit_or_fallback`'s blocks-free floor, so it is a REAL rendering, never a stub. The body
@@ -148,8 +155,13 @@ async def handle_mention(ctx, *, event_team_id: str, channel_id: str, thread_ts:
         effective_audiences = asker_audiences
     else:
         try:
-            effective_audiences = channels.channel_audiences_live(
-                ctx.conn, ctx.settings.channels_path, channel_id)
+            effective_audiences = await run_blocking(
+                run_with_connection,
+                ctx,
+                lambda conn: channels.channel_audiences_live(
+                    conn, ctx.settings.channels_path, channel_id
+                ),
+            )
         except IdentityError as error:
             # Fail-closed is right; total silence is not — the same honest server-error copy every
             # other unexpected failure gets, with a correlation ref.
@@ -182,9 +194,13 @@ async def handle_mention(ctx, *, event_team_id: str, channel_id: str, thread_ts:
     placeholder_ts = placeholder["ts"]
 
     try:
-        service = ctx.build_service(email, effective_audiences)
-        service.require_embedder()
-        answer = await _run_ask(service, question)
+        answer = await run_blocking(
+            run_with_service,
+            ctx,
+            email,
+            effective_audiences,
+            lambda service: _run_ask_sync(service, question),
+        )
     except TimeoutError:
         await _edit_or_fallback(ctx, channel_id=channel_id, ts=placeholder_ts, thread_ts=thread_ts,
                                 blocks=render.render_timeout(), text=copy.TIMEOUT)
@@ -224,14 +240,26 @@ async def _maybe_dm_fuller_answer(ctx, *, email: str, asker_audiences, asker_sla
     # `rate_limited=False`: SYSTEM-initiated work must not spend the asker's own budget — an asker
     # for whom content was withheld would become observably likelier to hit the rate-limit message
     # on their next real question. `identity=email` is unchanged, so audit attribution is unaffected.
-    channel_service = ctx.build_service(email, effective_audiences, rate_limited=False)
-    asker_service = ctx.build_service(email, asker_audiences, rate_limited=False)
     # The channel answer has SHIPPED — nothing after this may escape uncaught into Bolt.
     try:
-        channel_paths = {h["path"] for h in
-                         channel_service.search(question, max_results=COMPARISON_MAX_RESULTS)["hits"]}
-        asker_paths = {h["path"] for h in
-                      asker_service.search(question, max_results=COMPARISON_MAX_RESULTS)["hits"]}
+        channel_result = await run_blocking(
+            run_with_service,
+            ctx,
+            email,
+            effective_audiences,
+            lambda service: service.search(question, max_results=COMPARISON_MAX_RESULTS),
+            rate_limited=False,
+        )
+        asker_result = await run_blocking(
+            run_with_service,
+            ctx,
+            email,
+            asker_audiences,
+            lambda service: service.search(question, max_results=COMPARISON_MAX_RESULTS),
+            rate_limited=False,
+        )
+        channel_paths = {h["path"] for h in channel_result["hits"]}
+        asker_paths = {h["path"] for h in asker_result["hits"]}
     except Exception as error:
         log.error(
             "slack: the DM comparison search() failed; the channel answer already shipped (%s)",
@@ -242,7 +270,14 @@ async def _maybe_dm_fuller_answer(ctx, *, email: str, asker_audiences, asker_sla
         return   # nothing the asker's scope surfaces that the channel's could not
 
     try:
-        fuller = await _run_ask(asker_service, question)
+        fuller = await run_blocking(
+            run_with_service,
+            ctx,
+            email,
+            asker_audiences,
+            lambda service: _run_ask_sync(service, question),
+            rate_limited=False,
+        )
     except Exception as error:
         log.error(
             "slack: the DM fuller-answer ask() failed; the channel answer already shipped (%s)",

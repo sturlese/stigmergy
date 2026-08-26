@@ -3,8 +3,8 @@ import contextvars
 import functools
 import logging
 import os
+from dataclasses import dataclass
 
-import anyio.to_thread
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -15,6 +15,7 @@ from stigmergy.capture.schema import ensure_capture_schema
 from stigmergy.capture.uploads import ensure_upload_schema
 from stigmergy.changes.store import ensure_change_schema
 from stigmergy.index import store
+from stigmergy.kernel.blocking import run_blocking
 from stigmergy.server import ops_files, webhook
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import IdentityError
@@ -60,18 +61,60 @@ def _transport_security_for_env():
     public_hosts = _public_hosts_from_env()
     return _build_transport_security(public_hosts) if public_hosts else None
 
-_current_service: contextvars.ContextVar[BrainService | None] = contextvars.ContextVar(
-    "stigmergy_http_current_service", default=None)
+@dataclass(frozen=True)
+class _RequestServiceScope:
+    """Request identity plus the resources needed to open one worker-owned service."""
+    settings: object
+    principal: object
+    connection_factory: object
+    embedder: object
+    rate_limiter: object
+    evidence: object
+
+    def _with_service(self, operation):
+        conn = self.connection_factory()
+        try:
+            audiences_tuple = self.principal.audiences
+            service = BrainService(
+                self.settings,
+                conn,
+                self.embedder,
+                set(audiences_tuple) if audiences_tuple is not None else None,
+                identity=self.principal.subject,
+                rate_limiter=self.rate_limiter,
+                audit=AuditWriter(conn),
+                evidence=self.evidence,
+                principal=self.principal,
+            )
+            return operation(service)
+        finally:
+            conn.close()
+
+    def call(self, method_name: str, *args, **kwargs):
+        return self._with_service(lambda service: getattr(service, method_name)(*args, **kwargs))
+
+    def run_scoped(self, operation):
+        return self._with_service(operation)
+
+
+_current_scope: contextvars.ContextVar[_RequestServiceScope | None] = contextvars.ContextVar(
+    "stigmergy_http_current_scope", default=None)
 
 
 class _ScopedServiceProxy:
     """Forward tool access to the request-scoped service."""
 
     def __getattr__(self, name):
-        service = _current_service.get()
-        if service is None:  # pragma: no cover — defensive; the middleware always sets it first
+        scope = _current_scope.get()
+        if scope is None:  # pragma: no cover — defensive; the middleware always sets it first
             raise RuntimeError("no request-scoped BrainService (auth middleware did not run)")
-        return getattr(service, name)
+        return functools.partial(scope.call, name)
+
+    def run_scoped(self, operation):
+        scope = _current_scope.get()
+        if scope is None:  # pragma: no cover — defensive; the middleware always sets it first
+            raise RuntimeError("no request-scoped BrainService (auth middleware did not run)")
+        return scope.run_scoped(operation)
 
 
 async def _refuse(scope, receive, send, body, status) -> None:
@@ -80,8 +123,17 @@ async def _refuse(scope, receive, send, body, status) -> None:
     await response(scope, receive, send)
 
 
+def _resolve_request_principal(connection_factory, identities_path: str, email: str):
+    """Resolve one HTTP identity on a short-lived worker-owned connection."""
+    conn = connection_factory()
+    try:
+        return ops_files.resolve_identity_principal(conn, identities_path, email)
+    finally:
+        conn.close()
+
+
 class _BearerAuthMiddleware:
-    """Resolve a principal and bind its service in the same ASGI coroutine."""
+    """Resolve a principal, then bind worker-owned services for the request."""
 
     def __init__(self, app, *, settings, token_store, connection_factory, embedder,
                  rate_limiter, evidence=None):
@@ -139,36 +191,30 @@ class _BearerAuthMiddleware:
             await _refuse(scope, receive, send, _TOO_LARGE_BODY, 413)
             return
 
-        conn = self._connection_factory()
         try:
-            try:
-                principal = ops_files.resolve_identity_principal(
-                    conn, self._settings.identities_path, email
-                )
-            except IdentityError as ex:
-                log.warning("HTTP auth refused (%s)", ex.__class__.__name__)
-                await _refuse(scope, bounded_receive, send, _UNAUTHORIZED_BODY, 401)
-                return
-            audiences_tuple = principal.audiences
-            audiences = set(audiences_tuple) if audiences_tuple is not None else None
-            service = BrainService(
-                self._settings,
-                conn,
-                self._embedder,
-                audiences,
-                identity=email,
-                rate_limiter=self._rate_limiter,
-                audit=AuditWriter(conn),
-                evidence=self._evidence,
-                principal=principal,
+            principal = await run_blocking(
+                _resolve_request_principal,
+                self._connection_factory,
+                self._settings.identities_path,
+                email,
             )
-            reset_token = _current_service.set(service)
-            try:
-                await self.app(scope, bounded_receive, send)
-            finally:
-                _current_service.reset(reset_token)
+        except IdentityError as ex:
+            log.warning("HTTP auth refused (%s)", ex.__class__.__name__)
+            await _refuse(scope, bounded_receive, send, _UNAUTHORIZED_BODY, 401)
+            return
+        request_scope = _RequestServiceScope(
+            settings=self._settings,
+            principal=principal,
+            connection_factory=self._connection_factory,
+            embedder=self._embedder,
+            rate_limiter=self._rate_limiter,
+            evidence=self._evidence,
+        )
+        reset_token = _current_scope.set(request_scope)
+        try:
+            await self.app(scope, bounded_receive, send)
         finally:
-            conn.close()
+            _current_scope.reset(reset_token)
 
 
 def _declared_body_length(scope) -> int | None:
@@ -226,11 +272,10 @@ async def _json_service_call(request: Request, method_name: str) -> JSONResponse
         body = await request.json()
         if not isinstance(body, dict):
             raise CaptureError("request body must be a JSON object")
-        service = _current_service.get()
-        if service is None:
+        request_scope = _current_scope.get()
+        if request_scope is None:
             raise RuntimeError("request identity is unavailable")
-        method = getattr(service, method_name)
-        result = await anyio.to_thread.run_sync(functools.partial(method, **body))
+        result = await run_blocking(request_scope.call, method_name, **body)
         return JSONResponse(result)
     except CaptureError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
@@ -266,16 +311,12 @@ def build_http_app(settings, *, token_store: dict[str, str]):
 
     @mcp.custom_route(webhook.WEBHOOK_PATH, methods=["POST"])
     async def _github_webhook(request):
-        conn = connection_factory()
-        try:
-            return await webhook.webhook_endpoint(
-                request,
-                conn=conn,
-                embedder=embedder,
-                settings=webhook_settings,
-            )
-        finally:
-            conn.close()
+        return await webhook.webhook_endpoint(
+            request,
+            connection_factory=connection_factory,
+            embedder=embedder,
+            settings=webhook_settings,
+        )
 
     @mcp.custom_route("/bridge/uploads", methods=["POST"])
     async def _create_bridge_upload(request: Request):

@@ -1,13 +1,16 @@
-"""`SlackContext` — the process-wide resources every handler shares, built ONCE at startup
-(`app.build_context`) and threaded through every event. What differs per event is only the
-resolved identity a `BrainService` is built with, never the shared resources.
+"""`SlackContext` — shared Slack process resources built once at startup.
+
+`conn` remains open only for the Socket Mode singleton advisory-lock lifetime. Handlers build
+their short-lived database units through `connection_factory`.
 """
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 
+from stigmergy.kernel.blocking import run_blocking
 from stigmergy.server import ops_files
+from stigmergy.server.audit import AuditWriter
 from stigmergy.server.service import SLACK_DOOR, BrainService
 from stigmergy.slack.gateway import SlackApiError, SlackGateway
 from stigmergy.slack.identity import UsersInfoCache, resolve_slack_identity
@@ -38,6 +41,7 @@ class SlackContext:
     rate_limiter: object = None
     audit: object = None
     evidence: object = None
+    connection_factory: object = None
     cache: UsersInfoCache = field(default_factory=UsersInfoCache)
     link_resolver: object = no_link_resolver
     # `token -> (path, owner_slack_user_id, expires_at)`. A button value is retrievable by any
@@ -55,12 +59,31 @@ class SlackContext:
         configured workspace and the identities file taken off these settings. `event_team_id` is
         the EVENT's own workspace and is the caller's to source: passing the configured
         `settings.team_id` here would bypass the workspace boundary."""
+        async def resolve_audiences(email: str):
+            return await run_blocking(
+                self.with_connection,
+                lambda conn: ops_files.resolve_identity_audiences(
+                    conn, self.settings.server.identities_path, email
+                ),
+            )
+
         return await resolve_slack_identity(
             self.gateway, self.cache, identities_path=self.settings.server.identities_path,
             configured_team_id=self.settings.team_id, event_team_id=event_team_id,
-            slack_user_id=slack_user_id, conn=self.conn)
+            slack_user_id=slack_user_id, resolve_audiences=resolve_audiences)
 
-    def build_service(self, email: str, audiences, *, rate_limited: bool = True) -> BrainService:
+    def with_connection(self, operation):
+        """Run one short database unit, keeping the singleton-lock connection untouched."""
+        if self.connection_factory is None:
+            return operation(self.conn)
+        conn = self.connection_factory()
+        try:
+            return operation(conn)
+        finally:
+            conn.close()
+
+    def build_service(self, email: str, audiences, *, rate_limited: bool = True,
+                      conn=None) -> BrainService:
         """A per-identity `BrainService` sharing every process-wide resource. `audiences` accepts
         `None` (unrestricted) or any iterable of labels.
 
@@ -69,8 +92,9 @@ class SlackContext:
         for whom content was withheld observably likelier to hit the rate-limit message on their
         next real question. `identity=email` is unchanged either way, so audit attribution stays
         the same."""
+        conn = self.conn if conn is None else conn
         principal = ops_files.resolve_identity_principal(
-            self.conn,
+            conn,
             self.settings.server.identities_path,
             email,
         )
@@ -78,18 +102,23 @@ class SlackContext:
         # `door`: the Slack transport is the one door whose `source_*` hints are composed by
         # server code from Slack's API responses — `_submit` accepts them here and refuses them
         # from every client-facing service (`capture.schema.reject_source_provenance_hints`).
-        return BrainService(self.settings.server, self.conn, self.embedder, aud, identity=email,
+        audit = self.audit if conn is self.conn else AuditWriter(conn)
+        return BrainService(self.settings.server, conn, self.embedder, aud, identity=email,
                             rate_limiter=self.rate_limiter if rate_limited else None,
-                            audit=self.audit, evidence=self.evidence, door=SLACK_DOOR,
+                            audit=audit, evidence=self.evidence, door=SLACK_DOOR,
                             principal=principal)
+
+    def run_service(self, email: str, audiences, operation, *, rate_limited: bool = True):
+        """Build and use one per-listener service on the connection it owns."""
+        return self.with_connection(
+            lambda conn: operation(
+                self.build_service(email, audiences, rate_limited=rate_limited, conn=conn)
+            )
+        )
 
     async def decline(self, *, channel_id: str, slack_user_id: str, is_dm: bool, blocks: list,
                       text: str, thread_ts: str | None = None) -> None:
-        """The ONE way this package declines a request for an identity reason (`NoAccess`,
-        `TransientFailure`): ephemeral in a channel — an identity failure must never be disclosed
-        to the whole channel — and a real message when the surface itself IS a DM (Slack has no
-        "ephemeral to yourself" there). Routed through `post_or_log`: a Slack outage while
-        declining degrades, never raises out of the handler."""
+        """Send an identity refusal without disclosing it to a channel."""
         if is_dm:
             await self.post_or_log(
                 self.gateway.chat_post_message(channel_id, blocks=blocks, text=text,
@@ -102,10 +131,7 @@ class SlackContext:
                 what=f"decline (ephemeral) in {channel_id}")
 
     async def post_or_log(self, coro, *, what: str) -> dict | None:
-        """The ONE seam every NON-CRITICAL Slack send goes through: a `SlackApiError` anywhere in
-        `coro` is logged and swallowed, never raised. Returns the gateway's response, or `None` on
-        a caught failure — a caller that needs the response (the placeholder's own `ts`) keeps its
-        own policy and does not use this seam (`mention._edit_or_fallback`)."""
+        """Post a non-critical Slack response, logging and swallowing Slack failures."""
         try:
             return await coro
         except SlackApiError as error:
@@ -113,22 +139,17 @@ class SlackContext:
             return None
 
     def mint_show_it_here_token(self, path: str, owner_slack_user_id: str) -> str:
-        """An opaque per-answer token for the "Show it here" button's value — injected into
-        `render` as `mint_token`, so that module stays free of any notion of a token STORE.
-        `(path, owner_slack_user_id)` lives ONLY here, server-side. Bounded at
-        `self._show_it_here_max_tokens`, oldest-first eviction on insert."""
+        """Mint one bounded opaque token for the human-facing page excerpt action."""
         token = uuid.uuid4().hex
         if (token not in self._show_it_here_tokens
                 and len(self._show_it_here_tokens) >= self._show_it_here_max_tokens):
-            del self._show_it_here_tokens[next(iter(self._show_it_here_tokens))]   # oldest-first
+            del self._show_it_here_tokens[next(iter(self._show_it_here_tokens))]
         self._show_it_here_tokens[token] = (path, owner_slack_user_id,
                                             time.monotonic() + SHOW_IT_HERE_TOKEN_TTL_S)
         return token
 
     def consume_show_it_here_token(self, token: str) -> tuple[str, str] | None:
-        """`(path, owner_slack_user_id)` for a live token, `None` for an unknown or expired one.
-        Not single-use — the button may legitimately be clicked more than once; entries are
-        dropped by TTL expiry, never by having been read."""
+        """Return a live opaque token's scoped path and owner, if any."""
         entry = self._show_it_here_tokens.get(token)
         if entry is None:
             return None
@@ -137,3 +158,19 @@ class SlackContext:
             del self._show_it_here_tokens[token]
             return None
         return path, owner_slack_user_id
+
+
+def run_with_connection(ctx, operation):
+    """Use the context connection seam, including lightweight listener test doubles."""
+    with_connection = getattr(ctx, "with_connection", None)
+    return with_connection(operation) if with_connection is not None else operation(ctx.conn)
+
+
+def run_with_service(ctx, email: str, audiences, operation, *, rate_limited: bool = True):
+    """Use the context service seam, including lightweight listener test doubles."""
+    run_service = getattr(ctx, "run_service", None)
+    if run_service is not None:
+        return run_service(email, audiences, operation, rate_limited=rate_limited)
+    if rate_limited:
+        return operation(ctx.build_service(email, audiences))
+    return operation(ctx.build_service(email, audiences, rate_limited=False))

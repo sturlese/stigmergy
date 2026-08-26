@@ -52,23 +52,27 @@ def _tools(service):
     return {name: fn.fn for name, fn in mcp._tool_manager._tools.items()}
 
 
+def _tool_call(service, name: str, **kwargs) -> str:
+    """Drive the real asynchronous MCP closure without changing wire behavior."""
+    return asyncio.run(_tools(service)[name](**kwargs))
+
+
 # ── the half that must keep working ──────────────────────────────────────────────────────────────
 # `brain_submit` is an `async` closure — it uploads to the evidence store, which must not run on
 # the event loop (#136) — so it is driven through `asyncio.run` here, for the reason the `ask` test
 # below states: this suite has no async plugin, and the closure under test is the real one.
 def test_brain_submit_works_with_no_embedder(keyless):
     svc, _ = keyless
-    ack = json.loads(asyncio.run(_tools(svc)["brain_submit"](
-        text="a capture made while the embedding key was expired")))
+    ack = json.loads(_tool_call(svc, "brain_submit",
+                                text="a capture made while the embedding key was expired"))
     assert ack["status"] == "queued" and isinstance(ack["id"], str)
     assert "error" not in ack
 
 
 def test_brain_submissions_works_with_no_embedder(keyless):
     svc, _ = keyless
-    tools = _tools(svc)
-    asyncio.run(tools["brain_submit"](text="something to read back keyless"))
-    out = json.loads(tools["brain_submissions"]())
+    _tool_call(svc, "brain_submit", text="something to read back keyless")
+    out = json.loads(_tool_call(svc, "brain_submissions"))
     assert "error" not in out and out["submissions"]
 
 
@@ -76,7 +80,7 @@ def test_read_page_works_with_no_embedder(keyless):
     """`read_page` fetches by PATH — it never embeds anything. This is the assertion that keeps a
     future 'require the embedder in the service constructor' shortcut from taking it down."""
     svc, _ = keyless
-    out = json.loads(_tools(svc)["read_page"](path="wiki/notes/initech-kpi.md"))
+    out = json.loads(_tool_call(svc, "read_page", path="wiki/notes/initech-kpi.md"))
     assert "error" not in out
     assert out["path"] == "wiki/notes/initech-kpi.md"
 
@@ -87,14 +91,14 @@ def test_list_entities_works_with_no_embedder(keyless):
     """`list_entities` reads the registry file plus `pages_index.entity` by membership — it never
     embeds anything, same reasoning as `read_page`."""
     svc, _ = keyless
-    out = json.loads(_tools(svc)["list_entities"]())
+    out = json.loads(_tool_call(svc, "list_entities"))
     assert "error" not in out
     assert isinstance(out["entities"], list)
 
 
 def test_describe_entity_works_with_no_embedder(keyless):
     svc, _ = keyless
-    out = json.loads(_tools(svc)["describe_entity"](entity="initech"))
+    out = json.loads(_tool_call(svc, "describe_entity", entity="initech"))
     assert "error" not in out
     assert out["found"] is False
 
@@ -102,7 +106,7 @@ def test_describe_entity_works_with_no_embedder(keyless):
 # ── the half that must refuse, honestly ──────────────────────────────────────────────────────────
 def test_search_brain_refuses_and_names_the_missing_capability(keyless):
     svc, _ = keyless
-    out = json.loads(_tools(svc)["search_brain"](query="anything at all"))
+    out = json.loads(_tool_call(svc, "search_brain", query="anything at all"))
 
     error = out["error"]
     assert "OPENROUTER_API_KEY" in error             # WHICH thing is missing
@@ -120,7 +124,7 @@ def test_ask_refuses_and_names_the_missing_capability(keyless):
     `asyncio.run` rather than a pytest-asyncio marker: this suite has no async plugin and every
     other async assertion in `tests/server` drives the coroutine directly."""
     svc, _ = keyless
-    out = json.loads(asyncio.run(_tools(svc)["ask"](question="what do we know about Initech?")))
+    out = json.loads(_tool_call(svc, "ask", question="what do we know about Initech?"))
 
     error = out["error"]
     assert "OPENROUTER_API_KEY" in error and "cannot search" in error
@@ -131,7 +135,7 @@ def test_the_refusal_message_names_no_key_no_path_and_no_dsn(keyless):
     """This message crosses the HTTP boundary verbatim, so it may name an environment VARIABLE
     and must never name its value, a filesystem path or a DSN."""
     svc, _ = keyless
-    error = json.loads(_tools(svc)["search_brain"](query="x"))["error"]
+    error = json.loads(_tool_call(svc, "search_brain", query="x"))["error"]
     assert "sk-" not in error
     assert "postgresql://" not in error and "/Users/" not in error and "@" not in error
 

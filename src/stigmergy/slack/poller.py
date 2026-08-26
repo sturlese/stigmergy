@@ -4,7 +4,9 @@ import asyncio
 import logging
 
 from stigmergy.capture import schema
+from stigmergy.kernel.blocking import run_blocking
 from stigmergy.slack import copy, render
+from stigmergy.slack.context import run_with_connection
 from stigmergy.slack.gateway import SlackApiError
 from stigmergy.slack.store import due_for_report, mark_reported
 
@@ -24,7 +26,8 @@ def _blocks_for(row: dict) -> tuple[list[dict], str]:
 
 async def poll_once(ctx) -> int:
     reported = 0
-    for row in due_for_report(ctx.conn):
+    rows = await run_blocking(run_with_connection, ctx, due_for_report)
+    for row in rows:
         try:
             blocks, text = _blocks_for(row)
             await ctx.gateway.chat_post_message(
@@ -42,7 +45,13 @@ async def poll_once(ctx) -> int:
                 },
             )
             continue
-        mark_reported(ctx.conn, row["id"], row["status"])
+        await run_blocking(
+            run_with_connection,
+            ctx,
+            lambda conn, row_id=row["id"], status=row["status"]: mark_reported(
+                conn, row_id, status
+            ),
+        )
         reported += 1
     return reported
 

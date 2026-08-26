@@ -113,7 +113,7 @@ def test_http_requests_use_distinct_closed_database_connections(monkeypatch):
     from stigmergy.server.ratelimit import RateLimiter
     from stigmergy.server.transport_http import (
         _BearerAuthMiddleware,
-        _current_service,
+        _current_scope,
     )
 
     class Connection:
@@ -142,7 +142,7 @@ def test_http_requests_use_distinct_closed_database_connections(monkeypatch):
     )
 
     async def inner(scope, receive, send):
-        seen.append(_current_service.get().conn)
+        seen.append(_current_scope.get())
         await JSONResponse({"ok": True})(scope, receive, send)
 
     middleware = _BearerAuthMiddleware(
@@ -188,7 +188,8 @@ def test_http_requests_use_distinct_closed_database_connections(monkeypatch):
     _run(request())
 
     assert len(created) == 2
-    assert seen == created
+    assert len({id(request_scope) for request_scope in seen}) == 2
+    assert all(request_scope.principal.subject == "member@example.com" for request_scope in seen)
     assert created[0] is not created[1]
     assert all(connection.closed for connection in created)
 

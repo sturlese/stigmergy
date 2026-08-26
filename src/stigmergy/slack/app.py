@@ -6,6 +6,7 @@ coroutine — Socket Mode dispatches each event as its own asyncio task. Only th
 """
 import argparse
 import asyncio
+import functools
 import logging
 import sys
 
@@ -26,8 +27,7 @@ log = logging.getLogger(__name__)
 
 
 def build_context(settings: SlackSettings, *, gateway=None, conn=None) -> SlackContext:
-    """Wire the process-wide resources ONCE — conn, embedder, rate limiter, audit writer,
-    evidence — exactly the shape `transport_http.build_http_app` uses for the HTTP transport."""
+    """Wire Slack startup resources and retain `conn` only for the singleton advisory lock."""
     conn, embedder = open_scoped_resources(settings.server, conn)
     store.bound_statements(conn)   # the adapter serves reads; it never runs an index rebuild
     ensure_audit_table(conn)
@@ -46,7 +46,9 @@ def build_context(settings: SlackSettings, *, gateway=None, conn=None) -> SlackC
 
     return SlackContext(settings=settings, gateway=gateway, conn=conn, embedder=embedder,
                         rate_limiter=rate_limiter, audit=audit, evidence=evidence,
-                        link_resolver=link_resolver)
+                        connection_factory=functools.partial(
+                            store.connect_serving, settings.server.dsn
+                        ), link_resolver=link_resolver)
 
 
 def _event_team_id(event: dict, body: dict | None = None) -> str:

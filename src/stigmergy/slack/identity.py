@@ -12,6 +12,7 @@ type's docstring says what it means, and no `BrainService` is constructed on any
 path. Bot/app/workflow events and the bot's OWN messages are excluded FIRST
 (`is_ignorable_event`), so an `app_mention` fired by the bot's own post can never loop.
 """
+import inspect
 import time
 from dataclasses import dataclass
 
@@ -162,7 +163,8 @@ def is_configured_workspace(event_team_id: str, configured_team_id: str) -> bool
 
 async def resolve_slack_identity(gateway, cache: UsersInfoCache, *, identities_path: str,
                                  configured_team_id: str, event_team_id: str,
-                                 slack_user_id: str, conn=None) -> IdentityResult:
+                                 slack_user_id: str, conn=None,
+                                 resolve_audiences=None) -> IdentityResult:
     """The one function every handler calls before constructing a `BrainService`. Callers run
     `is_ignorable_event` FIRST; this function assumes a real human Slack user id and starts at
     the workspace check. **Fails CLOSED on an absent event team**: a missing `event_team_id` (an
@@ -191,7 +193,14 @@ async def resolve_slack_identity(gateway, cache: UsersInfoCache, *, identities_p
     try:
         # Snapshot-first through the server's one chooser (`server.ops_files`): the deployed
         # slack group holds no checkout, and an identity edit must not wait for a deploy.
-        audiences_tuple = ops_files.resolve_identity_audiences(conn, identities_path, email)
+        resolver = resolve_audiences or (
+            lambda resolved_email: ops_files.resolve_identity_audiences(
+                conn, identities_path, resolved_email
+            )
+        )
+        audiences_tuple = resolver(email)
+        if inspect.isawaitable(audiences_tuple):
+            audiences_tuple = await audiences_tuple
     except IdentityError:
         return NoAccess()
     audiences = frozenset(audiences_tuple) if audiences_tuple is not None else None
