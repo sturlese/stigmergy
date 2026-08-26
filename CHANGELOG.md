@@ -11,20 +11,55 @@ remain authoritative.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-26
+
+This milestone completes the clean-cut transition to an agent-first team wiki: every capture is
+immutable evidence, one bounded librarian files what it establishes, code enforces the contract,
+and every reader sees only knowledge within their audience.
+
+### ⚠ BREAKING CHANGES
+
+- Replaced the previous capture, queue, knowledge, and operational contracts with the single team
+  wiki runtime contract. Deployments carrying pre-milestone test data must reset that data before
+  adopting this release.
+- Moved audience selection to the capture door, removed `ops/acl.json`, and standardized principals
+  on lists of groups. Existing deployment identity and channel files must use the new grammar.
+- Removed the superseded review, repair, generated-view, meeting, Drive, entity, cron-control, and
+  compatibility surfaces. Captures, deletion sweeps, worker maintenance, and reader-scoped tools
+  are now the only supported paths.
+
+### Added
+
+- Added exact binary evidence, typed extraction, selective OCR, immutable readable source pages,
+  and local private acquisition through the MCP bridge.
+- Added first-class cited contradictions, explicit resolution provenance, one Changes ledger with
+  friendly and exact diffs, and autonomous deterministic maintenance.
+- Added reader-scoped entity descriptions, exact cross-capture identity convergence, deployment
+  liveness, and explicit index convergence health.
+
 ### Changed
 
 - Rebuilt Stigmergy as a Karpathy-style team wiki with one kind-free capture envelope, one durable
   queue, one serialized Git writer, immutable readable sources, and autonomous wiki maintenance.
-- Added exact binary evidence, typed extraction and selective OCR for the supported file formats,
-  including local private Google Drive acquisition through the MCP bridge.
 - Replaced entity dossiers and generated views with opaque entity identities, scoped sourced name
   claims, deterministic registry projection, and reader-scoped entity descriptions.
-- Added first-class cited contradictions, master-submitted resolution evidence, one Changes ledger
-  with friendly and exact diffs, and a single autonomous lint-and-fix gardener operation.
 - Standardized runtime model access on a closed OpenRouter allowlist using DeepSeek, GLM, and Qwen;
   direct Anthropic, OpenAI, and Gemini runtime credentials are rejected.
-- Restored the pinned nightly full index rebuild while retaining webhook-driven incremental
-  indexing and explicit convergence health.
+
+### Fixed
+
+- Made explicit contradiction resolutions work through both direct and bridged capture, and
+  required a coherent page update before a contradiction marker can be removed.
+- Reconciled librarian reports with landed diffs and surfaced every skipped or rejected operation
+  without exposing restricted source material.
+- Converged external identities across capture scopes while preserving exact registry spellings,
+  explicit aliases, and hidden-identity boundaries.
+- Anchored pages to every unambiguous exact entity mentioned in the capture, including identities
+  already visible to the librarian rather than only identities proposed in the same plan.
+- Preserved complete Slack thread chronology and readable attachment evidence while storing
+  identical attachment bytes only once per capture.
+- Bounded answer, model, embedding, and database phases; added safe recovery from exhausted model
+  runs and transient provider, index, worker, and deployment failures.
 
 ### Removed
 
