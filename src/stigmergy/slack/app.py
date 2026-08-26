@@ -37,10 +37,9 @@ def build_context(settings: SlackSettings, *, gateway=None, conn=None) -> SlackC
     evidence = evidence_plane.store_from_env()
 
     if gateway is None:
-        from slack_sdk.web.async_client import AsyncWebClient
+        from stigmergy.slack.bolt_gateway import build_gateway
 
-        from stigmergy.slack.bolt_gateway import BoltSlackGateway
-        gateway = BoltSlackGateway(AsyncWebClient(token=settings.bot_token))
+        gateway = build_gateway(settings.bot_token)
 
     link_resolver = no_link_resolver
 
@@ -116,8 +115,13 @@ def build_bolt_app(ctx: SlackContext):
     """Register every listener. Bolt's own middleware populates `context["bot_user_id"]`;
     `context["team_id"]` is never used to identify an event's sender (see `_event_team_id`)."""
     from slack_bolt.async_app import AsyncApp
+    from slack_sdk.web.async_client import AsyncWebClient
 
-    app = AsyncApp(token=ctx.settings.bot_token)
+    from stigmergy.slack.bolt_gateway import API_TIMEOUT_S
+
+    app = AsyncApp(
+        client=AsyncWebClient(token=ctx.settings.bot_token, timeout=API_TIMEOUT_S),
+    )
 
     @app.event("app_mention")
     async def on_app_mention(event, context, ack, body):

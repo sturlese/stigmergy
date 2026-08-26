@@ -1,7 +1,11 @@
 """Postgres contract for Slack capture deduplication and terminal reports."""
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from unittest.mock import MagicMock
 
+import psycopg
 import pytest
 
 from stigmergy.capture import queue, schema
@@ -106,3 +110,107 @@ def test_non_terminal_work_is_not_reportable(conn):
     submission_id = enqueue_work(conn, "queued")
     store.attach_submission(conn, reservation, submission_id)
     assert store.due_for_report(conn) == []
+
+
+def test_reaction_to_the_same_reply_is_idempotent_after_thread_binding(conn):
+    """A reply reservation becomes a root-thread reservation after acquisition."""
+    first = store.reserve_reaction(
+        conn,
+        team_id="T1",
+        channel_id="C1",
+        message_ts="100.2",
+        slack_user_id="U1",
+        submitted_by="ana@example.com",
+    )
+    assert first is not None
+    assert store.bind_thread(
+        conn,
+        first,
+        team_id="T1",
+        channel_id="C1",
+        thread_ts="100.1",
+        slack_user_id="U1",
+    )
+
+    assert store.reserve_reaction(
+        conn,
+        team_id="T1",
+        channel_id="C1",
+        message_ts="100.2",
+        slack_user_id="U1",
+        submitted_by="ana@example.com",
+    ) is None
+
+
+def test_reserve_reaction_does_not_hide_unrelated_database_errors(monkeypatch):
+    conn = MagicMock()
+    expected = psycopg.OperationalError("connection lost")
+    monkeypatch.setattr(store, "reserve", MagicMock(side_effect=expected))
+
+    with pytest.raises(psycopg.OperationalError, match="connection lost"):
+        store.reserve_reaction(
+            conn,
+            team_id="T1",
+            channel_id="C1",
+            message_ts="100.2",
+            slack_user_id="U1",
+            submitted_by="ana@example.com",
+        )
+
+
+def test_root_and_reply_reservations_converge_during_concurrent_thread_binding(conn):
+    root = store.reserve_reaction(
+        conn,
+        team_id="T1",
+        channel_id="C1",
+        message_ts="100.1",
+        slack_user_id="U1",
+        submitted_by="ana@example.com",
+    )
+    assert root is not None
+    conn.commit()
+
+    reply_conn = connect_or_skip()
+    try:
+        reply = store.reserve_reaction(
+            reply_conn,
+            team_id="T1",
+            channel_id="C1",
+            message_ts="100.2",
+            slack_user_id="U1",
+            submitted_by="ana@example.com",
+        )
+        assert reply is not None
+        reply_conn.commit()
+    finally:
+        reply_conn.close()
+
+    barrier = Barrier(2)
+
+    def bind(reservation_id):
+        binding_conn = connect_or_skip()
+        try:
+            barrier.wait()
+            bound = store.bind_thread(
+                binding_conn,
+                reservation_id,
+                team_id="T1",
+                channel_id="C1",
+                thread_ts="100.1",
+                slack_user_id="U1",
+            )
+            binding_conn.commit()
+            return bound
+        finally:
+            binding_conn.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(bind, (root, reply)))
+
+    assert sorted(results) == [False, True]
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT message_ts, thread_ts FROM slack_submissions "
+            "WHERE team_id = 'T1' AND channel_id = 'C1' AND slack_user_id = 'U1'"
+        )
+        assert len(cursor.fetchall()) == 1

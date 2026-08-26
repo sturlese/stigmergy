@@ -7,8 +7,8 @@ import pytest
 
 from stigmergy.capture import schema
 from stigmergy.kernel.llm import LIBRARIAN_MODEL, OCR_MODEL
-from stigmergy.librarian import cli, config, worker
-from stigmergy.librarian.errors import LibrarianConfigError
+from stigmergy.librarian import cli, config, gitcmd, worker
+from stigmergy.librarian.errors import GitError, LibrarianConfigError
 
 
 def test_cli_exposes_only_the_long_running_writer():
@@ -68,6 +68,83 @@ def test_cli_bounds_database_statements_before_schema_startup(monkeypatch):
         ("uploads", connection),
         ("changes", connection),
     ]
+
+
+def test_cli_maps_a_scrubbed_git_startup_error_to_a_bounded_safe_exit(monkeypatch, capsys):
+    """The worker command never turns a credential-scrubbed Git failure into a traceback."""
+    connection = object()
+    error = GitError(
+        "`git fetch https://***@github.invalid/team/wiki.git` rc=128: " + "remote failed " * 45
+    )
+    settings = SimpleNamespace(dsn="postgresql://fixture")
+
+    monkeypatch.setattr(cli.config.Settings, "from_args", lambda _args: settings)
+    monkeypatch.setattr(cli.store, "connect", lambda _dsn: connection)
+    monkeypatch.setattr(cli.worker, "configure_connection", lambda _conn: None)
+    monkeypatch.setattr(cli.schema, "ensure_capture_schema", lambda _conn: None)
+    monkeypatch.setattr(cli, "ensure_upload_schema", lambda _conn: None)
+    monkeypatch.setattr(cli, "ensure_change_schema", lambda _conn: None)
+    monkeypatch.setattr(cli.worker, "startup_checks", lambda _settings: (_ for _ in ()).throw(error))
+
+    assert cli.main(["run"]) == 2
+
+    stderr = capsys.readouterr().err
+    assert stderr.startswith("stigmergy-librarian:")
+    assert "Traceback" not in stderr
+    assert "ghs_supersecrettoken" not in stderr
+    assert len(stderr) <= 800
+
+
+def test_cli_scrubs_raw_git_startup_error_before_writing_stderr(monkeypatch, capsys):
+    """The CLI boundary renders only a bounded safe synopsis of raw Git failure detail."""
+    connection = object()
+    settings = SimpleNamespace(dsn="postgresql://fixture")
+    private_path = "/Users/tester/private-knowledge-repo"
+    raw_url = (
+        "https://x-access-token:url-userinfo-secret@github.invalid/team/wiki.git?"
+        "ToKeN=query-token-secret&access_token=access-token-secret&Signature=signature-secret&"
+        "CREDENTIAL=credential-secret&password=password-secret&key=key-secret"
+    )
+    unrelated_secret = "unrelated-secret-marker"
+    raw_stderr = f"fatal: fetch {raw_url} from {private_path}: {unrelated_secret}"
+
+    monkeypatch.setattr(cli.config.Settings, "from_args", lambda _args: settings)
+    monkeypatch.setattr(cli.store, "connect", lambda _dsn: connection)
+    monkeypatch.setattr(cli.worker, "configure_connection", lambda _conn: None)
+    monkeypatch.setattr(cli.schema, "ensure_capture_schema", lambda _conn: None)
+    monkeypatch.setattr(cli, "ensure_upload_schema", lambda _conn: None)
+    monkeypatch.setattr(cli, "ensure_change_schema", lambda _conn: None)
+    monkeypatch.setattr(
+        gitcmd.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=128, stdout="", stderr=raw_stderr),
+    )
+    monkeypatch.setattr(
+        cli.worker,
+        "startup_checks",
+        lambda _settings: gitcmd.run("ls-remote", raw_url, cwd=private_path),
+    )
+
+    assert cli.main(["run"]) == 2
+
+    stderr = capsys.readouterr().err
+    assert stderr.startswith("stigmergy-librarian:")
+    assert "Traceback" not in stderr
+    assert len(stderr) <= 800
+    assert not any(
+        value in stderr
+        for value in (
+            "url-userinfo-secret",
+            "query-token-secret",
+            "access-token-secret",
+            "signature-secret",
+            "credential-secret",
+            "password-secret",
+            "key-secret",
+            private_path,
+            unrelated_secret,
+        )
+    )
 
 
 @pytest.mark.parametrize(

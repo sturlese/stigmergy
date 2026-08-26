@@ -15,7 +15,6 @@ from stigmergy.capture.errors import CaptureError, QueueStateError, SubmissionRe
 from stigmergy.kernel.deadline import hard_deadline
 from stigmergy.knowledge.planner import PydanticPlanner, ScriptedPlanner
 from stigmergy.knowledge.writer import (
-    KnowledgeWriteError,
     WriterDeadline,
     WriterDeps,
     process,
@@ -135,7 +134,7 @@ def process_next(conn, deps: WriterDeps):
 def _retryable(error: Exception) -> bool:
     if isinstance(error, SubmissionRejected):
         return False
-    if isinstance(error, KnowledgeWriteError):
+    if hasattr(error, "retryable"):
         return bool(error.retryable)
     if isinstance(error, ModelHTTPError):
         return error.status_code in {408, 409, 425, 429} or error.status_code >= 500

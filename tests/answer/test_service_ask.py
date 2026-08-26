@@ -409,14 +409,10 @@ def test_model_has_no_channel_left_to_smuggle_a_refusal_figure_through(ask_servi
     # `refusal_case` is computed straight from `ctx.read_paths_order`, unaffected by the defensive
     # backstop below.
     assert res["refusal_case"] == "no_match"
-    # A side effect of that backstop, not a defect: the surfaced page's OWN title
-    # ("Quarterly Report Q1 2026 FINAL") carries a figure (2026) absent from the question, and
-    # `_compose_reason`'s defensive backstop now scans the composed reason against the QUESTION
-    # (never the full evidence text — the tool's own `no results for: {query}` echo must not count
-    # as "tracing" a model-chosen figure). That backstop fires here, honestly, and falls back to
-    # the generic sentence rather than naming a title carrying an unrelated number — still 100%
-    # true, just less specific than `no_match`'s named ending.
-    assert res["reason"] == "nothing came back this run — no tool call found anything to work with."
+    # The numbered surfaced title is a verified server fact, not model-authored answer content.
+    # A no-match refusal must therefore retain the true context instead of claiming no tool found
+    # anything.
+    assert res["reason"] == "surfaced Quarterly Report Q1 2026 final — it doesn't answer that."
 
 
 def test_strict_gate_suppresses_a_fabricated_citation_quote_figure(ask_service, monkeypatch):

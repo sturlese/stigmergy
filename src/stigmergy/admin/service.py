@@ -36,6 +36,10 @@ class AdminRefused(Exception):
     pass
 
 
+class AdminUnavailable(AdminRefused):
+    pass
+
+
 class AdminService:
     def __init__(self, conn, *, server_settings, admin_settings: AdminSettings, evidence=None):
         self._conn = conn
@@ -353,7 +357,7 @@ class AdminService:
         try:
             payload = entity_aliases.registry_payload(text, origin)
         except ValueError as error:
-            raise AdminRefused("entity registry could not be read") from error
+            raise AdminUnavailable("entity registry could not be read") from error
         entities = []
         for entity_id, record in sorted(payload["entities"].items()):
             claims = sorted(
@@ -509,7 +513,7 @@ class AdminService:
 
     def _required_evidence(self):
         if self._evidence is None:
-            raise AdminRefused("evidence storage is unavailable")
+            raise AdminUnavailable("evidence storage is unavailable")
         return self._evidence
 
     def _reconstruct_patch(self, record) -> bytes:
@@ -521,7 +525,9 @@ class AdminService:
             return exact_patch(configured, record.parent_commit_sha, record.commit_sha)
         repo_url = getattr(self._server, "knowledge_repo_url", "")
         if not repo_url:
-            raise AdminRefused("the exact patch cache is missing and Git reconstruction is unavailable")
+            raise AdminUnavailable(
+                "the exact patch cache is missing and Git reconstruction is unavailable"
+            )
         with tempfile.TemporaryDirectory(prefix="stigmergy-change-") as temporary:
             checkout = os.path.join(temporary, "knowledge")
             bootstrap.ensure_checkout(

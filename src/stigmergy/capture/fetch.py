@@ -7,8 +7,16 @@ import socket
 import urllib.parse
 from dataclasses import dataclass
 
+from urllib3.exceptions import (
+    HTTPError,
+    ProtocolError,
+)
+from urllib3.exceptions import (
+    TimeoutError as Urllib3TimeoutError,
+)
+
 from stigmergy.capture import schema
-from stigmergy.capture.errors import FetchRejected
+from stigmergy.capture.errors import FetchRejected, FetchUnavailable
 from stigmergy.capture.provenance import without_capability
 
 MAX_REDIRECTS = 5
@@ -17,6 +25,8 @@ READ_TIMEOUT_S = 20
 CHUNK_BYTES = 64 * 1024
 USER_AGENT = "Stigmergy/1 public-artifact-fetcher"
 REDIRECTS = {301, 302, 303, 307, 308}
+UNAVAILABLE_MESSAGE = "public URL is temporarily unavailable"
+TRANSPORT_ERRORS = (OSError, Urllib3TimeoutError, ProtocolError, HTTPError)
 
 
 @dataclass(frozen=True)
@@ -52,7 +62,7 @@ def resolve_url(url: str, *, resolver=socket.getaddrinfo) -> ResolvedURL:
     try:
         answers = resolver(hostname, port, type=socket.SOCK_STREAM)
     except OSError as error:
-        raise FetchRejected("URL host could not be resolved") from error
+        raise FetchUnavailable(UNAVAILABLE_MESSAGE) from error
     addresses = sorted({answer[4][0] for answer in answers})
     if not addresses:
         raise FetchRejected("URL host has no address")
@@ -102,7 +112,10 @@ def fetch_public(
     current = url
     for redirect_count in range(MAX_REDIRECTS + 1):
         resolved = resolve_url(current, resolver=resolver)
-        response = request(resolved)
+        try:
+            response = request(resolved)
+        except TRANSPORT_ERRORS as error:
+            raise FetchUnavailable(UNAVAILABLE_MESSAGE) from error
         try:
             if response.status in REDIRECTS:
                 if redirect_count >= MAX_REDIRECTS:
@@ -134,6 +147,8 @@ def fetch_public(
                 final_url=without_capability(resolved.url),
                 response_media_type=media_type,
             )
+        except TRANSPORT_ERRORS as error:
+            raise FetchUnavailable(UNAVAILABLE_MESSAGE) from error
         finally:
             response.release_conn()
     raise FetchRejected("URL has too many redirects")

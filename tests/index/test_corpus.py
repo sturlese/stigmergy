@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from stigmergy.index import corpus
+from stigmergy.index.errors import StigmergyIndexError
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "repo")
 
@@ -68,6 +69,17 @@ def test_invalid_acl_fails_closed(acl):
     text = text.replace("acl: null", f"acl: {acl}")
     with pytest.raises(corpus.CorpusContractError, match="acl"):
         corpus.page_row(path, "wiki", text)
+
+
+def test_corpus_contract_error_is_an_index_domain_error_not_a_generic_value_error():
+    path, text = _wiki_text()
+    text = text.replace("acl: null", "acl: []")
+
+    with pytest.raises(StigmergyIndexError) as exc_info:
+        corpus.page_row(path, "wiki", text)
+
+    assert isinstance(exc_info.value, corpus.CorpusContractError)
+    assert not isinstance(exc_info.value, ValueError)
 
 
 @pytest.mark.parametrize("role", ["meeting", "document", "page", "view", "raw"])

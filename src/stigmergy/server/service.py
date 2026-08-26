@@ -23,6 +23,7 @@ from stigmergy.server import entity_aliases, identity, ops_files
 from stigmergy.server.acl import visible
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import (
+    ArgumentLengthError,
     CapabilityUnavailableError,
     IdentityError,
     RegistryError,
@@ -66,11 +67,9 @@ MIN_MATCH_CHARS = 3
 
 
 def check_arg_length(name: str, value: str) -> None:
-    """Reject oversized arguments with a safe transport marker."""
+    """Reject oversized arguments with a safe transport error."""
     if len(value) > MAX_ARG_CHARS:
-        ex = ValueError(f"{name} too long (max {MAX_ARG_CHARS} characters)")
-        ex.is_arg_length_error = True
-        raise ex
+        raise ArgumentLengthError(f"{name} too long (max {MAX_ARG_CHARS} characters)")
 
 
 def _truncate_for_audit(args: dict, depth: int = 0) -> dict:
@@ -915,7 +914,11 @@ def _occurred_at(value: str | None) -> dt.datetime | dt.date | None:
     normalized = value.strip()
     try:
         if "T" in normalized:
-            return dt.datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+            occurred_at = dt.datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+            if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
+                raise CaptureError(
+                    "occurred_at must be an ISO date or timezone-aware timestamp")
+            return occurred_at
         return dt.date.fromisoformat(normalized)
     except ValueError as error:
         raise CaptureError("occurred_at must be an ISO date or timezone-aware timestamp") from error

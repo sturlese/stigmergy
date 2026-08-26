@@ -7,19 +7,25 @@ import hashlib
 import shlex
 import subprocess
 
+from stigmergy.changes.errors import ChangeError
 from stigmergy.changes.model import PathChange
 from stigmergy.knowledge import contradictions
 
 
 def _git(repo: str, *args: str) -> bytes:
-    process = subprocess.run(
-        ["git", "-c", "core.quotePath=false", *args],
-        cwd=repo,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        process = subprocess.run(
+            ["git", "-c", "core.quotePath=false", *args],
+            cwd=repo,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        raise ChangeError("git could not construct the change record") from error
     if process.returncode:
-        raise RuntimeError("git could not construct the change record")
+        raise ChangeError("git could not construct the change record") from RuntimeError(
+            "git returned a non-zero exit status"
+        )
     return process.stdout
 
 
@@ -133,14 +139,8 @@ def _counts(repo: str, parent: str, commit: str) -> dict[str, tuple[int, int]]:
     return result
 
 
-def _blob(repo: str, revision: str, path: str) -> bytes | None:
-    process = subprocess.run(
-        ["git", "show", f"{revision}:{path}"],
-        cwd=repo,
-        capture_output=True,
-        check=False,
-    )
-    return process.stdout if process.returncode == 0 else None
+def _blob(repo: str, revision: str, path: str) -> bytes:
+    return _git(repo, "show", f"{revision}:{path}")
 
 
 def _role(path: str) -> str:
@@ -176,8 +176,8 @@ def build_manifest(
     counts = _counts(repo, parent, commit)
     result = []
     for status, path in _paths(repo, parent, commit):
-        before = _blob(repo, parent, path)
-        after = _blob(repo, commit, path)
+        before = None if status == "A" else _blob(repo, parent, path)
+        after = None if status == "D" else _blob(repo, commit, path)
         additions, deletions = counts.get(path, (0, 0))
         page_role = _role(path)
         before_contradictions = _contradiction_ids(before, page_role)

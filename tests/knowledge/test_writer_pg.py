@@ -13,6 +13,7 @@ from stigmergy.capture.fetch import FetchedArtifact
 from stigmergy.capture.schema import Actor
 from stigmergy.capture.service import CaptureService
 from stigmergy.capture.source import source_path
+from stigmergy.changes.errors import ChangeError
 from stigmergy.changes.store import list_changes
 from stigmergy.index.corpus import split_frontmatter_checked
 from stigmergy.knowledge import contradictions, writer
@@ -1978,6 +1979,73 @@ def test_crash_after_commit_reconciles_without_a_second_commit(
         ["git", "rev-list", "--count", "main"], cwd=target_repo, text=True
     ).strip() == "2"
     assert len(list_changes(clean_queue)) == 1
+
+
+def test_change_record_failure_after_commit_retries_and_reconciles_once(
+    clean_queue, target_repo, monkeypatch
+):
+    store = evidence.MemoryEvidenceStore()
+    CaptureService(clean_queue, store).capture_text(
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=("engineering",),
+        adapter="mcp",
+        text="A durable change-ledger recovery decision.",
+        idempotency_key="change-record-recovery",
+    )
+    plan = FilingPlan(
+        summary="Recorded change-ledger recovery",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Change ledger recovery",
+                body="# Change ledger recovery\n\nThe commit remains recoverable.",
+                reason="The source establishes the recovery invariant",
+            ),
+        ),
+    )
+    settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
+    deps = WriterDeps(settings, store, ScriptedPlanner(plan), str(target_repo))
+    remote = target_repo.parent / "writer-remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", remote], check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=target_repo, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=target_repo, check=True)
+    original_record_change = writer.record_change
+    calls = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ChangeError("git could not construct the change record")
+        return original_record_change(*args, **kwargs)
+
+    monkeypatch.setattr(writer, "record_change", fail_once)
+
+    first, first_outcome = worker.process_next(clean_queue, deps)
+
+    assert first_outcome.status == schema.QUEUED
+    assert first["error_category"] == "ChangeError"
+    assert subprocess.check_output(
+        ["git", "--git-dir", str(remote), "rev-list", "--count", "main"], text=True
+    ).strip() == "2"
+    assert list_changes(clean_queue) == []
+    with clean_queue.cursor() as cursor:
+        cursor.execute(
+            "UPDATE capture_queue SET next_attempt_at = now() WHERE id = %s",
+            (first["id"],),
+        )
+
+    item, outcome = worker.process_next(clean_queue, deps)
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["reconciled"] is True
+    assert subprocess.check_output(
+        ["git", "--git-dir", str(remote), "rev-list", "--count", "main"], text=True
+    ).strip() == "2"
+    changes = list_changes(clean_queue)
+    assert len(changes) == 1
+    assert changes[0].commit_sha == item["commit_sha"]
 
 
 def test_explicit_delete_sweeps_page_and_source_references_in_one_commit(

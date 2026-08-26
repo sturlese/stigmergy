@@ -19,9 +19,10 @@ from stigmergy.admin.service import (
     AdminNotFound,
     AdminRefused,
     AdminService,
+    AdminUnavailable,
 )
 from stigmergy.admin.settings import AdminSettings
-from stigmergy.capture.errors import CaptureError
+from stigmergy.capture.errors import CaptureError, FetchRejected, FetchUnavailable
 from stigmergy.capture.schema import MAX_ARTIFACT_BYTES
 from stigmergy.kernel.blocking import run_blocking
 
@@ -216,12 +217,18 @@ def _endpoint(function):
             return JSONResponse({"error": "request too large"}, status_code=413)
         except AdminBadRequest as error:
             return JSONResponse({"error": str(error)}, status_code=400)
+        except FetchUnavailable:
+            return JSONResponse({"error": "public URL is temporarily unavailable"}, status_code=503)
+        except FetchRejected:
+            return JSONResponse({"error": "public URL was rejected"}, status_code=400)
         except CaptureError as error:
             return JSONResponse({"error": str(error)}, status_code=400)
         except AdminNotFound as error:
             return JSONResponse({"error": str(error)}, status_code=404)
+        except AdminUnavailable as error:
+            return JSONResponse({"error": str(error)}, status_code=503)
         except AdminRefused as error:
-            return JSONResponse({"error": str(error)}, status_code=409)
+            return JSONResponse({"error": str(error)}, status_code=403)
         except Exception as error:  # noqa: BLE001
             log.error(
                 "admin endpoint failed",

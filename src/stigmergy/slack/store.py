@@ -85,7 +85,7 @@ def reserve(
                 id, team_id, channel_id, message_ts, thread_ts,
                 slack_user_id, submitted_by
             ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (team_id, channel_id, thread_ts, slack_user_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             RETURNING id
             """,
             (

@@ -9,7 +9,7 @@ from stigmergy.capture.uploads import ensure_upload_schema
 from stigmergy.changes.store import ensure_change_schema
 from stigmergy.index import store
 from stigmergy.librarian import config, worker
-from stigmergy.librarian.errors import LibrarianConfigError
+from stigmergy.librarian.errors import GitError, LibrarianConfigError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,6 +40,9 @@ def main(argv=None) -> int:
             resolved,
             evidence_plane.store_from_env(),
         )
+    except GitError:
+        print("stigmergy-librarian: could not validate the knowledge repository", file=sys.stderr)
+        return 2
     except (LibrarianConfigError, ValueError, OSError) as error:
         print(f"stigmergy-librarian: {error}", file=sys.stderr)
         return 2
