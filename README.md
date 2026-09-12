@@ -260,11 +260,12 @@ Report vulnerabilities privately: [`SECURITY.md`](./SECURITY.md).
 
 ## Models
 
-One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, same-model provider failover only,
-no model fallback or direct alternate-provider credentials, zero-data
-retention. Direct Anthropic, OpenAI, or Gemini credentials are rejected. The librarian's structured
-plans are routed to a host verified to return tool-call arguments intact, with the hosts known to
-corrupt them excluded from failover.
+One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, no model fallback or direct
+alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenAI, or Gemini
+credentials are rejected. The librarian's structured plans are pinned to Azure, the verified host
+for intact tool-call arguments, and fail closed rather than falling back to another host. Transient
+routing unavailability retries through the bounded queue; answer and OCR requests retain same-model
+provider failover.
 
 | Purpose | Model |
 |---|---|

@@ -137,7 +137,7 @@ def _retryable(error: Exception) -> bool:
     if hasattr(error, "retryable"):
         return bool(error.retryable)
     if isinstance(error, ModelHTTPError):
-        return error.status_code in {408, 409, 425, 429} or error.status_code >= 500
+        return error.status_code in {404, 408, 409, 425, 429} or error.status_code >= 500
     return isinstance(
         error,
         (
