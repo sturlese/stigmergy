@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -9,6 +10,8 @@ from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.models.test import TestModel
 
 from stigmergy.kernel import llm
+from stigmergy.knowledge import planner
+from stigmergy.knowledge.plan import FilingPlan
 
 
 def test_runtime_model_contract_is_exact():
@@ -31,39 +34,43 @@ def test_every_approved_model_has_the_mandatory_provider_policy(monkeypatch):
         assert model.model_name == configured.removeprefix("openrouter:")
         assert settings is model.settings
         assert model.settings["openrouter_provider"] == llm.provider_policy(configured)
-        assert llm.OPENROUTER_PROVIDER_POLICY.items() <= model.settings["openrouter_provider"].items()
+        assert {
+            "require_parameters": True,
+            "data_collection": "deny",
+            "zdr": True,
+        }.items() <= model.settings["openrouter_provider"].items()
 
 
-def test_approved_models_enable_provider_failover_without_relaxing_privacy(monkeypatch):
+def test_non_librarian_models_enable_provider_failover_without_relaxing_privacy(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-    model, _ = llm.build_model(llm.LIBRARIAN_MODEL)
-
-    assert model.model_name == "deepseek/deepseek-v4-flash"
-    assert model.settings["openrouter_provider"] == {
-        "allow_fallbacks": True,
-        "require_parameters": True,
-        "data_collection": "deny",
-        "zdr": True,
-        "order": ["Sail Research"],
-        "ignore": ["CoreWeave", "DeepInfra"],
-    }
-
-
-def test_only_the_librarian_model_is_routed_to_a_verified_host(monkeypatch):
-    """CoreWeave and DeepInfra mangle DeepSeek tool-call arguments (newlines dropped, arrays
-    double-encoded); the librarian's structured plans are the only path that pays for it."""
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-    librarian, _ = llm.build_model(llm.LIBRARIAN_MODEL)
-    assert librarian.settings["openrouter_provider"]["order"] == ["Sail Research"]
-    assert librarian.settings["openrouter_provider"]["ignore"] == ["CoreWeave", "DeepInfra"]
-    assert librarian.settings["openrouter_provider"]["allow_fallbacks"] is True
 
     for configured in (llm.ANSWER_MODEL, llm.OCR_MODEL):
         model, _ = llm.build_model(configured)
-        assert "order" not in model.settings["openrouter_provider"]
-        assert "ignore" not in model.settings["openrouter_provider"]
+        assert model.settings["openrouter_provider"] == llm.OPENROUTER_PROVIDER_POLICY
+
+
+def test_librarian_is_pinned_to_azure_for_intact_structured_output():
+    assert llm.provider_policy(llm.LIBRARIAN_MODEL) == {
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+        "only": ["azure"],
+    }
+
+
+def test_only_the_librarian_model_is_pinned_to_a_verified_host(monkeypatch):
+    """Only DeepSeek tool-call output requires a verified host for structured plans."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    librarian, _ = llm.build_model(llm.LIBRARIAN_MODEL)
+    assert librarian.settings["openrouter_provider"]["only"] == ["azure"]
+    assert librarian.settings["openrouter_provider"]["allow_fallbacks"] is False
+
+    for configured in (llm.ANSWER_MODEL, llm.OCR_MODEL):
+        model, _ = llm.build_model(configured)
+        assert "only" not in model.settings["openrouter_provider"]
+        assert model.settings["openrouter_provider"]["allow_fallbacks"] is True
 
 
 def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypatch):
@@ -103,6 +110,69 @@ def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypat
     expected = llm.provider_policy(llm.LIBRARIAN_MODEL)
     assert [payload["provider"] for payload in payloads] == [expected, expected]
     assert model.settings["openrouter_provider"] == expected
+
+
+def test_librarian_structured_output_request_requires_a_tool_and_pins_azure(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": "test-completion",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "deepseek/deepseek-v4-flash",
+            "provider": "azure",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "final_result",
+                            "arguments": '{"summary":"Filed"}',
+                        },
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+
+    async def run():
+        model, _ = llm.build_model(llm.LIBRARIAN_MODEL)
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        model.provider._set_http_client(client)
+        subject = planner.PydanticPlanner(
+            SimpleNamespace(model=llm.LIBRARIAN_MODEL, max_turns=1),
+            model_factory=lambda: model,
+        )
+        try:
+            return await subject._run_structured(
+                mode="tool",
+                output_type=FilingPlan,
+                instructions="File supported conclusions only.",
+                prompt="A supported conclusion.",
+            )
+        finally:
+            await client.aclose()
+
+    result = asyncio.run(run())
+
+    assert result.plan.summary == "Filed"
+    assert len(payloads) == 1
+    assert payloads[0]["tool_choice"] == "required"
+    assert payloads[0]["tools"][0]["function"]["name"] == "final_result"
+    assert payloads[0]["provider"] == {
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+        "only": ["azure"],
+    }
 
 
 @pytest.mark.parametrize(

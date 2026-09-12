@@ -149,7 +149,7 @@ def test_model_run_failures_are_retryable(error):
         (400, False),
         (401, False),
         (403, False),
-        (404, False),
+        (404, True),
         (408, True),
         (409, True),
         (425, True),
