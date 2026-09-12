@@ -312,6 +312,7 @@ def test_local_tool_rejects_zero_or_multiple_inputs():
             raise AssertionError("cloud should not be called")
 
     mcp = build_mcp(NoCloud(), Acquirer())
+    assert mcp.name == "stigmergy-bridge"
 
     async def call(arguments):
         blocks, _ = await mcp.call_tool("brain_submit", arguments)

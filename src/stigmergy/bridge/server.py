@@ -23,7 +23,7 @@ def _error(error: Exception) -> str:
 def build_mcp(cloud: CloudClient, acquirer: Acquirer):
     from mcp.server.fastmcp import FastMCP
 
-    mcp = FastMCP("stigmergy-local")
+    mcp = FastMCP("stigmergy-bridge")
 
     @mcp.tool()
     async def search_brain(query: str, filters: dict | None = None, max_results: int = 5) -> str:
