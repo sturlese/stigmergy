@@ -93,7 +93,7 @@ def test_a_valid_token_at_the_real_deployed_host_reaches_the_normal_auth_and_too
     body = r.json()   # json_response=True (the fix's second precondition): a plain JSON body,
     # never SSE-framed, is exactly what a raw (non-SDK) HTTP caller like this test needs.
     assert body["jsonrpc"] == "2.0" and "result" in body
-    assert body["result"]["serverInfo"]["name"] == "stigmergy-brain"
+    assert body["result"]["serverInfo"]["name"] == "stigmergy"
 
 
 def test_a_host_outside_the_allowlist_still_gets_421_with_the_public_host_configured(

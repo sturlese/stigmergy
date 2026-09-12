@@ -48,7 +48,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
     """Build the shared tool surface with transport-specific FastMCP settings."""
     from mcp.server.fastmcp import FastMCP
 
-    mcp = FastMCP("stigmergy-brain", stateless_http=stateless_http,
+    mcp = FastMCP("stigmergy", stateless_http=stateless_http,
                   transport_security=transport_security, json_response=json_response)
 
     @mcp.tool()

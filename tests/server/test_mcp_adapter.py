@@ -60,6 +60,7 @@ def fake_service():
 def test_the_mounted_tool_list_is_exactly_the_eight_supported_tools(fake_service):
     """Pin the supported MCP product surface."""
     mcp = build_mcp(fake_service)
+    assert mcp.name == "stigmergy"
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert names == {
         # read

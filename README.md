@@ -164,7 +164,7 @@ Claude Code, `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "stigmergy": {
+    "stigmergy-bridge": {
       "command": "stigmergy-bridge",
       "args": ["--url", "https://stigmergy.example.com"],
       "env": {
@@ -179,7 +179,7 @@ Claude Code, `.mcp.json`:
 Codex, `.codex/config.toml`:
 
 ```toml
-[mcp_servers.stigmergy]
+[mcp_servers.stigmergy-bridge]
 command = "stigmergy-bridge"
 args = ["--url", "https://stigmergy.example.com"]
 env_vars = ["STIGMERGY_TOKEN", "STIGMERGY_GOOGLE_CLIENT_SECRETS"]
