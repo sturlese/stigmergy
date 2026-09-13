@@ -45,6 +45,12 @@ groups, components, functions, and extensions are sections of that page, not sib
 Split a child page only when it independently has a stable name, mechanism, significance, examples,
 and future reuse beyond the parent framework.
 
+Related pages at different conceptual levels, such as a broad discipline or framework and a
+reusable component, mechanism, or artifact, are not duplicates. Preserve the lower-level page,
+update its distinct definition, and link both pages reciprocally. Delete only a true semantic
+duplicate with no independently durable name, mechanism, significance, or future reuse; never
+delete merely because pages overlap or because a new page is broader.
+
 Every created or materially updated page must be cold-readable and useful without the source:
 state what it is, why it matters, how it works, its source-supported framework or mechanism, and
 the concrete examples, extensions, tradeoffs, and connections that make it reusable. Preserve the

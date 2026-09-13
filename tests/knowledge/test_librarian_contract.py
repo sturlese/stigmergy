@@ -251,6 +251,15 @@ def test_librarian_prevents_new_identity_proposals_without_a_page_anchor():
     assert "if no durable page has a material relationship to an identity, do not propose it" in text
 
 
+def test_librarian_preserves_related_pages_at_distinct_conceptual_levels():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "related pages at different conceptual levels" in text
+    assert "are not duplicates" in text
+    assert "update its distinct definition, and link both pages reciprocally" in text
+    assert "delete only a true semantic duplicate" in text
+    assert "never delete merely because pages overlap or because a new page is broader" in text
+
+
 def test_librarian_distinguishes_evidentiary_identities_from_incidental_examples():
     text = " ".join(FROZEN.read_text().casefold().split())
     assert "stated action, measurement, decision, report, or result" in text
