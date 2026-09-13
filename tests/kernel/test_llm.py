@@ -16,7 +16,7 @@ from stigmergy.knowledge.plan import FilingPlan
 
 def test_runtime_model_contract_is_exact():
     assert llm.ANSWER_MODEL == "openrouter:z-ai/glm-5.2"
-    assert llm.LIBRARIAN_MODEL == "openrouter:deepseek/deepseek-v4-flash"
+    assert llm.LIBRARIAN_MODEL == "openrouter:openai/gpt-5.4"
     assert llm.OCR_MODEL == "openrouter:qwen/qwen3-vl-8b-instruct"
     assert {
         llm.ANSWER_MODEL,
@@ -60,7 +60,7 @@ def test_librarian_is_pinned_to_azure_for_intact_structured_output():
 
 
 def test_only_the_librarian_model_is_pinned_to_a_verified_host(monkeypatch):
-    """Only DeepSeek tool-call output requires a verified host for structured plans."""
+    """Only the librarian needs a verified host for structured plans."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     librarian, _ = llm.build_model(llm.LIBRARIAN_MODEL)
@@ -73,6 +73,26 @@ def test_only_the_librarian_model_is_pinned_to_a_verified_host(monkeypatch):
         assert model.settings["openrouter_provider"]["allow_fallbacks"] is True
 
 
+def test_librarian_requests_high_reasoning_without_returning_reasoning(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    model, settings = llm.build_model(llm.LIBRARIAN_MODEL)
+
+    assert settings is model.settings
+    assert model.settings["openrouter_reasoning"] == {
+        "effort": "high",
+        "exclude": True,
+    }
+
+
+def test_answer_and_ocr_do_not_inherit_librarian_reasoning(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    for configured in (llm.ANSWER_MODEL, llm.OCR_MODEL):
+        model, _ = llm.build_model(configured)
+        assert "openrouter_reasoning" not in model.settings
+
+
 def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     payloads = []
@@ -83,8 +103,8 @@ def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypat
             "id": "test-completion",
             "object": "chat.completion",
             "created": 0,
-            "model": "deepseek/deepseek-v4-flash",
-            "provider": "deepseek",
+            "model": "openai/gpt-5.4",
+            "provider": "azure",
             "choices": [{
                 "index": 0,
                 "message": {"role": "assistant", "content": "ok"},
@@ -108,6 +128,7 @@ def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypat
     model = asyncio.run(run_twice())
 
     expected = llm.provider_policy(llm.LIBRARIAN_MODEL)
+    assert [payload["model"] for payload in payloads] == ["openai/gpt-5.4"] * 2
     assert [payload["provider"] for payload in payloads] == [expected, expected]
     assert model.settings["openrouter_provider"] == expected
 
@@ -122,7 +143,7 @@ def test_librarian_structured_output_request_requires_a_tool_and_pins_azure(monk
             "id": "test-completion",
             "object": "chat.completion",
             "created": 0,
-            "model": "deepseek/deepseek-v4-flash",
+            "model": "openai/gpt-5.4",
             "provider": "azure",
             "choices": [{
                 "index": 0,
@@ -166,12 +187,17 @@ def test_librarian_structured_output_request_requires_a_tool_and_pins_azure(monk
     assert len(payloads) == 1
     assert payloads[0]["tool_choice"] == "required"
     assert payloads[0]["tools"][0]["function"]["name"] == "final_result"
+    assert payloads[0]["model"] == "openai/gpt-5.4"
     assert payloads[0]["provider"] == {
         "allow_fallbacks": False,
         "require_parameters": True,
         "data_collection": "deny",
         "zdr": True,
         "only": ["azure"],
+    }
+    assert payloads[0]["reasoning"] == {
+        "effort": "high",
+        "exclude": True,
     }
 
 

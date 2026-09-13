@@ -15,6 +15,8 @@ from stigmergy.capture.service import CaptureService
 from stigmergy.capture.source import source_path
 from stigmergy.changes.errors import ChangeError
 from stigmergy.changes.store import list_changes
+from stigmergy.index import build
+from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.index.corpus import split_frontmatter_checked
 from stigmergy.knowledge import contradictions, writer
 from stigmergy.knowledge.pages import parse_page, render_page
@@ -29,6 +31,8 @@ from stigmergy.knowledge.planner import ScriptedPlanner
 from stigmergy.knowledge.write_guard import WriteContext
 from stigmergy.knowledge.writer import KnowledgeWriteError, WriterDeps
 from stigmergy.librarian import config, worker
+from stigmergy.server.service import BrainService
+from stigmergy.server.settings import Settings as ServerSettings
 
 
 def _process_capture(
@@ -718,7 +722,7 @@ def test_source_only_capture_is_a_landed_auditable_commit(clean_queue, target_re
     ]
 
 
-def test_exact_proposed_entity_name_anchors_a_mutated_page_when_omitted_from_mutation(
+def test_omitted_entity_references_do_not_auto_anchor_a_proposed_identity(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -756,14 +760,6 @@ def test_exact_proposed_entity_name_anchors_a_mutated_page_when_omitted_from_mut
     )
 
     assert outcome.status == schema.LANDED
-    registry = json.loads(
-        subprocess.check_output(
-            ["git", "show", "main:ops/entity-registry.json"],
-            cwd=target_repo,
-            text=True,
-        )
-    )
-    entity_id = next(iter(registry["entities"]))
     page = parse_page(
         "wiki/notes/Northstar Research renewal.md",
         subprocess.check_output(
@@ -773,10 +769,10 @@ def test_exact_proposed_entity_name_anchors_a_mutated_page_when_omitted_from_mut
         ),
     )
 
-    assert page.entities == (entity_id,)
+    assert page.entities == ()
 
 
-def test_omitted_entity_references_auto_anchor_a_unique_proposed_identity(
+def test_omitted_entity_references_do_not_auto_anchor_a_unique_proposed_identity(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -817,14 +813,6 @@ def test_omitted_entity_references_auto_anchor_a_unique_proposed_identity(
     )
 
     assert outcome.status == schema.LANDED
-    registry = json.loads(
-        subprocess.check_output(
-            ["git", "show", "main:ops/entity-registry.json"],
-            cwd=target_repo,
-            text=True,
-        )
-    )
-    entity_id = next(iter(registry["entities"]))
     page = parse_page(
         "wiki/notes/Qaldris renewal.md",
         subprocess.check_output(
@@ -834,7 +822,7 @@ def test_omitted_entity_references_auto_anchor_a_unique_proposed_identity(
         ),
     )
 
-    assert page.entities == (entity_id,)
+    assert page.entities == ()
 
 
 def test_proposed_entity_name_substrings_do_not_anchor_mutated_pages(clean_queue, target_repo):
@@ -876,7 +864,7 @@ def test_proposed_entity_name_substrings_do_not_anchor_mutated_pages(clean_queue
     assert page.entities == ()
 
 
-def test_overlapping_proposed_names_anchor_only_the_longest_matching_name(
+def test_explicit_entity_references_resolve_overlapping_proposed_names(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -893,6 +881,7 @@ def test_overlapping_proposed_names_anchor_only_the_longest_matching_name(
                 role="note",
                 title="Acme Inc approval",
                 body="# Acme Inc approval\n\nAcme Inc approved the renewal.",
+                entities=("Acme Inc",),
                 reason="The source names Acme Inc exactly",
             ),
             PageMutation(
@@ -903,6 +892,7 @@ def test_overlapping_proposed_names_anchor_only_the_longest_matching_name(
                     "# Acme and Pinecone approval\n\nAcme and Pinecone Labs "
                     "approved the renewal."
                 ),
+                entities=("Acme", "Pinecone Labs"),
                 reason="The source names two distinct organizations",
             ),
         ),
@@ -953,7 +943,9 @@ def test_overlapping_proposed_names_anchor_only_the_longest_matching_name(
     assert distinct.entities == (entity_ids["Acme"], entity_ids["Pinecone Labs"])
 
 
-def test_separate_short_and_long_proposed_name_mentions_both_anchor(clean_queue, target_repo):
+def test_explicit_entity_references_resolve_short_and_long_proposed_names(
+    clean_queue, target_repo
+):
     store = evidence.MemoryEvidenceStore()
     plan = FilingPlan(
         summary="Recorded Acme approvals",
@@ -970,6 +962,7 @@ def test_separate_short_and_long_proposed_name_mentions_both_anchor(clean_queue,
                     "# Acme approvals\n\nAcme Inc approved its renewal, while Acme "
                     "approved a separate renewal."
                 ),
+                entities=("Acme", "Acme Inc"),
                 reason="The source separately identifies Acme Inc and Acme",
             ),
         ),
@@ -1064,7 +1057,7 @@ def test_equivalent_proposed_name_spans_with_distinct_ids_do_not_auto_anchor(
     assert page.entities == ()
 
 
-def test_alias_text_anchors_the_single_identity_proposed_for_all_names(
+def test_explicit_alias_reference_resolves_the_single_proposed_identity(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -1085,6 +1078,7 @@ def test_alias_text_anchors_the_single_identity_proposed_for_all_names(
                 role="note",
                 title="Calibration approval",
                 body="# Calibration approval\n\nVSW approved the calibration schedule.",
+                entities=("VSW",),
                 reason="The source identifies the approving organization",
             ),
         ),
@@ -1368,7 +1362,7 @@ def test_two_proposals_for_one_strong_identity_reject_the_plan(
     assert "wiki/notes/Duplicate identity proposals.md" not in tree
 
 
-def test_omitted_update_entities_retains_existing_anchors_and_adds_exact_proposals(
+def test_omitted_update_entities_retain_existing_anchors_without_adding_proposals(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -1444,10 +1438,10 @@ def test_omitted_update_entities_retains_existing_anchors_and_adds_exact_proposa
             text=True,
         ),
     )
-    assert page.entities == (entity_ids["Legacy Systems"], entity_ids["Northstar Research"])
+    assert page.entities == (entity_ids["Legacy Systems"],)
 
 
-def test_explicit_entity_lists_cannot_suppress_entities_named_in_page(
+def test_explicit_entity_references_are_the_complete_anchor_set(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -1524,9 +1518,10 @@ def test_explicit_entity_lists_cannot_suppress_entities_named_in_page(
         ),
     )
 
-    expected = (entity_ids["Northstar Research"], entity_ids["Pinecone Labs"])
-    assert listed.entities == expected
-    assert empty.entities == expected
+    assert (listed.entities, empty.entities) == (
+        (entity_ids["Northstar Research"],),
+        (),
+    )
 
     update = FilingPlan(
         summary="Replaced the page with Cascade Works evidence",
@@ -1556,18 +1551,6 @@ def test_explicit_entity_lists_cannot_suppress_entities_named_in_page(
     )
 
     assert update_outcome.status == schema.LANDED
-    updated_registry = json.loads(
-        subprocess.check_output(
-            ["git", "show", "main:ops/entity-registry.json"],
-            cwd=target_repo,
-            text=True,
-        )
-    )
-    cascade_id = next(
-        entity_id
-        for entity_id, record in updated_registry["entities"].items()
-        if any(claim["value"] == "Cascade Works" for claim in record["claims"])
-    )
     updated = parse_page(
         "wiki/notes/Empty entity page.md",
         subprocess.check_output(
@@ -1576,7 +1559,69 @@ def test_explicit_entity_lists_cannot_suppress_entities_named_in_page(
             text=True,
         ),
     )
-    assert updated.entities == (cascade_id, entity_ids["Northstar Research"])
+    assert updated.entities == ()
+
+
+def test_describe_entity_returns_only_the_explicitly_anchored_page_after_indexing(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded two otherwise similar Northstar renewal pages",
+        entities=(
+            {"name": "Northstar Research", "entity_type": "organization"},
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Northstar explicit link",
+                body="# Northstar explicit link\n\nNorthstar Research approved the renewal.",
+                entities=("Northstar Research",),
+                reason="The source establishes a deliberate Northstar relationship",
+            ),
+            PageMutation(
+                action="create",
+                role="note",
+                title="Northstar omitted link",
+                body="# Northstar omitted link\n\nNorthstar Research approved the renewal.",
+                entities=None,
+                reason="The source records a passing Northstar mention without a link",
+            ),
+        ),
+    )
+
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        key="explicit-entity-link-indexing",
+        text="Northstar Research approved the renewal.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    build.rebuild(clean_queue, str(target_repo), build_embedder("fake"))
+    service = BrainService(
+        ServerSettings(
+            identity="test-master",
+            identities_path=str(target_repo / "ops" / "identities.json"),
+            entity_registry_path=str(target_repo / "ops" / "entity-registry.json"),
+        ),
+        clean_queue,
+        build_embedder("fake"),
+        audiences=None,
+        identity="test-master",
+    )
+
+    result = service.describe_entity("Northstar Research")
+
+    assert result["found"] is True
+    assert [item["path"] for item in result["knowledge"]] == [
+        "wiki/notes/Northstar explicit link.md"
+    ]
 
 
 def test_guessed_hidden_page_and_entity_cannot_be_affected(clean_queue, target_repo):
