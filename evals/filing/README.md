@@ -21,13 +21,15 @@ The selected Stigmergy level requires at least three independent, complete,
 two-request budget, exercise the temporary-worktree writer and bounded semantic-repair path, and must
 all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
 blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a
-material regression.
+material regression. Hippocampus is comparative baseline evidence, not an admission candidate: its
+hard gates may honestly fail under Stigmergy's writer rubric, but every case, provenance field,
+canonical payload digest, semantic score, writer result, and raw gate map is still replay-verified.
 
 Every Stigmergy reasoning-level candidate records full per-case runs using the same corpus, initial
 graph, case hashes, candidate commit, skill hash, runtime route, and complete raw gate map. The
 selected production level must be the first passing level in the ordered matrix. The runner accepts a
 diagnostic `planner-only` mode, but that evidence can never select a production level. Missing, stale,
-mismatched, aggregate-only, incomplete, or failing evidence rejects the release.
+mismatched, aggregate-only, incomplete, or failing selected-Stigmergy evidence rejects the release.
 
 Run one immutable case-result record with the production-equivalent path:
 

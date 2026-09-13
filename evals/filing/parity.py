@@ -248,7 +248,9 @@ def _implementation_runs(value, corpus, initial, expected, failures: list[dict])
             corpus=corpus,
             initial=initial,
             expected=expected,
-            require_passing=True,
+            # Hippocampus is comparative evidence: preserve complete replay validation without
+            # applying Stigmergy's admission threshold to a different filing workflow.
+            require_passing=implementation == "stigmergy",
             require_production_equivalent=implementation == "stigmergy",
             failures=failures,
         )

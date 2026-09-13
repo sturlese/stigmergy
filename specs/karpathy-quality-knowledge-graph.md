@@ -133,9 +133,11 @@ filing or repair records a typed operational failure without committing a partia
     knowledge bodies, and invalid local source references without attempting subjective topic
     extraction.
 13. **KG-13:** The same source corpus and initial graph are run through Hippocampus and Stigmergy.
-    Evidence records every current case inside every run rather than an aggregate score. Every hard
-    faithfulness, coverage, provenance, connectivity, entity, and ACL criterion passes, and a blind
-    pairwise editorial review finds no material Stigmergy regression before deployment.
+    Evidence records every current case inside every run rather than an aggregate score. Stigmergy
+    must pass every hard faithfulness, coverage, provenance, connectivity, entity, and ACL criterion;
+    Hippocampus is a comparative baseline whose complete evidence remains replay-verified even where
+    it honestly fails Stigmergy-specific writer gates. A blind pairwise editorial review finds no
+    material Stigmergy regression before deployment.
 14. **KG-14:** Production continues to use `openai/gpt-5.4` through the approved Azure
     OpenRouter route. The lowest reasoning level that passes every hard reference case is selected
     only after at least three independent production-equivalent repeats per case under the configured

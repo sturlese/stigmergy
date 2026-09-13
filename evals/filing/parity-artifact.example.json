@@ -1,6 +1,12 @@
 {
   "schema_version": 3,
   "example_only": true,
+  "baseline_contract": {
+    "implementation": "hippocampus",
+    "role": "comparative-only",
+    "hard_gates_may_fail": true,
+    "integrity_and_replay_are_required": true
+  },
   "corpus_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "initial_graph_ref": "0123456789abcdef0123456789abcdef01234567",
   "stigmergy_commit": "0123456789abcdef0123456789abcdef01234567",

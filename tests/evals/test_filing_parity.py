@@ -263,6 +263,26 @@ def test_parity_gate_accepts_complete_case_level_evidence_and_three_selected_rep
     assert evaluate(_artifact(), expected=EXPECTED)["passed"] is True
 
 
+def test_honest_hippocampus_baseline_may_fail_hard_gates_without_relaxing_replay_validation():
+    artifact = _artifact()
+    artifact["runs"][0] = _run("hippocampus", "hippocampus-reference-1", "medium", 1, passed=False)
+
+    assert evaluate(artifact, expected=EXPECTED)["passed"] is True
+
+    artifact["runs"][0]["case_results"][0]["payload"]["effective_plan"]["summary"] = "tampered"
+    assert {"case-payload", "case-output-hash"} & _reasons(artifact)
+
+
+def test_blind_review_must_reference_each_baseline_and_selected_run():
+    artifact = _artifact()
+    artifact["blind_editorial_review"]["provenance"]["runs"]["hippocampus"] = []
+    assert "stale-or-mismatched-review" in _reasons(artifact)
+
+    artifact = _artifact()
+    artifact["blind_editorial_review"]["provenance"]["runs"]["stigmergy"].pop()
+    assert "stale-or-mismatched-review" in _reasons(artifact)
+
+
 def test_parity_gate_rejects_aggregate_only_or_missing_case_evidence():
     artifact = _artifact()
     artifact["runs"][0].pop("case_results")

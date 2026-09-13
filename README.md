@@ -295,8 +295,9 @@ history rather than adding a second change type.
 Before release or deployment, the real-model parity artifact MUST pass
 `python evals/filing/parity.py --artifact <result.json>`; a non-zero result blocks rollout. It
 requires identical corpus, initial graph, source-case hashes, Stigmergy commit and librarian-skill
-hashes across runs; raw passing gates; a provenance-bearing blind review; and a reasoning matrix
-that proves the selected Stigmergy level is the lowest passing level.
+hashes across runs; replay-verified raw gates; a provenance-bearing blind review; and a reasoning
+matrix that proves the selected Stigmergy level is the lowest passing level. Hippocampus is retained
+as comparative, replay-verified baseline evidence and is not a Stigmergy admission candidate.
 
 | Purpose | Model |
 |---|---|
