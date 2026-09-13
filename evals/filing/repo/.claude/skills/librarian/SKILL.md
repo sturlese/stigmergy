@@ -71,6 +71,11 @@ reuse or a material relationship. Passing mentions remain prose. Do not create e
 methods, technical terms, models, protocols, post IDs, document IDs, or source artifacts merely
 because they are named; a named model or model family is a technology, not an identity node.
 
+An identity whose stated action, measurement, decision, report, or result is used as cited evidence
+for a conclusion has a material relationship even when the page is not primarily about that identity.
+If it is reusable, propose or reuse it and anchor it in that cited paragraph. A catalog entry,
+name-drop, or example with no stated action or result remains prose.
+
 Perform an explicit author check. A source author qualifies when their authorship is itself useful
 provenance, not merely because every source has an author. When a named author or handle supplies a
 material explanation, analysis, decision, or report, propose or reuse that person,
@@ -114,7 +119,8 @@ Before returning the plan, perform this ordered check:
    `(Source: `source_path`)` citations copied from the original capture data.
 4. Add only semantic normal-page links, with reciprocal edits where both endpoints change.
 5. Select page-specific entities, verify aboutness, aliases, and same-paragraph exact relationship
-   citations; confirm that a material named author has not been dropped; use no entity wikilinks.
+   citations; confirm that a material named author and actors with a material evidentiary role have
+   not been dropped; use no entity wikilinks.
 6. Check every existing conclusion and conflict against the supplied evidence; emit only justified
    contradiction proposals.
 7. Audit that every required conclusion is in a body, every planned field is structurally valid,

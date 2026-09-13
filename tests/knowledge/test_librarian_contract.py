@@ -251,6 +251,15 @@ def test_librarian_prevents_new_identity_proposals_without_a_page_anchor():
     assert "if no durable page has a material relationship to an identity, do not propose it" in text
 
 
+def test_librarian_distinguishes_evidentiary_identities_from_incidental_examples():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "stated action, measurement, decision, report, or result" in text
+    assert "used as cited evidence for a conclusion" in text
+    assert "even when the page is not primarily about that identity" in text
+    assert "catalog entry, name-drop, or example with no stated action or result remains prose" in text
+    assert "actors with a material evidentiary role have not been dropped" in text
+
+
 def test_librarian_declares_entity_anchor_shape_for_every_mutation_action():
     text = " ".join(FROZEN.read_text().casefold().split())
 
