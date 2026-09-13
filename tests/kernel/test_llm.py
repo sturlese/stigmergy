@@ -79,6 +79,7 @@ def test_librarian_requests_high_reasoning_without_returning_reasoning(monkeypat
     model, settings = llm.build_model(llm.LIBRARIAN_MODEL)
 
     assert settings is model.settings
+    assert model.settings["max_tokens"] == llm.LIBRARIAN_MAX_OUTPUT_TOKENS == 16_000
     assert model.settings["openrouter_reasoning"] == {
         "effort": "high",
         "exclude": True,
@@ -90,6 +91,7 @@ def test_answer_and_ocr_do_not_inherit_librarian_reasoning(monkeypatch):
 
     for configured in (llm.ANSWER_MODEL, llm.OCR_MODEL):
         model, _ = llm.build_model(configured)
+        assert "max_tokens" not in model.settings
         assert "openrouter_reasoning" not in model.settings
 
 
@@ -194,6 +196,7 @@ def test_librarian_native_output_request_uses_strict_json_schema_and_pins_cerebr
         "effort": "high",
         "exclude": True,
     }
+    assert payloads[0]["max_tokens"] == llm.LIBRARIAN_MAX_OUTPUT_TOKENS
 
 
 @pytest.mark.parametrize(
