@@ -8,8 +8,11 @@ loop, evaluates outcomes, and records the evidence needed for the next action.
 
 The source post identifier is 2098782814837543075.
 
-OpenAI and Anthropic are examples of model providers whose models can operate inside a harness.
-LangChain is an example of a framework that can assemble tools and execution steps around a model.
+OpenAI built a large internal software product through an agent harness rather than by changing the
+underlying model. LangChain measured its own coding agent rising from thirtieth place to the top five
+after improving the harness without changing the model. Anthropic documented that the same model can
+produce either a polished but broken application or a working one under different harness
+configurations. These concrete practices and results support the source's main conclusion.
 
 Claude Code and Codex are examples of coding-agent environments. ReAct is a prompting pattern,
 not an identity to file as a person or organization.

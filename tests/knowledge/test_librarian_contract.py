@@ -256,6 +256,10 @@ def test_librarian_requires_reusable_identities_and_deliberate_entity_links():
         "likely to be referenced again",
         "passing mentions remain plain text",
         "only explicit `entities` references are anchored",
+        "make that decision from the source evidence, not from which examples the draft happened to retain",
+        "drafting and entity extraction are independent outputs from the same evidence",
+        "compare the plan against the source-first identity inventory, not only against the draft",
+        "never erase material attribution merely to simplify the draft",
     }
     forbidden = {
         "automatic unambiguous same-plan anchoring",
@@ -286,6 +290,8 @@ def test_librarian_keeps_named_non_identity_material_as_prose_or_concepts():
         "merely because it has a proper name",
         "retain that material in prose or create a concept only when it is independently durable",
         "a named benchmark such as `benchmark alpha 2.0` is not an entity",
+        "a named ai model or model family is a technology name, not an identity node",
+        "named models such as `model alpha` and `model beta` remain prose",
     }
 
     assert not (missing := {rule for rule in required if rule not in text}), missing
