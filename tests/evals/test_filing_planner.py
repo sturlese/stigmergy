@@ -277,6 +277,22 @@ def test_harness_score_requires_the_complete_framework_not_a_generic_summary():
     assert result["passed"] is False
 
 
+def test_harness_score_accepts_unicode_dash_variants_in_semantic_requirements():
+    case = planner_eval.load_case(CASE)
+    plan = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    nonbreaking_hyphen = plan.model_copy(update={"mutations": (plan.mutations[0].model_copy(
+        update={"body": plan.mutations[0].body.replace("long-term memory", "long‑term memory")}
+    ),)})
+
+    result = planner_eval.score(nonbreaking_hyphen, case)
+
+    assert result["bodies"]["missing_required_any"] == []
+    assert result["passed"] is True
+
+
 def test_harness_score_rejects_entity_name_wikilinks_without_normal_pages():
     case = planner_eval.load_case(CASE)
     plan = _plan(

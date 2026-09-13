@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 from stigmergy.entities.service import _tokens as entity_tokens
 from stigmergy.kernel.normalize import resolution_key
 from stigmergy.knowledge.plan import FilingPlan, PageMutation
+
+_DASH_VARIANTS = str.maketrans({character: "-" for character in "‐‑‒–—―−"})
 
 
 def load_case(path: str | Path) -> dict:
@@ -267,17 +270,17 @@ def _alias_evidence(plan: FilingPlan, source_text: str) -> dict:
 def _bodies(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
     expectation = case.get("bodies", {})
     relevant = tuple(mutation for mutation in mutations if mutation.action != "delete")
-    combined = "\n".join(mutation.body or "" for mutation in relevant).casefold()
+    combined = _normalized_text("\n".join(mutation.body or "" for mutation in relevant))
     required = [str(value) for value in expectation.get("required", ())]
     required_any = tuple(expectation.get("required_any", ()))
     forbidden = [str(value) for value in expectation.get("forbidden", ())]
-    missing = [value for value in required if value.casefold() not in combined]
+    missing = [value for value in required if _normalized_text(value) not in combined]
     missing_any = [
         str(group.get("label") or "required semantic coverage")
         for group in required_any
         if not _body_requirement_met(combined, group)
     ]
-    present_forbidden = [value for value in forbidden if value.casefold() in combined]
+    present_forbidden = [value for value in forbidden if _normalized_text(value) in combined]
     heading_mismatch = [
         mutation.title or mutation.path or ""
         for mutation in relevant
@@ -384,12 +387,16 @@ def _entity_wikilinks(case, mutations, candidates) -> dict:
 
 
 def _body_requirement_met(body: str, requirement: dict) -> bool:
-    if any(str(phrase).casefold() in body for phrase in requirement.get("phrases", ())):
+    if any(_normalized_text(phrase) in body for phrase in requirement.get("phrases", ())):
         return True
     return any(
-        all(str(term).casefold() in body for term in terms)
+        all(_normalized_text(term) in body for term in terms)
         for terms in requirement.get("co_occurrence", ())
     )
+
+
+def _normalized_text(value: object) -> str:
+    return unicodedata.normalize("NFKC", str(value)).translate(_DASH_VARIANTS).casefold()
 
 
 def _relationship_mention(body: str, name: str) -> bool:
