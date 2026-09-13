@@ -15,6 +15,7 @@ from stigmergy.index.corpus import link_targets, split_frontmatter_checked
 from stigmergy.kernel.acl import flows_into
 from stigmergy.knowledge.contradictions import ContradictionContractError, parse_all
 from stigmergy.knowledge.pages import PageContractError, parse_page
+from stigmergy.knowledge.relationships import has_entity_relationship_evidence
 from stigmergy.knowledge.sources import SourceContractError, parse_source
 from stigmergy.server.controls import PATHS as CONTROL_PATHS
 from stigmergy.server.controls import ControlError, validate_root
@@ -292,13 +293,17 @@ def _editorial_violations(pages, records, editorial_paths: frozenset[str]) -> li
                 claim.value for claim in record.claims
                 if flows_into(_list(claim.acl), _list(page.acl))
             ]
-            if not any(_has_relationship_prose(body, name) for name in visible_names):
+            if not any(
+                has_entity_relationship_evidence(body, name, page.sources)
+                for name in visible_names
+            ):
                 violations.append(Violation(path, "entity-without-relationship",
                                             f"entity {entity_id} has no visible relationship prose"))
     return violations
 
 
 def _has_relationship_prose(text: str, name: str) -> bool:
+    """Keep the existing lightweight prose check for normal wiki-to-wiki links."""
     needle = name.casefold()
     for line in text.splitlines():
         if needle not in line.casefold():

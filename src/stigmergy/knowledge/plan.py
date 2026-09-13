@@ -11,17 +11,57 @@ from stigmergy.kernel.normalize import resolution_key
 EntityName = Annotated[str, Field(min_length=1, max_length=300)]
 
 
-class PageMutation(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+def _require_entities_in_json_schema(schema: dict) -> None:
+    required = schema.setdefault("required", [])
+    if "entities" not in required:
+        required.append("entities")
 
-    action: Literal["create", "update", "delete"]
-    role: Literal["note", "concept"] | None = None
-    path: str | None = None
-    title: Annotated[str, Field(max_length=300)] | None = None
-    body: Annotated[str, Field(max_length=50_000)] | None = None
-    status: Literal["seed", "developing", "mature", "evergreen"] | None = None
-    entities: tuple[str, ...] | None = None
-    reason: Annotated[str, Field(min_length=1, max_length=1000)]
+
+class PageMutation(BaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        json_schema_extra=_require_entities_in_json_schema,
+    )
+
+    action: Annotated[
+        Literal["create", "update", "delete"],
+        Field(description="The intended mutation: create a page, update its path, or delete its path."),
+    ]
+    role: Annotated[
+        Literal["note", "concept"] | None,
+        Field(description="Required only for create. Update role values are tolerated but ignored."),
+    ] = None
+    path: Annotated[
+        str | None,
+        Field(description="Existing page path required for update and delete; never provide it for create."),
+    ] = None
+    title: Annotated[
+        str | None,
+        Field(max_length=300, description="Required for create. Update title values are tolerated but ignored."),
+    ] = None
+    body: Annotated[
+        str | None,
+        Field(max_length=50_000, description="Complete Markdown body required for create and update; omit for delete."),
+    ] = None
+    status: Annotated[
+        Literal["seed", "developing", "mature", "evergreen"] | None,
+        Field(description="Optional editorial maturity for create or update; omit for delete."),
+    ] = None
+    entities: Annotated[
+        tuple[str, ...] | None,
+        Field(
+            description=(
+                "Explicit complete entity anchor set. Create must include this field, using [] when "
+                "there are no deliberate links. Update null preserves existing anchors; update [] clears "
+                "them. Delete must use null."
+            )
+        ),
+    ] = None
+    reason: Annotated[
+        str,
+        Field(min_length=1, max_length=1000, description="Concise factual explanation for the change ledger."),
+    ]
 
     @model_validator(mode="after")
     def complete(self):
@@ -29,6 +69,10 @@ class PageMutation(BaseModel):
             raise ValueError("create requires role, title, and body")
         if self.action == "create" and self.path:
             raise ValueError("create paths are derived from role and title")
+        if self.action == "create" and (
+            "entities" not in self.model_fields_set or self.entities is None
+        ):
+            raise ValueError("create requires explicit entities; use [] when no entity links are intended")
         if self.action == "update" and (not self.path or not self.body):
             raise ValueError("update requires path and body")
         if self.action == "delete" and not self.path:
@@ -85,18 +129,62 @@ class ContradictionProposal(BaseModel):
 class FilingPlan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    summary: Annotated[str, Field(min_length=1, max_length=1000)]
-    mutations: Annotated[tuple[PageMutation, ...], Field(max_length=12)] = ()
-    entities: Annotated[tuple[EntityProposal, ...], Field(max_length=20)] = ()
-    contradictions: Annotated[tuple[ContradictionProposal, ...], Field(max_length=10)] = ()
-    resolved_contradictions: Annotated[tuple[str, ...], Field(max_length=20)] = ()
+    summary: Annotated[
+        str,
+        Field(min_length=1, max_length=1000, description="Plain-English account of what the wiki learned."),
+    ]
+    mutations: Annotated[
+        tuple[PageMutation, ...],
+        Field(max_length=12, description="Only deliberate note or concept mutations for this source."),
+    ] = ()
+    entities: Annotated[
+        tuple[EntityProposal, ...],
+        Field(max_length=20, description="Reusable identity proposals, independent from page entity links."),
+    ] = ()
+    contradictions: Annotated[
+        tuple[ContradictionProposal, ...],
+        Field(max_length=10, description="Evidence-backed unresolved contradictions to file."),
+    ] = ()
+    resolved_contradictions: Annotated[
+        tuple[str, ...],
+        Field(max_length=20, description="Only contradiction IDs explicitly resolved by this capture."),
+    ] = ()
+
+    @model_validator(mode="after")
+    def link_proposed_entities(self):
+        linked_references = {
+            resolution_key(reference)
+            for mutation in self.mutations
+            if mutation.action in {"create", "update"}
+            for reference in mutation.entities or ()
+        }
+        unlinked = [
+            proposal.name
+            for proposal in self.entities
+            if not linked_references.intersection(
+                resolution_key(value) for value in (proposal.name, *proposal.aliases)
+            )
+        ]
+        if unlinked:
+            raise ValueError(
+                "each entity proposal must be linked by a create or update mutation: "
+                + ", ".join(unlinked)
+            )
+        return self
 
 
 class RepairMutation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: Annotated[str, Field(min_length=1, max_length=500)]
-    text: Annotated[str, Field(min_length=1, max_length=100_000)]
+    body: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=100_000,
+            description="Replacement Markdown body only; the writer preserves page metadata.",
+        ),
+    ]
     reason: Annotated[str, Field(min_length=1, max_length=1000)]
 
 

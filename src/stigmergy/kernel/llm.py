@@ -8,8 +8,7 @@ import os
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
-LIBRARIAN_MODEL = "openrouter:openai/gpt-oss-120b"
-LIBRARIAN_MAX_OUTPUT_TOKENS = 16_000
+LIBRARIAN_MODEL = "openrouter:openai/gpt-5.4"
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
 APPROVED_MODELS = frozenset(
     {ANSWER_MODEL, LIBRARIAN_MODEL, OCR_MODEL}
@@ -22,11 +21,11 @@ OPENROUTER_PROVIDER_POLICY = {
     "zdr": True,
 }
 
-# The librarian's native structured output is verified on Cerebras. A failed request must retry
+# The librarian's native structured output is verified on Azure. A failed request must retry
 # rather than silently route through an unverified host.
 LIBRARIAN_PROVIDER_ROUTING = {
     "allow_fallbacks": False,
-    "only": ["cerebras"],
+    "only": ["azure"],
 }
 
 
@@ -72,7 +71,6 @@ def build_model(model_name: str = ANSWER_MODEL):
         openrouter_provider=provider_policy(model_name)
     )
     if model_name == LIBRARIAN_MODEL:
-        model_settings["max_tokens"] = LIBRARIAN_MAX_OUTPUT_TOKENS
         model_settings["openrouter_reasoning"] = {
             "effort": "high",
             "exclude": True,

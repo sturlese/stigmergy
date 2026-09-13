@@ -133,11 +133,17 @@ filing or repair records a typed operational failure without committing a partia
     knowledge bodies, and invalid local source references without attempting subjective topic
     extraction.
 13. **KG-13:** The same source corpus and initial graph are run through Hippocampus and Stigmergy.
-    Every hard faithfulness, coverage, provenance, connectivity, entity, and ACL criterion passes,
-    and a blind pairwise editorial review finds no material Stigmergy regression before deployment.
-14. **KG-14:** Production continues to use `openai/gpt-oss-120b` through the approved Cerebras
-    OpenRouter route. The lowest reasoning level that passes every hard reference case is selected;
-    a stronger model may be used only as an offline evaluation judge.
+    Evidence records every current case inside every run rather than an aggregate score. Every hard
+    faithfulness, coverage, provenance, connectivity, entity, and ACL criterion passes, and a blind
+    pairwise editorial review finds no material Stigmergy regression before deployment.
+14. **KG-14:** Production continues to use `openai/gpt-5.4` through the approved Azure
+    OpenRouter route. The lowest reasoning level that passes every hard reference case is selected
+    only after at least three independent production-equivalent repeats per case under the configured
+    two-request budget; runtime route, observed requests, derived schema retries, semantic repairs,
+    elapsed time, available usage, raw gates, and content-addressed output references are recorded.
+    Every result binds the case and fixture hashes and the exact brain-prompt commit/hash; its
+    source-free original/effective plan payload is content-hashed and replayed by the admission gate.
+    A stronger model may be used only as an offline evaluation judge.
 15. **KG-15:** Existing immutable production sources are preserved while derived notes, concepts,
     links, and entity anchors are rebuilt with the new compiler. Source-backed identities remain
     retained even when no derived page anchors them; lifecycle removal is an explicit controlled
@@ -202,8 +208,9 @@ external consumers have explicitly migrated, which is outside this change.
 
 All entity content is fetched through the existing scoped page index and visibility policy. Caps are
 applied after visibility filtering and reveal only visible totals. Filing reports and evaluation
-history record model, reasoning, request count, latency, semantic score, mutation count, entities,
-links, and failure class without logging restricted content.
+history record model, reasoning, configured request budget, observed request count, derived schema
+retries, semantic-repair count, elapsed time, available usage, raw gates, output hash, mutation count,
+entities, links, and failure class without logging restricted content.
 
 ## Resolved decisions
 

@@ -4,6 +4,7 @@ import subprocess
 import pytest
 
 from stigmergy.entities.model import registry_bytes
+from stigmergy.knowledge.contract import expected_librarian_skill
 from tests.capture.conftest import clean_queue, conn
 
 __all__ = ["clean_queue", "conn"]
@@ -39,6 +40,9 @@ def target_repo(tmp_path):
         encoding="utf-8",
     )
     (tmp_path / "ops" / "slack-channels.json").write_text("{}\n", encoding="utf-8")
+    skill = tmp_path / ".claude" / "skills" / "librarian" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_bytes(expected_librarian_skill())
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(
         [

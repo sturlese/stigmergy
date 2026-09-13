@@ -102,17 +102,17 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 | Runtime purpose | Model |
 |---|---|
-| librarian filing and semantic repair | `openrouter:openai/gpt-oss-120b` |
+| librarian filing and semantic repair | `openrouter:openai/gpt-5.4` |
 | cited answers | `z-ai/glm-5.2` |
 | vector embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | scanned-page and image OCR | `qwen/qwen3-vl-8b-instruct` |
 
 Deterministic linting is the gardener's detection step and makes no model call. Semantic repair is
-the only model-backed part of a garden run and uses the librarian's `openrouter:openai/gpt-oss-120b`
+the only model-backed part of a garden run and uses the librarian's `openrouter:openai/gpt-5.4`
 model. Librarian calls request reasoning effort `high` with reasoning excluded from returned output
 and require strict provider-native JSON Schema plans. OpenRouter requires supported parameters,
 denies data collection, and requires zero-data-retention processing. The librarian is pinned to
-Cerebras, with no provider fallback. Each writer attempt makes at most two model requests, including
+Azure, with no provider fallback. Each writer attempt makes at most two model requests, including
 one schema repair. Retryable failures use the existing bounded queue-attempt policy; answer and OCR
 requests retain same-model provider failover. Model fallback is prohibited. The application never reads,
 forwards, or falls back to Anthropic, OpenAI, Gemini, or another direct model-provider credential.

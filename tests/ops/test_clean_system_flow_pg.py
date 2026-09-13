@@ -396,6 +396,7 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                         "after the filing decision is complete. "
                         f"(Source: `{slack_source}`)"
                     ),
+                    entities=(),
                     reason="The Slack thread requests a temporary note",
                 ),
             ),
@@ -638,6 +639,7 @@ def test_mcp_delete_lands_one_commit_sweeps_references_and_leaves_search(
                         "is reconciled. "
                         f"(Source: `{delete_source}`)"
                     ),
+                    entities=(),
                     reason="Recorded the temporary procedure",
                 ),
                 PageMutation(
@@ -650,6 +652,7 @@ def test_mcp_delete_lands_one_commit_sweeps_references_and_leaves_search(
                         "[[Temporary operating note]] while the temporary procedure remains active. "
                         f"(Source: `{delete_source}`)"
                     ),
+                    entities=(),
                     reason="Recorded the related reference",
                 ),
             ),

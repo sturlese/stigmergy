@@ -277,7 +277,7 @@ Report vulnerabilities privately: [`SECURITY.md`](./SECURITY.md).
 One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, no model fallback or direct
 alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenAI, or Gemini
 credentials are rejected. The librarian's strict provider-native JSON Schema plans are pinned to
-Cerebras, with no provider fallback; requests require supported parameters, deny data collection,
+Azure, with no provider fallback; requests require supported parameters, deny data collection,
 and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
 Each writer attempt makes at most two model requests across filing, schema retries, and any semantic
 repair. A schema retry consumes the same attempt budget, so a repair is attempted only with a
@@ -300,7 +300,7 @@ that proves the selected Stigmergy level is the lowest passing level.
 
 | Purpose | Model |
 |---|---|
-| filing and semantic repair | `openai/gpt-oss-120b` |
+| filing and semantic repair | `openai/gpt-5.4` |
 | cited answers | `z-ai/glm-5.2` |
 | embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |

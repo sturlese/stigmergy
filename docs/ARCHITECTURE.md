@@ -46,8 +46,9 @@ The candidate tree must pass page, source immutability, reference, link, ACL-flo
 contradiction, registry, changed-path, and trusted-writer checks before the branch advances. New and
 updated knowledge pages must be cold-readable, use a matching H1, place source attribution near
 their factual conclusions, and explain material page and entity relationships in prose. A bounded
-semantic repair receives the original source and the same safe context; it replaces the complete
-candidate plan or nothing. If it cannot pass the gates, the immutable source lands alone with a
+semantic repair receives the original source, the same safe context, and only the Markdown bodies
+of authorized pages; the writer reconstructs each page with its original metadata. It replaces the
+complete candidate plan or nothing. If it cannot pass the gates, the immutable source lands alone with a
 typed `plan_rejected` report. Every landed operation records a friendly manifest plus a hash-verified
 exact patch.
 

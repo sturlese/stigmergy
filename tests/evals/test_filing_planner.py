@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -5,8 +6,15 @@ import pytest
 
 from evals.filing import planner_eval, run_planner
 from evals.filing import worktree as eval_worktree
-from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation
+from stigmergy.knowledge.plan import (
+    EntityProposal,
+    FilingPlan,
+    PageMutation,
+    RepairMutation,
+    RepairPlan,
+)
 from stigmergy.knowledge.planner import PlanRun
+from stigmergy.knowledge.relationships import has_entity_relationship_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 CASE = ROOT / "evals" / "filing" / "cases" / "harness_engineering.json"
@@ -95,7 +103,7 @@ def test_decision_trace_quality_requires_the_author_and_attributed_organization(
     assert result["entity_links"]["found"] == ["mira chen", "northstar signal lab"]
     assert result["external_ids"]["found"] == []
     assert result["link_coverage"]["unlinked_proposals"] == []
-    assert result["passed"] is True
+    assert result["passed"] is True, result
 
 
 @pytest.mark.parametrize(
@@ -125,8 +133,10 @@ def test_harness_score_separates_identity_proposals_from_deliberate_links():
     case = planner_eval.load_case(CASE)
     plan = _plan(
         entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
-        links=("Santi",),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
     )
+    unlinked = plan.mutations[0].model_copy(update={"entities": ("Santi",)})
+    plan = plan.model_copy(update={"mutations": (unlinked,)})
 
     result = planner_eval.score(plan, case)
 
@@ -199,7 +209,7 @@ def test_seeded_harness_case_requires_two_reciprocally_connected_reusable_pages(
                 entities=("Santi", "OpenAI", "Anthropic", "LangChain"), reason="New reusable concept.",
             ),
             PageMutation(
-                action="update", path="wiki/concepts/Agent Harness.md", title="Agent Harness",
+                action="update", path="wiki/concepts/Agent Harness.md", title="Ignored model label",
                 body=("# Agent Harness\n\nAn agent harness is the operating layer enriched by "
                       "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain illustrate its "
                       f"leverage. (Source: `{source}`)"),
@@ -366,7 +376,6 @@ def test_harness_score_requires_each_page_anchor_to_have_its_own_cited_relations
     copied_anchors = PageMutation(
         action="update",
         path="wiki/concepts/Agent Harness.md",
-        title="Agent Harness",
         body=f"# Agent Harness\n\nA related normal page. (Source: `{SOURCE}`)",
         entities=identities,
         reason="Incorrectly copied anchors without page-specific evidence.",
@@ -376,6 +385,67 @@ def test_harness_score_requires_each_page_anchor_to_have_its_own_cited_relations
 
     assert result["entity_relationships"]["missing"]
     assert result["passed"] is False
+
+
+def test_entity_relationship_accepts_an_immediately_following_collective_attribution():
+    body = (
+        "## Examples\n\n"
+        "- **OpenAI** built a large internal software product through an agent harness.\n\n"
+        f"These examples support the conclusion. (Source: `{SOURCE}`)"
+    )
+
+    assert has_entity_relationship_evidence(body, "OpenAI", (SOURCE,)) is True
+    assert has_entity_relationship_evidence(
+        body.replace("\n\nThese examples", "\n\nUnrelated analysis.\n\nThese examples"),
+        "OpenAI",
+        (SOURCE,),
+    ) is False
+    assert has_entity_relationship_evidence(
+        f"**Claude\u202fCode** is a coding-agent environment. (Source: `{SOURCE}`)",
+        "Claude Code",
+        (SOURCE,),
+    ) is True
+
+
+def test_seeded_harness_score_uses_the_update_path_not_model_create_fields():
+    case = planner_eval.load_case(SEEDED_CASE)
+    identities = tuple(
+        EntityProposal(name=name, entity_type="organization")
+        for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
+    )
+    plan = FilingPlan(
+        summary="Created the central discipline and connected its adjacent artifact.",
+        entities=identities,
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Harness Engineering",
+                body=HARNESS_BODY,
+                entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                reason="Created the source-named central discipline.",
+            ),
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                role="note",
+                title="Incorrect model title",
+                body=(
+                    "# Agent Harness\n\nAn agent harness is the artifact designed and improved by "
+                    "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain provide the "
+                    f"source evidence for that relationship. (Source: `{SOURCE}`)"
+                ),
+                entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                reason="Added the reciprocal relationship to the central discipline.",
+            ),
+        ),
+    )
+
+    result = planner_eval.score(plan, case)
+
+    assert result["mutations"]["passed"] is True
+    assert result["bodies"]["heading_mismatch"] == []
+    assert result["passed"] is True
 
 
 def test_harness_score_allows_optional_coding_environments_and_rejects_react():
@@ -417,8 +487,12 @@ def test_harness_score_rejects_an_allowed_optional_identity_without_a_link():
     case = planner_eval.load_case(CASE)
     plan = _plan(
         entities=("Santi", "OpenAI", "Anthropic", "LangChain", "Codex"),
-        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain", "Codex"),
     )
+    unlinked = plan.mutations[0].model_copy(
+        update={"entities": ("Santi", "OpenAI", "Anthropic", "LangChain")}
+    )
+    plan = plan.model_copy(update={"mutations": (unlinked,)})
 
     result = planner_eval.score(plan, case)
 
@@ -601,11 +675,30 @@ def test_harness_score_requires_santi_as_the_canonical_name_not_only_an_alias():
 
 
 @pytest.mark.parametrize(
-    ("turn_arguments", "expected_max_turns"),
-    (((), 1), (("--max-turns", "3"), 3)),
+    (
+        "turn_arguments",
+        "expected_max_turns",
+        "reasoning_arguments",
+        "expected_reasoning",
+        "expected_mode",
+        "include_payload",
+    ),
+    (
+        ((), 2, (), "high", "production-equivalent", False),
+        (("--max-turns", "3", "--execution-mode", "planner-only"), 3, (), "high", "planner-only", True),
+        ((), 2, ("--reasoning-level", "low"), "low", "production-equivalent", False),
+    ),
 )
-def test_cli_uses_one_request_by_default_and_preserves_an_explicit_turn_override(
-    tmp_path, monkeypatch, capsys, turn_arguments, expected_max_turns
+def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_override(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    turn_arguments,
+    expected_max_turns,
+    reasoning_arguments,
+    expected_reasoning,
+    expected_mode,
+    include_payload,
 ):
     source_text = FIXTURE.read_text(encoding="utf-8")
     worktree = tmp_path / "worktree"
@@ -615,8 +708,8 @@ def test_cli_uses_one_request_by_default_and_preserves_an_explicit_turn_override
     calls = []
 
     class RecordingPlanner:
-        def __init__(self, settings):
-            calls.append({"settings": settings})
+        def __init__(self, settings, *, model_factory=None):
+            calls.append({"settings": settings, "model_factory": model_factory})
 
         def plan(self, **kwargs):
             calls.append(kwargs)
@@ -643,6 +736,28 @@ def test_cli_uses_one_request_by_default_and_preserves_an_explicit_turn_override
 
     monkeypatch.setattr(run_planner, "PydanticPlanner", RecordingPlanner)
 
+    class Model:
+        def __init__(self, settings):
+            self.settings = settings
+
+    def build_librarian_model(model_name):
+        assert model_name == "openrouter:openai/gpt-5.4"
+        settings = {
+            "openrouter_provider": {"only": ["azure"], "allow_fallbacks": False},
+            "openrouter_reasoning": {"effort": "high", "exclude": True},
+        }
+        return Model(settings), settings
+
+    monkeypatch.setattr(run_planner, "build_model", build_librarian_model)
+    monkeypatch.setattr(
+        run_planner,
+        "librarian_skill_provenance",
+        lambda _worktree: {
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        },
+    )
+
     exit_code = run_planner.main(
         [
             "--live",
@@ -653,19 +768,214 @@ def test_cli_uses_one_request_by_default_and_preserves_an_explicit_turn_override
             "--worktree",
             str(worktree),
             *turn_arguments,
+            *reasoning_arguments,
+            *(("--include-payload",) if include_payload else ()),
         ]
     )
 
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
     assert exit_code == 0
     assert calls[0]["settings"].repo != str(worktree)
     assert calls[0]["settings"].max_turns == expected_max_turns
+    assert calls[0]["settings"].model == "openrouter:openai/gpt-5.4"
     assert source_text in calls[1]["source_text"]
     assert calls[1]["source_path"] == "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
     assert '"candidates": []' in calls[1]["context"]
     assert payload["case"] == "harness-engineering"
+    assert payload["case_id"] == "harness_engineering"
+    assert payload["execution_mode"] == expected_mode
+    assert payload["configured_max_turns"] == expected_max_turns
+    assert payload["model_requests"] == 1
+    assert payload["planning_model_requests"] == 1
+    assert payload["repair_model_requests"] == 0
+    assert payload["schema_retry_count"] == 0
+    assert payload["semantic_repair_count"] == 0
+    assert payload["usage"] == {"requests": 1}
+    assert payload["runtime"] == {
+        "model": "openai/gpt-5.4",
+        "reasoning_level": expected_reasoning,
+        "provider": "azure",
+    }
     assert payload["score"]["passed"] is True
     assert payload["gates"]["passed"] is True
+    assert set(payload["raw_gates"]) == (set(payload["score"]) - {"passed"}) | {"writer"}
+    assert "plan" not in payload
+    assert "effective_plan" not in payload
+    if include_payload:
+        assert "payload" in payload["case_result"]
+        assert "--include-payload emits derived page bodies" in captured.err
+        assert payload["output"]["sha256"] == hashlib.sha256(
+            json.dumps(
+                payload["case_result"]["payload"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    else:
+        assert "payload" not in payload["case_result"]
+        assert not captured.err
+    assert payload["output"]["artifact_ref"] == f"sha256:{payload['output']['sha256']}"
+    expected_case_result = {
+        key: payload[key]
+        for key in (
+                "brain_prompt", "case_id", "case_sha256", "fixture_sha256", "runtime",
+                "execution_mode", "configured_max_turns", "model_requests",
+            "planning_model_requests", "repair_model_requests", "schema_retry_count",
+            "semantic_repair_count", "elapsed_ms", "usage", "score",
+            "gates", "raw_gates", "output",
+        )
+    }
+    if include_payload:
+        expected_case_result["payload"] = payload["case_result"]["payload"]
+    assert payload["case_result"] == expected_case_result
+    factory = calls[0]["model_factory"]
+    if reasoning_arguments:
+        assert factory is not None
+        assert factory().settings["openrouter_reasoning"] == {
+            "effort": expected_reasoning,
+            "exclude": True,
+        }
+    else:
+        assert factory is None
+
+
+def test_production_equivalent_worktree_records_a_bounded_semantic_repair_attempt():
+    case = planner_eval.load_case(CASE)
+    source_text = FIXTURE.read_text(encoding="utf-8")
+    missing_local_citation = FilingPlan(
+        summary="Exercise the bounded repair path.",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Harness Engineering",
+                body="# Harness Engineering\n\nA source-grounded concept without the required local citation.",
+                entities=(),
+                reason="A deliberately invalid evaluation fixture.",
+            ),
+        ),
+    )
+
+    class RepairingPlanner:
+        def repair(self, **kwargs):
+            assert kwargs["max_requests"] == 1
+            return PlanRun(RepairPlan(summary="No repair supplied."), model_requests=1)
+
+    with eval_worktree.prepared(case, source_text, template=str(run_planner.DEFAULT_WORKTREE)) as worktree:
+        result = eval_worktree.apply_with_production_repair(
+            worktree,
+            missing_local_citation,
+            RepairingPlanner(),
+            planning_model_requests=1,
+            max_turns=2,
+        )
+
+    assert result["passed"] is False
+    assert result["semantic_repair_count"] == 1
+    assert result["repair_model_requests"] == 1
+
+
+def test_production_equivalent_worktree_exposes_safe_repair_rejection_shape():
+    case = planner_eval.load_case(CASE)
+    source_text = FIXTURE.read_text(encoding="utf-8")
+    missing_local_citation = FilingPlan(
+        summary="Exercise the bounded repair path.",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Harness Engineering",
+                body="# Harness Engineering\n\nA source-grounded concept without the required local citation.",
+                entities=(),
+                reason="A deliberately invalid evaluation fixture.",
+            ),
+        ),
+    )
+
+    class MisroutingPlanner:
+        def repair(self, **_kwargs):
+            return PlanRun(
+                RepairPlan(
+                    summary="Invalid repair target.",
+                    mutations=(
+                        RepairMutation(
+                            path="wiki/entities/ent_11111111-1111-4111-8111-111111111111.md",
+                            body="not emitted",
+                            reason="invalid target fixture",
+                        ),
+                    ),
+                ),
+                model_requests=1,
+            )
+
+    with eval_worktree.prepared(case, source_text, template=str(run_planner.DEFAULT_WORKTREE)) as worktree:
+        result = eval_worktree.apply_with_production_repair(
+            worktree,
+            missing_local_citation,
+            MisroutingPlanner(),
+            planning_model_requests=1,
+            max_turns=2,
+        )
+
+    assert result["repair_rejection"] == "model repair targeted a path outside its violations"
+    assert result["repair_mutation_shape"] == [
+        {"target_kind": "entity", "body_bytes": 11, "reason_bytes": 22}
+    ]
+
+
+def test_production_equivalent_worktree_scores_the_final_repaired_body():
+    case = planner_eval.load_case(CASE)
+    source_text = FIXTURE.read_text(encoding="utf-8")
+    base = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    valid_body = base.mutations[0].body.replace("[[Agent Harness]]", "the agent harness")
+    broken = base.model_copy(
+        update={
+            "mutations": (
+                base.mutations[0].model_copy(
+                    update={"body": valid_body.replace(f"(Source: `{SOURCE}`)", "")}
+                ),
+            )
+        }
+    )
+
+    class CorrectingPlanner:
+        def repair(self, **kwargs):
+            path, body = next(iter(kwargs["files"].items()))
+            repaired = body.replace(
+                "app under different harness configurations. ",
+                f"app under different harness configurations. (Source: `{SOURCE}`) ",
+            )
+            return PlanRun(
+                RepairPlan(
+                    summary="Restored local provenance.",
+                    mutations=(
+                        RepairMutation(
+                            path=path,
+                            body=repaired,
+                            reason="Restored a local source reference.",
+                        ),
+                    ),
+                ),
+                model_requests=1,
+            )
+
+    with eval_worktree.prepared(case, source_text, template=str(run_planner.DEFAULT_WORKTREE)) as worktree:
+        result = eval_worktree.apply_with_production_repair(
+            worktree,
+            broken,
+            CorrectingPlanner(),
+            planning_model_requests=1,
+            max_turns=2,
+        )
+        final = eval_worktree.effective_plan(worktree, broken)
+
+    assert result["passed"] is True, result
+    assert planner_eval.score(final, case, source_text=source_text)["passed"] is True
 
 
 def test_cli_requires_live_acknowledgement_before_it_can_invoke_a_planner(capsys):
@@ -674,3 +984,35 @@ def test_cli_requires_live_acknowledgement_before_it_can_invoke_a_planner(capsys
 
     assert error.value.code == 2
     assert "sends source text to configured OpenRouter" in capsys.readouterr().err
+
+
+def test_cli_rejects_an_unknown_reasoning_level(capsys):
+    with pytest.raises(SystemExit) as error:
+        run_planner.main(
+            [
+                "--live",
+                "--source",
+                str(FIXTURE),
+                "--reasoning-level",
+                "maximum",
+            ]
+        )
+
+    assert error.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_cli_rejects_a_nonproduction_budget_labeled_production_equivalent(capsys):
+    with pytest.raises(SystemExit) as error:
+        run_planner.main(
+            [
+                "--live",
+                "--source",
+                str(FIXTURE),
+                "--max-turns",
+                "3",
+            ]
+        )
+
+    assert error.value.code == 2
+    assert "production-equivalent requires --max-turns 2" in capsys.readouterr().err

@@ -3,6 +3,7 @@
   "name": "harness-engineering-seeded",
   "source_title": "Harness Engineering: explained from zero",
   "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000001.md",
+  "fixture_path": "../fixtures/harness_engineering_synthetic.md",
   "seed_pages": [
     {
       "id": "page_eval_agent_harness",
@@ -28,14 +29,14 @@
   },
   "identities": {
     "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
-    "allowed": [],
+    "allowed": ["Claude Code", "Codex"],
     "forbidden": ["ReAct", "2098782814837543075"],
     "closed": true
   },
   "external_ids": {"required": [], "allowed": [], "closed": true},
   "links": {
     "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
-    "allowed": [],
+    "allowed": ["Claude Code", "Codex"],
     "forbidden": ["ReAct", "2098782814837543075"],
     "closed": true
   },

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run one source through PydanticPlanner and score its FilingPlan.
+"""Run one source through the production-equivalent filing evaluation path.
 
-The runner is planner-only: it reads a source and the versioned case, sends that source to the
-configured OpenRouter librarian model in one request by default, and prints the plan plus
-semantic score. That request can cost money. It never opens a database or a Git worktree for
-writing. Higher turn counts are an explicit diagnostic opt-in.
+The default runs the planner, the real temporary-worktree writer gates, and the bounded semantic
+repair path without opening a database or writing Git. ``planner-only`` is a diagnostic mode that
+skips semantic repair. Every result is a single immutable, case-level evidence record suitable for
+embedding in the parity artifact. The request can cost money.
 
 Example:
   python evals/filing/run_planner.py \
@@ -15,25 +15,72 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 try:
+    from constants import (
+        PLANNER_ONLY_MODE,
+        PRODUCTION_EQUIVALENT_MODE,
+        PRODUCTION_MAX_TURNS,
+        PRODUCTION_REASONING_LEVEL,
+        REASONING_LEVELS,
+    )
     from planner_eval import load_case, score
-    from worktree import apply_and_gate, prepared
+    from worktree import apply_and_gate, apply_with_production_repair, effective_plan, prepared
 except ModuleNotFoundError:
+    from evals.filing.constants import (
+        PLANNER_ONLY_MODE,
+        PRODUCTION_EQUIVALENT_MODE,
+        PRODUCTION_MAX_TURNS,
+        PRODUCTION_REASONING_LEVEL,
+        REASONING_LEVELS,
+    )
     from evals.filing.planner_eval import load_case, score
-    from evals.filing.worktree import apply_and_gate, prepared
+    from evals.filing.worktree import (
+        apply_and_gate,
+        apply_with_production_repair,
+        effective_plan,
+        prepared,
+    )
 
+from stigmergy.kernel.llm import (  # noqa: E402
+    LIBRARIAN_MODEL,
+    LIBRARIAN_PROVIDER_ROUTING,
+    build_model,
+)
+from stigmergy.knowledge.contract import (  # noqa: E402
+    KnowledgeContractError,
+    librarian_skill_provenance,
+)
 from stigmergy.knowledge.planner import PydanticPlanner  # noqa: E402
 from stigmergy.librarian.config import Settings  # noqa: E402
 
 DEFAULT_CASE = ROOT / "evals" / "filing" / "cases" / "harness_engineering.json"
 DEFAULT_WORKTREE = ROOT / "evals" / "filing" / "repo"
+
+
+def _diagnostic_model_factory(reasoning_level: str):
+    """Build the production librarian model with one evaluation-only reasoning override."""
+
+    def factory():
+        model, model_settings = build_model(LIBRARIAN_MODEL)
+        if model_settings is None:
+            raise RuntimeError("diagnostic reasoning requires OpenRouter model settings")
+        reasoning = model_settings.get("openrouter_reasoning")
+        if not isinstance(reasoning, dict):
+            raise RuntimeError("librarian model has no configured reasoning policy")
+        model_settings["openrouter_reasoning"] = {**reasoning, "effort": reasoning_level}
+        return model
+
+    return factory
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,43 +98,170 @@ def main(argv: list[str] | None = None) -> int:
         help="read-only worktree containing the librarian skill",
     )
     parser.add_argument("--timeout-s", type=int, default=300)
-    parser.add_argument("--max-turns", type=int, default=1)
+    parser.add_argument("--max-turns", type=int, default=PRODUCTION_MAX_TURNS)
+    parser.add_argument(
+        "--execution-mode",
+        choices=(PRODUCTION_EQUIVALENT_MODE, PLANNER_ONLY_MODE),
+        default=PRODUCTION_EQUIVALENT_MODE,
+        help="production-equivalent exercises bounded semantic repair; planner-only is diagnostic",
+    )
+    parser.add_argument(
+        "--run-id",
+        help="immutable ID for this independent case execution; defaults to a generated UUID",
+    )
+    parser.add_argument(
+        "--reasoning-level",
+        choices=REASONING_LEVELS,
+        help="evaluation-only OpenRouter reasoning override; default preserves production high",
+    )
+    parser.add_argument(
+        "--include-payload",
+        action="store_true",
+        help="emit derived plan bodies for a local release artifact; stdout is otherwise safe telemetry",
+    )
     args = parser.parse_args(argv)
 
     if not args.live:
         parser.error(
             "--live is required: this sends source text to configured OpenRouter and can cost money"
         )
+    if (
+        args.execution_mode == PRODUCTION_EQUIVALENT_MODE
+        and args.max_turns != PRODUCTION_MAX_TURNS
+    ):
+        parser.error(
+            f"{PRODUCTION_EQUIVALENT_MODE} requires --max-turns {PRODUCTION_MAX_TURNS}; "
+            f"use {PLANNER_ONLY_MODE} for diagnostics"
+        )
 
     source_path = Path(args.source)
     if not source_path.is_file():
         parser.error(f"source is not a file: {source_path}")
-    case = load_case(args.case)
-    source_text = source_path.read_text(encoding="utf-8")
+    case_path = Path(args.case)
+    case = load_case(case_path)
+    fixture = case_path.parent / str(case.get("fixture_path") or "")
+    if not fixture.is_file():
+        parser.error("case fixture_path must name a versioned readable fixture")
+    source_bytes = source_path.read_bytes()
+    fixture_bytes = fixture.read_bytes()
+    if hashlib.sha256(source_bytes).digest() != hashlib.sha256(fixture_bytes).digest():
+        parser.error("source bytes do not match the versioned case fixture")
+    try:
+        brain_prompt = librarian_skill_provenance(args.worktree)
+    except KnowledgeContractError as error:
+        parser.error(str(error))
+    if args.include_payload:
+        print(
+            "run-planner: --include-payload emits derived page bodies; keep this diagnostic output local",
+            file=sys.stderr,
+        )
+    source_text = source_bytes.decode("utf-8")
+    case_sha256 = hashlib.sha256(case_path.read_bytes()).hexdigest()
+    fixture_sha256 = hashlib.sha256(fixture_bytes).hexdigest()
+    reasoning_level = args.reasoning_level or PRODUCTION_REASONING_LEVEL
+    run_id = args.run_id or str(uuid.uuid4())
+    started_ns = time.monotonic_ns()
     with prepared(case, source_text, template=str(args.worktree)) as evaluation:
         settings = Settings(
             repo=evaluation.root,
+            model=LIBRARIAN_MODEL,
             timeout_s=args.timeout_s,
             max_turns=args.max_turns,
         )
-        run = PydanticPlanner(settings).plan(
+        planner_kwargs = (
+            {"model_factory": _diagnostic_model_factory(args.reasoning_level)}
+            if args.reasoning_level is not None
+            else {}
+        )
+        planner = PydanticPlanner(settings, **planner_kwargs)
+        run = planner.plan(
             worktree=evaluation.root,
             envelope=evaluation.envelope,
             source_path=evaluation.source_path,
             source_text=evaluation.source_text,
             context=evaluation.context,
         )
-        semantic = score(run.plan, case, source_text=source_text)
-        gates = apply_and_gate(evaluation, run.plan)
-        semantic["passed"] = semantic["passed"] and gates["passed"]
-        result = {
-            "case": case["name"],
-            "model_requests": run.model_requests,
+        if args.execution_mode == PRODUCTION_EQUIVALENT_MODE:
+            gates = apply_with_production_repair(
+                evaluation,
+                run.plan,
+                planner,
+                planning_model_requests=run.model_requests,
+                max_turns=args.max_turns,
+            )
+        else:
+            gates = apply_and_gate(evaluation, run.plan)
+            gates["repair_model_requests"] = 0
+            gates["semantic_repair_count"] = 0
+            gates["repair_rejection"] = None
+            gates["repair_mutation_shape"] = []
+        scored_plan = effective_plan(evaluation, run.plan) if gates["passed"] else run.plan
+        semantic = score(scored_plan, case, source_text=source_text)
+        planning_model_requests = int(run.model_requests)
+        repair_model_requests = int(gates["repair_model_requests"])
+        model_requests = planning_model_requests + repair_model_requests
+        schema_retry_count = max(0, planning_model_requests - 1) + max(
+            0, repair_model_requests - int(gates["semantic_repair_count"] > 0)
+        )
+        raw_gates = {
+            gate: semantic[gate]["passed"]
+            for gate in sorted(semantic)
+            if gate != "passed"
+        }
+        raw_gates["writer"] = gates["passed"]
+        output_payload = {
+            "brain_prompt": brain_prompt,
+            "case_sha256": case_sha256,
+            "fixture_sha256": fixture_sha256,
             "plan": run.plan.model_dump(mode="json"),
+            "effective_plan": scored_plan.model_dump(mode="json"),
             "score": semantic,
             "gates": gates,
+            "raw_gates": raw_gates,
         }
+        output_sha256 = hashlib.sha256(
+            json.dumps(output_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        elapsed_ms = (time.monotonic_ns() - started_ns) // 1_000_000
+        runtime = {
+            "model": LIBRARIAN_MODEL.removeprefix("openrouter:"),
+            "reasoning_level": reasoning_level,
+            "provider": LIBRARIAN_PROVIDER_ROUTING["only"][0],
+        }
+        case_result = {
+            "brain_prompt": brain_prompt,
+            "case": case["name"],
+            "case_id": Path(args.case).stem,
+            "case_sha256": case_sha256,
+            "fixture_sha256": fixture_sha256,
+            "run_id": run_id,
+            "execution_mode": args.execution_mode,
+            "configured_max_turns": args.max_turns,
+            "model_requests": model_requests,
+            "planning_model_requests": planning_model_requests,
+            "repair_model_requests": repair_model_requests,
+            "schema_retry_count": schema_retry_count,
+            "semantic_repair_count": gates["semantic_repair_count"],
+            "elapsed_ms": elapsed_ms,
+            "usage": {"requests": model_requests},
+            "runtime": runtime,
+            "score": semantic,
+            "gates": gates,
+            "raw_gates": raw_gates,
+            "output": {
+                "sha256": output_sha256,
+                "artifact_ref": f"sha256:{output_sha256}",
+            },
+            "passed": semantic["passed"] and gates["passed"],
+        }
+        result = dict(case_result)
+        case_result.pop("case")
+        case_result.pop("run_id")
+        case_result.pop("passed")
+        if args.include_payload:
+            case_result["payload"] = output_payload
+        result["case_result"] = case_result
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if result["score"]["passed"] else 1
+    return 0 if result["passed"] else 1
 if __name__ == "__main__":
     sys.exit(main())

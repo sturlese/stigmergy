@@ -13,12 +13,23 @@ from pathlib import Path
 from stigmergy.capture import schema
 from stigmergy.capture.extraction import ExtractedArtifact, ExtractionResult
 from stigmergy.capture.source import render_source
+from stigmergy.entities import service as entity_service
 from stigmergy.entities.model import registry_bytes
+from stigmergy.knowledge import contradictions
 from stigmergy.knowledge.context import filing_context, render_context
 from stigmergy.knowledge.lint import check
-from stigmergy.knowledge.pages import page_path, render_page
-from stigmergy.knowledge.write_guard import WriteContext
-from stigmergy.knowledge.writer import _apply_filing_plan
+from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
+from stigmergy.knowledge.repair import repair_deterministic
+from stigmergy.knowledge.write_guard import WriteContext, WriteRefused
+from stigmergy.knowledge.writer import (
+    GateRefused,
+    KnowledgeWriteError,
+    _apply_filing_plan,
+    _apply_repair_plan,
+    _capture_repair_files,
+    _restore_mutable,
+    _snapshot_mutable,
+)
 
 
 @dataclass(frozen=True)
@@ -106,6 +117,182 @@ def apply_and_gate(worktree: EvaluationWorktree, plan) -> dict:
             "violations": [{"path": "plan", "code": error.__class__.__name__}],
             "changed_paths": sorted(reasons),
         }
+
+
+def apply_with_production_repair(
+    worktree: EvaluationWorktree,
+    plan,
+    planner,
+    *,
+    planning_model_requests: int,
+    max_turns: int,
+) -> dict:
+    """Exercise the production filing gate and its single bounded model-repair path in memory."""
+    root = worktree.root
+    context = filing_context(
+        root,
+        source_text=worktree.source_text,
+        capture_acl=worktree.envelope.audience,
+        actor_groups=None,
+    )
+    rendered_context = render_context(context)
+    reasons = {}
+    snapshot = _snapshot_mutable(root)
+    plan_invalid = False
+    plan_rejection = ""
+    repair_model_requests = 0
+    semantic_repair_count = 0
+    repair_rejection = None
+    repair_mutation_shape = []
+    try:
+        _apply_filing_plan(
+            root,
+            plan,
+            context=WriteContext(None, worktree.envelope.audience, unrestricted=True),
+            envelope=worktree.envelope,
+            relative_source=worktree.source_path,
+            readable_artifacts=(worktree.source_text,),
+            reasons=reasons,
+            visible_entities=tuple(context["entities"]),
+            visible_entity_ids=frozenset(item["id"] for item in context["entities"]),
+            allowed_contradiction_sources=frozenset(
+                {worktree.source_path, *(item["path"] for item in context["source_evidence"])}
+            ),
+        )
+        repair_deterministic(root)
+    except (
+        KnowledgeWriteError,
+        PageContractError,
+        entity_service.EntityOperationError,
+        WriteRefused,
+        contradictions.ContradictionContractError,
+    ) as error:
+        plan_invalid = True
+        plan_rejection = error.__class__.__name__
+
+    editorial_paths = frozenset(
+        path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
+    )
+    violations = check(root, editorial_paths=editorial_paths) if not plan_invalid else ()
+    if violations:
+        try:
+            repair_files = _capture_repair_files(
+                root,
+                violations=violations,
+                editorial_paths=editorial_paths,
+                snapshot=snapshot,
+                context=WriteContext(None, worktree.envelope.audience, unrestricted=True),
+            )
+            repair_run = planner.repair(
+                worktree=root,
+                violations=violations,
+                files=repair_files,
+                source_path=worktree.source_path,
+                source_text=worktree.source_text,
+                context=rendered_context,
+                max_requests=max(0, int(max_turns) - int(planning_model_requests)),
+            )
+            repair_model_requests = int(repair_run.model_requests)
+            semantic_repair_count = int(repair_model_requests > 0)
+            repair_mutation_shape = _repair_shape(repair_run.plan)
+            repaired = _apply_repair_plan(
+                root,
+                violations,
+                repair_run.plan,
+                authorized_files=repair_files,
+                context=WriteContext(None, worktree.envelope.audience, unrestricted=True),
+                existing_paths=frozenset(snapshot),
+            )
+            if repaired:
+                reasons.update(repaired)
+                repair_deterministic(root)
+            violations = check(root, editorial_paths=editorial_paths)
+        except GateRefused as error:
+            plan_invalid = True
+            plan_rejection = "invalid-repair-plan"
+            repair_rejection = _safe_repair_rejection(error)
+        else:
+            if violations:
+                plan_invalid = True
+                plan_rejection = "unrepaired-gate-violations"
+
+    if plan_invalid:
+        _restore_mutable(root, snapshot)
+    return {
+        "passed": not plan_invalid and not violations,
+        "violations": [{"path": item.path, "code": item.code} for item in violations],
+        "changed_paths": sorted(reasons),
+        "plan_rejection": plan_rejection or None,
+        "repair_model_requests": repair_model_requests,
+        "semantic_repair_count": semantic_repair_count,
+        "repair_rejection": repair_rejection,
+        "repair_mutation_shape": repair_mutation_shape,
+    }
+
+
+def effective_plan(worktree: EvaluationWorktree, plan):
+    """Return the submitted plan with bodies read from the gated temporary worktree."""
+    root = Path(worktree.root)
+    mutations = []
+    for mutation in plan.mutations:
+        if mutation.action == "delete":
+            mutations.append(mutation)
+            continue
+        relative = mutation.path if mutation.action == "update" else page_path(mutation.role, mutation.title)
+        target = root / str(relative)
+        if not target.is_file():
+            mutations.append(mutation)
+            continue
+        page = parse_page(str(relative), target.read_text(encoding="utf-8"))
+        mutations.append(mutation.model_copy(update={"body": page.body}))
+    return plan.model_copy(update={"mutations": tuple(mutations)})
+
+
+def _repair_shape(plan) -> list[dict[str, int | str]]:
+    """Expose no repair body while retaining enough shape to diagnose a gate refusal."""
+    return [
+        {
+            "target_kind": _repair_target_kind(mutation.path),
+            "body_bytes": len(mutation.body.encode("utf-8")),
+            "reason_bytes": len(mutation.reason.encode("utf-8")),
+        }
+        for mutation in plan.mutations
+    ]
+
+
+def _repair_target_kind(path: str) -> str:
+    if path.startswith("wiki/concepts/"):
+        return "concept"
+    if path.startswith("wiki/notes/"):
+        return "note"
+    if path.startswith("wiki/entities/"):
+        return "entity"
+    if path.startswith("sources/"):
+        return "source"
+    return "other"
+
+
+_SAFE_REPAIR_REJECTIONS = frozenset(
+    {
+        "repair includes a path outside this capture's visible graph changes",
+        "repair may only target capture knowledge pages",
+        "repair target is outside the capture audience",
+        "repair target is missing",
+        "repair target exceeds its byte limit",
+        "model repair targeted a path outside its violations",
+        "model repair targeted a path outside this capture's authorization",
+        "model repair targeted a missing path",
+        "capture repair is missing its authorization context",
+        "model repair is outside the capture audience",
+        "repair target has no preservable page metadata",
+        "repair target changed after authorization",
+    }
+)
+
+
+def _safe_repair_rejection(error: GateRefused) -> str:
+    message = str(error)
+    return message if message in _SAFE_REPAIR_REJECTIONS else error.__class__.__name__
 
 
 def _source(case: dict, source_text: str) -> tuple[schema.CaptureEnvelope, str, str]:

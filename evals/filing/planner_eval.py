@@ -10,6 +10,7 @@ from pathlib import Path
 from stigmergy.entities.service import _tokens as entity_tokens
 from stigmergy.kernel.normalize import resolution_key
 from stigmergy.knowledge.plan import FilingPlan, PageMutation
+from stigmergy.knowledge.relationships import has_entity_relationship_evidence
 
 _DASH_VARIANTS = str.maketrans({character: "-" for character in "‐‑‒–—―−"})
 
@@ -53,7 +54,9 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
     alias_score = _alias_evidence(plan, source_text)
     body_score = _bodies(case, mutations)
     connection_score = _connections(case, mutations)
-    entity_relationship_score = _entity_relationships(mutations, resolutions, candidates)
+    entity_relationship_score = _entity_relationships(
+        mutations, resolutions, candidates, source_path=case["source_path"]
+    )
     entity_wikilink_score = _entity_wikilinks(case, mutations, candidates)
     anti_fragmentation_score = _anti_fragmentation(case, mutations)
     coverage_score = _link_coverage(
@@ -182,9 +185,17 @@ def _case_signature(item: dict) -> tuple[str, str, str]:
 def _mutation_signature(mutation: PageMutation) -> tuple[str, str, str]:
     return (
         mutation.action,
-        mutation.role or "",
-        resolution_key(mutation.title or mutation.path or ""),
+        "" if mutation.action == "update" else mutation.role or "",
+        resolution_key(_mutation_label(mutation)),
     )
+
+
+def _mutation_label(mutation: PageMutation) -> str:
+    if mutation.action == "update" and mutation.path:
+        return Path(mutation.path).stem
+    if mutation.title:
+        return mutation.title
+    return mutation.path or ""
 
 
 def _render_signature(value: tuple[str, str, str]) -> dict:
@@ -284,7 +295,8 @@ def _bodies(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
     heading_mismatch = [
         mutation.title or mutation.path or ""
         for mutation in relevant
-        if mutation.title and not (mutation.body or "").lstrip().startswith(f"# {mutation.title}")
+        if mutation.action == "create" and mutation.title
+        and not (mutation.body or "").lstrip().startswith(f"# {mutation.title}")
     ]
     placeholders = [
         mutation.title or mutation.path or ""
@@ -337,7 +349,7 @@ def _placeholder_body(body: str) -> bool:
 
 
 def _connections(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
-    by_title = {resolution_key(mutation.title or mutation.path or ""): mutation for mutation in mutations}
+    by_title = {resolution_key(_mutation_label(mutation)): mutation for mutation in mutations}
     missing = []
     for item in case.get("connections", ()):
         source = resolution_key(item["from"])
@@ -353,7 +365,7 @@ def _connections(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
     return {"missing": missing, "passed": not missing}
 
 
-def _entity_relationships(mutations, resolutions, candidates) -> dict:
+def _entity_relationships(mutations, resolutions, candidates, *, source_path: str) -> dict:
     missing = []
     for index, mutation in enumerate(mutations):
         body = mutation.body or ""
@@ -362,7 +374,10 @@ def _entity_relationships(mutations, resolutions, candidates) -> dict:
                 value for value, entries in candidates.items()
                 if any(candidate == canonical for _proposal, candidate in entries)
             ]
-            if not any(_relationship_mention(body, name) for name in names):
+            if not any(
+                has_entity_relationship_evidence(body, name, (source_path,))
+                for name in names
+            ):
                 missing.append({"mutation": mutation.title or mutation.path, "entity": canonical})
     return {"missing": missing, "passed": not missing}
 
@@ -373,7 +388,11 @@ def _entity_wikilinks(case, mutations, candidates) -> dict:
         resolution_key(value)
         for value in (
             *case.get("normal_page_targets", ()),
-            *(mutation.title for mutation in mutations if mutation.role in {"note", "concept"}),
+            *(
+                _mutation_label(mutation)
+                for mutation in mutations
+                if mutation.role in {"note", "concept"} or mutation.action == "update"
+            ),
         )
         if value
     }
@@ -382,7 +401,7 @@ def _entity_wikilinks(case, mutations, candidates) -> dict:
         for target in re.findall(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]", mutation.body or ""):
             key = resolution_key(target)
             if key in candidates and key not in normal_targets:
-                violations.append({"mutation": mutation.title or mutation.path, "target": target})
+                violations.append({"mutation": _mutation_label(mutation), "target": target})
     return {"violations": violations, "passed": not violations}
 
 
@@ -397,19 +416,6 @@ def _body_requirement_met(body: str, requirement: dict) -> bool:
 
 def _normalized_text(value: object) -> str:
     return unicodedata.normalize("NFKC", str(value)).translate(_DASH_VARIANTS).casefold()
-
-
-def _relationship_mention(body: str, name: str) -> bool:
-    for paragraph in re.split(r"\n\s*\n", body):
-        if "(source:" not in paragraph.casefold():
-            continue
-        for line in paragraph.splitlines():
-            if name.casefold() not in line.casefold():
-                continue
-            remainder = re.sub(re.escape(name), "", line, flags=re.I)
-            if len(re.findall(r"[A-Za-z0-9]+", remainder)) >= 3:
-                return True
-    return False
 
 
 def _membership(expectation: dict, found: set[str]) -> dict:

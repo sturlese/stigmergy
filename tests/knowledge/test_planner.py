@@ -11,7 +11,7 @@ from pydantic_ai.models.function import FunctionModel
 
 from stigmergy.capture import schema
 from stigmergy.knowledge import planner
-from stigmergy.knowledge.plan import FilingPlan
+from stigmergy.knowledge.plan import FilingPlan, RepairMutation, RepairPlan
 
 
 def _envelope() -> schema.CaptureEnvelope:
@@ -46,7 +46,7 @@ def _worktree(tmp_path):
 
 def _settings(*, max_turns=2):
     return SimpleNamespace(
-        model="openrouter:openai/gpt-oss-120b",
+        model="openrouter:openai/gpt-5.4",
         timeout_s=5,
         max_turns=max_turns,
     )
@@ -181,6 +181,47 @@ def test_repair_context_uses_only_the_explicitly_authorized_files(tmp_path):
     assert result.plan.summary == "No bounded repair was needed"
     assert result.plan.mutations == ()
     assert result.model_requests == 1
+
+
+def test_repair_prompt_requests_only_markdown_bodies(tmp_path, monkeypatch):
+    subject = planner.PydanticPlanner(_settings())
+    captured = {}
+
+    async def run_structured(**kwargs):
+        captured.update(kwargs)
+        return planner.PlanRun(RepairPlan(summary="No bounded repair was needed"))
+
+    monkeypatch.setattr(subject, "_run_structured", run_structured)
+
+    result = subject.repair(
+        worktree=_worktree(tmp_path),
+        violations=(),
+        files={"wiki/notes/Terms.md": "# Terms\n\nCurrent text."},
+        source_path="sources/2026/08/capture.md",
+        source_text="Decision: renew for one year.",
+        context='{"candidates": []}',
+        max_requests=1,
+    )
+
+    assert result.plan.summary == "No bounded repair was needed"
+    assert "only the replacement Markdown body" in captured["prompt"]
+    assert "do not include YAML front matter" in captured["prompt"]
+
+
+def test_repair_mutation_accepts_only_body():
+    mutation = RepairMutation(
+        path="wiki/notes/Terms.md",
+        body="# Terms\n\nCurrent text.",
+        reason="Restored the required source citation.",
+    )
+
+    assert mutation.body == "# Terms\n\nCurrent text."
+    with pytest.raises(ValueError, match="text"):
+        RepairMutation(
+            path="wiki/notes/Terms.md",
+            text="# Terms\n\nCurrent text.",
+            reason="Retired whole-page field.",
+        )
 
 
 def test_planner_rejects_a_prompt_over_its_byte_budget(monkeypatch):

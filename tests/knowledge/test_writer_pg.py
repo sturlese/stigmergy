@@ -250,7 +250,7 @@ def test_failed_required_anchor_rolls_back_entity_and_registry_state(clean_queue
                 role="note",
                 title="Atomic fixture conclusion",
                 body="# Atomic fixture conclusion\n\nThis page must never land.",
-                entities=("unknown-entity-reference",),
+                entities=("Atomic fixture organization", "unknown-entity-reference"),
                 reason="The plan deliberately contains an unresolved required anchor",
             ),
         ),
@@ -302,6 +302,7 @@ def test_one_capture_lands_source_wiki_and_change_in_one_commit(clean_queue, tar
                 title="Support rotation",
                     body=("# Support rotation\n\nThe support rotation changes weekly on 1 September. "
                           "(Source: `sources/2026/09/ee9737a1-6a78-5a13-a675-cccae5cc1a1c.md`)"),
+                entities=(),
                 reason="The source establishes the new operating cadence",
             ),
         ),
@@ -398,7 +399,7 @@ def test_public_url_lands_sanitized_original_and_final_provenance(
     assert "secret" not in source_text
 
 
-def test_invalid_wiki_plan_lands_the_source_without_partial_mutations(
+def test_update_ignores_model_supplied_role_and_title(
     clean_queue, target_repo
 ):
     for title, body in (
@@ -436,17 +437,33 @@ def test_invalid_wiki_plan_lands_the_source_without_partial_mutations(
     )
     store = evidence.MemoryEvidenceStore()
     plan = FilingPlan(
-        summary="Renamed the target",
+        summary="Updated the target",
         mutations=(
             PageMutation(
                 action="update",
                 path="wiki/notes/Target.md",
+                role="concept",
                 title="Renamed target",
-                body="# Renamed target\n\nUpdated target knowledge.",
-                reason="The source uses the new title",
+                body=(
+                    "# Target\n\nThe target now records the current operating decision "
+                    "with sufficient supporting detail."
+                ),
+                reason="The source updates the target",
             ),
         ),
     )
+
+    class CurrentTargetPlanner(ScriptedPlanner):
+        def plan(self, **kwargs) -> PlanRun:
+            run = super().plan(**kwargs)
+            mutation = run.plan.mutations[0]
+            body = f"{mutation.body}\n\n(Source: `{kwargs['source_path']}`)"
+            return PlanRun(
+                run.plan.model_copy(
+                    update={"mutations": (mutation.model_copy(update={"body": body}),)}
+                ),
+                run.model_requests,
+            )
 
     _receipt, item, outcome = _process_capture(
         clean_queue,
@@ -454,9 +471,10 @@ def test_invalid_wiki_plan_lands_the_source_without_partial_mutations(
         store,
         actor=Actor(subject="marc", display_name="Marc"),
         audience=None,
-        key="invalid-cross-page-plan",
-        text="The current target has a new title.",
+        key="update-ignores-model-create-fields",
+        text="The current target changed.",
         plan=plan,
+        planner=CurrentTargetPlanner(plan),
     )
 
     tree = subprocess.check_output(
@@ -465,13 +483,18 @@ def test_invalid_wiki_plan_lands_the_source_without_partial_mutations(
         text=True,
     ).splitlines()
     assert outcome.status == schema.LANDED
-    assert item["report"]["plan_rejected"] is True
-    assert item["report"]["wiki_changes"] == 0
+    assert item["report"]["plan_rejected"] is False
+    assert item["report"]["wiki_changes"] == 1
     assert "wiki/notes/Target.md" in tree
     assert "wiki/notes/Renamed target.md" not in tree
-    assert [change.page_role for change in list_changes(clean_queue)[0].manifest] == [
-        "source"
-    ]
+    page = parse_page(
+        "wiki/notes/Target.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Target.md"], cwd=target_repo, text=True
+        ),
+    )
+    assert (page.role, page.title) == ("note", "Target")
+    assert [change.page_role for change in list_changes(clean_queue)[0].manifest] == ["source", "note"]
 
 
 def test_pasted_transcript_archives_exact_input_and_files_only_its_conclusion(
@@ -494,6 +517,7 @@ def test_pasted_transcript_archives_exact_input_and_files_only_its_conclusion(
                         "The team agreed to move the support rotation to weekly on 1 September. "
                         "(Source: `sources/2026/09/8139bbff-80ed-559e-98fa-cca533899a9c.md`)"
                     ),
+                entities=(),
                 reason="The transcript establishes the decision",
             ),
         ),
@@ -542,6 +566,7 @@ def test_conclusions_only_submission_archives_only_the_supplied_synthesis(
                 role="note",
                 title="Launch date",
                 body="# Launch date\n\nThe launch remains on 15 October and is owned by product.",
+                entities=(),
                 reason="The submitted synthesis establishes the current launch decision",
             ),
         ),
@@ -716,6 +741,7 @@ def test_capture_can_create_rewrite_consolidate_and_delete_in_one_atomic_commit(
                 role="note",
                 title="Primary plan",
                 body="# Primary plan\n\nInitial plan.",
+                entities=(),
                 reason="The initial plan is durable",
             ),
             PageMutation(
@@ -723,6 +749,7 @@ def test_capture_can_create_rewrite_consolidate_and_delete_in_one_atomic_commit(
                 role="note",
                 title="Duplicate plan",
                 body="# Duplicate plan\n\nDuplicate details.",
+                entities=(),
                 reason="The source initially separates this detail",
             ),
             PageMutation(
@@ -730,6 +757,7 @@ def test_capture_can_create_rewrite_consolidate_and_delete_in_one_atomic_commit(
                 role="concept",
                 title="Temporary idea",
                 body="# Temporary idea\n\nA temporary explanation.",
+                entities=(),
                 reason="The source introduces the concept",
             ),
         ),
@@ -776,6 +804,7 @@ def test_capture_can_create_rewrite_consolidate_and_delete_in_one_atomic_commit(
                 role="concept",
                 title="Operating cadence",
                 body="# Operating cadence\n\nUse a weekly review.",
+                entities=(),
                 reason="The cadence is reusable explanatory knowledge",
             ),
         ),
@@ -867,10 +896,13 @@ def test_omitted_entity_references_do_not_auto_anchor_a_proposed_identity(
                     "# Northstar Research renewal\n\n"
                     "Northstar Research approved the annual renewal."
                 ),
+                entities=("Northstar Research",),
                 reason="The source identifies the organization and its renewal",
             ),
         ),
     )
+    unlinked = plan.mutations[0].model_copy(update={"entities": ()})
+    plan = plan.model_copy(update={"mutations": (unlinked,)})
 
     _receipt, _item, outcome = _process_capture(
         clean_queue,
@@ -897,7 +929,7 @@ def test_omitted_entity_references_do_not_auto_anchor_a_proposed_identity(
     assert page.entities == ()
 
 
-def test_omitted_entity_references_do_not_auto_anchor_a_unique_proposed_identity(
+def test_explicit_empty_entity_references_do_not_anchor_a_unique_proposed_identity(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -920,11 +952,13 @@ def test_omitted_entity_references_do_not_auto_anchor_a_unique_proposed_identity
                     "# Qaldris renewal\n\n"
                     "Qaldris Dynamics Limited approved the annual renewal."
                 ),
-                entities=None,
+                entities=("Qaldris Dynamics Limited",),
                 reason="The source identifies the organization and its renewal",
             ),
         ),
     )
+    unlinked = plan.mutations[0].model_copy(update={"entities": ()})
+    plan = plan.model_copy(update={"mutations": (unlinked,)})
 
     _receipt, _item, outcome = _process_capture(
         clean_queue,
@@ -962,10 +996,13 @@ def test_proposed_entity_name_substrings_do_not_anchor_mutated_pages(clean_queue
                 role="note",
                 title="AcmeCorp renewal",
                 body="# AcmeCorp renewal\n\nAcmeCorp approved the annual renewal.",
+                entities=("Acme",),
                 reason="The source records the AcmeCorp decision",
             ),
         ),
     )
+    unlinked = plan.mutations[0].model_copy(update={"entities": ()})
+    plan = plan.model_copy(update={"mutations": (unlinked,)})
 
     _receipt, _item, outcome = _process_capture(
         clean_queue,
@@ -1149,10 +1186,13 @@ def test_equivalent_proposed_name_spans_with_distinct_ids_do_not_auto_anchor(
                 role="note",
                 title="Ambiguous Acme approval",
                 body="# Ambiguous Acme approval\n\nAcme Inc approved the renewal.",
+                entities=("Acme Inc", "Acme, Inc."),
                 reason="The source does not disambiguate equivalent proposed identities",
             ),
         ),
     )
+    unlinked = plan.mutations[0].model_copy(update={"entities": ()})
+    plan = plan.model_copy(update={"mutations": (unlinked,)})
 
     _receipt, _item, outcome = _process_capture(
         clean_queue,
@@ -1285,10 +1325,13 @@ def test_shared_proposed_alias_never_auto_anchors_by_plan_order(
                 role="note",
                 title="Ambiguous acronym",
                 body="# Ambiguous acronym\n\nVSW approved the schedule.",
+                entities=("Velorum Signal Works GmbH", "Valence Switching Works Limited"),
                 reason="The source does not disambiguate the acronym",
             ),
         ),
     )
+    unlinked = plan.mutations[0].model_copy(update={"entities": ()})
+    plan = plan.model_copy(update={"mutations": (unlinked,)})
 
     _receipt, _item, outcome = _process_capture(
         clean_queue,
@@ -1393,6 +1436,7 @@ def test_alias_without_exact_artifact_evidence_rejects_the_plan(
                 role="note",
                 title="Unsupported acronym",
                 body="# Unsupported acronym\n\nVelorum Signal Works GmbH approved the schedule.",
+                entities=("Velorum Signal Works GmbH",),
                 reason="The source identifies the organization",
             ),
         ),
@@ -1457,6 +1501,7 @@ def test_two_proposals_for_one_strong_identity_reject_the_plan(
                     "# Duplicate identity proposals\n\n"
                     "Velorum Signal Works GmbH and VSW Holdings share one registration."
                 ),
+                entities=("Velorum Signal Works GmbH", "VSW Holdings"),
                 reason="The source supplies one stable registration",
             ),
         ),
@@ -1535,10 +1580,13 @@ def test_omitted_update_entities_retain_existing_anchors_without_adding_proposal
                     "# Renewal record\n\nLegacy Systems remains the account holder. "
                     "Northstar Research approved the annual renewal."
                 ),
+                entities=("Northstar Research",),
                 reason="The source identifies the additional organization",
             ),
         ),
     )
+    unlinked = update.mutations[0].model_copy(update={"entities": None})
+    update = update.model_copy(update={"mutations": (unlinked,)})
     _receipt, _item, outcome = _process_capture(
         clean_queue,
         target_repo,
@@ -1595,7 +1643,7 @@ def test_explicit_entity_references_are_the_complete_anchor_set(
                     "# Listed entity page\n\nNorthstar Research and Pinecone Labs "
                     "approved the renewal."
                 ),
-                entities=("Northstar Research",),
+                entities=("Northstar Research", "Pinecone Labs"),
                 reason="The source retains only the explicit selected entity",
             ),
             PageMutation(
@@ -1654,7 +1702,7 @@ def test_explicit_entity_references_are_the_complete_anchor_set(
     )
 
     assert (listed.entities, empty.entities) == (
-        (entity_ids["Northstar Research"],),
+        (entity_ids["Northstar Research"], entity_ids["Pinecone Labs"]),
         (),
     )
 
@@ -1669,11 +1717,13 @@ def test_explicit_entity_references_are_the_complete_anchor_set(
                     "# Empty entity page\n\nNorthstar Research and Cascade Works "
                     "approved the revised renewal."
                 ),
-                entities=(),
+                entities=("Cascade Works",),
                 reason="The new source replaces the prior page conclusion",
             ),
         ),
     )
+    unlinked = update.mutations[0].model_copy(update={"entities": ()})
+    update = update.model_copy(update={"mutations": (unlinked,)})
     _receipt, _item, update_outcome = _process_capture(
         clean_queue,
         target_repo,
@@ -1721,7 +1771,7 @@ def test_describe_entity_returns_only_the_explicitly_anchored_page_after_indexin
                 role="note",
                 title="Northstar omitted link",
                 body="# Northstar omitted link\n\nNorthstar Research approved the renewal.",
-                entities=None,
+                entities=(),
                 reason="The source records a passing Northstar mention without a link",
             ),
         ),
@@ -1981,6 +2031,7 @@ def test_restricted_input_cannot_rewrite_open_page_but_can_create_companion(
                 role="note",
                 title="Public policy",
                 body="# Public policy\n\nOrganization-wide policy.",
+                entities=(),
                 reason="The policy is organization-wide",
             ),
         ),
@@ -2033,6 +2084,7 @@ def test_restricted_input_cannot_rewrite_open_page_but_can_create_companion(
                 role="note",
                 title="Finance policy detail",
                 body="# Finance policy detail\n\nRestricted finance detail.",
+                entities=(),
                 reason="Restricted evidence belongs in a restricted page",
             ),
         ),
@@ -2076,6 +2128,7 @@ def test_invalid_filing_candidate_lands_only_immutable_evidence(clean_queue, tar
                 role="note",
                 title="Broken page",
                 body="# Broken page\n\nThis points to [[Missing page]].",
+                entities=(),
                 reason="Invalid link fixture",
             ),
         ),
@@ -2135,7 +2188,7 @@ def test_editorial_gate_repairs_a_candidate_once_before_rejecting_it(
                     mutations=(
                         RepairMutation(
                             path=path,
-                            text=repaired,
+                            body=repaired,
                             reason="Added the missing local evidence citation",
                         ),
                     ),
@@ -2160,6 +2213,7 @@ def test_editorial_gate_repairs_a_candidate_once_before_rejecting_it(
                 role="note",
                 title="Repairable release decision",
                 body="# Repairable release decision\n\nThe release decision remains current.",
+                entities=(),
                 reason="The source records the current release decision",
             ),
         ),
@@ -2196,7 +2250,7 @@ def test_editorial_gate_rejects_an_out_of_bounds_repair_but_keeps_the_source(
                     mutations=(
                         RepairMutation(
                             path="wiki/notes/Unrelated repair.md",
-                            text="# Unrelated repair\n\nThis page must not be written.",
+                            body="# Unrelated repair\n\nThis page must not be written.",
                             reason="This repair is outside the violated page",
                         ),
                     ),
@@ -2213,6 +2267,7 @@ def test_editorial_gate_rejects_an_out_of_bounds_repair_but_keeps_the_source(
                 role="note",
                 title="Incomplete release decision",
                 body="# Incomplete release decision\n\nThe release decision remains current.",
+                entities=(),
                 reason="The source records the current release decision",
             ),
         ),
@@ -2240,6 +2295,72 @@ def test_editorial_gate_rejects_an_out_of_bounds_repair_but_keeps_the_source(
         text=True,
     ).splitlines()
     assert changed_paths == [source]
+
+
+def test_repair_writer_reconstructs_the_authorized_page_metadata(tmp_path):
+    path = "wiki/concepts/Repair boundary.md"
+    target = tmp_path.joinpath(*path.split("/"))
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        render_page(
+            path=path,
+            role="concept",
+            title="Repair boundary",
+            body="# Repair boundary\n\nThe original body.",
+            acl=("engineering",),
+            entities=("ent_11111111-1111-4111-8111-111111111111",),
+            sources=("sources/2026/09/repair-boundary.md",),
+            status="evergreen",
+            page_id="page_repair_boundary",
+            created=dt.date(2026, 9, 1),
+            updated=dt.date(2026, 9, 2),
+        ),
+        encoding="utf-8",
+    )
+    before = parse_page(path, target.read_text(encoding="utf-8"))
+
+    changed = writer._apply_repair_plan(
+        str(tmp_path),
+        (writer.Violation(path, "placeholder-knowledge-body", "repair it"),),
+        RepairPlan(
+            summary="Replaced the incomplete body.",
+            mutations=(
+                RepairMutation(
+                    path=path,
+                    body="# Repair boundary\n\nThe repaired body.",
+                    reason="Restored the durable conclusion.",
+                ),
+            ),
+        ),
+        authorized_files={path: before.body},
+        context=WriteContext(None, ("engineering",), unrestricted=True),
+        existing_paths=frozenset({path}),
+    )
+
+    after = parse_page(path, target.read_text(encoding="utf-8"))
+    assert changed == {path: "Restored the durable conclusion."}
+    assert after.body == "# Repair boundary\n\nThe repaired body."
+    assert (
+        after.role,
+        after.title,
+        after.acl,
+        after.entities,
+        after.sources,
+        after.status,
+        after.page_id,
+        after.created,
+        after.updated,
+    ) == (
+        before.role,
+        before.title,
+        before.acl,
+        before.entities,
+        before.sources,
+        before.status,
+        before.page_id,
+        before.created,
+        before.updated,
+    )
 
 
 def test_capture_repair_refuses_an_out_of_scope_violation_before_reading_files(
@@ -2281,7 +2402,7 @@ def test_master_recompile_preserves_sources_reuses_identity_and_is_idempotent(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
-    plan = FilingPlan(
+    plan = FilingPlan.model_construct(
         summary="Recorded source-backed identity evidence without a page anchor",
         entities=(
             EntityProposal(
@@ -2459,6 +2580,7 @@ def test_master_recompile_refuses_an_oversized_source_before_any_derived_mutatio
             PageMutation(
                 action="create", role="note", title="Stable recompile baseline",
                 body="# Stable recompile baseline\n\nThe source records a durable operating conclusion.",
+                entities=(),
                 reason="Baseline.",
             ),
         ),
@@ -2511,6 +2633,7 @@ def test_crash_after_commit_reconciles_without_a_second_commit(
                 role="note",
                 title="Crash recovery",
                 body="# Crash recovery\n\nThe decision survives acknowledgement loss.",
+                entities=(),
                 reason="The decision is durable",
             ),
         ),
@@ -2569,6 +2692,7 @@ def test_change_record_failure_after_commit_retries_and_reconciles_once(
                 role="note",
                 title="Change ledger recovery",
                 body="# Change ledger recovery\n\nThe commit remains recoverable.",
+                entities=(),
                 reason="The source establishes the recovery invariant",
             ),
         ),
@@ -2630,6 +2754,7 @@ def test_explicit_delete_sweeps_page_and_source_references_in_one_commit(
                 role="note",
                 title="Delete target",
                 body="# Delete target\n\nObsolete detail.",
+                entities=(),
                 reason="Deletion fixture target",
             ),
             PageMutation(
@@ -2637,6 +2762,7 @@ def test_explicit_delete_sweeps_page_and_source_references_in_one_commit(
                 role="note",
                 title="Keep page",
                 body="# Keep page\n\nSee [[Delete target]] for obsolete detail.",
+                entities=(),
                 reason="Deletion fixture referrer",
             ),
         ),
@@ -2866,7 +2992,10 @@ def test_entity_rename_merge_and_delete_use_atomic_writer_operations(
                 action="create",
                 role="note",
                 title="Northstar account",
-                body="# Northstar account\n\nThe account remains substantive.",
+                body=(
+                    "# Northstar account\n\n"
+                    "Northstar Labs and Northstar Research remain substantive accounts."
+                ),
                 entities=("Northstar Labs", "Northstar Research"),
                 reason="The source describes both records",
             ),
@@ -2913,8 +3042,12 @@ def test_entity_rename_merge_and_delete_use_atomic_writer_operations(
         mutations=(
             PageMutation(
                 action="update",
-                path="wiki/notes/Northstar account.md",
-                body="# Northstar account\n\nThe account remains substantive after the rename.",
+                    path="wiki/notes/Northstar account.md",
+                    body=(
+                        "# Northstar account\n\n"
+                        "The account remains substantive after the rename; Northstar Systems "
+                        "and Northstar Research remain the associated organizations."
+                    ),
                 entities=("Northstar Systems", "Northstar Research"),
                 reason="The source establishes the preferred name",
             ),
@@ -3062,6 +3195,7 @@ def test_contradiction_and_resolution_are_ordinary_atomic_captures(clean_queue, 
                 role="note",
                 title="Renewal cadence",
                 body="# Renewal cadence\n\nThe signed agreement states an annual renewal.",
+                entities=(),
                 reason="The signed agreement establishes the initial cadence",
             ),
         ),
@@ -3203,6 +3337,7 @@ def test_resolution_without_a_prose_mutation_preserves_the_visible_marker(
                             role="note",
                             title="Public retention",
                             body="# Public retention\n\nThe policies disagree.",
+                            entities=(),
                             reason="Both policies remain credible",
                         ),
                     ),
@@ -3303,6 +3438,7 @@ def test_invalid_contradiction_proposal_cannot_block_a_valid_capture(
                     role="note",
                     title="Account renewal",
                     body="# Account renewal\n\nThe account currently renews annually.",
+                    entities=(),
                     reason="The source establishes the cadence",
                 ),
             ),
@@ -3381,6 +3517,7 @@ def test_contradiction_cannot_cite_an_existing_source_not_supplied_to_the_planne
                         "# Bounded renewal provenance\n\n"
                         "The signed renewal agreement states an annual renewal."
                     ),
+                    entities=(),
                     reason="The agreement establishes the renewal cadence",
                 ),
             ),
@@ -3489,6 +3626,7 @@ def test_restricted_contradiction_is_kept_only_on_a_safe_companion_page(
                 role="note",
                 title="Renewal schedule",
                 body="# Renewal schedule\n\nThe public schedule says renewal is annual.",
+                entities=(),
                 reason="The public schedule establishes the current claim",
             ),
         ),
@@ -3556,6 +3694,7 @@ def test_restricted_contradiction_is_kept_only_on_a_safe_companion_page(
                 role="note",
                 title="Finance renewal discrepancy",
                 body="# Finance renewal discrepancy\n\nThe schedules disagree.",
+                entities=(),
                 reason="The restricted evidence requires a restricted companion",
             ),
         ),
@@ -3634,6 +3773,7 @@ def test_only_the_master_can_remove_a_matching_scoped_contradiction(
                             role="note",
                             title="Finance notice period",
                             body="# Finance notice period\n\nThe schedules disagree.",
+                            entities=(),
                             reason="Both claims remain credible",
                         ),
                     ),
@@ -3699,6 +3839,7 @@ def test_only_the_master_can_remove_a_matching_scoped_contradiction(
                             role="note",
                             title="Scoped resolution side effect",
                             body="# Scoped resolution side effect\n\nThis must not be written.",
+                            entities=("Scoped resolution entity",),
                             reason="The non-master plan attempted an unrelated mutation",
                         ),
                     ),
@@ -3835,6 +3976,7 @@ def test_unsupported_resolution_lands_as_evidence_and_preserves_uncertainty(
                 role="note",
                 title="Notice period",
                 body="# Notice period\n\nThe current contracts disagree.",
+                entities=(),
                 reason="Both claims remain supportable",
             ),
         ),

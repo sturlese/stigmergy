@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 import re
@@ -23,9 +24,9 @@ from stigmergy.entities.service import (
     resolve_reference,
 )
 from stigmergy.kernel.deadline import hard_deadline
-from stigmergy.kernel.normalize import resolution_key
 from stigmergy.knowledge import contradictions
 from stigmergy.knowledge.context import actor_scope, filing_context, render_context
+from stigmergy.knowledge.contract import validate_librarian_skill_at_ref
 from stigmergy.knowledge.lint import Violation, check
 from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
 from stigmergy.knowledge.plan import FilingPlan, PageMutation
@@ -104,6 +105,7 @@ def _process_with_lock(conn, item: dict, deps: WriterDeps) -> WriteResult:
         if not acquired:
             raise WriterBusy("another knowledge write is active")
         base = gitcmd.base_ref(deps.repo, deps.settings.branch)
+        validate_librarian_skill_at_ref(deps.repo, base.sha)
         recovered = _recover(conn, item, deps, base.sha)
         if recovered:
             return recovered
@@ -149,9 +151,25 @@ def _garden(
         model_requests = 0
         model_changed: dict[str, str] = {}
         if after:
-            repair_run = deps.planner.repair(worktree=worktree, violations=after)
+            repair_files, repair_context = _garden_repair_files(worktree, after)
+            repair_run = deps.planner.repair(
+                worktree=worktree,
+                violations=after,
+                files=repair_files,
+                source_path="",
+                source_text="",
+                context=repair_context,
+                max_requests=max(0, int(deps.settings.max_turns)),
+            )
             model_requests = repair_run.model_requests
-            model_changed = _apply_repair_plan(worktree, after, repair_run.plan)
+            model_changed = _apply_repair_plan(
+                worktree,
+                after,
+                repair_run.plan,
+                authorized_files=repair_files,
+                context=WriteContext(actor_groups=None, content_acl=None, unrestricted=True),
+                existing_paths=frozenset(repair_files),
+            )
             if model_changed:
                 repair_deterministic(worktree)
             after = check(worktree)
@@ -195,6 +213,35 @@ def _garden(
             clean=True,
         )
         return WriteResult(commit_sha=commit, change_id=str(change.id), report=dict(run.stats))
+
+
+def _garden_repair_files(
+    root: str, violations: tuple[Violation, ...]
+) -> tuple[dict[str, str], str]:
+    """Authorize maintenance repair targets and their already-declared provenance."""
+    paths = {violation.path for violation in violations}
+    if not paths or not all(path.startswith(("wiki/notes/", "wiki/concepts/")) for path in paths):
+        raise GateRefused("garden repair may only target violated knowledge pages")
+    files = {}
+    allowed_sources_by_path = {}
+    for path in sorted(paths):
+        target = _path(root, path)
+        if not target.is_file():
+            raise GateRefused("garden repair targeted a missing path")
+        try:
+            page = parse_page(path, target.read_text(encoding="utf-8"))
+        except PageContractError as error:
+            raise GateRefused("garden repair target has no preservable page metadata") from error
+        files[path] = page.body
+        allowed_sources_by_path[path] = sorted(page.sources)
+    context = json.dumps(
+        {
+            "maintenance": True,
+            "allowed_sources_by_path": allowed_sources_by_path,
+        },
+        sort_keys=True,
+    )
+    return files, context
 
 
 def _recompile(conn, deps: WriterDeps, base: gitcmd.BaseRef, *, request: schema.GardenRequest) -> WriteResult:
@@ -299,7 +346,7 @@ def _recompile_derived(
             context=rendered_context,
         )
         model_requests += plan_run.model_requests
-        plan = _recompile_identity_reuse(worktree, plan_run.plan)
+        plan = plan_run.plan
         try:
             _apply_filing_plan(
                 worktree,
@@ -310,10 +357,9 @@ def _recompile_derived(
                 readable_artifacts=(source.body,),
                 reasons={},
                 visible_entities=tuple(safe_context["entities"]),
-                # The master-only compiler may preserve an opaque identity even if its former
-                # claim was outside this source's normal filing context. It still requires an
-                # exact existing preferred claim and compatible entity type below.
-                visible_entity_ids=frozenset(load_entities(worktree)),
+                visible_entity_ids=frozenset(
+                    entity["id"] for entity in safe_context["entities"]
+                ),
                 allowed_contradiction_sources=frozenset(
                     {relative_source, *(item["path"] for item in safe_context["source_evidence"])}
                 ),
@@ -394,36 +440,6 @@ def _restore_recompiled_page_identity(root: str, previous_pages: dict[str, str])
             ),
             encoding="utf-8",
         )
-
-
-def _recompile_identity_reuse(root: str, plan: FilingPlan) -> FilingPlan:
-    """Attach exact, type-compatible existing identities to a recompilation plan.
-
-    This is preservation rather than entity inference: no names are extracted or invented, and an
-    ambiguous match remains a model decision. It gives an otherwise equivalent rebuilt graph its
-    prior opaque IDs without weakening ordinary capture identity rules.
-    """
-    records = load_entities(root)
-    proposals = []
-    for proposal in plan.entities:
-        if proposal.same_as or (proposal.external_namespace and proposal.external_id):
-            proposals.append(proposal)
-            continue
-        matches = [
-            entity_id
-            for entity_id, record in records.items()
-            if record.entity_type == proposal.entity_type
-            and sum(
-                claim.kind == "preferred" and claim.normalized == resolution_key(proposal.name)
-                for claim in record.claims
-            ) == 1
-        ]
-        proposals.append(
-            proposal.model_copy(update={"same_as": matches[0]})
-            if len(matches) == 1
-            else proposal
-        )
-    return plan.model_copy(update={"entities": tuple(proposals)})
 
 
 def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteResult:
@@ -877,8 +893,9 @@ def _apply_page_mutation(
         reasons[target_path] = mutation.reason
         return None
 
-    title = mutation.title or page.title
-    destination = page_path(page.role, title)
+    # An update is path-addressed. Model-supplied create metadata cannot rename or retype it.
+    title = page.title
+    destination = target_path
     entities = (
         page.entities
         if mutation.entities is None
@@ -903,16 +920,9 @@ def _apply_page_mutation(
         created=page.created,
         updated=at,
     )
-    if destination != target_path:
-        if _path(root, destination).exists():
-            raise KnowledgeWriteError("renamed page destination already exists")
-        target.unlink()
-        _write_new(root, destination, rendered)
-        reasons[target_path] = mutation.reason
-    else:
-        target.write_text(rendered, encoding="utf-8")
-    reasons[destination] = mutation.reason
-    return destination
+    target.write_text(rendered, encoding="utf-8")
+    reasons[target_path] = mutation.reason
+    return target_path
 
 
 def _preserve_contradictions(existing: str, proposed: str) -> str:
@@ -1312,7 +1322,10 @@ def _capture_repair_files(
         text = target.read_text(encoding="utf-8")
         if len(text.encode("utf-8")) > 100_000:
             raise GateRefused("repair target exceeds its byte limit")
-        files[path] = text
+        try:
+            files[path] = parse_page(path, text).body
+        except PageContractError as error:
+            raise GateRefused("repair target has no preservable page metadata") from error
     return files
 
 
@@ -1339,8 +1352,13 @@ def _apply_repair_plan(
         target = _path(root, mutation.path)
         if not target.is_file():
             raise GateRefused("model repair targeted a missing path")
+        try:
+            before = parse_page(mutation.path, target.read_text(encoding="utf-8"))
+        except PageContractError as error:
+            raise GateRefused("repair target has no preservable page metadata") from error
         if authorized_files is not None:
-            before = parse_page(mutation.path, authorized_files[mutation.path])
+            if before.body != authorized_files[mutation.path]:
+                raise GateRefused("repair target changed after authorization")
             if context is None:
                 raise GateRefused("capture repair is missing its authorization context")
             try:
@@ -1350,20 +1368,22 @@ def _apply_repair_plan(
                     allow_create(context, before.acl)
             except WriteRefused as error:
                 raise GateRefused("model repair is outside the capture audience") from error
-            after = parse_page(mutation.path, mutation.text)
-            if (
-                after.role != before.role
-                or after.title != before.title
-                or after.acl != before.acl
-                or after.entities != before.entities
-                or after.sources != before.sources
-                or after.status != before.status
-                or after.page_id != before.page_id
-                or after.created != before.created
-                or after.updated != before.updated
-            ):
-                raise GateRefused("model repair may change only the authorized page body")
-        target.write_text(mutation.text, encoding="utf-8")
+        target.write_text(
+            render_page(
+                path=before.path,
+                role=before.role,
+                title=before.title,
+                body=mutation.body,
+                acl=before.acl,
+                entities=before.entities,
+                sources=before.sources,
+                status=before.status,
+                page_id=before.page_id,
+                created=before.created,
+                updated=before.updated,
+            ),
+            encoding="utf-8",
+        )
         changed[mutation.path] = mutation.reason
     return changed
 

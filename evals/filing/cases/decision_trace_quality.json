@@ -3,6 +3,7 @@
   "name": "decision-trace-quality",
   "source_title": "Decision Trace Quality",
   "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000002.md",
+  "fixture_path": "../fixtures/decision_trace_quality.md",
   "mutations": {
     "min_count": 1,
     "max_count": 4,

@@ -3,6 +3,7 @@
   "name": "harness-engineering",
   "source_title": "Harness Engineering: explained from zero",
   "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000001.md",
+  "fixture_path": "../fixtures/harness_engineering_synthetic.md",
   "mutations": {
     "min_count": 1,
     "max_count": 4,

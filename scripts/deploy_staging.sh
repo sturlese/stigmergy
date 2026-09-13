@@ -84,8 +84,8 @@ if [ -z "$PARITY_ARTIFACT" ] || [ ! -f "$PARITY_ARTIFACT" ]; then
   echo "deploy: STIGMERGY_PARITY_ARTIFACT must name a recorded passing parity artifact" >&2
   exit 2
 fi
-if ! "$PREFLIGHT_PY" "$HERE/evals/filing/parity.py" \
-  --artifact "$PARITY_ARTIFACT" --repo-root "$HERE"; then
+if ! PYTHONDONTWRITEBYTECODE=1 "$PREFLIGHT_PY" "$HERE/evals/filing/parity.py" \
+  --artifact "$PARITY_ARTIFACT" --repo-root "$HERE" --brain-root "$root" --brain-commit "$sha"; then
   echo "deploy: recorded parity gate rejected this candidate" >&2
   exit 2
 fi

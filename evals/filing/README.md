@@ -1,25 +1,62 @@
 # Filing parity release gate
 
 `parity.py` validates recorded real-model evidence before an image can be published or rolled out.
-It independently derives the candidate Git commit, the current librarian-skill hash, and the hashes
-of every versioned filing case. An artifact cannot self-attest those inputs. This is a release gate,
-not a fake-backend test or a score-only benchmark.
+It independently derives the candidate Git commit, the current librarian-skill hash, the hashes of
+every versioned filing case and fixture, and the exact checked-out brain prompt. An artifact cannot
+self-attest those inputs. This is a release gate, not a fake-backend test or a score-only benchmark.
 
-The artifact must contain independent Hippocampus and Stigmergy runs over the same corpus and initial
-graph. Each run records the full raw semantic gate map: mutation and identity quality, links and
-reference resolution, readable bodies, local provenance, entity relationships, anti-fragmentation,
-and writer gates. The blind editorial review binds to the two exact run IDs and declares whether
-Stigmergy has a material regression.
+The artifact contains one complete result for every current case inside every recorded repeat. It
+does not accept a summary score standing in for individual case results. Schema v3 binds every result
+to the SHA-256 of its versioned case and readable fixture, plus the commit and SHA-256 of the exact
+knowledge-repository librarian prompt that executed it. Each case result records the full raw semantic
+gate map: mutation and identity quality, links and reference resolution, readable bodies, local
+provenance, entity relationships, anti-fragmentation, writer gates, actual model requests, derived
+schema retries, semantic-repair count, elapsed time, and a content-addressed output reference. Its
+canonical payload retains the original and effective derived plans, never source text. The gate
+recalculates that payload hash, semantic score, writer gate, and raw gate map against the current case
+and fixture. Token usage is recorded only when the runner exposes it; provider fields are never inferred.
 
-Every Stigmergy reasoning-level result repeats the same corpus, initial graph, case hashes, candidate
-commit, skill hash, runtime route, and complete raw gate map. The selected production level must be
-the first passing level in the ordered matrix. Missing, stale, mismatched, incomplete, or failing
-evidence rejects the release.
+The selected Stigmergy level requires at least three independent, complete,
+`production-equivalent` repeats per case. Those runs use the production Azure route and the fixed
+two-request budget, exercise the temporary-worktree writer and bounded semantic-repair path, and must
+all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
+blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a
+material regression.
+
+Every Stigmergy reasoning-level candidate records full per-case runs using the same corpus, initial
+graph, case hashes, candidate commit, skill hash, runtime route, and complete raw gate map. The
+selected production level must be the first passing level in the ordered matrix. The runner accepts a
+diagnostic `planner-only` mode, but that evidence can never select a production level. Missing, stale,
+mismatched, aggregate-only, incomplete, or failing evidence rejects the release.
+
+Run one immutable case-result record with the production-equivalent path:
+
+```bash
+.venv/bin/python evals/filing/run_planner.py --live \
+  --source evals/filing/fixtures/harness_engineering_synthetic.md \
+  --case evals/filing/cases/harness_engineering.json \
+  --worktree /absolute/path/to/verified/stigmergy-brain \
+  --run-id <independent-case-run-id>
+```
+
+By default the runner prints safe telemetry, gate results, prompt/case/fixture provenance, and the
+content hash only. Add `--include-payload` only when recording a local release artifact: it prints the
+derived page bodies and an explicit stderr warning, but never the supplied source text. The emitted
+`case_result` with that flag is the exact object embedded under its repeat's `case_results` array.
+Use the same repeat ID for every case in one matrix repeat; record a new ID for each independent
+repeat. The top-level repeat records the shared runtime, execution mode, two-request budget, and
+candidate provenance. The validator requires the nested records to repeat that runtime and budget,
+so summaries cannot stand in for individual outcomes.
+
+[`parity-artifact.example.json`](./parity-artifact.example.json) documents the nested shape only;
+it is deliberately marked `example_only` and cannot pass the release validator. A real artifact
+must contain every current case and complete run objects at every recorded matrix level.
 
 Run the gate directly while recording a release artifact:
 
 ```bash
-.venv/bin/python evals/filing/parity.py --artifact /absolute/path/to/parity-result.json
+.venv/bin/python evals/filing/parity.py --artifact /absolute/path/to/parity-result.json \
+  --brain-root /absolute/path/to/verified/stigmergy-brain --brain-commit <verified-40-char-commit>
 ```
 
 Deploy only through the guarded entrypoint; it validates the artifact before `fly deploy`:
@@ -29,5 +66,6 @@ make deploy-staging PARITY_ARTIFACT=/absolute/path/to/parity-result.json
 ```
 
 `scripts/deploy_staging.sh` rejects a missing, stale, mismatched, or failing artifact before it
-calls `fly deploy`. It also requires an exact clean platform checkout, so keep the artifact outside
-that checkout.
+calls `fly deploy`. After refreshing the brain at its verified commit, it compares the artifact prompt
+provenance, the brain `SKILL.md`, and the packaged platform skill byte for byte. It also requires an
+exact clean platform checkout, so keep the artifact outside that checkout.

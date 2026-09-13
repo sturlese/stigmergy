@@ -23,6 +23,7 @@ from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.index.corpus import split_frontmatter_checked
 from stigmergy.knowledge import contradictions
+from stigmergy.knowledge.contract import expected_librarian_skill
 from stigmergy.knowledge.contradictions import Contradiction
 from stigmergy.knowledge.pages import render_page
 from stigmergy.knowledge.plan import ContradictionClaim, FilingPlan
@@ -72,6 +73,9 @@ def admin_rig(tmp_path):
         '"groups":["finance"],"default_audience":["finance"]}}\n'
     )
     (repo / "ops" / "entity-registry.json").write_bytes(registry_bytes({}))
+    skill = repo / ".claude" / "skills" / "librarian" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_bytes(expected_librarian_skill())
     write_controls(repo)
     (repo / "wiki" / "notes" / "Welcome.md").write_text(
         render_page(

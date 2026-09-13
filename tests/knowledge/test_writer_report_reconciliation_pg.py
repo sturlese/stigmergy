@@ -68,6 +68,7 @@ def test_report_reconciles_partial_plans_without_repeating_the_model_summary(
                 role="note",
                 title="Weekly policy",
                 body="# Weekly policy\n\nThe approved policy is now weekly.",
+                entities=(),
                 reason="The supplied evidence records the approved weekly policy",
             ),
             PageMutation(
@@ -121,6 +122,7 @@ def test_report_reconciles_fully_accepted_plans_without_repeating_model_prose(
                     "for this operating process. "
                     f"(Source: `{source}`)"
                 ),
+                entities=(),
                 reason="The supplied evidence records the approved monthly policy",
             ),
         ),
