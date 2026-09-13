@@ -72,7 +72,7 @@ def build_model(model_name: str = ANSWER_MODEL):
     )
     if model_name == LIBRARIAN_MODEL:
         model_settings["openrouter_reasoning"] = {
-            "effort": "high",
+            "effort": "medium",
             "exclude": True,
         }
     model = OpenRouterModel(

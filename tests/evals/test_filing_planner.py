@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from evals.filing import planner_eval, run_planner
+from evals.filing import constants, planner_eval, run_planner
 from evals.filing import worktree as eval_worktree
 from stigmergy.knowledge.plan import (
     EntityProposal,
@@ -37,6 +37,12 @@ HARNESS_BODY = (
     "top 5 on Terminal Bench; Anthropic showed a polished but broken application versus a working "
     f"app under different harness configurations. (Source: `{SOURCE}`)"
 )
+
+
+def test_production_reasoning_selects_medium_while_high_remains_diagnostic_only():
+    assert constants.PRODUCTION_REASONING_LEVEL == "medium"
+    assert constants.PRODUCTION_REASONING_LEVEL != "high"
+    assert "high" in constants.REASONING_LEVELS
 
 
 def _plan(*, entities=(), links=()):
@@ -684,8 +690,8 @@ def test_harness_score_requires_santi_as_the_canonical_name_not_only_an_alias():
         "include_payload",
     ),
     (
-        ((), 2, (), "high", "production-equivalent", False),
-        (("--max-turns", "3", "--execution-mode", "planner-only"), 3, (), "high", "planner-only", True),
+        ((), 2, (), "medium", "production-equivalent", False),
+        (("--max-turns", "3", "--execution-mode", "planner-only"), 3, (), "medium", "planner-only", True),
         ((), 2, ("--reasoning-level", "low"), "low", "production-equivalent", False),
     ),
 )
@@ -747,7 +753,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
         assert model_name == "openrouter:openai/gpt-5.4"
         settings = {
             "openrouter_provider": {"only": ["azure"], "allow_fallbacks": False},
-            "openrouter_reasoning": {"effort": "high", "exclude": True},
+            "openrouter_reasoning": {"effort": "medium", "exclude": True},
         }
         return Model(settings), settings
 

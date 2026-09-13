@@ -204,7 +204,7 @@ def _matrix_item(level: str, *, passed: bool, repeats: int = 1) -> dict:
 
 
 def _artifact() -> dict:
-    selected = [_run("stigmergy", f"matrix-high-{repeat}", "high", repeat, passed=True) for repeat in range(1, 4)]
+    selected = [_run("stigmergy", f"matrix-medium-{repeat}", "medium", repeat, passed=True) for repeat in range(1, 4)]
     return {
         "schema_version": 3,
         "corpus_sha256": CORPUS,
@@ -215,16 +215,15 @@ def _artifact() -> dict:
         "source_cases": [{"id": key, "sha256": value} for key, value in EXPECTED.source_cases.items()],
         "source_fixtures": [{"id": key, "sha256": value} for key, value in EXPECTED.source_fixtures.items()],
         "runs": [
-            _run("hippocampus", "hippocampus-reference-1", "high", 1, passed=True),
+            _run("hippocampus", "hippocampus-reference-1", "medium", 1, passed=True),
             *selected,
         ],
         "reasoning_matrix": [
             _matrix_item("minimal", passed=False),
             _matrix_item("low", passed=False),
-            _matrix_item("medium", passed=False),
             {
-                "reasoning_level": "high",
-                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "high", "provider": "azure"},
+                "reasoning_level": "medium",
+                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "medium", "provider": "azure"},
                 "runs": copy.deepcopy(selected),
                 "passed": True,
             },
@@ -240,7 +239,7 @@ def _artifact() -> dict:
                 "source_cases": EXPECTED.source_cases,
                 "runs": {
                     "hippocampus": ["hippocampus-reference-1"],
-                    "stigmergy": ["matrix-high-1", "matrix-high-2", "matrix-high-3"],
+                    "stigmergy": ["matrix-medium-1", "matrix-medium-2", "matrix-medium-3"],
                 },
             },
         },
