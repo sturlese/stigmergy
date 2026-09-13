@@ -250,13 +250,45 @@ def test_librarian_keeps_identity_evidence_when_no_page_mutation_is_due():
     assert "archiving a source is not a reason to discard identity evidence" in text
 
 
-def test_librarian_omits_entity_references_for_automatic_same_plan_anchoring():
+def test_librarian_requires_reusable_identities_and_deliberate_entity_links():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "omit `entities` by default" in text
-    assert "an explicit `entities` list is exhaustive, never partial" in text
-    assert "include every identity discussed by the page" in text
-    assert "cannot suppress an unambiguous visible or same-plan proposed identity" in text
-    assert "the explicit list controls all other identity anchors" in text
+    required = {
+        "likely to be referenced again",
+        "passing mentions remain plain text",
+        "only explicit `entities` references are anchored",
+    }
+    forbidden = {
+        "automatic unambiguous same-plan anchoring",
+        "include every identity discussed by the page",
+        "cannot suppress an unambiguous visible or same-plan proposed identity",
+    }
+    assert not (missing := {rule for rule in required if rule not in text}), missing
+    assert not (present := {rule for rule in forbidden if rule in text}), present
+
+
+def test_librarian_links_named_content_authors_without_inferring_submitter_authorship():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    required = {
+        "named human author or originator with a stable name or handle is never a passing mention",
+        "must propose or reuse that author",
+        "deliberately link every materially derived mutation to them",
+        "a content author is not the submitter or provenance actor",
+        "do nothing when the author identity is absent or anonymous",
+    }
+
+    assert not (missing := {rule for rule in required if rule not in text}), missing
+
+
+def test_librarian_keeps_named_non_identity_material_as_prose_or_concepts():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    required = {
+        "never propose a benchmark, metric, method, pattern, technology, topic, or concept "
+        "merely because it has a proper name",
+        "retain that material in prose or create a concept only when it is independently durable",
+        "a named benchmark such as `benchmark alpha 2.0` is not an entity",
+    }
+
+    assert not (missing := {rule for rule in required if rule not in text}), missing
 
 
 def test_librarian_reuses_a_stable_identifier_across_scopes_without_disclosing_hidden_claims():

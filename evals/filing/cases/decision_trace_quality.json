@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "name": "decision-trace-quality",
+  "source_title": "Decision Trace Quality",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000002.md",
+  "mutations": {
+    "count": 1,
+    "allowed": [
+      {
+        "action": "create",
+        "role": "concept",
+        "title": "Decision Trace Quality"
+      }
+    ]
+  },
+  "identities": {
+    "required": ["Mira Chen", "Northstar Signal Lab"],
+    "allowed": [],
+    "forbidden": ["OrbitBench", "Recall at Five", "Paired Holdout Review", "VectorCache"],
+    "closed": true
+  },
+  "external_ids": {
+    "required": [],
+    "allowed": [],
+    "closed": true
+  },
+  "links": {
+    "required": ["Mira Chen", "Northstar Signal Lab"],
+    "allowed": [],
+    "forbidden": ["OrbitBench", "Recall at Five", "Paired Holdout Review", "VectorCache"],
+    "closed": true
+  },
+  "link_coverage": {
+    "allow_unlinked": []
+  }
+}

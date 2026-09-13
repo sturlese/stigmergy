@@ -102,15 +102,16 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 | Runtime purpose | Model |
 |---|---|
-| librarian filing and semantic repair | `deepseek/deepseek-v4-flash` |
+| librarian filing and semantic repair | `openrouter:openai/gpt-5.4` |
 | cited answers | `z-ai/glm-5.2` |
 | vector embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | scanned-page and image OCR | `qwen/qwen3-vl-8b-instruct` |
 
 Deterministic linting is the gardener's detection step and makes no model call. Semantic repair is
-the only model-backed part of a garden run and uses the librarian's DeepSeek model. OpenRouter
-requires requested parameters, denies data collection, and requires zero-data-retention processing.
-The librarian model is pinned to Azure, the verified host for intact tool-call arguments, and fails
+the only model-backed part of a garden run and uses the librarian's GPT-5.4 model. Librarian calls
+request reasoning effort `high` with reasoning excluded from returned output. OpenRouter requires
+requested parameters, denies data collection, and requires zero-data-retention processing. The
+librarian model is pinned to Azure, the verified host for intact tool-call arguments, and fails
 closed rather than falling back to another host. A transient routing unavailability retries through
 the bounded queue; answer and OCR requests retain same-model provider failover. Model fallback is
 prohibited. The application never reads, forwards, or falls back to Anthropic, OpenAI, Gemini, or
@@ -384,7 +385,7 @@ The librarian proposes one record per identity while filing normal material. The
 
 Automatic reuse during filing requires a shared stable external identifier or an explicit `same_as` reference that is uniquely visible to the writer. An explicit merge requires either one external identifier present on every selected identity or an exact same-entity assertion that is verified against a cited immutable source. A rationale alone is never evidence. Uncertain fuzzy similarity creates no merge task and reveals nothing; separate IDs are safer than a false merge.
 
-Proposal identity and textual name resolution are separate. Each proposal retains its resolved opaque ID, while every normalized proposed name maps to the set of candidate IDs. Automatic or explicit page anchoring by text succeeds only when that set has exactly one ID. Shared aliases and normalized name collisions therefore remain unanchored rather than depending on proposal order. Multiple proposals that strongly resolve to one identity invalidate the plan instead of fabricating an ordered rename.
+Proposal identity and page linkage are separate. The librarian proposes an identity when the source establishes a durable identity that is likely to be referenced by future knowledge; passing mentions remain plain text. It selects a page's entity links explicitly and only for durable, materially useful relationships, never from lexical occurrence alone. On page creation, omitted `entities` means no anchors. On update, omission preserves existing anchors, while an explicit list, including an empty list, is the complete replacement. Each proposal retains its resolved opaque ID, while every normalized proposed name maps to the set of candidate IDs. The writer resolves and validates the librarian's selected links but never infers additional links from a title or body. Explicit resolution succeeds only when a selected name maps to exactly one ID. Shared aliases and normalized name collisions therefore remain unanchored rather than depending on proposal order. Multiple proposals that strongly resolve to one identity invalidate the plan instead of fabricating an ordered rename.
 
 If a hidden canonical ID is reused, the submission receipt reports only normal capture progress. It must not reveal the hidden preferred name, aliases, audiences, or prior existence.
 

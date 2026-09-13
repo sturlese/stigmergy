@@ -3,11 +3,14 @@ import pathlib
 import re
 import tomllib
 
+import pytest
+
 from stigmergy.kernel import llm
 from stigmergy.librarian import config as librarian_config
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FLY_TOML = ROOT / "fly.toml"
+ENV_EXAMPLE = ROOT / ".env.example"
 DOCKERFILE = ROOT / "Dockerfile"
 COMPOSE = ROOT / "docker-compose.yml"
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
@@ -62,6 +65,16 @@ EXECUTABLE_MODULES = {
 def _fly_config() -> dict:
     with FLY_TOML.open("rb") as handle:
         return tomllib.load(handle)
+
+
+def _env_example_value(name: str) -> str:
+    entries = [
+        line.partition("=")
+        for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+        if line.startswith(f"{name}=")
+    ]
+    assert len(entries) == 1
+    return entries[0][2]
 
 
 def _dockerfile_cmd() -> list[str]:
@@ -143,9 +156,24 @@ def test_static_environment_contains_no_credentials():
     assert not forbidden.intersection(_fly_config().get("env", {}))
 
 
-def test_deployed_librarian_uses_the_supported_default_model():
-    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MODEL"] == librarian_config.DEFAULT_MODEL
-    assert librarian_config.DEFAULT_MODEL == llm.LIBRARIAN_MODEL
+@pytest.mark.parametrize(
+    ("surface", "configured"),
+    (
+        ("kernel", llm.LIBRARIAN_MODEL),
+        ("librarian default", librarian_config.DEFAULT_MODEL),
+        ("Fly deployment", _fly_config()["env"]["STIGMERGY_LIBRARIAN_MODEL"]),
+        ("environment example", _env_example_value("STIGMERGY_LIBRARIAN_MODEL")),
+    ),
+)
+def test_deployed_librarian_uses_the_supported_default_model(surface, configured):
+    expected = "openrouter:openai/gpt-5.4"
+    assert configured == expected, surface
+
+
+def test_specification_names_the_exact_librarian_model():
+    specification = (ROOT / "specs" / "karpathy-team-wiki.md").read_text(encoding="utf-8")
+
+    assert f"`{llm.LIBRARIAN_MODEL}`" in specification
 
 
 def test_deployed_answer_uses_the_approved_glm_model():
@@ -173,7 +201,8 @@ def test_static_model_configuration_names_no_disallowed_provider():
     assert "anthropic" not in text
     assert "claude" not in text
     assert "gemini" not in text
-    assert "gpt-" not in text
+    assert "openai:" not in text
+    assert "gpt-" not in text.replace(llm.LIBRARIAN_MODEL.casefold(), "")
 
 
 def test_runtime_installs_only_the_openrouter_model_extra():

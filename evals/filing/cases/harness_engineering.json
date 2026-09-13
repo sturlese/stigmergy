@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "harness-engineering",
+  "source_title": "Harness Engineering: explained from zero",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000001.md",
+  "mutations": {
+    "count": 1,
+    "allowed": [
+      {
+        "action": "create",
+        "role": "concept",
+        "title": "Harness Engineering"
+      }
+    ]
+  },
+  "identities": {
+    "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
+    "allowed": ["Claude Code", "Codex"],
+    "forbidden": ["ReAct"]
+  },
+  "external_ids": {
+    "required": [],
+    "allowed": []
+  },
+  "links": {
+    "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
+    "allowed": ["Claude Code", "Codex"],
+    "forbidden": ["ReAct"]
+  },
+  "link_coverage": {
+    "allow_unlinked": []
+  }
+}

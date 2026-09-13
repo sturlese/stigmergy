@@ -269,7 +269,7 @@ provider failover.
 
 | Purpose | Model |
 |---|---|
-| filing and semantic repair | `deepseek/deepseek-v4-flash` |
+| filing and semantic repair | `openai/gpt-5.4` |
 | cited answers | `z-ai/glm-5.2` |
 | embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |

@@ -8,7 +8,7 @@ import os
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
-LIBRARIAN_MODEL = "openrouter:deepseek/deepseek-v4-flash"
+LIBRARIAN_MODEL = "openrouter:openai/gpt-5.4"
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
 APPROVED_MODELS = frozenset(
     {ANSWER_MODEL, LIBRARIAN_MODEL, OCR_MODEL}
@@ -22,8 +22,8 @@ OPENROUTER_PROVIDER_POLICY = {
 }
 
 # The librarian's plans arrive as tool-call arguments. Azure is the verified OpenRouter host for
-# DeepSeek V4 Flash structured output; other hosts have corrupted Markdown newlines or nested
-# arrays. A failed Azure request must retry rather than silently route through an unverified host.
+# librarian structured output. A failed Azure request must retry rather than silently route through
+# an unverified host.
 LIBRARIAN_PROVIDER_ROUTING = {
     "allow_fallbacks": False,
     "only": ["azure"],
@@ -71,6 +71,11 @@ def build_model(model_name: str = ANSWER_MODEL):
     model_settings = OpenRouterModelSettings(
         openrouter_provider=provider_policy(model_name)
     )
+    if model_name == LIBRARIAN_MODEL:
+        model_settings["openrouter_reasoning"] = {
+            "effort": "high",
+            "exclude": True,
+        }
     model = OpenRouterModel(
         model_name.removeprefix("openrouter:"),
         provider=OpenRouterProvider(api_key=key),
