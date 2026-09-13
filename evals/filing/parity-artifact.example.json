@@ -30,10 +30,10 @@
   "runs": [
     {
       "implementation": "stigmergy",
-      "run_id": "matrix-medium-repeat-1",
+      "run_id": "matrix-high-repeat-1",
       "runtime": {
         "model": "openai/gpt-5.4",
-        "reasoning_level": "medium",
+        "reasoning_level": "high",
         "provider": "azure"
       },
       "execution": {
@@ -67,7 +67,7 @@
           },
           "runtime": {
             "model": "openai/gpt-5.4",
-            "reasoning_level": "medium",
+            "reasoning_level": "high",
             "provider": "azure"
           },
           "execution_mode": "production-equivalent",
@@ -123,10 +123,10 @@
   ],
   "reasoning_matrix": [
     {
-      "reasoning_level": "medium",
+      "reasoning_level": "high",
       "runtime": {
         "model": "openai/gpt-5.4",
-        "reasoning_level": "medium",
+        "reasoning_level": "high",
         "provider": "azure"
       },
       "runs": [

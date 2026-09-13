@@ -203,8 +203,21 @@ def _matrix_item(level: str, *, passed: bool, repeats: int = 1) -> dict:
     }
 
 
+def _unstable_matrix_item(level: str) -> dict:
+    runs = [
+        _run("stigmergy", f"matrix-{level}-1", level, 1, passed=True),
+        _run("stigmergy", f"matrix-{level}-2", level, 2, passed=False),
+    ]
+    return {
+        "reasoning_level": level,
+        "runtime": {"model": "openai/gpt-5.4", "reasoning_level": level, "provider": "azure"},
+        "runs": runs,
+        "passed": False,
+    }
+
+
 def _artifact() -> dict:
-    selected = [_run("stigmergy", f"matrix-medium-{repeat}", "medium", repeat, passed=True) for repeat in range(1, 4)]
+    selected = [_run("stigmergy", f"matrix-high-{repeat}", "high", repeat, passed=True) for repeat in range(1, 4)]
     return {
         "schema_version": 3,
         "corpus_sha256": CORPUS,
@@ -220,10 +233,11 @@ def _artifact() -> dict:
         ],
         "reasoning_matrix": [
             _matrix_item("minimal", passed=False),
-            _matrix_item("low", passed=False),
+            _unstable_matrix_item("low"),
+            _unstable_matrix_item("medium"),
             {
-                "reasoning_level": "medium",
-                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "medium", "provider": "azure"},
+                "reasoning_level": "high",
+                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "high", "provider": "azure"},
                 "runs": copy.deepcopy(selected),
                 "passed": True,
             },
@@ -239,7 +253,7 @@ def _artifact() -> dict:
                 "source_cases": EXPECTED.source_cases,
                 "runs": {
                     "hippocampus": ["hippocampus-reference-1"],
-                    "stigmergy": ["matrix-medium-1", "matrix-medium-2", "matrix-medium-3"],
+                    "stigmergy": ["matrix-high-1", "matrix-high-2", "matrix-high-3"],
                 },
             },
         },

@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--reasoning-level",
         choices=REASONING_LEVELS,
-        help="evaluation-only OpenRouter reasoning override; default preserves production medium",
+        help="evaluation-only OpenRouter reasoning override; default preserves production high",
     )
     parser.add_argument(
         "--include-payload",
