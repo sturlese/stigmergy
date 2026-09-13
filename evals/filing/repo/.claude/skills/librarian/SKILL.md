@@ -49,26 +49,39 @@ there is a known replacement, and use a contradiction when credible claims disag
 
 ## Editorial graph compilation
 
-Entity proposals and page links are separate editorial decisions. Before returning, inventory every
-named person, organization, product, and project in the durable page prose, then apply this decision
-test:
+Entity proposals and page links are separate editorial decisions. Before drafting any mutation,
+inventory every named person, organization, product, and project in the supplied source, then decide
+which identities carry durable graph meaning. Make that decision from the source evidence, not from
+which examples the draft happened to retain: drafting and entity extraction are independent outputs
+from the same evidence. Then apply this decision test:
 
-- If the prose preserves a supported statement that an identity authored, built, measured,
-  documented, decided, owns, or otherwise performed or received a concrete action or claim, that
-  identity MUST be proposed or reused and explicitly linked to every relevant page. It is not a
-  passing mention, even when it is not the page's subject, and is likely to be referenced again.
+- If the source supports that an identity authored, built, measured, documented, decided, owns, or
+  otherwise performed or received a concrete action, claim, practice, implementation, or result that
+  materially supports the durable conclusion, that identity MUST be proposed or reused and explicitly
+  linked to every relevant page. It is not a passing mention, even when it is not the page's subject,
+  and is likely to be referenced again. Preserve one concise source-supported statement of that
+  relationship in the page body so the link remains intelligible; never erase material attribution
+  merely to simplify the draft.
+- When a source compares multiple named identities through their concrete practices, implementations,
+  or measured results, evaluate each one independently and retain every identity that materially
+  supports the conclusion. A cohesive single-concept page is not a reason to collapse those identities
+  into an anonymous phrase such as "several teams" or to omit their proposals.
 - A source's named human author or originator with a stable name or handle is never a passing
   mention. When that authored source yields durable knowledge, the librarian MUST propose or reuse
   that author
   and deliberately link every materially derived mutation to them. A content author is not the
   submitter or provenance actor; do nothing when the author identity is absent or anonymous.
-- Passing mentions remain plain text: they are names with no retained claim, action, or material
-  relationship. Generic technologies, patterns, and incidental lists remain plain text.
+- Passing mentions remain plain text: they are names for which the source supplies no concrete action,
+  claim, practice, implementation, result, or material relationship supporting the durable conclusion.
+  Generic technologies, patterns, provider lists, and incidental examples remain plain text.
 
 Entity proposals represent reusable identities: a person, organization, product, project, or another
 actual identity-bearing actor or object. Never propose a benchmark, metric, method, pattern,
 technology, topic, or concept merely because it has a proper name; retain that material in prose or
-create a concept only when it is independently durable.
+create a concept only when it is independently durable. A named AI model or model family is a
+technology name, not an identity node, merely because the source compares its performance, places it
+inside a harness, or attributes technical behavior to it. A product or project qualifies only through
+its own durable material relationship, not merely because it is listed as an environment or tool.
 
 Link a page only to identities with a durable, material relationship to that page: its subject,
 author, owner, decision-maker, counterparty, or a substantial example that makes future retrieval
@@ -84,22 +97,27 @@ the complete replacement set, including `entities: []`, whenever the links shoul
 
 Examples:
 
-- A durable concept about evaluation, attributed to an author with handle `@mina`, and supported by
-  benchmark actions from Atlas Labs and Beacon Systems proposes or reuses those three identities and
-  explicitly links the concept to them. The author and organizations are useful future retrieval
-  paths even though the concept is not about any one of them.
+- A durable concept about evaluation, attributed to an author with handle `@mina`, says Atlas Labs
+  built an internal evaluator, Beacon Systems measured a ranking improvement, and Northstar documented
+  a configuration-dependent failure. Propose or reuse all four identities, preserve their compact
+  source-supported relationships in the concept, and explicitly link the concept to them. The author
+  and organizations are useful future retrieval paths even though the concept is not about any one of
+  them and remains one cohesive page.
 - A one-off sentence that lists generic techniques such as embeddings or retrieval leaves those
   techniques as plain text unless the source gives one durable, reusable knowledge.
 - A named benchmark such as `Benchmark Alpha 2.0` is not an entity; retain it in prose or a durable
   concept when appropriate.
+- Named models such as `Model Alpha` and `Model Beta` remain prose when a source compares how they
+  perform inside different harnesses.
 - An update that changes facts but not links omits `entities`; an update that removes its only link
   provides `entities: []`.
 
-Before returning, check that every identity meeting the decision test is proposed or reused and
-linked to every relevant mutation, every other name is a passing mention, and every claim is
-supported by supplied evidence. Apply a redundancy test: if a secondary page can be removed without
-losing a distinct conclusion because its content already exists in the primary page, omit it. State
-summary counts and claims that exactly match the returned plan.
+Before returning, compare the plan against the source-first identity inventory, not only against the
+draft: check that every identity meeting the decision test is proposed or reused, remains intelligible
+in the relevant mutation body, and is linked to every relevant mutation. Every other name is a passing
+mention, and every claim is supported by supplied evidence. Apply a redundancy test: if a secondary
+page can be removed without losing a distinct conclusion because its content already exists in the
+primary page, omit it. State summary counts and claims that exactly match the returned plan.
 
 ## Sources and identity governance
 
