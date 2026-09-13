@@ -25,6 +25,7 @@
         "bodies": "<passed|failed>",
         "connections": "<passed|failed>",
         "entity_relationships": "<passed|failed>",
+        "entity_wikilinks": "<passed|failed>",
         "anti_fragmentation": "<passed|failed>",
         "writer": "<passed|failed>"
       },
@@ -51,6 +52,7 @@
         "bodies": "<passed|failed>",
         "connections": "<passed|failed>",
         "entity_relationships": "<passed|failed>",
+        "entity_wikilinks": "<passed|failed>",
         "anti_fragmentation": "<passed|failed>",
         "writer": "<passed|failed>"
       },

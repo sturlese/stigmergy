@@ -14,6 +14,21 @@ SEEDED_CASE = ROOT / "evals" / "filing" / "cases" / "harness_engineering_seeded.
 FIXTURE = ROOT / "evals" / "filing" / "fixtures" / "harness_engineering_synthetic.md"
 DECISION_TRACE_CASE = ROOT / "evals" / "filing" / "cases" / "decision_trace_quality.json"
 DECISION_TRACE_FIXTURE = ROOT / "evals" / "filing" / "fixtures" / "decision_trace_quality.md"
+SOURCE = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
+HARNESS_BODY = (
+    "# Harness Engineering\n\n"
+    "A model alone is not an agentic system: the model supplies reasoning while the "
+    "[[Agent Harness]] turns its text into work. The six capabilities are tools let the model "
+    "request actions; a loop repeats decide, act, observe; memory/state preserves work; context "
+    "selection chooses what the model sees; a working environment provides an isolated workspace; "
+    "and a clear objective and verification establish external acceptance criteria.\n\n"
+    "The three trust capabilities are permissions and limits, observability through traces of "
+    "context and outcomes, and evals using stable evaluation tasks. Skills, MCP, subagents, and "
+    "long-term memory extend the same design. Santi (@santtiagom_) authored this explanation. "
+    "OpenAI built one million lines and 1,500 pull requests; LangChain rose from rank 30 to the "
+    "top 5 on Terminal Bench; Anthropic showed a polished but broken application versus a working "
+    f"app under different harness configurations. (Source: `{SOURCE}`)"
+)
 
 
 def _plan(*, entities=(), links=()):
@@ -26,15 +41,8 @@ def _plan(*, entities=(), links=()):
                 role="concept",
                 title="Harness Engineering",
                 body=(
-                    "# Harness Engineering\n\n"
-                    "Harness engineering explains why a model alone is not an agentic system: "
-                    "a task loop supplies tools, feedback, and durable memory. [[Agent Harness]] "
-                    "is the operating system this discipline improves.\n\n"
-                    "Santi authored the explanation. OpenAI built a product through an agent harness, "
-                    "LangChain measured a ranking improvement, and Anthropic documented different "
-                    "outcomes from different harness configurations. Claude Code and Codex are optional "
-                    "coding-agent environments in the source. (Source: "
-                    "`sources/2026/09/00000000-0000-4000-8000-000000000001.md`)"
+                    f"{HARNESS_BODY}\n\nClaude Code and Codex are coding-agent environments named "
+                    "by the source."
                 ),
                 entities=tuple(links),
                 reason="The source explains the concept",
@@ -187,10 +195,7 @@ def test_seeded_harness_case_requires_two_reciprocally_connected_reusable_pages(
         mutations=(
             PageMutation(
                 action="create", role="concept", title="Harness Engineering",
-                body=("# Harness Engineering\n\nA model alone is not an agentic system; harness "
-                      "engineering improves the [[Agent Harness]] around it. Santi, OpenAI, Anthropic, "
-                      "and LangChain provide evidence that different harness configurations change "
-                      f"outcomes. (Source: `{source}`)"),
+                body=HARNESS_BODY,
                 entities=("Santi", "OpenAI", "Anthropic", "LangChain"), reason="New reusable concept.",
             ),
             PageMutation(
@@ -250,6 +255,66 @@ def test_harness_score_rejects_heading_only_body_even_with_expected_entities():
     result = planner_eval.score(empty, case)
 
     assert result["bodies"]["placeholders"] == ["Harness Engineering"]
+    assert result["passed"] is False
+
+
+def test_harness_score_requires_the_complete_framework_not_a_generic_summary():
+    case = planner_eval.load_case(CASE)
+    plan = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    incomplete = plan.model_copy(update={"mutations": (plan.mutations[0].model_copy(
+        update={"body": "# Harness Engineering\n\nA model alone is not an agentic system. "
+               f"(Source: `{SOURCE}`)"}
+    ),)})
+
+    result = planner_eval.score(incomplete, case)
+
+    assert "capability: tools" in result["bodies"]["missing_required_any"]
+    assert "trust: evals" in result["bodies"]["missing_required_any"]
+    assert "author attribution" in result["bodies"]["missing_required_any"]
+    assert result["passed"] is False
+
+
+def test_harness_score_rejects_entity_name_wikilinks_without_normal_pages():
+    case = planner_eval.load_case(CASE)
+    plan = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    linked_entity = plan.model_copy(update={"mutations": (plan.mutations[0].model_copy(
+        update={"body": plan.mutations[0].body.replace("OpenAI built", "[[OpenAI]] built")}
+    ),)})
+
+    result = planner_eval.score(linked_entity, case)
+
+    assert result["entity_wikilinks"]["violations"] == [
+        {"mutation": "Harness Engineering", "target": "OpenAI"}
+    ]
+    assert result["passed"] is False
+
+
+def test_harness_score_rejects_a_post_identifier_as_a_page():
+    case = planner_eval.load_case(CASE)
+    plan = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    resource_note = PageMutation(
+        action="create",
+        role="note",
+        title="2098782814837543075",
+        body=f"# 2098782814837543075\n\nA source identifier. (Source: `{SOURCE}`)",
+        entities=(),
+        reason="Incorrectly treated a post identifier as knowledge.",
+    )
+
+    result = planner_eval.score(plan.model_copy(update={"mutations": (*plan.mutations, resource_note)}), case)
+
+    assert result["mutations"]["forbidden_present"] == [
+        {"action": "create", "role": "note", "title": "2098782814837543075"}
+    ]
     assert result["passed"] is False
 
 

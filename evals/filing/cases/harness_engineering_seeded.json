@@ -20,24 +20,46 @@
       {"action": "update", "title": "Agent Harness"}
     ],
     "allowed": [],
-    "forbidden": []
+    "forbidden": [
+      {"action": "create", "role": "note", "title": "2098782814837543075"}
+    ]
   },
   "identities": {
     "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
     "allowed": [],
-    "forbidden": ["ReAct"],
+    "forbidden": ["ReAct", "2098782814837543075"],
     "closed": true
   },
   "external_ids": {"required": [], "allowed": [], "closed": true},
   "links": {
     "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
     "allowed": [],
-    "forbidden": ["ReAct"],
+    "forbidden": ["ReAct", "2098782814837543075"],
     "closed": true
   },
   "link_coverage": {"allow_unlinked": []},
+  "normal_page_targets": ["Agent Harness"],
   "bodies": {
-    "required": ["model alone is not an agentic system", "different harness configurations"],
+    "required_any": [
+      {"label": "model versus harness", "phrases": ["model alone is not an agentic system", "model only takes text as input", "model supplies reasoning"]},
+      {"label": "capability: tools", "phrases": ["tools let the model", "tools: named actions", "tools, for the model"]},
+      {"label": "capability: loop", "phrases": ["loop: repeated", "a loop", "the loop"]},
+      {"label": "capability: memory/state", "phrases": ["memory/state", "memory and state", "memory stores"]},
+      {"label": "capability: context selection", "phrases": ["context selection", "selects what the model sees", "chooses what the model sees"]},
+      {"label": "capability: working environment", "phrases": ["working environment", "isolated workspace", "sandbox"]},
+      {"label": "capability: objective and verification", "phrases": ["clear objective and verification", "acceptance criteria and verify", "objective and external verification"]},
+      {"label": "trust: permissions and limits", "phrases": ["permissions and limits", "permissions, limits", "permission system"]},
+      {"label": "trust: observability", "phrases": ["observability", "traces of context"]},
+      {"label": "trust: evals", "phrases": ["evals", "evaluation tasks"]},
+      {"label": "extension: skills", "phrases": ["skills"]},
+      {"label": "extension: MCP", "phrases": ["mcp"]},
+      {"label": "extension: subagents", "phrases": ["subagents", "sub-agents"]},
+      {"label": "extension: long-term memory", "phrases": ["long-term memory", "long term memory"]},
+      {"label": "OpenAI example", "phrases": ["one million lines", "1,500 pull requests"]},
+      {"label": "LangChain example", "phrases": ["rank 30 to the top 5", "thirtieth place to the top five", "top 5 on terminal bench"]},
+      {"label": "Anthropic example", "phrases": ["polished but non-working", "polished but broken", "working app"]},
+      {"label": "author attribution", "phrases": ["santi (@santtiagom_)", "santi, publishing as @santtiagom_", "santi (@santtiagom_) authored"]}
+    ],
     "forbidden": [],
     "require_local_source": true
   },

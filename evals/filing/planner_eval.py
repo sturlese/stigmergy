@@ -51,6 +51,7 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
     body_score = _bodies(case, mutations)
     connection_score = _connections(case, mutations)
     entity_relationship_score = _entity_relationships(mutations, resolutions, candidates)
+    entity_wikilink_score = _entity_wikilinks(case, mutations, candidates)
     anti_fragmentation_score = _anti_fragmentation(case, mutations)
     coverage_score = _link_coverage(
         _proposal_names(plan),
@@ -77,6 +78,7 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
             body_score,
             connection_score,
             entity_relationship_score,
+            entity_wikilink_score,
             anti_fragmentation_score,
             coverage_score,
             resolution_score,
@@ -94,6 +96,7 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
         "bodies": body_score,
         "connections": connection_score,
         "entity_relationships": entity_relationship_score,
+        "entity_wikilinks": entity_wikilink_score,
         "anti_fragmentation": anti_fragmentation_score,
     }
 
@@ -266,8 +269,14 @@ def _bodies(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
     relevant = tuple(mutation for mutation in mutations if mutation.action != "delete")
     combined = "\n".join(mutation.body or "" for mutation in relevant).casefold()
     required = [str(value) for value in expectation.get("required", ())]
+    required_any = tuple(expectation.get("required_any", ()))
     forbidden = [str(value) for value in expectation.get("forbidden", ())]
     missing = [value for value in required if value.casefold() not in combined]
+    missing_any = [
+        str(group.get("label") or "required semantic coverage")
+        for group in required_any
+        if not any(str(phrase).casefold() in combined for phrase in group.get("phrases", ()))
+    ]
     present_forbidden = [value for value in forbidden if value.casefold() in combined]
     heading_mismatch = [
         mutation.title or mutation.path or ""
@@ -287,11 +296,12 @@ def _bodies(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
     ]
     return {
         "missing_required": missing,
+        "missing_required_any": missing_any,
         "forbidden_present": present_forbidden,
         "heading_mismatch": heading_mismatch,
         "placeholders": placeholders,
         "missing_local_source_attribution": missing_citations,
-        "passed": not missing and not present_forbidden and not heading_mismatch
+        "passed": not missing and not missing_any and not present_forbidden and not heading_mismatch
         and not placeholders and not missing_citations,
     }
 
@@ -352,6 +362,25 @@ def _entity_relationships(mutations, resolutions, candidates) -> dict:
             if not any(_relationship_mention(body, name) for name in names):
                 missing.append({"mutation": mutation.title or mutation.path, "entity": canonical})
     return {"missing": missing, "passed": not missing}
+
+
+def _entity_wikilinks(case, mutations, candidates) -> dict:
+    """Reject links that pretend an internal entity anchor is a normal wiki page."""
+    normal_targets = {
+        resolution_key(value)
+        for value in (
+            *case.get("normal_page_targets", ()),
+            *(mutation.title for mutation in mutations if mutation.role in {"note", "concept"}),
+        )
+        if value
+    }
+    violations = []
+    for mutation in mutations:
+        for target in re.findall(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]", mutation.body or ""):
+            key = resolution_key(target)
+            if key in candidates and key not in normal_targets:
+                violations.append({"mutation": mutation.title or mutation.path, "target": target})
+    return {"violations": violations, "passed": not violations}
 
 
 def _relationship_mention(body: str, name: str) -> bool:

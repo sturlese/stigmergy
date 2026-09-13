@@ -48,11 +48,25 @@ Every knowledge body must be readable cold: its H1 exactly matches the title, it
 the conclusion without relying on the source, and it contains substantive declarative prose rather
 than a heading, label, or placeholder. A concept covers definition, mechanism, significance,
 examples, and connections whenever the evidence supports those sections; adapt headings to the
-material rather than emitting empty template headings. A note preserves its contextual conclusion,
+material rather than emitting empty template headings. It must do the editorial work of a strong
+personal knowledge page: retain the complete source-supported explanation a future reader needs,
+not a label plus a few generic bullets. When evidence gives a named or enumerated framework,
+preserve every named component, its material mechanism, and the distinction between groups. Do not
+collapse a complete framework into a representative subset, rename its components vaguely, or lose
+an extension merely because it is not the main heading. A note preserves its contextual conclusion,
 decision, or event in declarative prose. Cite every newly introduced factual conclusion locally as
 `(Source: \`sources/YYYY/MM/<capture-id>.md\`)`; page metadata remains authoritative but is not the
-reader's only provenance signal. Every material `[[wikilink]]` must appear in a sentence or bullet
-that explains the relationship, never in an unexplained link list.
+reader's only provenance signal.
+
+Wikilinks are navigation between normal `note` and `concept` pages, never a substitute for an
+entity anchor. An entity relationship belongs in the mutation's explicit `entities` field and in
+intelligible, source-supported prose. Do not write `[[OpenAI]]`, `[[Santi]]`, or another entity name
+merely because that identity is anchored: raw entity records are not normal pages. Use an entity-name
+wikilink only when the visible context explicitly provides a normal note or concept page with that
+exact target, and explain the normal-page relationship in prose. Every material `[[wikilink]]` must
+appear in a sentence or bullet that explains the relationship, never in an unexplained link list.
+When two or more normal pages are created or materially connected in the same plan, write the
+relationship on every affected page so the graph remains reciprocal.
 
 The editorial maturities are `seed`, `developing`, `mature`, and `evergreen`. Do not mark a fact or
 entity deprecated. State dated inactivity as knowledge, use an explicit supersession relation when
@@ -69,6 +83,17 @@ when their authorship is itself useful provenance for the knowledge, not merely 
 has an author. Passing mentions remain prose. Generic technologies, models, provider lists,
 benchmarks, methods, patterns, and incidental examples remain prose unless the source establishes
 reusable entity-specific knowledge about them.
+
+Perform an explicit author check before you draft and before you return. When a named author or
+handle advances a material explanation, analysis, decision, or report, authorship is useful
+provenance: propose or reuse that person with the exact displayed name and handle alias, anchor the
+primary page through `entities`, and state the authored relationship in cited prose. Do not lose an
+author because the page is about a concept rather than the person. An unasserted submitter or a
+byline with no material relation remains outside the graph.
+
+Post, status, message, document, artifact, and resource identifiers are provenance, not knowledge
+nodes. Keep them only in the immutable source, its URL, or local citation. Never create a note,
+concept, entity proposal, entity link, external identifier, title, or wikilink from such an ID.
 
 Entity proposals represent reusable identities: a person, organization, product, project, or another
 actual identity-bearing actor or object. Never propose a benchmark, metric, method, pattern,
@@ -107,11 +132,14 @@ Examples:
   provides `entities: []`.
 
 Before returning, perform three passes. First inventory durable conclusions, candidate reusable ideas,
-and identities from the complete source. Then draft the smallest sufficient graph. Finally audit that
-every required conclusion is in a body, every selected identity has a visible relationship and local
-source citation, every page link explains why it exists, existing pages were reused where relevant,
-and no proposed secondary page is a redundant stub. State summary counts and claims that exactly
-match the returned plan.
+identities, named frameworks, examples, extensions, resource identifiers, and the named author from
+the complete source. Then draft the smallest sufficient graph. Finally audit that every required
+conclusion is in a body; every named framework retains every material component and group; every
+selected identity has a visible relationship and local source citation; the author check is complete;
+resource IDs remain provenance only; entity anchors have not become entity-name wikilinks; every
+normal-page link explains why it exists and is reciprocal when it connects pages in this plan;
+existing pages were reused where relevant; and no proposed secondary page is a redundant stub. State
+summary counts and claims that exactly match the returned plan.
 
 ## Sources and identity governance
 

@@ -280,6 +280,22 @@ def test_librarian_links_named_content_authors_without_inferring_submitter_autho
     assert not (missing := {rule for rule in required if rule not in text}), missing
 
 
+def test_librarian_requires_full_frameworks_and_keeps_entity_anchors_out_of_wikilinks():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    required = {
+        "preserve every named component, its material mechanism, and the distinction between groups",
+        "do not collapse a complete framework into a representative subset",
+        "perform an explicit author check before you draft and before you return",
+        "post, status, message, document, artifact, and resource identifiers are provenance",
+        "wikilinks are navigation between normal `note` and `concept` pages",
+        "an entity relationship belongs in the mutation's explicit `entities` field",
+        "entity anchors have not become entity-name wikilinks",
+        "relationship on every affected page so the graph remains reciprocal",
+    }
+
+    assert not (missing := {rule for rule in required if rule not in text}), missing
+
+
 def test_librarian_keeps_named_non_identity_material_as_prose_or_concepts():
     text = " ".join(FROZEN.read_text().casefold().split())
     required = {
