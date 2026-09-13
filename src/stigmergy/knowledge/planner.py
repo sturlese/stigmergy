@@ -76,16 +76,13 @@ class PydanticPlanner:
         ensure_usage_extraction_repaired()
         usage = RunUsage()
         async with asyncio.timeout(self.settings.timeout_s):
-            return await self._run_output_modes(
-                lambda mode: self._run_filing(
-                    mode=mode,
-                    worktree=worktree,
-                    envelope=envelope,
-                    source_path=source_path,
-                    source_text=source_text,
-                    context=context,
-                    usage=usage,
-                )
+            return await self._run_filing(
+                worktree=worktree,
+                envelope=envelope,
+                source_path=source_path,
+                source_text=source_text,
+                context=context,
+                usage=usage,
             )
 
     def repair(self, *, worktree: str, violations: tuple) -> PlanRun:
@@ -127,20 +124,16 @@ class PydanticPlanner:
         )
         _guard_prompt(prompt)
         async with asyncio.timeout(self.settings.timeout_s):
-            return await self._run_output_modes(
-                lambda mode: self._run_structured(
-                    mode=mode,
-                    output_type=RepairPlan,
-                    instructions=instructions,
-                    prompt=prompt,
-                    usage=usage,
-                )
+            return await self._run_structured(
+                output_type=RepairPlan,
+                instructions=instructions,
+                prompt=prompt,
+                usage=usage,
             )
 
     async def _run_filing(
         self,
         *,
-        mode: str,
         worktree: str,
         envelope: CaptureEnvelope,
         source_path: str,
@@ -151,7 +144,6 @@ class PydanticPlanner:
         with open(f"{worktree}/.claude/skills/librarian/SKILL.md", encoding="utf-8") as handle:
             instructions = handle.read()
         return await self._run_structured(
-            mode=mode,
             output_type=FilingPlan,
             instructions=instructions,
             prompt=_prompt(
@@ -163,28 +155,17 @@ class PydanticPlanner:
             usage=usage,
         )
 
-    async def _run_output_modes(self, run) -> PlanRun:
-        from pydantic_ai.exceptions import UnexpectedModelBehavior
-
-        try:
-            return await run("tool")
-        except UnexpectedModelBehavior:
-            return await run("json")
-
     async def _run_structured(
         self,
         *,
-        mode: str,
         output_type: type[FilingPlan] | type[RepairPlan],
         instructions: str,
         prompt: str,
         usage=None,
     ) -> PlanRun:
-        from pydantic_ai import Agent, PromptedOutput
+        from pydantic_ai import Agent, NativeOutput
         from pydantic_ai.usage import RunUsage, UsageLimits
 
-        if mode not in {"tool", "json"}:
-            raise ValueError(f"unsupported planner output mode: {mode}")
         if usage is None:
             usage = RunUsage()
         if self.model_factory:
@@ -195,8 +176,8 @@ class PydanticPlanner:
         agent = Agent(
             model,
             instructions=instructions,
-            output_type=output_type if mode == "tool" else PromptedOutput(output_type),
-            retries=2,
+            output_type=NativeOutput(output_type, strict=True),
+            retries=1,
             model_settings=model_settings,
         )
         result = await agent.run(

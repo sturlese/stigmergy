@@ -8,7 +8,7 @@ import os
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
-LIBRARIAN_MODEL = "openrouter:openai/gpt-5.4"
+LIBRARIAN_MODEL = "openrouter:openai/gpt-oss-120b"
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
 APPROVED_MODELS = frozenset(
     {ANSWER_MODEL, LIBRARIAN_MODEL, OCR_MODEL}
@@ -21,12 +21,11 @@ OPENROUTER_PROVIDER_POLICY = {
     "zdr": True,
 }
 
-# The librarian's plans arrive as tool-call arguments. Azure is the verified OpenRouter host for
-# librarian structured output. A failed Azure request must retry rather than silently route through
-# an unverified host.
+# The librarian's native structured output is verified on Cerebras. A failed request must retry
+# rather than silently route through an unverified host.
 LIBRARIAN_PROVIDER_ROUTING = {
     "allow_fallbacks": False,
-    "only": ["azure"],
+    "only": ["cerebras"],
 }
 
 

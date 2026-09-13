@@ -166,8 +166,14 @@ def test_static_environment_contains_no_credentials():
     ),
 )
 def test_deployed_librarian_uses_the_supported_default_model(surface, configured):
-    expected = "openrouter:openai/gpt-5.4"
+    expected = "openrouter:openai/gpt-oss-120b"
     assert configured == expected, surface
+
+
+def test_deployed_librarian_allows_only_one_schema_repair():
+    assert librarian_config.DEFAULT_MAX_TURNS == 2
+    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MAX_TURNS"] == "2"
+    assert _env_example_value("STIGMERGY_LIBRARIAN_MAX_TURNS") == "2"
 
 
 def test_specification_names_the_exact_librarian_model():
