@@ -157,6 +157,17 @@ def test_worker_limits_fail_closed(field, value):
         settings.check_domains()
 
 
+@pytest.mark.parametrize("max_turns", (1, 3))
+def test_librarian_request_budget_allows_only_one_schema_repair(max_turns):
+    with pytest.raises(LibrarianConfigError, match="request budget"):
+        config.Settings(max_turns=max_turns).check_domains()
+
+
+def test_librarian_request_budget_defaults_to_two_requests():
+    assert config.DEFAULT_MAX_TURNS == 2
+    config.Settings(max_turns=2).check_domains()
+
+
 def test_visibility_budget_covers_extraction_model_and_gates():
     operation = config.operation_budget_s(timeout_s=180)
     minimum = config.minimum_visibility_timeout_s(timeout_s=180)

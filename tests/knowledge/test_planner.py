@@ -1,14 +1,13 @@
 import asyncio
 import datetime as dt
 import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
-from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import FunctionModel
-from pydantic_ai.models.test import TestModel
-from pydantic_ai.usage import RunUsage
 
 from stigmergy.capture import schema
 from stigmergy.knowledge import planner
@@ -45,16 +44,24 @@ def _worktree(tmp_path):
     return str(tmp_path)
 
 
-def _settings(*, max_turns=1):
+def _settings(*, max_turns=2):
     return SimpleNamespace(
-        model="openrouter:deepseek/deepseek-v4-flash",
+        model="openrouter:openai/gpt-oss-120b",
         timeout_s=5,
         max_turns=max_turns,
     )
 
 
+def _native_model(summary: str) -> FunctionModel:
+    return FunctionModel(
+        lambda _messages, _info: ModelResponse(
+            parts=[TextPart(json.dumps({"summary": summary}))]
+        )
+    )
+
+
 def test_pydantic_planner_returns_a_typed_filing_plan_without_a_network_call(tmp_path):
-    model = TestModel(custom_output_args={"summary": "Filed the supported decision"})
+    model = _native_model("Filed the supported decision")
     subject = planner.PydanticPlanner(_settings(), model_factory=lambda: model)
 
     result = subject.plan(
@@ -70,20 +77,16 @@ def test_pydantic_planner_returns_a_typed_filing_plan_without_a_network_call(tmp
     assert result.model_requests == 1
 
 
-def test_pydantic_planner_retries_once_with_prompted_json_after_tool_output_exhaustion(
-        tmp_path, monkeypatch):
+def test_pydantic_planner_runs_one_native_output_path(tmp_path, monkeypatch):
     subject = planner.PydanticPlanner(
         _settings(),
         model_factory=lambda: pytest.fail("the mode helper must own model execution"),
     )
     calls = []
 
-    async def run_filing(*, mode, source_text, **_kwargs):
-        calls.append(mode)
+    async def run_filing(*, source_text, **_kwargs):
+        calls.append(source_text)
         assert "PO-EL27-1847" in source_text
-        if mode == "tool":
-            raise UnexpectedModelBehavior("output retries exhausted")
-        assert mode == "json"
         return planner.PlanRun(
             plan=FilingPlan(summary="Filed the scanned purchase order"),
             model_requests=1,
@@ -99,96 +102,59 @@ def test_pydantic_planner_retries_once_with_prompted_json_after_tool_output_exha
         context="",
     )
 
-    assert calls == ["tool", "json"]
+    assert calls == ["## Page 1\n\nPURCHASE ORDER PO-EL27-1847"]
     assert isinstance(result.plan, FilingPlan)
     assert result.plan.summary == "Filed the scanned purchase order"
 
 
-def test_prompted_json_mode_parses_a_real_text_completion():
+def test_native_output_allows_one_schema_repair_within_the_total_request_budget():
+    calls = []
+
+    def respond(_messages, agent_info):
+        calls.append(agent_info.output_tools)
+        text = (
+            "not structured output"
+            if len(calls) == 1
+            else '{"summary":"Filed after the schema repair"}'
+        )
+        return ModelResponse(parts=[TextPart(text)])
+
     subject = planner.PydanticPlanner(
         _settings(),
-        model_factory=lambda: FunctionModel(
-            lambda _messages, _info: ModelResponse(
-                parts=[TextPart('{"summary":"Filed the scanned purchase order"}')]
-            )
-        ),
+        model_factory=lambda: FunctionModel(respond),
     )
 
     result = asyncio.run(subject._run_structured(
-        mode="json",
         output_type=FilingPlan,
         instructions="File supported conclusions only.",
-        prompt="PURCHASE ORDER PO-EL27-1847",
+        prompt="A supported conclusion.",
     ))
 
-    assert result.plan.summary == "Filed the scanned purchase order"
-    assert result.model_requests == 1
+    assert calls == [[], []]
+    assert result.plan.summary == "Filed after the schema repair"
+    assert result.model_requests == 2
 
 
-def test_output_mode_fallback_shares_one_request_budget_and_reports_total_usage():
+def test_native_output_never_exceeds_the_two_request_budget_after_schema_repairs():
     calls = []
-    usage = RunUsage()
 
     def respond(_messages, agent_info):
-        calls.append(len(agent_info.output_tools))
-        text = (
-            "not structured output"
-            if agent_info.output_tools
-            else '{"summary":"Filed after the output-mode fallback"}'
-        )
-        return ModelResponse(parts=[TextPart(text)])
+        calls.append(agent_info.output_tools)
+        return ModelResponse(parts=[TextPart("not structured output")])
 
     subject = planner.PydanticPlanner(
-        _settings(max_turns=4),
+        _settings(max_turns=2),
         model_factory=lambda: FunctionModel(respond),
     )
 
-    result = asyncio.run(subject._run_output_modes(
-        lambda mode: subject._run_structured(
-            mode=mode,
+    with pytest.raises(UnexpectedModelBehavior, match="maximum output retries"):
+        asyncio.run(subject._run_structured(
             output_type=FilingPlan,
             instructions="File supported conclusions only.",
             prompt="A supported conclusion.",
-            usage=usage,
-        )
-    ))
-
-    assert calls == [1, 1, 1, 0]
-    assert result.plan.summary == "Filed after the output-mode fallback"
-    assert result.model_requests == 4
-
-
-def test_output_mode_fallback_cannot_exceed_the_shared_request_budget():
-    calls = []
-
-    def respond(_messages, agent_info):
-        calls.append(len(agent_info.output_tools))
-        text = (
-            "not structured output"
-            if agent_info.output_tools
-            else '{"summary":"This request must never run"}'
-        )
-        return ModelResponse(parts=[TextPart(text)])
-
-    subject = planner.PydanticPlanner(
-        _settings(max_turns=3),
-        model_factory=lambda: FunctionModel(respond),
-    )
-    usage = RunUsage()
-
-    with pytest.raises(UsageLimitExceeded, match="request_limit"):
-        asyncio.run(subject._run_output_modes(
-            lambda mode: subject._run_structured(
-                mode=mode,
-                output_type=FilingPlan,
-                instructions="File supported conclusions only.",
-                prompt="A supported conclusion.",
-                usage=usage,
-            )
         ))
 
-    assert calls == [1, 1, 1]
-    assert usage.requests == 3
+    assert calls == [[], []]
 
 
 def test_repair_context_includes_only_bounded_note_and_concept_files(tmp_path):
@@ -205,7 +171,7 @@ def test_repair_context_includes_only_bounded_note_and_concept_files(tmp_path):
         SimpleNamespace(path="wiki/concepts/Oversized.md", code="large", message="too large"),
         SimpleNamespace(path="sources/2026/08/source.md", code="source", message="immutable"),
     )
-    model = TestModel(custom_output_args={"summary": "No bounded repair was needed"})
+    model = _native_model("No bounded repair was needed")
     subject = planner.PydanticPlanner(_settings(), model_factory=lambda: model)
 
     result = subject.repair(worktree=worktree, violations=violations)

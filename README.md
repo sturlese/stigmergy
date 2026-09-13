@@ -262,14 +262,16 @@ Report vulnerabilities privately: [`SECURITY.md`](./SECURITY.md).
 
 One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, no model fallback or direct
 alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenAI, or Gemini
-credentials are rejected. The librarian's structured plans are pinned to Azure, the verified host
-for intact tool-call arguments, and fail closed rather than falling back to another host. Transient
-routing unavailability retries through the bounded queue; answer and OCR requests retain same-model
+credentials are rejected. The librarian's strict provider-native JSON Schema plans are pinned to
+Cerebras, with no provider fallback; requests require supported parameters, deny data collection,
+and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
+Each writer attempt makes at most two model requests, including one schema repair. Retryable
+failures use the existing bounded queue-attempt policy; answer and OCR requests retain same-model
 provider failover.
 
 | Purpose | Model |
 |---|---|
-| filing and semantic repair | `openai/gpt-5.4` |
+| filing and semantic repair | `openai/gpt-oss-120b` |
 | cited answers | `z-ai/glm-5.2` |
 | embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |

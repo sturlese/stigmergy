@@ -9,7 +9,7 @@ from stigmergy.kernel.llm import LIBRARIAN_MODEL, OCR_MODEL
 from stigmergy.librarian.errors import LibrarianConfigError
 
 DEFAULT_MODEL = LIBRARIAN_MODEL
-DEFAULT_MAX_TURNS = 12
+DEFAULT_MAX_TURNS = 2
 DEFAULT_TIMEOUT_S = 300
 DEFAULT_POLL_INTERVAL_S = 3.0
 GATE_BUDGET_S = 120
@@ -106,7 +106,11 @@ class Settings:
             raise LibrarianConfigError(
                 f"the librarian model must be {DEFAULT_MODEL}"
             )
-        if self.max_turns < 1 or self.timeout_s < 1:
+        if self.max_turns != DEFAULT_MAX_TURNS:
+            raise LibrarianConfigError(
+                f"the librarian request budget must be {DEFAULT_MAX_TURNS}"
+            )
+        if self.timeout_s < 1:
             raise LibrarianConfigError("model limits must be positive")
         if self.poll_interval_s <= 0 or self.max_attempts < 1:
             raise LibrarianConfigError("worker loop limits must be positive")
