@@ -701,10 +701,13 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     include_payload,
 ):
     source_text = FIXTURE.read_text(encoding="utf-8")
-    worktree = tmp_path / "worktree"
-    skill = worktree / ".claude" / "skills" / "librarian" / "SKILL.md"
+    brain_root = tmp_path / "brain-root"
+    skill = brain_root / ".claude" / "skills" / "librarian" / "SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text("Synthetic librarian skill.\n", encoding="utf-8")
+    production_only = brain_root / "wiki" / "concepts" / "Production Only.md"
+    production_only.parent.mkdir(parents=True)
+    production_only.write_text("# Production Only\n\nMust not enter an eval context.\n", encoding="utf-8")
     calls = []
 
     class RecordingPlanner:
@@ -757,6 +760,13 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         },
     )
+    template_checks = []
+
+    def validate_template(template):
+        template_checks.append(Path(template))
+        assert Path(template) == run_planner.DEFAULT_WORKTREE
+
+    monkeypatch.setattr(run_planner, "validate_librarian_skill", validate_template)
 
     exit_code = run_planner.main(
         [
@@ -765,8 +775,8 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
             str(FIXTURE),
             "--case",
             str(CASE),
-            "--worktree",
-            str(worktree),
+            "--brain-root",
+            str(brain_root),
             *turn_arguments,
             *reasoning_arguments,
             *(("--include-payload",) if include_payload else ()),
@@ -776,12 +786,14 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert exit_code == 0
-    assert calls[0]["settings"].repo != str(worktree)
+    assert calls[0]["settings"].repo != str(brain_root)
     assert calls[0]["settings"].max_turns == expected_max_turns
     assert calls[0]["settings"].model == "openrouter:openai/gpt-5.4"
     assert source_text in calls[1]["source_text"]
     assert calls[1]["source_path"] == "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
     assert '"candidates": []' in calls[1]["context"]
+    assert "Production Only" not in calls[1]["context"]
+    assert template_checks == [run_planner.DEFAULT_WORKTREE]
     assert payload["case"] == "harness-engineering"
     assert payload["case_id"] == "harness_engineering"
     assert payload["execution_mode"] == expected_mode
@@ -839,6 +851,39 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
         }
     else:
         assert factory is None
+
+
+def test_cli_rejects_a_template_skill_that_does_not_match_the_packaged_skill(
+    tmp_path, monkeypatch, capsys
+):
+    template = tmp_path / "template"
+    skill = template / ".claude" / "skills" / "librarian" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("drifted template skill\n", encoding="utf-8")
+    monkeypatch.setattr(
+        run_planner,
+        "librarian_skill_provenance",
+        lambda _brain_root: {
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        },
+    )
+
+    with pytest.raises(SystemExit) as error:
+        run_planner.main(
+            [
+                "--live",
+                "--source",
+                str(FIXTURE),
+                "--brain-root",
+                str(tmp_path / "brain-root"),
+                "--worktree",
+                str(template),
+            ]
+        )
+
+    assert error.value.code == 2
+    assert "librarian skill" in capsys.readouterr().err
 
 
 def test_production_equivalent_worktree_records_a_bounded_semantic_repair_attempt():
@@ -980,7 +1025,9 @@ def test_production_equivalent_worktree_scores_the_final_repaired_body():
 
 def test_cli_requires_live_acknowledgement_before_it_can_invoke_a_planner(capsys):
     with pytest.raises(SystemExit) as error:
-        run_planner.main(["--source", str(FIXTURE)])
+        run_planner.main(
+            ["--source", str(FIXTURE), "--brain-root", str(run_planner.DEFAULT_WORKTREE)]
+        )
 
     assert error.value.code == 2
     assert "sends source text to configured OpenRouter" in capsys.readouterr().err
@@ -993,6 +1040,8 @@ def test_cli_rejects_an_unknown_reasoning_level(capsys):
                 "--live",
                 "--source",
                 str(FIXTURE),
+                "--brain-root",
+                str(run_planner.DEFAULT_WORKTREE),
                 "--reasoning-level",
                 "maximum",
             ]
@@ -1009,6 +1058,8 @@ def test_cli_rejects_a_nonproduction_budget_labeled_production_equivalent(capsys
                 "--live",
                 "--source",
                 str(FIXTURE),
+                "--brain-root",
+                str(run_planner.DEFAULT_WORKTREE),
                 "--max-turns",
                 "3",
             ]

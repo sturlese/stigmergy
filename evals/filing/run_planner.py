@@ -59,6 +59,7 @@ from stigmergy.kernel.llm import (  # noqa: E402
 from stigmergy.knowledge.contract import (  # noqa: E402
     KnowledgeContractError,
     librarian_skill_provenance,
+    validate_librarian_skill,
 )
 from stigmergy.knowledge.planner import PydanticPlanner  # noqa: E402
 from stigmergy.librarian.config import Settings  # noqa: E402
@@ -93,9 +94,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--case", default=str(DEFAULT_CASE), help="versioned semantic case")
     parser.add_argument(
+        "--brain-root",
+        required=True,
+        help="verified Git checkout whose librarian prompt executed the evaluation",
+    )
+    parser.add_argument(
         "--worktree",
         default=str(DEFAULT_WORKTREE),
-        help="read-only worktree containing the librarian skill",
+        help="fixed versioned initial-graph template for the temporary evaluation worktree",
     )
     parser.add_argument("--timeout-s", type=int, default=300)
     parser.add_argument("--max-turns", type=int, default=PRODUCTION_MAX_TURNS)
@@ -147,7 +153,8 @@ def main(argv: list[str] | None = None) -> int:
     if hashlib.sha256(source_bytes).digest() != hashlib.sha256(fixture_bytes).digest():
         parser.error("source bytes do not match the versioned case fixture")
     try:
-        brain_prompt = librarian_skill_provenance(args.worktree)
+        validate_librarian_skill(args.worktree)
+        brain_prompt = librarian_skill_provenance(args.brain_root)
     except KnowledgeContractError as error:
         parser.error(str(error))
     if args.include_payload:

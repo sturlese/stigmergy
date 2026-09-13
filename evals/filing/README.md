@@ -35,9 +35,14 @@ Run one immutable case-result record with the production-equivalent path:
 .venv/bin/python evals/filing/run_planner.py --live \
   --source evals/filing/fixtures/harness_engineering_synthetic.md \
   --case evals/filing/cases/harness_engineering.json \
-  --worktree /absolute/path/to/verified/stigmergy-brain \
+  --brain-root /absolute/path/to/verified/stigmergy-brain \
   --run-id <independent-case-run-id>
 ```
+
+`--brain-root` is the verified Git checkout used only to prove the exact librarian prompt. Do not
+pass it as `--worktree`: the latter is the fixed versioned initial graph at `evals/filing/repo` by
+default. The runner validates the template's librarian skill byte-for-byte against the packaged
+skill, but the template itself does not need to be a Git checkout.
 
 By default the runner prints safe telemetry, gate results, prompt/case/fixture provenance, and the
 content hash only. Add `--include-payload` only when recording a local release artifact: it prints the
