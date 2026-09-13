@@ -42,7 +42,7 @@ def _plan(*, entities=(), links=()):
                 title="Harness Engineering",
                 body=(
                     f"{HARNESS_BODY}\n\nClaude Code and Codex are coding-agent environments named "
-                    "by the source."
+                    f"by the source. (Source: `{SOURCE}`)"
                 ),
                 entities=tuple(links),
                 reason="The source explains the concept",
@@ -315,6 +315,50 @@ def test_harness_score_rejects_a_post_identifier_as_a_page():
     assert result["mutations"]["forbidden_present"] == [
         {"action": "create", "role": "note", "title": "2098782814837543075"}
     ]
+    assert result["passed"] is False
+
+
+def test_harness_score_rejects_framework_categories_as_synthetic_child_concepts():
+    case = planner_eval.load_case(CASE)
+    plan = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    category_page = PageMutation(
+        action="create",
+        role="concept",
+        title="Harness Engineering Capability Framework",
+        body=("# Harness Engineering Capability Framework\n\nA category from the parent framework. "
+              f"(Source: `{SOURCE}`)"),
+        entities=(),
+        reason="Incorrectly split a parent-framework category into a child concept.",
+    )
+
+    result = planner_eval.score(plan.model_copy(update={"mutations": (*plan.mutations, category_page)}), case)
+
+    assert any(
+        item["title"] == "harness engineering capability framework"
+        for item in result["mutations"]["forbidden_present"]
+    )
+    assert result["passed"] is False
+
+
+def test_harness_score_requires_each_page_anchor_to_have_its_own_cited_relationship():
+    case = planner_eval.load_case(CASE)
+    identities = ("Santi", "OpenAI", "Anthropic", "LangChain")
+    plan = _plan(entities=identities, links=identities)
+    copied_anchors = PageMutation(
+        action="update",
+        path="wiki/concepts/Agent Harness.md",
+        title="Agent Harness",
+        body=f"# Agent Harness\n\nA related normal page. (Source: `{SOURCE}`)",
+        entities=identities,
+        reason="Incorrectly copied anchors without page-specific evidence.",
+    )
+
+    result = planner_eval.score(plan.model_copy(update={"mutations": (*plan.mutations, copied_anchors)}), case)
+
+    assert result["entity_relationships"]["missing"]
     assert result["passed"] is False
 
 

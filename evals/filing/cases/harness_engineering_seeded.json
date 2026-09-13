@@ -21,7 +21,9 @@
     ],
     "allowed": [],
     "forbidden": [
-      {"action": "create", "role": "note", "title": "2098782814837543075"}
+      {"action": "create", "role": "note", "title": "2098782814837543075"},
+      {"action": "create", "role": "concept", "title": "Harness Engineering Capability Framework"},
+      {"action": "create", "role": "concept", "title": "Harness Engineering Trust Framework"}
     ]
   },
   "identities": {
@@ -41,24 +43,24 @@
   "normal_page_targets": ["Agent Harness"],
   "bodies": {
     "required_any": [
-      {"label": "model versus harness", "phrases": ["model alone is not an agentic system", "model only takes text as input", "model supplies reasoning"]},
-      {"label": "capability: tools", "phrases": ["tools let the model", "tools: named actions", "tools, for the model"]},
-      {"label": "capability: loop", "phrases": ["loop: repeated", "a loop", "the loop"]},
-      {"label": "capability: memory/state", "phrases": ["memory/state", "memory and state", "memory stores"]},
-      {"label": "capability: context selection", "phrases": ["context selection", "selects what the model sees", "chooses what the model sees"]},
-      {"label": "capability: working environment", "phrases": ["working environment", "isolated workspace", "sandbox"]},
-      {"label": "capability: objective and verification", "phrases": ["clear objective and verification", "acceptance criteria and verify", "objective and external verification"]},
-      {"label": "trust: permissions and limits", "phrases": ["permissions and limits", "permissions, limits", "permission system"]},
-      {"label": "trust: observability", "phrases": ["observability", "traces of context"]},
-      {"label": "trust: evals", "phrases": ["evals", "evaluation tasks"]},
+      {"label": "model, harness, and agent", "phrases": ["model alone is not an agentic system"], "co_occurrence": [["model", "harness", "agent"]]},
+      {"label": "capability: tools", "phrases": ["tools", "tool use", "tools let the model", "tools: named actions", "tools, for the model"], "co_occurrence": [["tool", "action"]]},
+      {"label": "capability: loop", "phrases": ["loop", "loop: repeated", "a loop", "the loop"], "co_occurrence": [["decide", "act", "observe"]]},
+      {"label": "capability: memory/state", "phrases": ["memory/state", "memory and state", "memory stores"], "co_occurrence": [["memory", "stateless"], ["memory", "across turns"]]},
+      {"label": "capability: context selection", "phrases": ["context selection", "context management", "context window", "selects what the model sees", "chooses what the model sees"], "co_occurrence": [["context", "each call"], ["context", "progressive disclosure"]]},
+      {"label": "capability: working environment", "phrases": ["working environment", "isolated workspace", "sandbox"], "co_occurrence": [["environment", "execution"]]},
+      {"label": "capability: objective and verification", "phrases": ["clear objective and verification", "goal and verification", "acceptance criteria and verify", "objective and external verification"], "co_occurrence": [["objective", "verification"], ["acceptance criteria", "verify"], ["goal", "verification"]]},
+      {"label": "trust: permissions and limits", "phrases": ["permissions and limits", "permissions, limits", "permission system"], "co_occurrence": [["permissions", "approval"]]},
+      {"label": "trust: observability", "phrases": ["observability", "traces of context"], "co_occurrence": [["traces", "tool"]]},
+      {"label": "trust: evals", "phrases": ["evals", "evaluation tasks", "evaluations"], "co_occurrence": [["evaluation", "regressions"]]},
       {"label": "extension: skills", "phrases": ["skills"]},
       {"label": "extension: MCP", "phrases": ["mcp"]},
       {"label": "extension: subagents", "phrases": ["subagents", "sub-agents"]},
       {"label": "extension: long-term memory", "phrases": ["long-term memory", "long term memory"]},
-      {"label": "OpenAI example", "phrases": ["one million lines", "1,500 pull requests"]},
-      {"label": "LangChain example", "phrases": ["rank 30 to the top 5", "thirtieth place to the top five", "top 5 on terminal bench"]},
-      {"label": "Anthropic example", "phrases": ["polished but non-working", "polished but broken", "working app"]},
-      {"label": "author attribution", "phrases": ["santi (@santtiagom_)", "santi, publishing as @santtiagom_", "santi (@santtiagom_) authored"]}
+      {"label": "OpenAI example", "phrases": ["one million lines", "1,500 pull requests"], "co_occurrence": [["openai", "million"], ["openai", "pull requests"]]},
+      {"label": "LangChain example", "phrases": ["rank 30 to the top 5", "thirtieth place to the top five", "top 5 on terminal bench"], "co_occurrence": [["langchain", "terminal bench"], ["langchain", "top 5"], ["langchain", "rank 30"]]},
+      {"label": "Anthropic example", "phrases": ["polished but non-working", "polished but broken", "working app"], "co_occurrence": [["anthropic", "same model"], ["anthropic", "working app"]]},
+      {"label": "author attribution", "phrases": ["santi (@santtiagom_)", "santi, publishing as @santtiagom_", "santi (@santtiagom_) authored"], "co_occurrence": [["santi", "@santtiagom_"]]}
     ],
     "forbidden": [],
     "require_local_source": true

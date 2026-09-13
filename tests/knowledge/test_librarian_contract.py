@@ -291,6 +291,10 @@ def test_librarian_requires_full_frameworks_and_keeps_entity_anchors_out_of_wiki
         "an entity relationship belongs in the mutation's explicit `entities` field",
         "entity anchors have not become entity-name wikilinks",
         "relationship on every affected page so the graph remains reciprocal",
+        "a source-named central concept belongs in one central page",
+        "a group or category of the parent framework is not enough",
+        "evaluate entity anchors independently for every mutation",
+        "finish with an end-to-end coverage scan of the complete source",
     }
 
     assert not (missing := {rule for rule in required if rule not in text}), missing

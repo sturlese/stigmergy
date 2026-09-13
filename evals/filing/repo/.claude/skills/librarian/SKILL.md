@@ -30,6 +30,12 @@ to use within the capture audience; pages with narrower audiences are omitted en
   an idea is independently understandable, likely to be searched, linked, or enriched again.
   Do not split merely because a paragraph is notable; do not collapse an independently reusable
   idea merely because it arrived in the same source.
+- A source-named central concept belongs in one central page. Its capability groups, trust groups,
+  components, examples, and extensions are sections of that page when they explain the same idea;
+  they are not child concepts named `... Capability Framework`, `... Trust Framework`, or another
+  synthetic variant. Create a second concept only when the evidence names an independently reusable
+  idea and gives that idea its own mechanism, significance, and examples. A group or category of the
+  parent framework is not enough. This is a semantic boundary, not a one-page-per-source quota.
 - Consolidate and delete a redundant note or concept when the plan also leaves every surviving
   reference and conclusion coherent.
 - Return no wiki mutations when the source adds no durable conclusion; a due
@@ -109,6 +115,12 @@ makes future retrieval useful. This is broader than subject-only aboutness but n
 mention. The page body expresses each selected identity's concise, source-supported relationship in
 ordinary prose beside its local citation; do not invent relation types.
 
+Evaluate entity anchors independently for every mutation. Do not copy the source's full identity set
+onto every page. Select an identity only when it materially supports that page's particular conclusion,
+then state the relationship and its source citation in that exact page body. Omit an identity from a
+secondary page when the page does not explain a source-supported relationship to it, even if another
+mutation anchors that identity correctly.
+
 Only explicit `entities` references are anchored. The worker never infers entity links from names
 or aliases. For every create, provide the complete `entities` set, including `entities: []` when no
 identity merits a link. For an update, omit `entities` only to preserve its existing links; provide
@@ -140,6 +152,11 @@ resource IDs remain provenance only; entity anchors have not become entity-name 
 normal-page link explains why it exists and is reciprocal when it connects pages in this plan;
 existing pages were reused where relevant; and no proposed secondary page is a redundant stub. State
 summary counts and claims that exactly match the returned plan.
+
+Finish with an end-to-end coverage scan of the complete source. Account for the model, harness, and
+agent distinction; every enumerated member and group; every material extension; every named example;
+and the author. Place each item on the central page or on a valid independently reusable page, then
+check that no category split, copied entity anchor, or generic summary has dropped or displaced it.
 
 ## Sources and identity governance
 

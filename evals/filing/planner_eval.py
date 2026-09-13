@@ -275,7 +275,7 @@ def _bodies(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
     missing_any = [
         str(group.get("label") or "required semantic coverage")
         for group in required_any
-        if not any(str(phrase).casefold() in combined for phrase in group.get("phrases", ()))
+        if not _body_requirement_met(combined, group)
     ]
     present_forbidden = [value for value in forbidden if value.casefold() in combined]
     heading_mismatch = [
@@ -383,13 +383,25 @@ def _entity_wikilinks(case, mutations, candidates) -> dict:
     return {"violations": violations, "passed": not violations}
 
 
+def _body_requirement_met(body: str, requirement: dict) -> bool:
+    if any(str(phrase).casefold() in body for phrase in requirement.get("phrases", ())):
+        return True
+    return any(
+        all(str(term).casefold() in body for term in terms)
+        for terms in requirement.get("co_occurrence", ())
+    )
+
+
 def _relationship_mention(body: str, name: str) -> bool:
-    for line in body.splitlines():
-        if name.casefold() not in line.casefold():
+    for paragraph in re.split(r"\n\s*\n", body):
+        if "(source:" not in paragraph.casefold():
             continue
-        remainder = re.sub(re.escape(name), "", line, flags=re.I)
-        if len(re.findall(r"[A-Za-z0-9]+", remainder)) >= 3:
-            return True
+        for line in paragraph.splitlines():
+            if name.casefold() not in line.casefold():
+                continue
+            remainder = re.sub(re.escape(name), "", line, flags=re.I)
+            if len(re.findall(r"[A-Za-z0-9]+", remainder)) >= 3:
+                return True
     return False
 
 
