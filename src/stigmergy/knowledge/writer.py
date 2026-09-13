@@ -23,6 +23,7 @@ from stigmergy.entities.service import (
     resolve_reference,
 )
 from stigmergy.kernel.deadline import hard_deadline
+from stigmergy.kernel.normalize import resolution_key
 from stigmergy.knowledge import contradictions
 from stigmergy.knowledge.context import actor_scope, filing_context, render_context
 from stigmergy.knowledge.lint import Violation, check
@@ -30,6 +31,12 @@ from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, 
 from stigmergy.knowledge.plan import FilingPlan, PageMutation
 from stigmergy.knowledge.planner import Planner
 from stigmergy.knowledge.repair import repair_deterministic
+from stigmergy.knowledge.sources import (
+    SourceContractError,
+    read_recompile_source,
+    recompile_source_preflight,
+    source_envelope,
+)
 from stigmergy.knowledge.trust import WRITER_EMAIL as AUTHOR_EMAIL
 from stigmergy.knowledge.trust import WRITER_NAME as AUTHOR_NAME
 from stigmergy.knowledge.write_guard import (
@@ -108,6 +115,8 @@ def _process_with_lock(conn, item: dict, deps: WriterDeps) -> WriteResult:
             return _entity(conn, item, deps, base)
         if item["operation"] == schema.GARDEN:
             request = schema.parse_garden(item["request"])
+            if request.mode == "recompile":
+                return _recompile(conn, deps, base, request=request)
             return _garden(
                 conn,
                 deps,
@@ -188,6 +197,235 @@ def _garden(
         return WriteResult(commit_sha=commit, change_id=str(change.id), report=dict(run.stats))
 
 
+def _recompile(conn, deps: WriterDeps, base: gitcmd.BaseRef, *, request: schema.GardenRequest) -> WriteResult:
+    """Rebuild derived knowledge from immutable sources in one master-only commit."""
+    with (
+        ops.job_run(conn, "recompile", base_commit_sha=base.sha) as run,
+        gitcmd.ephemeral_worktree(
+            deps.repo,
+            base.sha,
+            root=deps.settings.worktree_root,
+        ) as worktree,
+    ):
+        groups, unrestricted = actor_scope(worktree, request.actor.subject)
+        allow_explicit_master(WriteContext(groups, None, unrestricted))
+        report = _recompile_derived(
+            worktree,
+            deps,
+            rationale=request.rationale,
+        )
+        entries = gitcmd.diff_entries(worktree)
+        if not entries:
+            run.head_commit_sha = base.sha
+            report.update(commit_sha="", change_id=None)
+            run.stats.update(report)
+            return WriteResult(commit_sha="", change_id=None, report=report)
+        _gate_diff(entries, trigger="garden")
+        reasons = {
+            entry.path: "Recompiled derived knowledge from immutable sources"
+            for entry in entries
+        }
+        commit, change = _commit_and_record(
+            conn,
+            deps,
+            worktree=worktree,
+            base_sha=base.sha,
+            entries=entries,
+            item_id=str(request.operation_id),
+            trigger="garden",
+            actor=request.actor.subject,
+            summary=(
+                f"Recompiled derived knowledge from {report['source_count']} immutable source(s)"
+            ),
+            reasons=reasons,
+            job_run_id=str(run.id),
+        )
+        run.head_commit_sha = commit
+        report.update(commit_sha=commit, change_id=str(change.id))
+        run.stats.update(report)
+        return WriteResult(commit_sha=commit, change_id=str(change.id), report=report)
+
+
+def _recompile_derived(
+    worktree: str,
+    deps: WriterDeps,
+    *,
+    rationale: str,
+) -> dict:
+    """Compile all immutable sources into a fresh derived graph without committing.
+
+    The caller owns an ephemeral worktree, so any failure abandons every derived mutation. Entity
+    records remain while sources are refiled, which reuses valid opaque identities. Page anchors
+    are not an identity liveness signal: source-backed records remain until an explicit lifecycle
+    operation removes them.
+    """
+    before_entities = set(load_entities(worktree))
+    previous_pages = {
+        path: _path(worktree, path).read_text(encoding="utf-8")
+        for path in _derived_paths(worktree)
+    }
+    source_paths = tuple(
+        path.relative_to(worktree).as_posix()
+        for path in sorted(Path(worktree, "sources").glob("*/*/*.md"))
+    )
+    if not source_paths:
+        raise GateRefused("recompile requires at least one immutable source")
+    try:
+        recompile_source_preflight(worktree, source_paths)
+    except SourceContractError as error:
+        raise GateRefused(f"recompile source preflight failed: {error}") from error
+    _clear_derived_pages(worktree)
+    model_requests = 0
+    gate_violations = 0
+    for relative_source in source_paths:
+        try:
+            source = read_recompile_source(worktree, relative_source)
+        except (OSError, UnicodeError, SourceContractError) as error:
+            raise GateRefused(f"recompile source changed after preflight: {relative_source}") from error
+        relative_source = source.path
+        envelope = source_envelope(source)
+        safe_context = filing_context(
+            worktree,
+            source_text=source.text,
+            capture_acl=envelope.audience,
+            actor_groups=None,
+        )
+        rendered_context = render_context(safe_context)
+        plan_run = deps.planner.plan(
+            worktree=worktree,
+            envelope=envelope,
+            source_path=relative_source,
+            source_text=source.text,
+            context=rendered_context,
+        )
+        model_requests += plan_run.model_requests
+        plan = _recompile_identity_reuse(worktree, plan_run.plan)
+        try:
+            _apply_filing_plan(
+                worktree,
+                plan,
+                context=WriteContext(None, envelope.audience, unrestricted=True),
+                envelope=envelope,
+                relative_source=relative_source,
+                readable_artifacts=(source.body,),
+                reasons={},
+                visible_entities=tuple(safe_context["entities"]),
+                # The master-only compiler may preserve an opaque identity even if its former
+                # claim was outside this source's normal filing context. It still requires an
+                # exact existing preferred claim and compatible entity type below.
+                visible_entity_ids=frozenset(load_entities(worktree)),
+                allowed_contradiction_sources=frozenset(
+                    {relative_source, *(item["path"] for item in safe_context["source_evidence"])}
+                ),
+            )
+            repair_deterministic(worktree)
+            violations = check(worktree, editorial_paths=_derived_paths(worktree))
+            if violations:
+                gate_violations += len(violations)
+                raise GateRefused(_violation_summary(violations))
+        except (
+            KnowledgeWriteError,
+            PageContractError,
+            EntityOperationError,
+            WriteRefused,
+            contradictions.ContradictionContractError,
+        ) as error:
+            raise GateRefused(f"recompile rejected source {relative_source}") from error
+    _restore_recompiled_page_identity(worktree, previous_pages)
+    final_violations = check(worktree)
+    if final_violations:
+        gate_violations += len(final_violations)
+        raise GateRefused(_violation_summary(final_violations))
+    after_entities = set(load_entities(worktree))
+    entries = gitcmd.diff_entries(worktree)
+    return {
+        "operation": "recompile",
+        "rationale": rationale,
+        "source_count": len(source_paths),
+        "page_mutations": len(entries),
+        "retained_entities": len(before_entities & after_entities),
+        # A valid source-backed identity may currently have no page anchor. Recompilation preserves
+        # it; an operator must use the explicit entity lifecycle path to remove an orphan.
+        "removed_entities": 0,
+        "created_entities": len(after_entities - before_entities),
+        "model_requests": model_requests,
+        "link_health": {"violations": gate_violations, "clean": True},
+        "idempotent": not entries,
+    }
+
+
+def _clear_derived_pages(root: str) -> None:
+    for folder in ("wiki/notes", "wiki/concepts"):
+        path = Path(root, folder)
+        if not path.is_dir():
+            continue
+        for page in path.glob("*.md"):
+            page.unlink()
+
+
+def _derived_paths(root: str) -> set[str]:
+    return {
+        path.relative_to(root).as_posix()
+        for folder in ("wiki/notes", "wiki/concepts")
+        for path in Path(root, folder).glob("*.md")
+    }
+
+
+def _restore_recompiled_page_identity(root: str, previous_pages: dict[str, str]) -> None:
+    """Keep durable page IDs/dates stable when the rebuilt page has the same logical path."""
+    for path in _derived_paths(root) & set(previous_pages):
+        before = parse_page(path, previous_pages[path])
+        after = parse_page(path, _path(root, path).read_text(encoding="utf-8"))
+        if before.role != after.role or before.title != after.title:
+            continue
+        _path(root, path).write_text(
+            render_page(
+                path=after.path,
+                role=after.role,
+                title=after.title,
+                body=after.body,
+                acl=after.acl,
+                entities=after.entities,
+                sources=after.sources,
+                status=after.status,
+                page_id=before.page_id,
+                created=before.created,
+                updated=after.updated,
+            ),
+            encoding="utf-8",
+        )
+
+
+def _recompile_identity_reuse(root: str, plan: FilingPlan) -> FilingPlan:
+    """Attach exact, type-compatible existing identities to a recompilation plan.
+
+    This is preservation rather than entity inference: no names are extracted or invented, and an
+    ambiguous match remains a model decision. It gives an otherwise equivalent rebuilt graph its
+    prior opaque IDs without weakening ordinary capture identity rules.
+    """
+    records = load_entities(root)
+    proposals = []
+    for proposal in plan.entities:
+        if proposal.same_as or (proposal.external_namespace and proposal.external_id):
+            proposals.append(proposal)
+            continue
+        matches = [
+            entity_id
+            for entity_id, record in records.items()
+            if record.entity_type == proposal.entity_type
+            and sum(
+                claim.kind == "preferred" and claim.normalized == resolution_key(proposal.name)
+                for claim in record.claims
+            ) == 1
+        ]
+        proposals.append(
+            proposal.model_copy(update={"same_as": matches[0]})
+            if len(matches) == 1
+            else proposal
+        )
+    return plan.model_copy(update={"entities": tuple(proposals)})
+
+
 def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteResult:
     envelope = schema.parse_capture(item["request"])
     extracted = extract_capture(
@@ -227,12 +465,13 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                 *(item["path"] for item in safe_context["source_evidence"]),
             }
         )
+        rendered_context = render_context(safe_context)
         plan_run = deps.planner.plan(
             worktree=worktree,
             envelope=envelope,
             source_path=relative_source,
             source_text=source_text,
-            context=render_context(safe_context),
+            context=rendered_context,
         )
         reasons = {relative_source: "Archived immutable readable evidence"}
         baseline = check(worktree)
@@ -242,6 +481,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         plan_invalid = False
         plan_rejection = ""
         plan_skipped: list[str] = []
+        model_requests = plan_run.model_requests
         try:
             _apply_filing_plan(
                 worktree,
@@ -261,16 +501,55 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             KnowledgeWriteError,
             PageContractError,
             EntityOperationError,
+            WriteRefused,
             contradictions.ContradictionContractError,
         ) as error:
             plan_invalid = True
             plan_rejection = str(error)
-        violations = check(worktree) if not plan_invalid else ()
+        editorial_paths = frozenset(
+            path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
+        )
+        violations = check(worktree, editorial_paths=editorial_paths) if not plan_invalid else ()
         if violations:
-            plan_invalid = True
-            # Codes only: a violation's path names a page, and the report is read by the submitter.
-            codes = ", ".join(sorted({item.code for item in violations}))
-            plan_rejection = f"knowledge gates found {codes}"
+            try:
+                repair_files = _capture_repair_files(
+                    worktree,
+                    violations=violations,
+                    editorial_paths=editorial_paths,
+                    snapshot=snapshot,
+                    context=context,
+                )
+                repair_run = deps.planner.repair(
+                    worktree=worktree,
+                    violations=violations,
+                    files=repair_files,
+                    source_path=relative_source,
+                    source_text=source_text,
+                    context=rendered_context,
+                    max_requests=max(0, int(deps.settings.max_turns) - model_requests),
+                )
+                model_requests += repair_run.model_requests
+                repaired = _apply_repair_plan(
+                    worktree,
+                    violations,
+                    repair_run.plan,
+                    authorized_files=repair_files,
+                    context=context,
+                    existing_paths=frozenset(snapshot),
+                )
+                if repaired:
+                    reasons.update(repaired)
+                    repair_deterministic(worktree)
+                violations = check(worktree, editorial_paths=editorial_paths)
+            except GateRefused:
+                plan_invalid = True
+                plan_rejection = "knowledge gates found invalid-repair-plan"
+            else:
+                if violations:
+                    plan_invalid = True
+                    # Codes only: a violation's path names a page, and the report is read by the submitter.
+                    codes = ", ".join(sorted({item.code for item in violations}))
+                    plan_rejection = f"knowledge gates found {codes}"
         if plan_invalid:
             # Gate messages are fixed sentences, never source or model text.
             log.warning("filing plan rejected for %s: %s", envelope.capture_id, plan_rejection)
@@ -314,7 +593,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         report={
             "summary": summary,
             "wiki_changes": wiki_changes,
-            "model_requests": plan_run.model_requests,
+            "model_requests": model_requests,
             "plan_rejected": plan_invalid,
             "plan_rejection": plan_rejection,
             # Empty when the plan was rejected outright: nothing of it was kept to drop from.
@@ -430,18 +709,13 @@ def _apply_filing_plan(
     allowed_contradiction_sources: frozenset[str],
     skipped: list[str] | None = None,
 ) -> None:
-    """`skipped` collects every plan item this function drops WITHOUT rejecting the plan, as
-    `"<item>: <gate sentence>"` — the plan still lands, so the report is the only place the
-    loss shows. Gate sentences only: never a title, path, or claim text from the plan."""
+    """Apply one derived graph plan atomically, or reject it as a whole.
+
+    The immutable source is written before this function. Every graph mutation, entity proposal,
+    anchor, contradiction, and resolution is therefore all-or-nothing with respect to that source.
+    """
     if envelope.intent.resolution_of:
-        try:
-            allow_explicit_master(context)
-        except WriteRefused:
-            _note_skip(
-                skipped,
-                "contradiction resolution: this operation requires the master identity",
-            )
-            return
+        allow_explicit_master(context)
     for proposal in plan.contradictions:
         proposed_sources = {claim.source for claim in proposal.claims}
         if not proposed_sources <= allowed_contradiction_sources:
@@ -474,22 +748,19 @@ def _apply_filing_plan(
                 visible_entity_ids=visible_entity_ids,
             )
         except (KnowledgeWriteError, PageContractError, WriteRefused) as error:
-            _note_skip(skipped, f"mutation[{index}] {mutation.action}: {error}")
-            continue
+            raise KnowledgeWriteError(f"planned mutation {index} could not be applied") from error
         if mutation.action == "update" and changed_path:
             updated_pages.add(changed_path)
     for index, proposal in enumerate(plan.contradictions):
         target = _path(root, proposal.page_path)
         if not target.is_file():
-            _note_skip(skipped, f"contradiction[{index}]: page not found")
-            continue
+            raise KnowledgeWriteError(f"planned contradiction {index} targets no page")
         original = target.read_text(encoding="utf-8")
         page = parse_page(proposal.page_path, original)
         try:
             allow_existing(context, page.acl)
         except WriteRefused as error:
-            _note_skip(skipped, f"contradiction[{index}]: {error}")
-            continue
+            raise KnowledgeWriteError(f"planned contradiction {index} is not authorized") from error
         before = set(check(root))
         try:
             record = contradictions.from_proposal(proposal)
@@ -509,15 +780,12 @@ def _apply_filing_plan(
                 updated=envelope.origin.captured_at.date(),
             )
         except (contradictions.ContradictionContractError, PageContractError) as error:
-            _note_skip(skipped, f"contradiction[{index}]: {error}")
-            continue
+            raise KnowledgeWriteError(f"planned contradiction {index} is invalid") from error
         target.write_text(candidate, encoding="utf-8")
         introduced = set(check(root)) - before
         if introduced:
             target.write_text(original, encoding="utf-8")
-            codes = ", ".join(sorted({item.code for item in introduced}))
-            _note_skip(skipped, f"contradiction[{index}]: knowledge gates found {codes}")
-            continue
+            raise KnowledgeWriteError(f"planned contradiction {index} failed knowledge gates")
         reasons[proposal.page_path] = proposal.explanation
     if plan.resolved_contradictions:
         expected = envelope.intent.resolution_of
@@ -533,8 +801,7 @@ def _apply_filing_plan(
                 updated_pages=frozenset(updated_pages),
             )
         except KnowledgeWriteError as error:
-            _note_skip(skipped, f"contradiction resolution: {error}")
-            return
+            raise KnowledgeWriteError("planned contradiction resolution could not be applied") from error
         reasons.update({path: envelope.intent.rationale or "Resolved contradiction" for path in removed})
 
 
@@ -918,6 +1185,7 @@ def _recover(conn, item: dict, deps: WriterDeps, head: str) -> WriteResult | Non
         trigger = "contradiction_resolution" if envelope.intent.resolution_of else "capture"
     parent = gitcmd.run("rev-parse", f"{commit}^", cwd=deps.repo).stdout.strip()
     if item["operation"] == schema.GARDEN:
+        garden_request = schema.parse_garden(request)
         change, report = _recover_garden(
             conn,
             deps,
@@ -925,6 +1193,8 @@ def _recover(conn, item: dict, deps: WriterDeps, head: str) -> WriteResult | Non
             commit=commit,
             parent=parent,
             actor=item["submitted_by"],
+            job_name="recompile" if garden_request.mode == "recompile" else "garden",
+            trigger="garden",
         )
     elif change is None:
         change = record_change(
@@ -968,6 +1238,8 @@ def _recover_garden(
     commit: str,
     parent: str,
     actor: str,
+    job_name: str = "garden",
+    trigger: str = "garden",
 ) -> tuple[ChangeRecord, dict]:
     stats = {
         "reconciled": True,
@@ -976,12 +1248,12 @@ def _recover_garden(
         "clean": True,
     }
     if change is None:
-        with ops.job_run(conn, "garden", base_commit_sha=parent) as run:
+        with ops.job_run(conn, job_name, base_commit_sha=parent) as run:
             change = record_change(
                 conn,
                 deps.evidence,
                 repo=deps.repo,
-                trigger="garden",
+                trigger=trigger,
                 actor=actor,
                 parent_commit_sha=parent,
                 commit_sha=commit,
@@ -1006,7 +1278,53 @@ def _release_deleted_evidence(conn, evidence, paths: set[str]) -> None:
         evidence.delete(reference)
 
 
-def _apply_repair_plan(root: str, violations: tuple[Violation, ...], plan) -> dict[str, str]:
+def _capture_repair_files(
+    root: str,
+    *,
+    violations: tuple[Violation, ...],
+    editorial_paths: frozenset[str],
+    snapshot: dict[str, bytes],
+    context: WriteContext,
+) -> dict[str, str]:
+    """Authorize every repair target before reading any candidate body for the model."""
+    paths = frozenset(violation.path for violation in violations)
+    if not paths or not paths <= editorial_paths:
+        raise GateRefused("repair includes a path outside this capture's visible graph changes")
+    if not all(path.startswith(("wiki/notes/", "wiki/concepts/")) for path in paths):
+        raise GateRefused("repair may only target capture knowledge pages")
+    for path in paths:
+        if path in snapshot:
+            before = parse_page(path, snapshot[path].decode("utf-8"))
+            try:
+                allow_existing(context, before.acl)
+            except WriteRefused as error:
+                raise GateRefused("repair target is outside the capture audience") from error
+        else:
+            try:
+                allow_create(context, context.content_acl)
+            except WriteRefused as error:
+                raise GateRefused("repair target is outside the capture audience") from error
+    files = {}
+    for path in sorted(paths):
+        target = _path(root, path)
+        if not target.is_file():
+            raise GateRefused("repair target is missing")
+        text = target.read_text(encoding="utf-8")
+        if len(text.encode("utf-8")) > 100_000:
+            raise GateRefused("repair target exceeds its byte limit")
+        files[path] = text
+    return files
+
+
+def _apply_repair_plan(
+    root: str,
+    violations: tuple[Violation, ...],
+    plan,
+    *,
+    authorized_files: dict[str, str] | None = None,
+    context: WriteContext | None = None,
+    existing_paths: frozenset[str] = frozenset(),
+) -> dict[str, str]:
     allowed = {
         violation.path
         for violation in violations
@@ -1016,9 +1334,35 @@ def _apply_repair_plan(root: str, violations: tuple[Violation, ...], plan) -> di
     for mutation in plan.mutations:
         if mutation.path not in allowed:
             raise GateRefused("model repair targeted a path outside its violations")
+        if authorized_files is not None and mutation.path not in authorized_files:
+            raise GateRefused("model repair targeted a path outside this capture's authorization")
         target = _path(root, mutation.path)
         if not target.is_file():
             raise GateRefused("model repair targeted a missing path")
+        if authorized_files is not None:
+            before = parse_page(mutation.path, authorized_files[mutation.path])
+            if context is None:
+                raise GateRefused("capture repair is missing its authorization context")
+            try:
+                if mutation.path in existing_paths:
+                    allow_existing(context, before.acl)
+                else:
+                    allow_create(context, before.acl)
+            except WriteRefused as error:
+                raise GateRefused("model repair is outside the capture audience") from error
+            after = parse_page(mutation.path, mutation.text)
+            if (
+                after.role != before.role
+                or after.title != before.title
+                or after.acl != before.acl
+                or after.entities != before.entities
+                or after.sources != before.sources
+                or after.status != before.status
+                or after.page_id != before.page_id
+                or after.created != before.created
+                or after.updated != before.updated
+            ):
+                raise GateRefused("model repair may change only the authorized page body")
         target.write_text(mutation.text, encoding="utf-8")
         changed[mutation.path] = mutation.reason
     return changed

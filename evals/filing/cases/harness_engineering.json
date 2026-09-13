@@ -1,17 +1,32 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "harness-engineering",
   "source_title": "Harness Engineering: explained from zero",
   "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000001.md",
   "mutations": {
-    "count": 1,
-    "allowed": [
+    "min_count": 1,
+    "max_count": 4,
+    "closed": true,
+    "required": [
       {
         "action": "create",
         "role": "concept",
         "title": "Harness Engineering"
       }
-    ]
+    ],
+    "allowed": [
+      {
+        "action": "create",
+        "role": "concept",
+        "title": "Agent Harness"
+      },
+      {
+        "action": "update",
+        "role": "concept",
+        "title": "Agent Harness"
+      }
+    ],
+    "forbidden": []
   },
   "identities": {
     "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
@@ -29,5 +44,16 @@
   },
   "link_coverage": {
     "allow_unlinked": []
+  },
+  "anti_fragmentation": {
+    "redundant_title_groups": [["Harness Engineering", "Harness Engineering Explained"]]
+  },
+  "bodies": {
+    "required": [
+      "model alone is not an agentic system",
+      "different harness configurations"
+    ],
+    "forbidden": ["ReAct is an entity"],
+    "require_local_source": true
   }
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -29,7 +30,17 @@ class Planner(Protocol):
         context: str,
     ) -> PlanRun: ...
 
-    def repair(self, *, worktree: str, violations: tuple) -> PlanRun: ...
+    def repair(
+        self,
+        *,
+        worktree: str,
+        violations: tuple,
+        files: Mapping[str, str],
+        source_path: str,
+        source_text: str,
+        context: str,
+        max_requests: int,
+    ) -> PlanRun: ...
 
 
 class ScriptedPlanner:
@@ -85,10 +96,42 @@ class PydanticPlanner:
                 usage=usage,
             )
 
-    def repair(self, *, worktree: str, violations: tuple) -> PlanRun:
-        return asyncio.run(self._repair(worktree=worktree, violations=violations))
+    def repair(
+        self,
+        *,
+        worktree: str,
+        violations: tuple,
+        files: Mapping[str, str],
+        source_path: str,
+        source_text: str,
+        context: str,
+        max_requests: int,
+    ) -> PlanRun:
+        if max_requests < 1:
+            return PlanRun(RepairPlan(summary="No request budget remains for repair"))
+        return asyncio.run(
+            self._repair(
+                worktree=worktree,
+                violations=violations,
+                files=files,
+                source_path=source_path,
+                source_text=source_text,
+                context=context,
+                max_requests=max_requests,
+            )
+        )
 
-    async def _repair(self, *, worktree: str, violations: tuple) -> PlanRun:
+    async def _repair(
+        self,
+        *,
+        worktree: str,
+        violations: tuple,
+        files: Mapping[str, str],
+        source_path: str,
+        source_text: str,
+        context: str,
+        max_requests: int,
+    ) -> PlanRun:
         from pydantic_ai.usage import RunUsage
 
         from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
@@ -97,18 +140,6 @@ class PydanticPlanner:
         usage = RunUsage()
         with open(f"{worktree}/.claude/skills/librarian/SKILL.md", encoding="utf-8") as handle:
             instructions = handle.read()
-        files = {}
-        for violation in violations:
-            if not violation.path.startswith(("wiki/notes/", "wiki/concepts/")):
-                continue
-            path = f"{worktree}/{violation.path}"
-            try:
-                with open(path, encoding="utf-8") as handle:
-                    files[violation.path] = handle.read(100_001)
-            except OSError:
-                continue
-            if len(files[violation.path]) > 100_000:
-                files.pop(violation.path)
         violation_json = json.dumps(
             [violation.__dict__ for violation in violations],
             ensure_ascii=False,
@@ -120,6 +151,10 @@ class PydanticPlanner:
             "sources or entity files.\n\n"
             "VIOLATIONS\n"
             f"{fence(violation_json)}\n\n"
+            "ORIGINAL CAPTURE\n"
+            f"{fence(json.dumps({'source_path': source_path, 'source_text': source_text}, ensure_ascii=False))}\n\n"
+            "AUTHORIZED CONTEXT\n"
+            f"{fence(context)}\n\n"
             f"FILES\n{fence(json.dumps(files, ensure_ascii=False, sort_keys=True))}"
         )
         _guard_prompt(prompt)
@@ -129,6 +164,7 @@ class PydanticPlanner:
                 instructions=instructions,
                 prompt=prompt,
                 usage=usage,
+                max_requests=max_requests,
             )
 
     async def _run_filing(
@@ -162,6 +198,7 @@ class PydanticPlanner:
         instructions: str,
         prompt: str,
         usage=None,
+        max_requests: int | None = None,
     ) -> PlanRun:
         from pydantic_ai import Agent, NativeOutput
         from pydantic_ai.usage import RunUsage, UsageLimits
@@ -183,7 +220,9 @@ class PydanticPlanner:
         result = await agent.run(
             prompt,
             usage=usage,
-            usage_limits=UsageLimits(request_limit=int(self.settings.max_turns)),
+            usage_limits=UsageLimits(
+                request_limit=int(self.settings.max_turns if max_requests is None else max_requests)
+            ),
         )
         requests = int(getattr(usage, "requests", 0) or 0)
         return PlanRun(plan=result.output, model_requests=requests)

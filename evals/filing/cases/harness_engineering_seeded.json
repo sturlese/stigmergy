@@ -1,0 +1,47 @@
+{
+  "version": 2,
+  "name": "harness-engineering-seeded",
+  "source_title": "Harness Engineering: explained from zero",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000001.md",
+  "seed_pages": [
+    {
+      "id": "page_eval_agent_harness",
+      "role": "concept",
+      "title": "Agent Harness",
+      "body": "# Agent Harness\n\nAn agent harness supplies the task loop, tools, feedback, and memory around a model. (Source: `{source_path}`)"
+    }
+  ],
+  "mutations": {
+    "min_count": 2,
+    "max_count": 3,
+    "closed": true,
+    "required": [
+      {"action": "create", "role": "concept", "title": "Harness Engineering"},
+      {"action": "update", "title": "Agent Harness"}
+    ],
+    "allowed": [],
+    "forbidden": []
+  },
+  "identities": {
+    "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
+    "allowed": [],
+    "forbidden": ["ReAct"],
+    "closed": true
+  },
+  "external_ids": {"required": [], "allowed": [], "closed": true},
+  "links": {
+    "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
+    "allowed": [],
+    "forbidden": ["ReAct"],
+    "closed": true
+  },
+  "link_coverage": {"allow_unlinked": []},
+  "bodies": {
+    "required": ["model alone is not an agentic system", "different harness configurations"],
+    "forbidden": [],
+    "require_local_source": true
+  },
+  "connections": [
+    {"from": "Harness Engineering", "to": "Agent Harness", "reciprocal": true}
+  ]
+}

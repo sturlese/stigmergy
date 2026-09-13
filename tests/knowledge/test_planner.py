@@ -157,14 +157,8 @@ def test_native_output_never_exceeds_the_two_request_budget_after_schema_repairs
     assert calls == [[], []]
 
 
-def test_repair_context_includes_only_bounded_note_and_concept_files(tmp_path):
+def test_repair_context_uses_only_the_explicitly_authorized_files(tmp_path):
     worktree = _worktree(tmp_path)
-    note = tmp_path / "wiki" / "notes" / "Terms.md"
-    note.parent.mkdir(parents=True)
-    note.write_text("# Terms\n\nCurrent text.\n", encoding="utf-8")
-    large = tmp_path / "wiki" / "concepts" / "Oversized.md"
-    large.parent.mkdir(parents=True)
-    large.write_text("x" * 100_001, encoding="utf-8")
     violations = (
         SimpleNamespace(path="wiki/notes/Terms.md", code="frontmatter", message="repair it"),
         SimpleNamespace(path="wiki/concepts/Missing.md", code="missing", message="gone"),
@@ -174,7 +168,15 @@ def test_repair_context_includes_only_bounded_note_and_concept_files(tmp_path):
     model = _native_model("No bounded repair was needed")
     subject = planner.PydanticPlanner(_settings(), model_factory=lambda: model)
 
-    result = subject.repair(worktree=worktree, violations=violations)
+    result = subject.repair(
+        worktree=worktree,
+        violations=violations,
+        files={"wiki/notes/Terms.md": "# Terms\n\nCurrent text.\n"},
+        source_path="sources/2026/08/capture.md",
+        source_text="Decision: renew for one year.",
+        context='{"candidates": []}',
+        max_requests=1,
+    )
 
     assert result.plan.summary == "No bounded repair was needed"
     assert result.plan.mutations == ()

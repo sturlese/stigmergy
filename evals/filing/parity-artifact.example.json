@@ -1,0 +1,101 @@
+{
+  "_template_notice": "This intentionally invalid template documents the required artifact shape. Replace every angle-bracket value with recorded evidence; the parity validator must reject this file.",
+  "corpus_sha256": "<64-character SHA-256 of the identical source corpus>",
+  "initial_graph_ref": "<40-character immutable initial graph revision>",
+  "stigmergy_commit": "<40-character Stigmergy commit used for the run>",
+  "librarian_skill_sha256": "<64-character hash of the deployed librarian skill>",
+  "source_cases": [
+    {"id": "<stable-source-case-id>", "sha256": "<64-character source-case SHA-256>"}
+  ],
+  "runs": [
+    {
+      "implementation": "hippocampus",
+      "run_id": "<immutable Hippocampus run id>",
+      "runtime": {"model": "<model>", "reasoning_level": "<level>", "provider": "<provider>"},
+      "score": {"passed": true},
+      "gates": {"passed": true},
+      "raw_gates": {
+        "mutations": "<passed|failed>",
+        "identity_proposals": "<passed|failed>",
+        "external_ids": "<passed|failed>",
+        "entity_links": "<passed|failed>",
+        "link_coverage": "<passed|failed>",
+        "reference_resolution": "<passed|failed>",
+        "alias_evidence": "<passed|failed>",
+        "bodies": "<passed|failed>",
+        "connections": "<passed|failed>",
+        "entity_relationships": "<passed|failed>",
+        "anti_fragmentation": "<passed|failed>",
+        "writer": "<passed|failed>"
+      },
+      "provenance": {
+        "corpus_sha256": "<same corpus SHA-256>",
+        "initial_graph_ref": "<same immutable initial graph revision>",
+        "source_cases": {"<stable-source-case-id>": "<same source-case SHA-256>"}
+      }
+    },
+    {
+      "implementation": "stigmergy",
+      "run_id": "<immutable Stigmergy run id>",
+      "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": "high", "provider": "cerebras"},
+      "score": {"passed": true},
+      "gates": {"passed": true},
+      "raw_gates": {
+        "mutations": "<passed|failed>",
+        "identity_proposals": "<passed|failed>",
+        "external_ids": "<passed|failed>",
+        "entity_links": "<passed|failed>",
+        "link_coverage": "<passed|failed>",
+        "reference_resolution": "<passed|failed>",
+        "alias_evidence": "<passed|failed>",
+        "bodies": "<passed|failed>",
+        "connections": "<passed|failed>",
+        "entity_relationships": "<passed|failed>",
+        "anti_fragmentation": "<passed|failed>",
+        "writer": "<passed|failed>"
+      },
+      "provenance": {
+        "corpus_sha256": "<same corpus SHA-256>",
+        "initial_graph_ref": "<same immutable initial graph revision>",
+        "source_cases": {"<stable-source-case-id>": "<same source-case SHA-256>"},
+        "commit": "<same Stigmergy commit>",
+        "librarian_skill_sha256": "<same librarian skill SHA-256>"
+      }
+    }
+  ],
+  "reasoning_matrix": [
+    {
+      "reasoning_level": "minimal",
+      "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": "minimal", "provider": "cerebras"},
+      "score": {"passed": false},
+      "gates": {"passed": false},
+      "raw_gates": {"<every canonical gate>": "<passed|failed>"},
+      "provenance": {"corpus_sha256": "<same corpus SHA-256>", "initial_graph_ref": "<same immutable initial graph revision>", "source_cases": {"<stable-source-case-id>": "<same source-case SHA-256>"}, "commit": "<same Stigmergy commit>", "librarian_skill_sha256": "<same librarian skill SHA-256>"},
+      "passed": false
+    },
+    {
+      "reasoning_level": "high",
+      "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": "high", "provider": "cerebras"},
+      "score": {"passed": true},
+      "gates": {"passed": true},
+      "raw_gates": {"<every canonical gate>": "passed"},
+      "provenance": {"corpus_sha256": "<same corpus SHA-256>", "initial_graph_ref": "<same immutable initial graph revision>", "source_cases": {"<stable-source-case-id>": "<same source-case SHA-256>"}, "commit": "<same Stigmergy commit>", "librarian_skill_sha256": "<same librarian skill SHA-256>"},
+      "passed": true
+    }
+  ],
+  "blind_editorial_review": {
+    "verdict": "no_material_stigmergy_regression",
+    "provenance": {
+      "reviewer": "<reviewer>",
+      "method": "blind-pairwise",
+      "artifact_ref": "<immutable-review-artifact>",
+      "corpus_sha256": "<same corpus SHA-256>",
+      "initial_graph_ref": "<same immutable initial graph revision>",
+      "source_cases": {"<stable-source-case-id>": "<same source-case SHA-256>"},
+      "runs": {
+        "hippocampus": "<same immutable Hippocampus run id>",
+        "stigmergy": "<same immutable Stigmergy run id>"
+      }
+    }
+  }
+}

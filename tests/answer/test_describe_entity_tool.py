@@ -26,12 +26,27 @@ _DESCRIBED = {
     "knowledge": [
         {"path": "wiki/notes/Vantage June 2026 Investor Update.md",
          "title": "Vantage June 2026 Investor Update", "type": "note",
-         "status": "developing", "updated": "2026-06-30"},
+         "status": "developing", "updated": "2026-06-30",
+         "excerpt": "Vantage reported a durable investor update.",
+         "excerpt_truncated": False,
+         "sources": [{"path": "sources/2026/08/vantage.md", "title": "Vantage source"}],
+         "relationships": [{"path": "wiki/concepts/Capital Allocation.md",
+                              "title": "Capital Allocation",
+                              "statement": "The update explains Vantage's capital allocation.",
+                              "statement_truncated": False}]},
         {"path": "wiki/notes/Vantage Hiring.md", "title": "Vantage Hiring", "type": "note",
-         "status": "developing", "updated": ""},
+         "status": "developing", "updated": "", "excerpt": "Vantage has an open hiring plan.",
+         "excerpt_truncated": False, "sources": [], "relationships": []},
     ],
     "knowledge_note": "2 page(s) anchored to this entity — showing all 2.",
+    "knowledge_state": "available",
+    "knowledge_truncated": False,
+    "knowledge_returned": 2,
+    "knowledge_cap": 20,
     "sources": [{"path": "sources/2026/08/vantage.md", "title": "Vantage source"}],
+    "sources_truncated": False,
+    "sources_returned": 1,
+    "sources_cap": 40,
 }
 
 
@@ -52,7 +67,10 @@ def test_entity_text_lays_out_identity_knowledge_and_sources():
     assert "name: Vantage" in text
     assert "aliases: vantage.com" in text
     assert "knowledge: 2 page(s) anchored to this entity — showing all 2." in text
+    assert "knowledge state: available" in text
     assert "2026-06-30 · wiki/notes/Vantage June 2026 Investor Update.md" in text
+    assert "evidence: Vantage reported a durable investor update." in text
+    assert "connection: The update explains Vantage's capital allocation." in text
     assert "(undated) · wiki/notes/Vantage Hiring.md" in text
     assert "sources/2026/08/vantage.md — Vantage source" in text
 

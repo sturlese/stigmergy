@@ -1,8 +1,10 @@
 import datetime as dt
 import io
 import json
+import re
 import subprocess
 import zipfile
+from pathlib import Path
 
 import pymupdf
 import pytest
@@ -19,6 +21,7 @@ from stigmergy.index import build
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.index.corpus import split_frontmatter_checked
 from stigmergy.knowledge import contradictions, writer
+from stigmergy.knowledge import sources as knowledge_sources
 from stigmergy.knowledge.pages import parse_page, render_page
 from stigmergy.knowledge.plan import (
     ContradictionClaim,
@@ -26,13 +29,79 @@ from stigmergy.knowledge.plan import (
     EntityProposal,
     FilingPlan,
     PageMutation,
+    RepairMutation,
+    RepairPlan,
 )
-from stigmergy.knowledge.planner import ScriptedPlanner
+from stigmergy.knowledge.planner import PlanRun, ScriptedPlanner
 from stigmergy.knowledge.write_guard import WriteContext
 from stigmergy.knowledge.writer import KnowledgeWriteError, WriterDeps
 from stigmergy.librarian import config, worker
 from stigmergy.server.service import BrainService
 from stigmergy.server.settings import Settings as ServerSettings
+
+_WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+
+
+class EditorialFixturePlanner(ScriptedPlanner):
+    """Explicit compatibility fixture for pre-editorial successful writer scenarios only."""
+
+    def plan(self, **kwargs) -> PlanRun:
+        run = super().plan(**kwargs)
+        plan = run.plan
+        if not isinstance(plan, FilingPlan):
+            return run
+        source = str(kwargs["source_path"])
+        names_by_reference = {
+            reference: proposal.name
+            for proposal in plan.entities
+            for reference in (proposal.name, *proposal.aliases)
+        }
+        mutations = tuple(
+            _editorial_fixture_mutation(
+                mutation,
+                source=source,
+                entity_names=tuple(
+                    names_by_reference.get(reference, reference)
+                    for reference in mutation.entities or ()
+                    if not reference.startswith("ent_")
+                ),
+            )
+            for mutation in plan.mutations
+        )
+        return PlanRun(plan.model_copy(update={"mutations": mutations}), run.model_requests)
+
+
+def _editorial_fixture_mutation(
+    mutation: PageMutation, *, source: str, entity_names: tuple[str, ...]
+) -> PageMutation:
+    if mutation.action not in {"create", "update"} or not mutation.body:
+        return mutation
+    title = mutation.title or Path(mutation.path or "").stem
+    body_lines = mutation.body.strip().splitlines()
+    if body_lines and body_lines[0].startswith("# "):
+        body_lines[0] = f"# {title}"
+    else:
+        body_lines.insert(0, f"# {title}")
+    body = "\n".join(body_lines).strip()
+    prose = " ".join(body_lines[1:]).strip()
+    if len(re.sub(r"[^A-Za-z0-9]", "", prose)) < 32:
+        body += (
+            f"\n\n{mutation.reason.rstrip('.')}. "
+            "This conclusion remains useful as durable operating knowledge."
+        )
+    body = _WIKILINK.sub(
+        lambda match: (
+            f"{match.group(1)} is materially related to this conclusion "
+            f"([[{match.group(1)}]])"
+        ),
+        body,
+    )
+    for name in dict.fromkeys(entity_names):
+        if name.casefold() not in body.casefold():
+            body += f"\n\n{name} is materially related to this conclusion."
+    if source not in body:
+        body += f"\n\n(Source: `{source}`)"
+    return mutation.model_copy(update={"body": body})
 
 
 def _process_capture(
@@ -45,6 +114,8 @@ def _process_capture(
     key: str,
     text: str,
     plan: FilingPlan,
+    planner: ScriptedPlanner | None = None,
+    editorial: bool = False,
 ):
     receipt = CaptureService(conn, store).capture_text(
         actor=actor,
@@ -56,7 +127,12 @@ def _process_capture(
     settings = config.Settings(repo=str(repo), branch="main", backend="scripted")
     item, outcome = worker.process_next(
         conn,
-        WriterDeps(settings, store, ScriptedPlanner(plan), str(repo)),
+        WriterDeps(
+            settings,
+            store,
+            planner or (EditorialFixturePlanner(plan) if editorial else ScriptedPlanner(plan)),
+            str(repo),
+        ),
     )
     return receipt, item, outcome
 
@@ -117,9 +193,8 @@ def test_rejected_plan_records_why_in_the_capture_report(clean_queue, target_rep
     )
 
 
-def test_silently_skipped_plan_items_are_recorded_in_the_capture_report(clean_queue, target_repo):
-    """A mutation or contradiction the writer drops without rejecting the plan must say so: a
-    plan that "landed" while losing half its items is otherwise indistinguishable from a thin one."""
+def test_missing_required_plan_items_reject_the_entire_derived_graph(clean_queue, target_repo):
+    """A source can land, but no mutation or contradiction may silently disappear."""
     store = evidence.MemoryEvidenceStore()
     receipt = CaptureService(clean_queue, store).capture_text(
         actor=Actor(subject="marc", display_name="Marc"),
@@ -157,11 +232,54 @@ def test_silently_skipped_plan_items_are_recorded_in_the_capture_report(clean_qu
     )
 
     assert outcome.status == schema.LANDED
-    assert item["report"]["plan_rejected"] is False
-    assert item["report"]["plan_skipped"] == [
-        "mutation[0] update: planned page does not exist",
-        "contradiction[0]: page not found",
-    ]
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["wiki_changes"] == 0
+    assert item["report"]["plan_skipped"] == []
+
+
+def test_failed_required_anchor_rolls_back_entity_and_registry_state(clean_queue, target_repo):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Attempted an atomic entity-backed conclusion",
+        entities=(
+            EntityProposal(name="Atomic fixture organization", entity_type="organization"),
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Atomic fixture conclusion",
+                body="# Atomic fixture conclusion\n\nThis page must never land.",
+                entities=("unknown-entity-reference",),
+                reason="The plan deliberately contains an unresolved required anchor",
+            ),
+        ),
+    )
+
+    _receipt, item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        key="atomic-entity-rollback",
+        text="The entity-backed conclusion must be atomic.",
+        plan=plan,
+    )
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["plan_rejected"] is True
+    registry = json.loads(
+        subprocess.check_output(
+            ["git", "show", "main:ops/entity-registry.json"], cwd=target_repo, text=True
+        )
+    )
+    assert registry == {"entities": {}, "redirects": {}, "version": 1}
+    assert subprocess.run(
+        ["git", "cat-file", "-e", "main:wiki/notes/Atomic fixture conclusion.md"],
+        cwd=target_repo,
+        check=False,
+    ).returncode != 0
 
 
 def test_one_capture_lands_source_wiki_and_change_in_one_commit(clean_queue, target_repo):
@@ -182,7 +300,8 @@ def test_one_capture_lands_source_wiki_and_change_in_one_commit(clean_queue, tar
                 action="create",
                 role="note",
                 title="Support rotation",
-                body="# Support rotation\n\nThe support rotation changes weekly on 1 September.",
+                    body=("# Support rotation\n\nThe support rotation changes weekly on 1 September. "
+                          "(Source: `sources/2026/09/ee9737a1-6a78-5a13-a675-cccae5cc1a1c.md`)"),
                 reason="The source establishes the new operating cadence",
             ),
         ),
@@ -370,10 +489,11 @@ def test_pasted_transcript_archives_exact_input_and_files_only_its_conclusion(
                 action="create",
                 role="note",
                 title="Weekly support rotation",
-                body=(
-                    "# Weekly support rotation\n\n"
-                    "The team agreed to move the support rotation to weekly on 1 September."
-                ),
+                    body=(
+                        "# Weekly support rotation\n\n"
+                        "The team agreed to move the support rotation to weekly on 1 September. "
+                        "(Source: `sources/2026/09/8139bbff-80ed-559e-98fa-cca533899a9c.md`)"
+                    ),
                 reason="The transcript establishes the decision",
             ),
         ),
@@ -388,6 +508,7 @@ def test_pasted_transcript_archives_exact_input_and_files_only_its_conclusion(
         key="pasted-transcript",
         text=transcript,
         plan=plan,
+        editorial=True,
     )
 
     request = queue.get_submission_trace(clean_queue, receipt["id"])["request"]
@@ -435,6 +556,7 @@ def test_conclusions_only_submission_archives_only_the_supplied_synthesis(
         key="conversation-synthesis",
         text=synthesis,
         plan=plan,
+        editorial=True,
     )
 
     request = queue.get_submission_trace(clean_queue, receipt["id"])["request"]
@@ -621,6 +743,7 @@ def test_capture_can_create_rewrite_consolidate_and_delete_in_one_atomic_commit(
         key="initial-pages",
         text="Initial plan, duplicate detail, and temporary idea.",
         plan=first_plan,
+        editorial=True,
     )
     assert first_outcome.status == schema.LANDED
     first_source = first_item["source_path"]
@@ -666,6 +789,7 @@ def test_capture_can_create_rewrite_consolidate_and_delete_in_one_atomic_commit(
         key="consolidate-pages",
         text="Consolidate the plan, retract the temporary idea, and review weekly.",
         plan=second_plan,
+        editorial=True,
     )
 
     assert second_outcome.status == schema.LANDED
@@ -757,6 +881,7 @@ def test_omitted_entity_references_do_not_auto_anchor_a_proposed_identity(
         key="implicit-entity-anchor",
         text="Northstar Research approved the annual renewal.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -810,6 +935,7 @@ def test_omitted_entity_references_do_not_auto_anchor_a_unique_proposed_identity
         key="empty-entity-references-still-anchor",
         text="Qaldris Dynamics Limited approved the annual renewal.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -850,6 +976,7 @@ def test_proposed_entity_name_substrings_do_not_anchor_mutated_pages(clean_queue
         key="entity-substring-does-not-anchor",
         text="AcmeCorp approved the annual renewal.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -907,6 +1034,7 @@ def test_explicit_entity_references_resolve_overlapping_proposed_names(
         key="longest-proposed-entity-anchor",
         text="Acme Inc and Pinecone Labs approved the renewal.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -977,6 +1105,7 @@ def test_explicit_entity_references_resolve_short_and_long_proposed_names(
         key="separate-short-long-entity-anchor",
         text="Acme Inc and Acme approved separate renewals.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -1034,6 +1163,7 @@ def test_equivalent_proposed_name_spans_with_distinct_ids_do_not_auto_anchor(
         key="ambiguous-equivalent-entity-anchor",
         text="Acme Inc approved the renewal.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -1093,6 +1223,7 @@ def test_explicit_alias_reference_resolves_the_single_proposed_identity(
         key="entity-alias-anchor",
         text="Velorum Signal Works GmbH, also called VSW, approved the schedule.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -1171,6 +1302,7 @@ def test_shared_proposed_alias_never_auto_anchors_by_plan_order(
             "Valence Switching Works Limited is also called VSW."
         ),
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -1390,6 +1522,7 @@ def test_omitted_update_entities_retain_existing_anchors_without_adding_proposal
         key="existing-entity-anchor",
         text="Legacy Systems approved the current renewal.",
         plan=initial,
+        editorial=True,
     )
     update = FilingPlan(
         summary="Recorded Northstar Research renewal",
@@ -1415,6 +1548,7 @@ def test_omitted_update_entities_retain_existing_anchors_without_adding_proposal
         key="implicit-update-entity-anchor",
         text="Northstar Research approved the annual renewal.",
         plan=update,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -1486,6 +1620,7 @@ def test_explicit_entity_references_are_the_complete_anchor_set(
         key="explicit-entity-lists-win",
         text="Northstar Research and Pinecone Labs approved the renewal.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -1548,6 +1683,7 @@ def test_explicit_entity_references_are_the_complete_anchor_set(
         key="explicit-empty-update-cannot-suppress-exact-match",
         text="Northstar Research and Cascade Works approved the revised renewal.",
         plan=update,
+        editorial=True,
     )
 
     assert update_outcome.status == schema.LANDED
@@ -1600,6 +1736,7 @@ def test_describe_entity_returns_only_the_explicitly_anchored_page_after_indexin
         key="explicit-entity-link-indexing",
         text="Northstar Research approved the renewal.",
         plan=plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -1655,6 +1792,7 @@ def test_guessed_hidden_page_and_entity_cannot_be_affected(clean_queue, target_r
         key="hidden-seed",
         text="Stealth Holdings has a restricted finance plan.",
         plan=hidden_plan,
+        editorial=True,
     )
     registry = json.loads(
         subprocess.check_output(
@@ -1759,6 +1897,7 @@ def test_strong_external_id_reuses_hidden_identity_without_model_or_receipt_leak
         key="hidden-external-id",
         text="The private CRM account is account-7.",
         plan=hidden_plan,
+        editorial=True,
     )
     hidden_registry = json.loads(
         subprocess.check_output(
@@ -1791,7 +1930,7 @@ def test_strong_external_id_reuses_hidden_identity_without_model_or_receipt_leak
         ),
     )
 
-    class RecordingPlanner(ScriptedPlanner):
+    class RecordingPlanner(EditorialFixturePlanner):
         context = ""
 
         def plan(self, **kwargs):
@@ -1855,6 +1994,7 @@ def test_restricted_input_cannot_rewrite_open_page_but_can_create_companion(
         key="open-policy",
         text="This policy is organization-wide.",
         plan=open_plan,
+        editorial=True,
     )
     open_before = subprocess.check_output(
         ["git", "show", "main:wiki/notes/Public policy.md"],
@@ -1906,6 +2046,7 @@ def test_restricted_input_cannot_rewrite_open_page_but_can_create_companion(
         key="safe-companion",
         text="Restricted finance detail for a companion page.",
         plan=companion_plan,
+        editorial=True,
     )
 
     assert outcome.status == schema.LANDED
@@ -1966,6 +2107,389 @@ def test_invalid_filing_candidate_lands_only_immutable_evidence(clean_queue, tar
     changes = list_changes(clean_queue)
     assert len(changes) == 1
     assert [entry.page_role for entry in changes[0].manifest] == ["source"]
+
+
+def test_editorial_gate_repairs_a_candidate_once_before_rejecting_it(
+    clean_queue, target_repo
+):
+    class RepairingPlanner(ScriptedPlanner):
+        def __init__(self, plan: FilingPlan, source: str):
+            super().__init__(plan)
+            self.source = source
+
+        def plan(self, **kwargs) -> PlanRun:
+            return PlanRun(super().plan(**kwargs).plan, model_requests=1)
+
+        def repair(self, *, files: dict[str, str], max_requests: int, **_kwargs) -> PlanRun:
+            assert max_requests == 1
+            path = "wiki/notes/Repairable release decision.md"
+            original = files[path]
+            repaired = original.replace(
+                "The release decision remains current.",
+                "The release decision remains current and records the operating conclusion. "
+                f"(Source: `{self.source}`)",
+            )
+            return PlanRun(
+                RepairPlan(
+                    summary="Added local evidence to the durable conclusion",
+                    mutations=(
+                        RepairMutation(
+                            path=path,
+                            text=repaired,
+                            reason="Added the missing local evidence citation",
+                        ),
+                    ),
+                ),
+                model_requests=1,
+            )
+
+    store = evidence.MemoryEvidenceStore()
+    receipt = CaptureService(clean_queue, store).capture_text(
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        adapter="mcp",
+        text="The release decision remains current.",
+        idempotency_key="repair-editorial-candidate",
+    )
+    source = source_path(schema.parse_capture(receipt["request"]))
+    plan = FilingPlan(
+        summary="Recorded the release decision",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Repairable release decision",
+                body="# Repairable release decision\n\nThe release decision remains current.",
+                reason="The source records the current release decision",
+            ),
+        ),
+    )
+    settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
+
+    item, outcome = worker.process_next(
+        clean_queue,
+        WriterDeps(settings, store, RepairingPlanner(plan, source), str(target_repo)),
+    )
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["plan_rejected"] is False
+    assert item["report"]["model_requests"] == 2
+    page = parse_page(
+        "wiki/notes/Repairable release decision.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Repairable release decision.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert source in page.body
+
+
+def test_editorial_gate_rejects_an_out_of_bounds_repair_but_keeps_the_source(
+    clean_queue, target_repo
+):
+    class OutOfBoundsRepairPlanner(ScriptedPlanner):
+        def repair(self, **_kwargs) -> PlanRun:
+            return PlanRun(
+                RepairPlan(
+                    summary="Attempted an unrelated repair",
+                    mutations=(
+                        RepairMutation(
+                            path="wiki/notes/Unrelated repair.md",
+                            text="# Unrelated repair\n\nThis page must not be written.",
+                            reason="This repair is outside the violated page",
+                        ),
+                    ),
+                ),
+                model_requests=1,
+            )
+
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded a repairable but incomplete release decision",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Incomplete release decision",
+                body="# Incomplete release decision\n\nThe release decision remains current.",
+                reason="The source records the current release decision",
+            ),
+        ),
+    )
+    receipt, item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        key="reject-out-of-bounds-repair",
+        text="The release decision remains current.",
+        plan=plan,
+        planner=OutOfBoundsRepairPlanner(plan),
+    )
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["model_requests"] == 1
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["plan_rejection"] == "knowledge gates found invalid-repair-plan"
+    source = source_path(schema.parse_capture(receipt["request"]))
+    changed_paths = subprocess.check_output(
+        ["git", "show", "--format=", "--name-only", item["commit_sha"]],
+        cwd=target_repo,
+        text=True,
+    ).splitlines()
+    assert changed_paths == [source]
+
+
+def test_capture_repair_refuses_an_out_of_scope_violation_before_reading_files(
+    clean_queue, target_repo
+):
+    hidden = "wiki/notes/Finance repair target.md"
+    target = target_repo / hidden
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        render_page(
+            path=hidden,
+            role="note",
+            title="Finance repair target",
+            body="# Finance repair target\n\nRestricted evidence.",
+            acl=("finance",),
+            created=dt.date(2026, 8, 24),
+            updated=dt.date(2026, 8, 24),
+        ),
+        encoding="utf-8",
+    )
+    before = {hidden: target.read_bytes()}
+    context = WriteContext(
+        actor_groups=frozenset({"engineering"}),
+        content_acl=("engineering",),
+        unrestricted=False,
+    )
+
+    with pytest.raises(writer.GateRefused, match="outside this capture"):
+        writer._capture_repair_files(
+            str(target_repo),
+            violations=(writer.Violation(hidden, "placeholder-knowledge-body", "repair it"),),
+            editorial_paths=frozenset({"wiki/notes/Visible repair target.md"}),
+            snapshot=before,
+            context=context,
+        )
+
+
+def test_master_recompile_preserves_sources_reuses_identity_and_is_idempotent(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    plan = FilingPlan(
+        summary="Recorded source-backed identity evidence without a page anchor",
+        entities=(
+            EntityProposal(
+                name="Acme",
+                entity_type="organization",
+                external_namespace="crm",
+                external_id="account-7",
+            ),
+        ),
+    )
+    receipt, _item, outcome = _process_capture(
+        clean_queue, target_repo, store,
+        actor=Actor(subject="marc", display_name="Marc"), audience=None,
+        key="recompile-seed", text="Acme CRM account account-7 owns a durable operating decision.", plan=plan,
+        editorial=True,
+    )
+    assert outcome.status == schema.LANDED
+    source = source_path(schema.parse_capture(receipt["request"]))
+    entity_path_before = subprocess.check_output(
+        ["git", "ls-tree", "-r", "--name-only", "main", "wiki/entities"],
+        cwd=target_repo,
+        text=True,
+    ).strip()
+    source_before = subprocess.check_output(
+        ["git", "show", f"main:{source}"], cwd=target_repo, text=True
+    )
+    entity_before = subprocess.check_output(
+        ["git", "show", f"main:{entity_path_before}"], cwd=target_repo, text=True
+    )
+    settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
+    queue.enqueue_garden(
+        clean_queue,
+        schema.GardenRequest(
+            idempotency_key="recompile-derived-knowledge",
+            actor=Actor(subject="marc", display_name="Marc"),
+            rationale="Apply the current graph compiler to immutable evidence", mode="recompile",
+        ),
+    )
+
+    item, outcome = worker.process_next(
+        clean_queue,
+        WriterDeps(settings, store, EditorialFixturePlanner(plan), str(target_repo)),
+    )
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["operation"] == "recompile"
+    assert item["report"]["source_count"] == 1
+    assert item["report"]["retained_entities"] == 1
+    assert source_before == subprocess.check_output(
+        ["git", "show", f"main:{source}"], cwd=target_repo, text=True
+    )
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"main:{entity_path_before}"],
+        cwd=target_repo,
+        check=False,
+    ).returncode == 0
+    assert entity_before == subprocess.check_output(
+        ["git", "show", f"main:{entity_path_before}"], cwd=target_repo, text=True
+    )
+
+    queue.enqueue_garden(
+        clean_queue,
+        schema.GardenRequest(
+            idempotency_key="recompile-derived-knowledge-again",
+            actor=Actor(subject="marc", display_name="Marc"),
+            rationale="Verify deterministic recompilation", mode="recompile",
+        ),
+    )
+    repeated, repeated_outcome = worker.process_next(
+        clean_queue,
+        WriterDeps(settings, store, EditorialFixturePlanner(plan), str(target_repo)),
+    )
+
+    assert repeated_outcome.status == schema.LANDED
+    assert repeated["report"]["idempotent"] is True
+    assert repeated["commit_sha"] == ""
+
+
+def test_recompile_records_one_garden_ledger_row_under_previous_trigger_constraint(
+    clean_queue, target_repo, monkeypatch
+):
+    def derive_one_page(worktree, _deps, *, rationale):
+        path = Path(worktree, "wiki", "notes", "Recompiled evidence.md")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            render_page(
+                path="wiki/notes/Recompiled evidence.md",
+                role="note",
+                title="Recompiled evidence",
+                body="# Recompiled evidence\n\nThis is regenerated derived knowledge.",
+                acl=None,
+                created=dt.date(2026, 8, 24),
+                updated=dt.date(2026, 8, 24),
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "operation": "recompile",
+            "rationale": rationale,
+            "source_count": 1,
+            "page_mutations": 1,
+            "retained_entities": 0,
+            "removed_entities": 0,
+            "created_entities": 0,
+            "model_requests": 0,
+            "link_health": {"violations": 0, "clean": True},
+            "idempotent": False,
+        }
+
+    monkeypatch.setattr(writer, "_recompile_derived", derive_one_page)
+    with clean_queue.cursor() as cursor:
+        cursor.execute(
+            "ALTER TABLE knowledge_changes DROP CONSTRAINT knowledge_changes_trigger_check"
+        )
+        cursor.execute(
+            """
+            ALTER TABLE knowledge_changes
+            ADD CONSTRAINT knowledge_changes_trigger_check
+            CHECK (trigger IN ('capture', 'garden', 'delete', 'contradiction_resolution', 'entity'))
+            """
+        )
+        cursor.execute(
+            """
+            SELECT pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conrelid = 'knowledge_changes'::regclass
+              AND conname = 'knowledge_changes_trigger_check'
+            """
+        )
+        trigger_constraint = cursor.fetchone()[0]
+    assert "'garden'" in trigger_constraint
+    assert "recompile" not in trigger_constraint
+
+    settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
+    deps = WriterDeps(settings, evidence.MemoryEvidenceStore(), ScriptedPlanner(FilingPlan(
+        summary="Unused recompile planner fixture"
+    )), str(target_repo))
+    request = schema.GardenRequest(
+        idempotency_key="recompile-ledger-compatibility",
+        actor=Actor(subject="marc", display_name="Marc"),
+        rationale="Record one compiled change under the historical ledger constraint",
+        mode="recompile",
+    )
+    commits_before = int(
+        subprocess.check_output(
+            ["git", "rev-list", "--count", "main"], cwd=target_repo, text=True
+        ).strip()
+    )
+
+    result = writer._recompile(
+        clean_queue,
+        deps,
+        writer.gitcmd.base_ref(str(target_repo), "main"),
+        request=request,
+    )
+
+    assert result.report["operation"] == "recompile"
+    assert int(
+        subprocess.check_output(
+            ["git", "rev-list", "--count", "main"], cwd=target_repo, text=True
+        ).strip()
+    ) == commits_before + 1
+    changes = [change for change in list_changes(clean_queue) if change.commit_sha == result.commit_sha]
+    assert len(changes) == 1
+    assert changes[0].trigger == "garden"
+
+
+def test_master_recompile_refuses_an_oversized_source_before_any_derived_mutation(
+    clean_queue, target_repo, monkeypatch
+):
+    store = evidence.MemoryEvidenceStore()
+    valid = FilingPlan(
+        summary="Recorded a durable conclusion",
+        mutations=(
+            PageMutation(
+                action="create", role="note", title="Stable recompile baseline",
+                body="# Stable recompile baseline\n\nThe source records a durable operating conclusion.",
+                reason="Baseline.",
+            ),
+        ),
+    )
+    _receipt, _item, outcome = _process_capture(
+        clean_queue, target_repo, store,
+        actor=Actor(subject="marc", display_name="Marc"), audience=None,
+        key="recompile-rollback-seed", text="The source records a durable operating conclusion.",
+        plan=valid, editorial=True,
+    )
+    assert outcome.status == schema.LANDED
+    before = subprocess.check_output(["git", "rev-parse", "main"], cwd=target_repo, text=True).strip()
+    monkeypatch.setattr(knowledge_sources, "MAX_CAPTURE_RENDERED_SOURCE_BYTES", 1)
+    queue.enqueue_garden(
+        clean_queue,
+        schema.GardenRequest(
+            idempotency_key="recompile-rollback", actor=Actor(subject="marc", display_name="Marc"),
+            rationale="Reject an oversized source before a complete rebuild", mode="recompile",
+        ),
+    )
+
+    _item, failed = worker.process_next(
+        clean_queue,
+        WriterDeps(
+            config.Settings(repo=str(target_repo), branch="main", backend="scripted"),
+            store, EditorialFixturePlanner(valid), str(target_repo),
+        ),
+    )
+
+    assert failed.status == schema.FAILED
+    assert subprocess.check_output(["git", "rev-parse", "main"], cwd=target_repo, text=True).strip() == before
 
 
 def test_crash_after_commit_reconciles_without_a_second_commit(
@@ -2126,6 +2650,7 @@ def test_explicit_delete_sweeps_page_and_source_references_in_one_commit(
         key="delete-seed",
         text="Obsolete detail with a retained referrer.",
         plan=seed_plan,
+        editorial=True,
     )
     assert outcome.status == schema.LANDED
     source = item["source_path"]
@@ -2208,6 +2733,7 @@ def test_source_deletion_reconciles_entity_claims_and_removes_empty_identities(
         key="entity-source-first",
         text="Acme Legacy is the account name.",
         plan=first_plan,
+        editorial=True,
     )
     assert first_outcome.status == schema.LANDED
     first_source = first_item["source_path"]
@@ -2248,6 +2774,7 @@ def test_source_deletion_reconciles_entity_claims_and_removes_empty_identities(
         key="entity-source-second",
         text="Acme Legacy is now called Acme Systems.",
         plan=second_plan,
+        editorial=True,
     )
     assert second_outcome.status == schema.LANDED
     second_source = second_item["source_path"]
@@ -2354,6 +2881,7 @@ def test_entity_rename_merge_and_delete_use_atomic_writer_operations(
         key="entity-pair",
         text=duplicate_assertion,
         plan=first_plan,
+        editorial=True,
     )
     registry = json.loads(
         subprocess.check_output(
@@ -2401,6 +2929,7 @@ def test_entity_rename_merge_and_delete_use_atomic_writer_operations(
         key="entity-rename",
         text="Northstar Labs is now called Northstar Systems.",
         plan=rename_plan,
+        editorial=True,
     )
     renamed = json.loads(
         subprocess.check_output(
@@ -2539,7 +3068,7 @@ def test_contradiction_and_resolution_are_ordinary_atomic_captures(clean_queue, 
     )
     worker.process_next(
         clean_queue,
-        WriterDeps(settings, store, ScriptedPlanner(first_plan), str(target_repo)),
+            WriterDeps(settings, store, EditorialFixturePlanner(first_plan), str(target_repo)),
     )
 
     second = service.capture_text(
@@ -2582,7 +3111,7 @@ def test_contradiction_and_resolution_are_ordinary_atomic_captures(clean_queue, 
     )
     item, outcome = worker.process_next(
         clean_queue,
-        WriterDeps(settings, store, ScriptedPlanner(second_plan), str(target_repo)),
+            WriterDeps(settings, store, EditorialFixturePlanner(second_plan), str(target_repo)),
     )
 
     assert outcome.status == schema.LANDED
@@ -2626,7 +3155,7 @@ def test_contradiction_and_resolution_are_ordinary_atomic_captures(clean_queue, 
     )
     resolved_item, resolved_outcome = worker.process_next(
         clean_queue,
-        WriterDeps(settings, store, ScriptedPlanner(resolution_plan), str(target_repo)),
+            WriterDeps(settings, store, EditorialFixturePlanner(resolution_plan), str(target_repo)),
     )
 
     assert resolved_outcome.status == schema.LANDED
@@ -2665,7 +3194,7 @@ def test_resolution_without_a_prose_mutation_preserves_the_visible_marker(
         WriterDeps(
             settings,
             store,
-            ScriptedPlanner(
+            EditorialFixturePlanner(
                 FilingPlan(
                     summary="Preserved a public retention contradiction",
                     mutations=(
@@ -2747,9 +3276,8 @@ def test_resolution_without_a_prose_mutation_preserves_the_visible_marker(
     )
     assert outcome.status == schema.LANDED
     assert item["report"]["wiki_changes"] == 0
-    assert item["report"]["plan_skipped"] == [
-        "contradiction resolution: target page requires an accepted update"
-    ]
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["plan_skipped"] == []
     assert len(contradictions.parse_all(after.body)) == 1
     assert after.sources == (seed_source,)
 
@@ -2779,6 +3307,7 @@ def test_invalid_contradiction_proposal_cannot_block_a_valid_capture(
                 ),
             ),
         ),
+        editorial=True,
     )
     receipt = CaptureService(clean_queue, store).capture_text(
         actor=actor,
@@ -2856,6 +3385,7 @@ def test_contradiction_cannot_cite_an_existing_source_not_supplied_to_the_planne
                 ),
             ),
         ),
+        editorial=True,
     )
     first_source = source_path(schema.parse_capture(first_receipt["request"]))
     unrelated_receipt, _unrelated_item, unrelated_outcome = _process_capture(
@@ -2965,7 +3495,7 @@ def test_restricted_contradiction_is_kept_only_on_a_safe_companion_page(
     )
     worker.process_next(
         clean_queue,
-        WriterDeps(settings, store, ScriptedPlanner(first_plan), str(target_repo)),
+        WriterDeps(settings, store, EditorialFixturePlanner(first_plan), str(target_repo)),
     )
     public_before = subprocess.check_output(
         ["git", "show", "main:wiki/notes/Renewal schedule.md"],
@@ -3046,7 +3576,7 @@ def test_restricted_contradiction_is_kept_only_on_a_safe_companion_page(
     )
     safe_item, safe_outcome = worker.process_next(
         clean_queue,
-        WriterDeps(settings, store, ScriptedPlanner(safe_plan), str(target_repo)),
+        WriterDeps(settings, store, EditorialFixturePlanner(safe_plan), str(target_repo)),
     )
 
     assert safe_outcome.status == schema.LANDED
@@ -3095,7 +3625,7 @@ def test_only_the_master_can_remove_a_matching_scoped_contradiction(
         WriterDeps(
             settings,
             store,
-            ScriptedPlanner(
+            EditorialFixturePlanner(
                 FilingPlan(
                     summary="Preserved finance contradictions",
                     mutations=(
@@ -3203,9 +3733,8 @@ def test_only_the_master_can_remove_a_matching_scoped_contradiction(
 
     assert outcome.status == schema.LANDED
     assert item["report"]["wiki_changes"] == 0
-    assert item["report"]["plan_skipped"] == [
-        "contradiction resolution: this operation requires the master identity",
-    ]
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["plan_skipped"] == []
     changed_paths = subprocess.check_output(
         ["git", "show", "--format=", "--name-only", item["commit_sha"]],
         cwd=target_repo,
@@ -3237,7 +3766,7 @@ def test_only_the_master_can_remove_a_matching_scoped_contradiction(
         WriterDeps(
             settings,
             store,
-                ScriptedPlanner(
+                EditorialFixturePlanner(
                     FilingPlan(
                         summary="Resolved the targeted finance contradiction",
                         mutations=(
@@ -3313,7 +3842,7 @@ def test_unsupported_resolution_lands_as_evidence_and_preserves_uncertainty(
     )
     worker.process_next(
         clean_queue,
-        WriterDeps(settings, store, ScriptedPlanner(seed_plan), str(target_repo)),
+        WriterDeps(settings, store, EditorialFixturePlanner(seed_plan), str(target_repo)),
     )
     page_text = subprocess.check_output(
         ["git", "show", "main:wiki/notes/Notice period.md"],

@@ -15,8 +15,6 @@ Example:
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -26,23 +24,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 try:
     from planner_eval import load_case, score
+    from worktree import apply_and_gate, prepared
 except ModuleNotFoundError:
     from evals.filing.planner_eval import load_case, score
+    from evals.filing.worktree import apply_and_gate, prepared
 
-from stigmergy.capture import schema  # noqa: E402
 from stigmergy.knowledge.planner import PydanticPlanner  # noqa: E402
 from stigmergy.librarian.config import Settings  # noqa: E402
 
-EMPTY_CONTEXT = json.dumps(
-    {
-        "candidates": [],
-        "entities": [],
-        "namespaces": [],
-        "source_evidence": [],
-        "truncated": False,
-    },
-    sort_keys=True,
-)
 DEFAULT_CASE = ROOT / "evals" / "filing" / "cases" / "harness_engineering.json"
 DEFAULT_WORKTREE = ROOT / "evals" / "filing" / "repo"
 
@@ -75,50 +64,30 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"source is not a file: {source_path}")
     case = load_case(args.case)
     source_text = source_path.read_text(encoding="utf-8")
-    settings = Settings(
-        repo=str(args.worktree),
-        timeout_s=args.timeout_s,
-        max_turns=args.max_turns,
-    )
-    run = PydanticPlanner(settings).plan(
-        worktree=str(args.worktree),
-        envelope=_envelope(source_text, title=case["source_title"]),
-        source_path=case["source_path"],
-        source_text=source_text,
-        context=EMPTY_CONTEXT,
-    )
-    result = {
-        "case": case["name"],
-        "model_requests": run.model_requests,
-        "plan": run.plan.model_dump(mode="json"),
-        "score": score(run.plan, case, source_text=source_text),
-    }
+    with prepared(case, source_text, template=str(args.worktree)) as evaluation:
+        settings = Settings(
+            repo=evaluation.root,
+            timeout_s=args.timeout_s,
+            max_turns=args.max_turns,
+        )
+        run = PydanticPlanner(settings).plan(
+            worktree=evaluation.root,
+            envelope=evaluation.envelope,
+            source_path=evaluation.source_path,
+            source_text=evaluation.source_text,
+            context=evaluation.context,
+        )
+        semantic = score(run.plan, case, source_text=source_text)
+        gates = apply_and_gate(evaluation, run.plan)
+        semantic["passed"] = semantic["passed"] and gates["passed"]
+        result = {
+            "case": case["name"],
+            "model_requests": run.model_requests,
+            "plan": run.plan.model_dump(mode="json"),
+            "score": semantic,
+            "gates": gates,
+        }
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if result["score"]["passed"] else 1
-
-
-def _envelope(source_text: str, *, title: str) -> schema.CaptureEnvelope:
-    raw = source_text.encode("utf-8")
-    digest = hashlib.sha256(raw).hexdigest()
-    return schema.CaptureEnvelope(
-        idempotency_key="filing-eval",
-        actor=schema.Actor(subject="filing-eval", display_name="Filing evaluation"),
-        audience=None,
-        origin=schema.Origin(
-            adapter="mcp",
-            captured_at=dt.datetime(2026, 9, 12, 14, 36, 31, tzinfo=dt.UTC),
-            title=title,
-        ),
-        artifacts=(
-            schema.ArtifactRef(
-                blob_ref=schema.content_ref(digest),
-                sha256=digest,
-                bytes=len(raw),
-                media_type=schema.MEDIA_MARKDOWN,
-            ),
-        ),
-    )
-
-
 if __name__ == "__main__":
     sys.exit(main())

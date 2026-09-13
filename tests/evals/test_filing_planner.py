@@ -4,11 +4,13 @@ from pathlib import Path
 import pytest
 
 from evals.filing import planner_eval, run_planner
+from evals.filing import worktree as eval_worktree
 from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation
 from stigmergy.knowledge.planner import PlanRun
 
 ROOT = Path(__file__).resolve().parents[2]
 CASE = ROOT / "evals" / "filing" / "cases" / "harness_engineering.json"
+SEEDED_CASE = ROOT / "evals" / "filing" / "cases" / "harness_engineering_seeded.json"
 FIXTURE = ROOT / "evals" / "filing" / "fixtures" / "harness_engineering_synthetic.md"
 DECISION_TRACE_CASE = ROOT / "evals" / "filing" / "cases" / "decision_trace_quality.json"
 DECISION_TRACE_FIXTURE = ROOT / "evals" / "filing" / "fixtures" / "decision_trace_quality.md"
@@ -23,7 +25,17 @@ def _plan(*, entities=(), links=()):
                 action="create",
                 role="concept",
                 title="Harness Engineering",
-                body="# Harness Engineering\n\nA durable explanation.",
+                body=(
+                    "# Harness Engineering\n\n"
+                    "Harness engineering explains why a model alone is not an agentic system: "
+                    "a task loop supplies tools, feedback, and durable memory. [[Agent Harness]] "
+                    "is the operating system this discipline improves.\n\n"
+                    "Santi authored the explanation. OpenAI built a product through an agent harness, "
+                    "LangChain measured a ranking improvement, and Anthropic documented different "
+                    "outcomes from different harness configurations. Claude Code and Codex are optional "
+                    "coding-agent environments in the source. (Source: "
+                    "`sources/2026/09/00000000-0000-4000-8000-000000000001.md`)"
+                ),
                 entities=tuple(links),
                 reason="The source explains the concept",
             ),
@@ -44,7 +56,12 @@ def _decision_trace_plan(*, entities=(), links=()):
                 action="create",
                 role="concept",
                 title="Decision Trace Quality",
-                body="# Decision Trace Quality\n\nA durable explanation.",
+                body=(
+                    "# Decision Trace Quality\n\nDecision trace quality records the evidence behind "
+                    "a decision so later readers can inspect the result. Mira Chen authored the method "
+                    "and Northstar Signal Lab measured its use. (Source: "
+                    "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)"
+                ),
                 entities=tuple(links),
                 reason="The source explains the concept.",
             ),
@@ -111,7 +128,7 @@ def test_harness_score_separates_identity_proposals_from_deliberate_links():
     assert result["passed"] is False
 
 
-def test_harness_score_requires_exactly_one_harness_engineering_concept():
+def test_harness_score_rejects_duplicate_pages_without_imposing_a_one_page_quota():
     case = planner_eval.load_case(CASE)
     plan = _plan(
         entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
@@ -123,6 +140,116 @@ def test_harness_score_requires_exactly_one_harness_engineering_concept():
 
     assert result["mutations"]["actual_count"] == 2
     assert result["mutations"]["passed"] is False
+    assert result["passed"] is False
+
+
+def test_empty_graph_case_rejects_a_redundant_split_without_using_page_count_as_a_proxy():
+    case = planner_eval.load_case(CASE)
+    case["anti_fragmentation"] = {
+        "redundant_title_groups": [["Harness Engineering", "Harness Engineering Explained"]]
+    }
+    plan = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    redundant = PageMutation(
+        action="create",
+        role="concept",
+        title="Harness Engineering Explained",
+        body=(
+            "# Harness Engineering Explained\n\nThis restates harness engineering rather than "
+            "adding independently reusable knowledge. (Source: "
+            "`sources/2026/09/00000000-0000-4000-8000-000000000001.md`)"
+        ),
+        entities=(),
+        reason="Redundant split fixture.",
+    )
+
+    result = planner_eval.score(plan.model_copy(update={"mutations": (*plan.mutations, redundant)}), case)
+
+    assert result["anti_fragmentation"]["passed"] is False
+    assert result["anti_fragmentation"]["fragmented_groups"] == [
+        ["harness engineering", "harness engineering explained"]
+    ]
+    assert result["passed"] is False
+
+
+def test_seeded_harness_case_requires_two_reciprocally_connected_reusable_pages():
+    case = planner_eval.load_case(SEEDED_CASE)
+    source = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
+    entities = tuple(
+        EntityProposal(name=name, entity_type="organization")
+        for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
+    )
+    plan = FilingPlan(
+        summary="Enriched the existing harness graph with a new reusable concept.",
+        entities=entities,
+        mutations=(
+            PageMutation(
+                action="create", role="concept", title="Harness Engineering",
+                body=("# Harness Engineering\n\nA model alone is not an agentic system; harness "
+                      "engineering improves the [[Agent Harness]] around it. Santi, OpenAI, Anthropic, "
+                      "and LangChain provide evidence that different harness configurations change "
+                      f"outcomes. (Source: `{source}`)"),
+                entities=("Santi", "OpenAI", "Anthropic", "LangChain"), reason="New reusable concept.",
+            ),
+            PageMutation(
+                action="update", path="wiki/concepts/Agent Harness.md", title="Agent Harness",
+                body=("# Agent Harness\n\nAn agent harness is the operating layer enriched by "
+                      "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain illustrate its "
+                      f"leverage. (Source: `{source}`)"),
+                entities=("Santi", "OpenAI", "Anthropic", "LangChain"), reason="Existing concept gains evidence.",
+            ),
+        ),
+    )
+
+    result = planner_eval.score(plan, case)
+
+    assert result["connections"]["passed"] is True
+    assert result["bodies"]["passed"] is True
+    assert result["entity_relationships"]["passed"] is True
+    assert result["passed"] is True
+
+
+def test_seeded_evaluation_worktree_exposes_the_real_candidate_and_runs_writer_gates():
+    case = planner_eval.load_case(SEEDED_CASE)
+    source_text = FIXTURE.read_text(encoding="utf-8")
+    plan = FilingPlan(
+        summary="Updated the seeded concept with current source evidence.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=(
+                    "# Agent Harness\n\nAn agent harness supplies the task loop, tools, feedback, "
+                    "and memory around a model; this source retains that durable definition. "
+                    "(Source: `sources/2026/09/00000000-0000-4000-8000-000000000001.md`)"
+                ),
+                reason="The current source supports the existing reusable concept.",
+            ),
+        ),
+    )
+
+    with eval_worktree.prepared(case, source_text, template=str(run_planner.DEFAULT_WORKTREE)) as root:
+        gates = eval_worktree.apply_and_gate(root, plan)
+
+        assert "Agent Harness" in root.context
+        assert gates["passed"] is True
+
+
+def test_harness_score_rejects_heading_only_body_even_with_expected_entities():
+    case = planner_eval.load_case(CASE)
+    plan = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    empty = plan.model_copy(update={"mutations": (plan.mutations[0].model_copy(
+        update={"body": "# Harness Engineering"}
+    ),)})
+
+    result = planner_eval.score(empty, case)
+
+    assert result["bodies"]["placeholders"] == ["Harness Engineering"]
     assert result["passed"] is False
 
 
@@ -368,10 +495,23 @@ def test_cli_uses_one_request_by_default_and_preserves_an_explicit_turn_override
 
         def plan(self, **kwargs):
             calls.append(kwargs)
+            base = _plan(
+                entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+            )
             return PlanRun(
-                _plan(
-                    entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
-                    links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                base.model_copy(
+                    update={
+                        "mutations": (
+                            base.mutations[0].model_copy(
+                                update={
+                                    "body": base.mutations[0].body.replace(
+                                        "[[Agent Harness]]", "the agent harness"
+                                    )
+                                }
+                            ),
+                        )
+                    }
                 ),
                 model_requests=1,
             )
@@ -393,13 +533,14 @@ def test_cli_uses_one_request_by_default_and_preserves_an_explicit_turn_override
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
-    assert calls[0]["settings"].repo == str(worktree)
+    assert calls[0]["settings"].repo != str(worktree)
     assert calls[0]["settings"].max_turns == expected_max_turns
-    assert calls[1]["source_text"] == source_text
+    assert source_text in calls[1]["source_text"]
     assert calls[1]["source_path"] == "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
-    assert calls[1]["context"] == run_planner.EMPTY_CONTEXT
+    assert '"candidates": []' in calls[1]["context"]
     assert payload["case"] == "harness-engineering"
     assert payload["score"]["passed"] is True
+    assert payload["gates"]["passed"] is True
 
 
 def test_cli_requires_live_acknowledgement_before_it_can_invoke_a_planner(capsys):

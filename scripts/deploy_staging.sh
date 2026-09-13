@@ -6,6 +6,20 @@ STIGMERGY_REPO="${STIGMERGY_REPO:-../stigmergy-brain}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY_DIR="$HERE/deploy"
 
+platform_root="$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "deploy: platform directory is not a Git worktree" >&2
+  exit 2
+}
+platform_root="$(cd "$platform_root" && pwd -P)"
+if [ "$platform_root" != "$HERE" ]; then
+  echo "deploy: deploy script must run from the platform Git worktree root" >&2
+  exit 2
+fi
+if [ -n "$(git -C "$HERE" status --porcelain=v1 --untracked-files=all)" ]; then
+  echo "deploy: platform checkout has tracked or untracked changes; use an exact clean checkout" >&2
+  exit 2
+fi
+
 mkdir -p "$DEPLOY_DIR"
 if ! mkdir "$DEPLOY_DIR/.staging-deploy.lock" 2>/dev/null; then
   echo "deploy: staging deployment is already in progress" >&2
@@ -62,6 +76,17 @@ PREFLIGHT_PY="${STIGMERGY_PYTHON:-$HERE/.venv/bin/python}"
 if [ ! -x "$PREFLIGHT_PY" ] ||
    ! "$PREFLIGHT_PY" -c "import stigmergy.server.identity" >/dev/null 2>&1; then
   echo "deploy: $PREFLIGHT_PY cannot import stigmergy; run make venv or set STIGMERGY_PYTHON" >&2
+  exit 2
+fi
+
+PARITY_ARTIFACT="${STIGMERGY_PARITY_ARTIFACT:-}"
+if [ -z "$PARITY_ARTIFACT" ] || [ ! -f "$PARITY_ARTIFACT" ]; then
+  echo "deploy: STIGMERGY_PARITY_ARTIFACT must name a recorded passing parity artifact" >&2
+  exit 2
+fi
+if ! "$PREFLIGHT_PY" "$HERE/evals/filing/parity.py" \
+  --artifact "$PARITY_ARTIFACT" --repo-root "$HERE"; then
+  echo "deploy: recorded parity gate rejected this candidate" >&2
   exit 2
 fi
 

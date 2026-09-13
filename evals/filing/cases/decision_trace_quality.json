@@ -1,17 +1,21 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "decision-trace-quality",
   "source_title": "Decision Trace Quality",
   "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000002.md",
   "mutations": {
-    "count": 1,
-    "allowed": [
+    "min_count": 1,
+    "max_count": 4,
+    "closed": true,
+    "required": [
       {
         "action": "create",
         "role": "concept",
         "title": "Decision Trace Quality"
       }
-    ]
+    ],
+    "allowed": [],
+    "forbidden": []
   },
   "identities": {
     "required": ["Mira Chen", "Northstar Signal Lab"],
@@ -32,5 +36,10 @@
   },
   "link_coverage": {
     "allow_unlinked": []
+  },
+  "bodies": {
+    "required": ["decision trace quality"],
+    "forbidden": [],
+    "require_local_source": true
   }
 }

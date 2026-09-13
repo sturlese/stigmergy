@@ -253,13 +253,13 @@ def test_librarian_keeps_identity_evidence_when_no_page_mutation_is_due():
 def test_librarian_requires_reusable_identities_and_deliberate_entity_links():
     text = " ".join(FROZEN.read_text().casefold().split())
     required = {
-        "likely to be referenced again",
-        "passing mentions remain plain text",
+        "expected future reuse",
+        "passing mentions remain prose",
         "only explicit `entities` references are anchored",
-        "make that decision from the source evidence, not from which examples the draft happened to retain",
-        "drafting and entity extraction are independent outputs from the same evidence",
-        "compare the plan against the source-first identity inventory, not only against the draft",
-        "never erase material attribution merely to simplify the draft",
+        "inventory named people, organizations, products, and projects",
+        "source supplies an entity-specific action",
+        "finally audit that every required conclusion is in a body",
+        "every selected identity has a visible relationship and local source citation",
     }
     forbidden = {
         "automatic unambiguous same-plan anchoring",
@@ -273,11 +273,8 @@ def test_librarian_requires_reusable_identities_and_deliberate_entity_links():
 def test_librarian_links_named_content_authors_without_inferring_submitter_authorship():
     text = " ".join(FROZEN.read_text().casefold().split())
     required = {
-        "named human author or originator with a stable name or handle is never a passing mention",
-        "must propose or reuse that author",
-        "deliberately link every materially derived mutation to them",
-        "a content author is not the submitter or provenance actor",
-        "do nothing when the author identity is absent or anonymous",
+        "source author qualifies when their authorship is itself useful provenance",
+        "not merely because every source has an author",
     }
 
     assert not (missing := {rule for rule in required if rule not in text}), missing

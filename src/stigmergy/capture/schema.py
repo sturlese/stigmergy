@@ -448,6 +448,9 @@ class GardenRequest(BaseModel):
     ]
     actor: Actor
     rationale: Annotated[str, Field(min_length=1, max_length=2000)]
+    # `repair` keeps historic queued garden requests compatible. Recompilation intentionally
+    # shares this operation envelope instead of introducing another queue or state store.
+    mode: Literal["repair", "recompile"] = "repair"
 
     def as_json(self) -> dict:
         return self.model_dump(mode="json")

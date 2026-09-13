@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,13 +31,14 @@ class Violation:
 class CorpusPage:
     path: str
     page_type: str
+    title: str
     acl: tuple[str, ...] | None
     entities: tuple[str, ...]
     sources: tuple[str, ...]
     text: str
 
 
-def check(root: str) -> tuple[Violation, ...]:
+def check(root: str, *, editorial_paths: frozenset[str] = frozenset()) -> tuple[Violation, ...]:
     violations: list[Violation] = []
     pages: dict[str, CorpusPage] = {}
     ids: dict[str, str] = {}
@@ -69,6 +71,8 @@ def check(root: str) -> tuple[Violation, ...]:
 
     violations.extend(_registry_violations(root, records))
     violations.extend(_relationship_violations(pages, records))
+    if editorial_paths:
+        violations.extend(_editorial_violations(pages, records, editorial_paths))
     if any(
         Path(root, *path.split("/")).exists()
         for path in CONTROL_PATHS
@@ -97,6 +101,7 @@ def _parse_corpus_page(path: str, text: str) -> CorpusPage:
         return CorpusPage(
             path=path,
             page_type=page.role,
+            title=page.title,
             acl=page.acl,
             entities=page.entities,
             sources=page.sources,
@@ -104,10 +109,10 @@ def _parse_corpus_page(path: str, text: str) -> CorpusPage:
         )
     if path.startswith("wiki/entities/"):
         parse_entity(path, text)
-        return CorpusPage(path, "entity", None, (), (), text)
+        return CorpusPage(path, "entity", "", None, (), (), text)
     if path.startswith("sources/"):
         source = parse_source(path, text)
-        return CorpusPage(path, "source", source.acl, (), (), source.text)
+        return CorpusPage(path, "source", "", source.acl, (), (), source.text)
     raise PageContractError("Markdown is outside an allowed corpus folder")
 
 
@@ -231,6 +236,78 @@ def _relationship_violations(pages, records) -> list[Violation]:
                         )
                     )
     return violations
+
+
+_SOURCE_REFERENCE = re.compile(r"sources/\d{4}/\d{2}/[^\s`\])>]+\.md")
+_PLACEHOLDER = re.compile(r"\b(?:todo|tbd|placeholder|to be written|coming soon)\b", re.I)
+
+
+def _editorial_violations(pages, records, editorial_paths: frozenset[str]) -> list[Violation]:
+    """Check objective reader-facing minimums only for pages changed by this candidate write."""
+    violations: list[Violation] = []
+    by_stem: dict[str, list[str]] = {}
+    for path in pages:
+        by_stem.setdefault(Path(path).stem.casefold(), []).append(path)
+
+    for path in sorted(editorial_paths):
+        page = pages.get(path)
+        if page is None or page.page_type not in {"note", "concept"}:
+            continue
+        metadata, body, malformed = split_frontmatter_checked(page.text)
+        if malformed or not metadata:
+            continue
+        body_lines = [line.strip() for line in body.splitlines() if line.strip()]
+        heading = f"# {page.title}"
+        if not body_lines or body_lines[0] != heading:
+            violations.append(Violation(path, "heading-title", "knowledge H1 must match page title"))
+            continue
+        prose = " ".join(body_lines[1:]).strip()
+        normalized = re.sub(r"\s+", " ", prose).strip()
+        if not normalized:
+            violations.append(Violation(path, "empty-knowledge-body", "knowledge body has no prose after its H1"))
+        elif _PLACEHOLDER.search(normalized) or len(re.sub(r"[^A-Za-z0-9]", "", normalized)) < 32:
+            violations.append(Violation(path, "placeholder-knowledge-body", "knowledge body is effectively empty"))
+
+        citations = set(_SOURCE_REFERENCE.findall(body))
+        if page.sources and not citations.intersection(page.sources):
+            violations.append(Violation(path, "missing-local-source-attribution",
+                                        "knowledge body must cite a declared source locally"))
+        for citation in sorted(citations - set(page.sources)):
+            violations.append(Violation(path, "invalid-local-source-reference",
+                                        f"local source reference {citation!r} is not declared"))
+
+        for target in link_targets(body):
+            matches = by_stem.get(target.casefold(), [])
+            if len(matches) != 1 or pages[matches[0]].page_type not in {"note", "concept"}:
+                continue
+            if not _has_relationship_prose(body, target):
+                violations.append(Violation(path, "link-without-relationship",
+                                            f"wikilink {target!r} has no relationship prose"))
+
+        for entity_id in page.entities:
+            record = records.get(entity_id)
+            if record is None:
+                continue
+            visible_names = [
+                claim.value for claim in record.claims
+                if flows_into(_list(claim.acl), _list(page.acl))
+            ]
+            if not any(_has_relationship_prose(body, name) for name in visible_names):
+                violations.append(Violation(path, "entity-without-relationship",
+                                            f"entity {entity_id} has no visible relationship prose"))
+    return violations
+
+
+def _has_relationship_prose(text: str, name: str) -> bool:
+    needle = name.casefold()
+    for line in text.splitlines():
+        if needle not in line.casefold():
+            continue
+        remainder = re.sub(r"\[\[[^\]]+\]\]", "", line)
+        remainder = re.sub(re.escape(name), "", remainder, flags=re.I)
+        if len(re.findall(r"[A-Za-z0-9]+", remainder)) >= 3:
+            return True
+    return False
 
 
 def _list(value: tuple[str, ...] | None) -> list[str] | None:

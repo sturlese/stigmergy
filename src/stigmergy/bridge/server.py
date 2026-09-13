@@ -45,7 +45,7 @@ def build_mcp(cloud: CloudClient, acquirer: Acquirer):
 
     @mcp.tool()
     async def describe_entity(entity: str) -> str:
-        """Compose visible knowledge anchored to one entity identity."""
+        """Return a bounded, ACL-visible entity dossier with cited relationship evidence."""
         return await cloud.call_tool("describe_entity", {"entity": entity})
 
     @mcp.tool()

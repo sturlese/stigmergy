@@ -9,7 +9,7 @@ from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.server.errors import RegistryError
 from stigmergy.server.identity import resolve_audiences
-from stigmergy.server.service import BrainService
+from stigmergy.server.service import NAV_CAP, BrainService
 from stigmergy.server.settings import Settings
 from tests.index.support import write_controls
 from tests.server.conftest import connect_or_skip, write_page
@@ -102,7 +102,7 @@ class EntityFixture:
                 "status": "mature",
                 "sources": [ACME_SOURCE],
             },
-            "Current public Acme knowledge.",
+            "Current public Acme knowledge. [[acme-2025]] supplies the prior context for this update.",
         )
         write_page(
             self.repo,
@@ -159,6 +159,46 @@ def _service(conn, fixture, subject, *, registry_path=None):
     )
 
 
+class CappedEntityFixture(EntityFixture):
+    def __init__(self, root):
+        super().__init__(root)
+        for index in range(NAV_CAP + 3):
+            write_page(
+                self.repo,
+                f"wiki/notes/Acme confidential {index:02d}.md",
+                {
+                    "title": f"Acme confidential {index:02d}",
+                    "entity": [ACME_ID],
+                    "updated": f"2027-05-{(index % 28) + 1:02d}",
+                    "acl": ["finance"],
+                },
+                f"Restricted Acme evidence page {index:02d} is not visible to engineering.",
+            )
+        for index in range(NAV_CAP + 1):
+            write_page(
+                self.repo,
+                f"wiki/notes/Acme evidence {index:02d}.md",
+                {
+                    "title": f"Acme evidence {index:02d}",
+                    "entity": [ACME_ID],
+                    "updated": f"2026-05-{(index % 28) + 1:02d}",
+                },
+                f"Acme evidence page {index:02d} contains substantive visible knowledge.",
+            )
+
+
+@pytest.fixture()
+def entity_capped_indexed(tmp_path):
+    fixture = CappedEntityFixture(str(tmp_path))
+    conn = connect_or_skip()
+    build.rebuild(conn, fixture.repo, build_embedder("fake"))
+    try:
+        yield conn, fixture
+    finally:
+        index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
+        conn.close()
+
+
 def test_list_entities_projects_only_names_visible_to_the_reader(entity_indexed):
     conn, fixture = entity_indexed
     unrestricted = _service(conn, fixture, fixture.STEWARD).list_entities()["entities"]
@@ -177,7 +217,11 @@ def test_describe_entity_is_a_dynamic_reader_scoped_projection(entity_indexed):
     finance = _service(conn, fixture, fixture.FINANCE).describe_entity("Acme")
     eng = _service(conn, fixture, fixture.ENG).describe_entity("Acme")
 
-    assert set(finance) == {"found", "entity", "knowledge", "knowledge_note", "sources"}
+    assert set(finance) == {
+        "found", "entity", "knowledge", "knowledge_note", "knowledge_state",
+        "knowledge_truncated", "knowledge_returned", "knowledge_cap", "sources",
+        "sources_truncated", "sources_returned", "sources_cap",
+    }
     assert finance["entity"]["id"] == ACME_ID
     assert [item["path"] for item in finance["knowledge"]] == [
         ACME_FINANCE,
@@ -187,6 +231,51 @@ def test_describe_entity_is_a_dynamic_reader_scoped_projection(entity_indexed):
     assert [item["path"] for item in eng["knowledge"]] == [ACME_NEW, ACME_OLD]
     assert finance["sources"] == [{"path": ACME_SOURCE, "title": "Acme evidence"}]
     assert eng["sources"] == []
+    item = next(item for item in eng["knowledge"] if item["path"] == ACME_NEW)
+    assert item["excerpt"] == "Current public Acme knowledge. [[acme-2025]] supplies the prior context for this update."
+    assert item["sources"] == []
+    assert item["relationships"] == [{
+        "path": ACME_OLD,
+        "title": "Acme 2025",
+        "statement": "Current public Acme knowledge. [[acme-2025]] supplies the prior context for this update.",
+        "statement_truncated": False,
+    }]
+    assert eng["knowledge_state"] == "available"
+    assert eng["knowledge_truncated"] is False
+
+
+def test_describe_entity_marks_visible_identity_without_anchored_knowledge(entity_indexed):
+    conn, fixture = entity_indexed
+
+    result = _service(conn, fixture, fixture.FINANCE).describe_entity("Vault Corp")
+
+    assert result["found"] is True
+    assert result["knowledge"] == []
+    assert result["knowledge_state"] == "no_visible_knowledge"
+    assert result["knowledge_truncated"] is False
+
+
+def test_describe_entity_caps_only_after_visibility_filtering(entity_capped_indexed):
+    conn, fixture = entity_capped_indexed
+
+    result = _service(conn, fixture, fixture.STEWARD).describe_entity("Acme")
+
+    assert result["knowledge_state"] == "capped"
+    assert result["knowledge_truncated"] is True
+    assert result["knowledge_returned"] == NAV_CAP
+    assert result["knowledge_cap"] == NAV_CAP
+
+
+def test_describe_entity_does_not_let_hidden_rows_consume_the_sql_evidence_cap(
+    entity_capped_indexed,
+):
+    conn, fixture = entity_capped_indexed
+
+    result = _service(conn, fixture, fixture.ENG).describe_entity("Acme")
+
+    assert result["knowledge_state"] == "capped"
+    assert result["knowledge_returned"] == NAV_CAP
+    assert all("confidential" not in item["path"] for item in result["knowledge"])
 
 
 def test_describe_entity_has_no_stored_dossier_or_entity_page(entity_indexed):

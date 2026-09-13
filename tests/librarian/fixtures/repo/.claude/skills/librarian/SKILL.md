@@ -19,16 +19,17 @@ to use within the capture audience; pages with narrower audiences are omitted en
 ## Filing judgment
 
 - Preserve durable conclusions, not the shape of the input.
-- Prefer a small graph of reusable concepts and identities over an exhaustive named-entity index.
+- Prefer a small, rich graph of reusable concepts and identities over an exhaustive named-entity
+  index. The unit of graph structure is a reusable idea, never the submitted source.
 - A page that lists incompatible sourced values without a `filed_contradictions` entry owes a
   `ContradictionProposal`, even from a repeat source that changes nothing else.
 - Create or rewrite a `note` for contextual conclusions, decisions, and events.
 - Create or rewrite a `concept` for durable explanatory knowledge.
-- Prefer one cohesive knowledge mutation per source. An explanatory source organized around one
-  concept normally creates exactly one concept page. Supporting examples, benchmarks, quotes,
-  statistics, and case studies belong as sections in that concept; do not create separate notes
-  merely because that material is notable or queryable. Create an additional page only for a
-  genuinely independent durable conclusion that cannot be subsumed without conflating topics.
+- A source may produce zero or more mutations. Update an existing relevant page before creating a
+  parallel one. Keep closely related evidence cohesive, but create or update a separate page when
+  an idea is independently understandable, likely to be searched, linked, or enriched again.
+  Do not split merely because a paragraph is notable; do not collapse an independently reusable
+  idea merely because it arrived in the same source.
 - Consolidate and delete a redundant note or concept when the plan also leaves every surviving
   reference and conclusion coherent.
 - Return no wiki mutations when the source adds no durable conclusion; a due
@@ -43,6 +44,16 @@ existing candidate path. A create supplies `role`, `title`, `body`, optional mat
 entity references, and a concise reason. A delete supplies only `path` and `reason`. Do not name a
 create path: the worker derives it from the role and title. Do not propose ACL changes.
 
+Every knowledge body must be readable cold: its H1 exactly matches the title, its opening explains
+the conclusion without relying on the source, and it contains substantive declarative prose rather
+than a heading, label, or placeholder. A concept covers definition, mechanism, significance,
+examples, and connections whenever the evidence supports those sections; adapt headings to the
+material rather than emitting empty template headings. A note preserves its contextual conclusion,
+decision, or event in declarative prose. Cite every newly introduced factual conclusion locally as
+`(Source: \`sources/YYYY/MM/<capture-id>.md\`)`; page metadata remains authoritative but is not the
+reader's only provenance signal. Every material `[[wikilink]]` must appear in a sentence or bullet
+that explains the relationship, never in an unexplained link list.
+
 The editorial maturities are `seed`, `developing`, `mature`, and `evergreen`. Do not mark a fact or
 entity deprecated. State dated inactivity as knowledge, use an explicit supersession relation when
 there is a known replacement, and use a contradiction when credible claims disagree.
@@ -50,30 +61,14 @@ there is a known replacement, and use a contradiction when credible claims disag
 ## Editorial graph compilation
 
 Entity proposals and page links are separate editorial decisions. Before drafting any mutation,
-inventory every named person, organization, product, and project in the supplied source, then decide
-which identities carry durable graph meaning. Make that decision from the source evidence, not from
-which examples the draft happened to retain: drafting and entity extraction are independent outputs
-from the same evidence. Then apply this decision test:
-
-- If the source supports that an identity authored, built, measured, documented, decided, owns, or
-  otherwise performed or received a concrete action, claim, practice, implementation, or result that
-  materially supports the durable conclusion, that identity MUST be proposed or reused and explicitly
-  linked to every relevant page. It is not a passing mention, even when it is not the page's subject,
-  and is likely to be referenced again. Preserve one concise source-supported statement of that
-  relationship in the page body so the link remains intelligible; never erase material attribution
-  merely to simplify the draft.
-- When a source compares multiple named identities through their concrete practices, implementations,
-  or measured results, evaluate each one independently and retain every identity that materially
-  supports the conclusion. A cohesive single-concept page is not a reason to collapse those identities
-  into an anonymous phrase such as "several teams" or to omit their proposals.
-- A source's named human author or originator with a stable name or handle is never a passing
-  mention. When that authored source yields durable knowledge, the librarian MUST propose or reuse
-  that author
-  and deliberately link every materially derived mutation to them. A content author is not the
-  submitter or provenance actor; do nothing when the author identity is absent or anonymous.
-- Passing mentions remain plain text: they are names for which the source supplies no concrete action,
-  claim, practice, implementation, result, or material relationship supporting the durable conclusion.
-  Generic technologies, patterns, provider lists, and incidental examples remain plain text.
+inventory named people, organizations, products, and projects in the supplied source. Then retain an
+identity only when it has expected future reuse: the source supplies an entity-specific action,
+claim, decision, ownership, implementation, or result that materially supports durable knowledge and
+future sources are likely to add or retrieve knowledge about that identity. A source author qualifies
+when their authorship is itself useful provenance for the knowledge, not merely because every source
+has an author. Passing mentions remain prose. Generic technologies, models, provider lists,
+benchmarks, methods, patterns, and incidental examples remain prose unless the source establishes
+reusable entity-specific knowledge about them.
 
 Entity proposals represent reusable identities: a person, organization, product, project, or another
 actual identity-bearing actor or object. Never propose a benchmark, metric, method, pattern,
@@ -84,11 +79,10 @@ inside a harness, or attributes technical behavior to it. A product or project q
 its own durable material relationship, not merely because it is listed as an environment or tool.
 
 Link a page only to identities with a durable, material relationship to that page: its subject,
-author, owner, decision-maker, counterparty, or a substantial example that makes future retrieval
-useful. Author or source attribution and identities whose concrete actions or examples materially
-support the durable knowledge are deliberate links too. This is broader than subject-only aboutness
-but narrower than lexical mention. The page body expresses the relationship in ordinary prose; do
-not invent relation types.
+author when provenance is useful, owner, decision-maker, counterparty, or a substantial example that
+makes future retrieval useful. This is broader than subject-only aboutness but narrower than lexical
+mention. The page body expresses each selected identity's concise, source-supported relationship in
+ordinary prose beside its local citation; do not invent relation types.
 
 Only explicit `entities` references are anchored. The worker never infers entity links from names
 or aliases. For every create, provide the complete `entities` set, including `entities: []` when no
@@ -112,12 +106,12 @@ Examples:
 - An update that changes facts but not links omits `entities`; an update that removes its only link
   provides `entities: []`.
 
-Before returning, compare the plan against the source-first identity inventory, not only against the
-draft: check that every identity meeting the decision test is proposed or reused, remains intelligible
-in the relevant mutation body, and is linked to every relevant mutation. Every other name is a passing
-mention, and every claim is supported by supplied evidence. Apply a redundancy test: if a secondary
-page can be removed without losing a distinct conclusion because its content already exists in the
-primary page, omit it. State summary counts and claims that exactly match the returned plan.
+Before returning, perform three passes. First inventory durable conclusions, candidate reusable ideas,
+and identities from the complete source. Then draft the smallest sufficient graph. Finally audit that
+every required conclusion is in a body, every selected identity has a visible relationship and local
+source citation, every page link explains why it exists, existing pages were reused where relevant,
+and no proposed secondary page is a redundant stub. State summary counts and claims that exactly
+match the returned plan.
 
 ## Sources and identity governance
 

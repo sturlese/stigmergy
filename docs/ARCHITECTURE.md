@@ -37,12 +37,19 @@ reservation so the same reaction can retry safely.
 
 The worker extracts each artifact, stores readable derivatives, deterministically renders one
 source page, retrieves only safe context, and requests one structured `FilingPlan`. The plan may
-create, update, consolidate, or delete notes/concepts; propose identity claims; add contradictions;
-or make no wiki mutation.
+create, update, consolidate, or delete zero or more notes/concepts; propose identity claims; add
+contradictions; or make no wiki mutation. A reusable idea, rather than the incoming source, is the
+graph unit: related evidence stays cohesive, while independently reusable conclusions become
+separate pages with meaningful links.
 
 The candidate tree must pass page, source immutability, reference, link, ACL-flow, entity,
-contradiction, registry, changed-path, and trusted-writer checks before the branch advances. Every
-landed operation records a friendly manifest plus a hash-verified exact patch.
+contradiction, registry, changed-path, and trusted-writer checks before the branch advances. New and
+updated knowledge pages must be cold-readable, use a matching H1, place source attribution near
+their factual conclusions, and explain material page and entity relationships in prose. A bounded
+semantic repair receives the original source and the same safe context; it replaces the complete
+candidate plan or nothing. If it cannot pass the gates, the immutable source lands alone with a
+typed `plan_rejected` report. Every landed operation records a friendly manifest plus a hash-verified
+exact patch.
 
 ## Visibility
 
@@ -57,7 +64,11 @@ IDs, aliases, captures, contradictions, or diff records reveal no existence.
 Entity IDs are immutable opaque UUIDs. Names are claims with scope, provenance, actor, and time.
 Names may be confidential. Entity files contain no facts or dossier body; facts live in ordinary
 notes and concepts anchored to the ID. Reader projections choose only visible claims, while
-`describe_entity` composes visible anchored pages and sources.
+`describe_entity` composes bounded content-bearing excerpts, local source records, and authored
+relationship evidence from visible anchored pages and sources. It is the ACL-safe entity dossier:
+the response has enough visible evidence for a client to render `What / Who`, `Facts`, and
+`Connections` without reading the raw identity record or making a second retrieval call. Visibility
+filtering precedes all caps, and caps disclose only the visible result.
 
 Each filing proposal represents one identity: one current name, source-explicit aliases, and an
 optional paired external namespace/ID. The filing context lists visible identities' external ids
@@ -90,8 +101,12 @@ evidence.
 
 The linter is pure. Repair primitives are bounded transformations. The scheduled gardener runs
 both inside the writer, applies the normal gates, and lands at most one commit. It stores a run
-summary, never a permanent assignment to a person. Due garden checks and expired-upload cleanup run
-under continuous queue load as well as while idle.
+summary, never a permanent assignment to a person. A master-only recompile uses the same
+`GardenRequest` path in `recompile` mode to rebuild derived notes, concepts, links, and entity
+anchors from the complete immutable-source corpus in an isolated worktree. It preserves sources and
+valid source-backed identities, aborts the complete candidate on any failed source or gate, and
+records its commit under the existing `garden` change-ledger trigger. Due garden checks and
+expired-upload cleanup run under continuous queue load as well as while idle.
 
 ## Read path
 

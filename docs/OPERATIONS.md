@@ -26,6 +26,12 @@ The private knowledge repository stores current Markdown and control files.
 
 Queue inspection/retry, gardener triggers, entity operations, changes, contradictions, and health
 are backoffice capabilities rather than separate product CLIs.
+The master-only `POST /admin/api/knowledge/recompile` control submits the same writer request as
+gardening with `mode: recompile`; it is not an index rebuild and has no separate installed CLI. It
+recompiles only derived notes, concepts, links, and entity anchors from committed immutable sources
+in an isolated worktree. A failed source, repair, or gate abandons the entire candidate. Successful
+recompiles retain valid source-backed identities and use the existing `garden` trigger in the
+unified change ledger, with `operation: recompile` in the run report.
 Entity merges require either one shared external ID present on every selected identity or an exact
 same-entity assertion copied from a cited immutable source path. Source assertions must name every
 selected identity completely and without same-label or contained-name ambiguity.
@@ -35,7 +41,7 @@ selected identity completely and without same-label or contained-name ambiguity.
 ```bash
 make test
 make lint
-make deploy-staging
+make deploy-staging PARITY_ARTIFACT=/absolute/path/to/parity-result.json
 make rebuild-staging
 ```
 
@@ -80,12 +86,26 @@ After deployment, validate:
 2. `/health` and authenticated MCP initialization succeed.
 3. The worker heartbeat advances and no processing lease is stale.
 4. A text capture lands with one source, one commit, and one Changes entry.
-5. Search sees the landed result only for authorized identities.
-6. The master backoffice shows the capture, friendly diff, exact patch, entities, contradictions,
+5. A controlled multi-idea capture produces a cohesive, linked set of cold-readable pages with local
+   citations; a rejected plan leaves only its immutable source and reports `plan_rejected`.
+6. Search sees the landed result only for authorized identities, and one `describe_entity` call
+   returns a bounded ACL-visible dossier with content-bearing evidence and relationships.
+7. An ACL-isolation probe proves hidden entity evidence, counts, names, and source titles do not
+   appear in a restricted reader's dossier.
+8. A master recompile preserves immutable sources, records `operation: recompile` under the `garden`
+   ledger trigger, and either advances the complete derived candidate or advances nothing.
+9. The master backoffice shows the capture, friendly diff, exact patch, entities, contradictions,
    gardener runs, and index-health state.
-7. A full rebuild indexes repository HEAD, records row count/time, and clears the dirty marker.
-8. Slack authentication and channel mapping are healthy; a controlled brain reaction lands through
+10. A full rebuild indexes repository HEAD, records row count/time, and clears the dirty marker.
+11. Slack authentication and channel mapping are healthy; a controlled brain reaction lands through
    the same capture path with a supported attachment when a safe test channel is available.
+
+For a librarian/compiler release, validate the recorded real-model parity artifact before any
+deployment command: `python evals/filing/parity.py --artifact <result.json>`. The command is a
+fail-closed release gate: a non-zero result blocks rollout. The artifact must bind both independent
+implementation runs to the same corpus, immutable initial graph, source-case hashes, Stigmergy
+commit, librarian skill hash, recorded raw gates, blind review provenance, and the lowest-passing
+reasoning-level matrix.
 
 ## Nightly reconciliation
 

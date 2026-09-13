@@ -421,6 +421,10 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return await _service_call(service.entities)
 
     @_endpoint
+    async def entity_dossier(request):
+        return await _service_call(service.entity_dossier, request.path_params["entity"])
+
+    @_endpoint
     async def entity_operation(request):
         data = await _json(request)
         entity_ids = data.get("entity_ids")
@@ -462,6 +466,14 @@ def _build_admin_app(service: AdminService) -> Starlette:
         )
 
     @_endpoint
+    async def recompile_trigger(request):
+        data = await _json(request)
+        return await _service_call(
+            service.trigger_recompile,
+            rationale=_text(data.get("rationale"), "rationale"),
+        )
+
+    @_endpoint
     async def index_state(_request):
         return await _service_call(service.index_state)
 
@@ -495,10 +507,12 @@ def _build_admin_app(service: AdminService) -> Starlette:
             methods=["POST"],
         ),
         Route(f"{API_PREFIX}entities", entities, methods=["GET"]),
+        Route(f"{API_PREFIX}entities/{{entity:str}}/dossier", entity_dossier, methods=["GET"]),
         Route(f"{API_PREFIX}entities/operation", entity_operation, methods=["POST"]),
         Route(f"{API_PREFIX}knowledge/delete", delete_pages, methods=["POST"]),
         Route(f"{API_PREFIX}gardener", gardener, methods=["GET"]),
         Route(f"{API_PREFIX}gardener/trigger", gardener_trigger, methods=["POST"]),
+        Route(f"{API_PREFIX}knowledge/recompile", recompile_trigger, methods=["POST"]),
         Route(f"{API_PREFIX}index", index_state, methods=["GET"]),
         Route(f"{API_PREFIX}worker", worker, methods=["GET"]),
         Route(f"{API_PREFIX}activity", activity, methods=["GET"]),

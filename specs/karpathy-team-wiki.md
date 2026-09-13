@@ -302,9 +302,9 @@ The librarian receives:
 
 The librarian returns a structured change set. It may:
 
-- create a `note` or `concept`;
+- create, update, consolidate, or delete zero or more `note` or `concept` pages according to the
+  independently reusable ideas in the evidence, rather than a quota derived from the source;
 - rewrite an existing `note` or `concept`;
-- consolidate knowledge and delete a redundant wiki page;
 - create or update minimal entity identity claims through the entity service;
 - add or resolve a well-formed contradiction marker;
 - decide that the source adds no durable wiki conclusion and create no wiki page.
@@ -312,6 +312,13 @@ The librarian returns a structured change set. It may:
 The librarian never rewrites `sources/`, emits a generated `view`, invents a meeting/document/page type, changes ACL to expose material more broadly, or waits for approval.
 
 It writes only figures its sources state. A later value from a source that is not the authority for that fact — the issuing party's own instrument or decision, a signed or reissued document, the system of record, or a named resolution — is filed as a contradiction, never applied as a correction.
+
+The writer treats a source as evidence, never as the unit of graph structure. A normal knowledge
+page represents one reusable idea: related support stays cohesive, while independently reusable
+conclusions become distinct explicitly connected pages. Every created or updated normal page must be
+cold-readable, state material relationships in prose, and attribute factual conclusions locally to
+its immutable sources. These are graph-quality gates, not an invitation to deterministic entity or
+topic extraction.
 
 The target corpus has four roles:
 
@@ -401,7 +408,12 @@ The projection chooses a display name deterministically from claims visible to t
 
 `list_entities` returns only identities for which the reader can see a name claim or an anchored page, using a visible display name.
 
-`describe_entity` follows internal redirects, emits only visible identity claims, and composes facts/connections from ACL-visible notes, concepts, and sources anchored to the stable ID. It does not read a stored dossier from the entity page.
+`describe_entity` follows internal redirects, emits only visible identity claims, and composes a
+bounded content-bearing dossier from ACL-visible notes, concepts, and sources anchored to the stable
+ID. Its visible excerpts, local sources, and authored relationships are sufficient for a client to
+render `What / Who`, `Facts`, and `Connections` without a second retrieval call. Visibility filtering
+precedes every cap; truncation reveals no hidden count, title, name, or source. It does not read a
+stored dossier from the entity page.
 
 Unknown, hidden, and unauthorized IDs return the same neutral response shape so the tool is not an existence oracle.
 
@@ -454,7 +466,7 @@ Submitting the form creates an ordinary capture with `intent.resolution_of`. It 
 These names remain, but their responsibilities become small and precise:
 
 - **Linter:** a pure detector library. Given a candidate repository tree, it returns deterministic, structured violations. It has no database backlog and no side effects.
-- **Repair:** pure, bounded transformation primitives used by the writer: deterministic rewrites, link/anchor sweeps, registry regeneration, explicit deletion, and a constrained model repair when semantics are required. It is not a daemon, queue, or user-facing workflow.
+- **Repair:** pure, bounded transformation primitives used by the writer: deterministic rewrites, link/anchor sweeps, registry regeneration, explicit deletion, and a constrained model repair when semantics are required. A semantic repair receives the original source and the same ACL-safe filing context, and replaces the complete candidate plan or nothing. It is not a daemon, queue, or user-facing workflow.
 - **Gardener:** the single scheduled orchestrator that runs the linter and repair primitives autonomously inside the existing writer process.
 
 There is no separate gardener worker and repair worker. The one knowledge writer performs:
@@ -465,6 +477,13 @@ detect -> plan bounded repairs -> apply to candidate tree -> run all write gates
 ```
 
 If the candidate does not pass every gate, no repository ref is advanced and no partial repair lands. A clean run records zero changes. A failed run records a safe error and is retried according to the technical retry policy. Findings are ephemeral details of a run, not durable assignments to people.
+
+A master may request `GardenRequest(mode="recompile")` through the backoffice. Recompile uses the
+same writer and all the same gates, reconstructs only derived notes, concepts, links, and entity
+anchors from immutable sources in an isolated worktree, and preserves source pages and valid
+source-backed identities. Any failed source, repair, or gate abandons the complete candidate.
+Recompile is recorded as `operation: recompile` in its run report but retains the existing `garden`
+trigger in the unified change ledger; no additional ledger trigger is introduced.
 
 The target disposition of current checks is:
 
@@ -509,7 +528,9 @@ The exact unified patch is stored compressed and content-addressed in the existi
 
 The current separate permanent gardener findings and repair ledger disappear. Delete operations and historical-style maintenance are simply filtered change records. Because this is a clean reset, no legacy records are converted.
 
-The master backoffice replaces the Repairs view with a unified Changes view. A capture, gardener run, entity action, contradiction resolution, or deletion links to its change record. The default presentation is friendly to both technical and non-technical users:
+The master backoffice replaces the Repairs view with a unified Changes view. A capture, gardener run,
+recompile (recorded under the `garden` trigger), entity action, contradiction resolution, or deletion
+links to its change record. The default presentation is friendly to both technical and non-technical users:
 
 - a short explanation of what the system learned or repaired;
 - created, updated, deleted, and contradiction counts;
