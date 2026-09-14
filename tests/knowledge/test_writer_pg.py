@@ -96,10 +96,14 @@ def _editorial_fixture_mutation(
         ),
         body,
     )
-    for name in dict.fromkeys(entity_names):
-        if name.casefold() not in body.casefold():
-            body += f"\n\n{name} is materially related to this conclusion."
-    if source not in body:
+    unique_entity_names = tuple(dict.fromkeys(entity_names))
+    if unique_entity_names:
+        relationships = " ".join(
+            f"{name} is materially related to this conclusion."
+            for name in unique_entity_names
+        )
+        body += f"\n\n{relationships} (Source: `{source}`)"
+    elif source not in body:
         body += f"\n\n(Source: `{source}`)"
     return mutation.model_copy(update={"body": body})
 
