@@ -40,7 +40,8 @@
       "runtime": {
         "model": "openai/gpt-5.4",
         "reasoning_level": "high",
-        "provider": "azure"
+        "provider": "azure",
+        "max_tokens": 32768
       },
       "execution": {
         "mode": "production-equivalent",
@@ -74,7 +75,8 @@
           "runtime": {
             "model": "openai/gpt-5.4",
             "reasoning_level": "high",
-            "provider": "azure"
+            "provider": "azure",
+            "max_tokens": 32768
           },
           "execution_mode": "production-equivalent",
           "configured_max_turns": 2,
@@ -149,7 +151,8 @@
       "runtime": {
         "model": "openai/gpt-5.4",
         "reasoning_level": "high",
-        "provider": "azure"
+        "provider": "azure",
+        "max_tokens": 32768
       },
       "runs": [
         "The complete selected-run objects are repeated here, once for every independent repeat."

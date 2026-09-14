@@ -21,7 +21,7 @@ plan to equal the recorded plan before deriving the revision telemetry, semantic
 raw gate map, and blind-review effective-page hash against the current case and fixture. Token usage is recorded only when the runner
 exposes it; provider fields are never inferred. Schema v3 is obsolete because it cannot bind the original
 draft and reviewed-plan telemetry required for that replay. This is a v4 clean cut: an older v4 record
-without the nullable repair fields is not replayable admission evidence and must be rerun.
+without the nullable repair fields or the Stigmergy `max_tokens` ceiling is not replayable admission evidence and must be rerun.
 
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use the production Azure route and the fixed
@@ -33,7 +33,7 @@ hard gates may honestly fail under Stigmergy's writer rubric, but every case, pr
 canonical payload digest, semantic score, writer result, and raw gate map is still replay-verified.
 
 Every Stigmergy reasoning-level candidate records full per-case runs using the same corpus, initial
-graph, case hashes, candidate commit, skill hash, runtime route, and complete raw gate map. The
+graph, case hashes, candidate commit, skill hash, runtime route, exact `max_tokens` ceiling, and complete raw gate map. The
 selected production level must be the first passing level in the ordered matrix and equal the one
 runtime librarian reasoning setting. The runner accepts a diagnostic `planner-only` mode, but that
 evidence can never select a production level. Missing, stale, mismatched, aggregate-only, incomplete,

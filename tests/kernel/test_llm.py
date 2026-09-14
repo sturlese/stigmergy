@@ -80,6 +80,8 @@ def test_librarian_requests_high_reasoning_without_returning_reasoning(monkeypat
 
     assert settings is model.settings
     assert llm.LIBRARIAN_REASONING_LEVEL == "high"
+    assert llm.LIBRARIAN_MAX_TOKENS == 32768
+    assert model.settings["max_tokens"] == llm.LIBRARIAN_MAX_TOKENS
     assert model.settings["openrouter_reasoning"] == {
         "effort": llm.LIBRARIAN_REASONING_LEVEL,
         "exclude": True,

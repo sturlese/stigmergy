@@ -10,6 +10,7 @@ from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettin
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:openai/gpt-5.4"
 LIBRARIAN_REASONING_LEVEL = "high"
+LIBRARIAN_MAX_TOKENS = 32768
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
 APPROVED_MODELS = frozenset(
     {ANSWER_MODEL, LIBRARIAN_MODEL, OCR_MODEL}
@@ -72,6 +73,7 @@ def build_model(model_name: str = ANSWER_MODEL):
         openrouter_provider=provider_policy(model_name)
     )
     if model_name == LIBRARIAN_MODEL:
+        model_settings["max_tokens"] = LIBRARIAN_MAX_TOKENS
         model_settings["openrouter_reasoning"] = {
             "effort": LIBRARIAN_REASONING_LEVEL,
             "exclude": True,

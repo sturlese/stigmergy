@@ -19,7 +19,7 @@ except ModuleNotFoundError:
     from evals.filing.planner_eval import load_case, score
     from evals.filing.worktree import apply_with_production_repair, effective_plan, prepared
 
-from stigmergy.kernel.llm import LIBRARIAN_REASONING_LEVEL
+from stigmergy.kernel.llm import LIBRARIAN_MAX_TOKENS, LIBRARIAN_REASONING_LEVEL
 from stigmergy.knowledge.context import authorized_derived_page_paths, filing_context
 from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
 from stigmergy.knowledge.plan import FilingPlan, RepairPlan
@@ -61,7 +61,11 @@ REQUIRED_SEMANTIC_GATES = frozenset(
         "writer",
     }
 )
-STIGMERGY_RUNTIME = {"model": "openai/gpt-5.4", "provider": "azure"}
+STIGMERGY_RUNTIME = {
+    "model": "openai/gpt-5.4",
+    "provider": "azure",
+    "max_tokens": LIBRARIAN_MAX_TOKENS,
+}
 ARTIFACT_SCHEMA_VERSION = 4
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_REF = re.compile(r"^[0-9a-f]{40}$")
@@ -359,6 +363,8 @@ def _validate_run(
             or runtime.get("reasoning_level") not in REASONING_LEVELS
         ):
             _failure(failures, implementation, "runtime-route")
+        if runtime.get("max_tokens") != LIBRARIAN_MAX_TOKENS:
+            _failure(failures, implementation, "runtime-output-ceiling")
         if require_runtime_reasoning and runtime.get("reasoning_level") != LIBRARIAN_REASONING_LEVEL:
             _failure(failures, implementation, "runtime-production-reasoning")
     execution = item.get("execution")

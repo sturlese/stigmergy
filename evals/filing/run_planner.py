@@ -53,6 +53,7 @@ except ModuleNotFoundError:
     )
 
 from stigmergy.kernel.llm import (  # noqa: E402
+    LIBRARIAN_MAX_TOKENS,
     LIBRARIAN_MODEL,
     LIBRARIAN_PROVIDER_ROUTING,
     build_model,
@@ -280,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
             "model": LIBRARIAN_MODEL.removeprefix("openrouter:"),
             "reasoning_level": reasoning_level,
             "provider": LIBRARIAN_PROVIDER_ROUTING["only"][0],
+            "max_tokens": LIBRARIAN_MAX_TOKENS,
         }
         case_result = {
             "brain_prompt": brain_prompt,
