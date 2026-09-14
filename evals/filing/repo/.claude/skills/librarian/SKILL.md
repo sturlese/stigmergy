@@ -25,16 +25,20 @@ only what the plan actually does.
   `entities: null` to preserve current anchors, or a complete `entities: [...]` list to replace them.
 - Use `delete` only to consolidate a duplicate or obsolete normal page, with path and reason, and
   emit `entities: null`.
-- When `SAFE EXISTING CONTEXT` contains `recompile.prior_pages`, the derived candidate started
-  empty. Account for every exact prior path: recreate it when it remains durable, update it only
-  when that path already exists in current `candidates`, or emit `delete` as an explicit tombstone
-  when it is truly obsolete or consolidated. A tombstone authorizes absence from the fresh
-  candidate; it does not delete a second time. Never tombstone and recreate the same path. For a
-  consolidation, create or update the replacement and name that replacement in the delete reason.
-  An empty mutation list is valid only when `recompile.prior_pages` is empty.
 - Never create pages, notes, concepts, or entities for a capture ID, post ID, URL slug, document
   identifier, or other provenance token. Keep those in source metadata and citations.
 - Do not create sources, captures, entities, indexes, logs, ACL records, or retired page roles.
+
+## Recompile-only preservation protocol
+
+Apply this section only when `SAFE EXISTING CONTEXT` contains a top-level `recompile` object;
+ignore it entirely for ordinary capture. In recompile mode, `delete` is an accounting tombstone,
+not the ordinary deletion above, because the derived candidate started empty. Account for every
+exact `recompile.prior_pages` path: recreate it when it remains durable, update it only when that
+path already exists in current `candidates`, or tombstone it when truly obsolete or consolidated.
+A tombstone authorizes absence and does not delete a second time. Never tombstone and recreate the
+same path. For consolidation, create or update the replacement and name it in the tombstone reason.
+An empty mutation list is valid only when `recompile.prior_pages` is empty.
 
 ## Editorial policy
 
@@ -42,13 +46,11 @@ Build the smallest useful graph, not a summary per source. A source may create z
 reusable pages. Prefer a supported update to a parallel page. A distinct page needs a name,
 mechanism, significance, and plausible future reuse; passing mentions remain prose.
 
-Assess a source-title named durable concept as a first-class page candidate. A named discipline,
-practice, methodology, or framework is ontologically distinct from the artifact, component, or
-tool it concerns even when they share words. For example, `X Engineering` is the discipline and
-`X` is the designed artifact: create or update the central discipline page and update the artifact
-only with a concise reciprocal relation. Dumping the source framework into the adjacent artifact
-page is incorrect. A source-named central concept belongs in one central page; its categories,
-groups, components, functions, and extensions are sections of that page, not sibling concepts.
+Treat a source-defined reusable discipline, framework, or method as a first-class page candidate.
+When it differs in abstraction from an existing lower-level artifact, system, or component,
+preserve both: create or update each as needed and link them reciprocally. Never collapse one into
+the other merely to reuse an existing page. A source-named central concept belongs in one central
+page; its categories, groups, components, functions, and extensions are sections of that page.
 Split a child page only when it independently has a stable name, mechanism, significance, examples,
 and future reuse beyond the parent framework.
 
@@ -127,14 +129,15 @@ Before returning the plan, perform this ordered check:
 1. Read the source completely; list durable concepts, named framework members, examples, extensions,
    authors, and identity evidence.
 2. Compare candidates with visible pages; choose zero to many reusable pages and keep a parent
-   framework cohesive unless a child passes the independent-page test. During recompile, give
-   every `recompile.prior_pages` path one explicit recreate, update, or delete disposition.
+   framework cohesive unless a child passes the independent-page test. If recompile mode is active,
+   also complete the recompile-only preservation protocol.
 3. Write each body as a cold-readable explanation with complete source-supported coverage and exact
    `(Source: `source_path`)` citations copied from the original capture data.
 4. Add only semantic normal-page links, with reciprocal edits where both endpoints change.
-5. Select page-specific entities, verify aboutness, aliases, and same-paragraph exact relationship
-   citations; confirm that a material named author and actors with a material evidentiary role have
-   not been dropped; use no entity wikilinks.
+5. Select page-specific entities and verify aboutness. Every material evidence-producing actor must
+   appear in a locally cited sentence with its preferred human or organization name and any
+   source-provided handle or alias together. Keep the human or organization name canonical and
+   handles only as aliases. Confirm no material author or actor was dropped; use no entity wikilinks.
 6. Check every existing conclusion and conflict against the supplied evidence; emit only justified
    contradiction proposals.
 7. Audit that every required conclusion is in a body, every planned field is structurally valid,

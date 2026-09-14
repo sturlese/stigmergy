@@ -263,9 +263,12 @@ def test_librarian_preserves_related_pages_at_distinct_conceptual_levels():
 def test_librarian_requires_explicit_disposition_for_every_prior_recompile_page():
     text = " ".join(FROZEN.read_text().casefold().split())
 
-    assert "when `safe existing context` contains `recompile.prior_pages`" in text
-    assert "account for every exact prior path" in text
-    assert "a tombstone authorizes absence from the fresh candidate" in text
+    assert "## recompile-only preservation protocol" in text
+    assert "contains a top-level `recompile` object" in text
+    assert "ignore it entirely for ordinary capture" in text
+    assert "`delete` is an accounting tombstone, not the ordinary deletion above" in text
+    assert "account for every exact `recompile.prior_pages` path" in text
+    assert "a tombstone authorizes absence and does not delete a second time" in text
     assert "never tombstone and recreate the same path" in text
     assert "an empty mutation list is valid only when `recompile.prior_pages` is empty" in text
 
@@ -276,7 +279,17 @@ def test_librarian_distinguishes_evidentiary_identities_from_incidental_examples
     assert "used as cited evidence for a conclusion" in text
     assert "even when the page is not primarily about that identity" in text
     assert "catalog entry, name-drop, or example with no stated action or result remains prose" in text
-    assert "actors with a material evidentiary role have not been dropped" in text
+    assert "confirm no material author or actor was dropped" in text
+
+
+def test_librarian_requires_locally_cited_preferred_identity_and_aliases():
+    text = " ".join(FROZEN.read_text().casefold().split())
+
+    assert "every material evidence-producing actor must appear in a locally cited sentence" in text
+    assert "preferred human or organization name" in text
+    assert "source-provided handle or alias together" in text
+    assert "human or organization name canonical" in text
+    assert "handles only as aliases" in text
 
 
 def test_librarian_declares_entity_anchor_shape_for_every_mutation_action():
@@ -325,8 +338,10 @@ def test_librarian_requires_full_frameworks_and_keeps_entity_anchors_out_of_wiki
         "do not reduce a six-part mechanism to generic bullets",
         "a source-named central concept belongs in one central page",
         "split a child page only when it independently has a stable name, mechanism, significance",
-        "assess a source-title named durable concept as a first-class page candidate",
-        "dumping the source framework into the adjacent artifact page is incorrect",
+        "treat a source-defined reusable discipline, framework, or method as a first-class page candidate",
+        "differs in abstraction from an existing lower-level artifact, system, or component",
+        "preserve both: create or update each as needed and link them reciprocally",
+        "never collapse one into the other merely to reuse an existing page",
         "use wikilinks only for visible normal note/concept pages",
         "never use entity names as wikilinks",
         "no provenance token became a page or entity",
