@@ -818,6 +818,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     assert payload["semantic_revision_applied"] is False
     assert payload["semantic_revision_model_requests"] == 0
     assert payload["repair_model_requests"] == 0
+    assert payload["repair_plan_sha256"] is None
     assert payload["schema_retry_count"] == 0
     assert payload["semantic_repair_count"] == 0
     assert payload["usage"] == {"requests": 1}
@@ -835,6 +836,8 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
         assert "payload" in payload["case_result"]
         assert "--include-payload emits derived page bodies" in captured.err
         assert payload["case_result"]["payload"]["reviewed_plan"] is None
+        assert payload["case_result"]["payload"]["repair_plan"] is None
+        assert payload["case_result"]["payload"]["repair_plan_sha256"] is None
         assert payload["case_result"]["payload"]["semantic_revision"] == {
             "required": False,
             "attempted": False,
@@ -861,7 +864,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
             "planning_model_requests", "semantic_revision_required",
             "semantic_revision_attempted", "semantic_revision_applied",
             "semantic_revision_model_requests", "repair_model_requests", "schema_retry_count",
-            "semantic_repair_count", "elapsed_ms", "usage", "score",
+            "repair_plan_sha256", "semantic_repair_count", "elapsed_ms", "usage", "score",
             "gates", "raw_gates", "output",
         )
     }
@@ -910,6 +913,93 @@ def test_cli_rejects_a_template_skill_that_does_not_match_the_packaged_skill(
 
     assert error.value.code == 2
     assert "librarian skill" in capsys.readouterr().err
+
+
+def test_cli_records_the_actual_pure_create_repair_plan(tmp_path, monkeypatch, capsys):
+    base = _plan(
+        entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+        links=("Santi", "OpenAI", "Anthropic", "LangChain"),
+    )
+    base = base.model_copy(
+        update={
+            "mutations": (
+                base.mutations[0].model_copy(
+                    update={"body": base.mutations[0].body.replace("[[Agent Harness]]", "the agent harness")}
+                ),
+            )
+        }
+    )
+    broken = base.model_copy(
+        update={
+            "mutations": (
+                base.mutations[0].model_copy(
+                    update={
+                        "body": base.mutations[0].body.replace(f"(Source: `{SOURCE}`)", "")
+                    }
+                ),
+            )
+        }
+    )
+
+    class RepairingPlanner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def plan(self, **_kwargs):
+            return PlanRun(broken, model_requests=1)
+
+        def repair(self, *, files, **_kwargs):
+            path, body = next(iter(files.items()))
+            repaired = body.replace(
+                "app under different harness configurations. ",
+                f"app under different harness configurations. (Source: `{SOURCE}`) ",
+            )
+            return PlanRun(
+                RepairPlan(
+                    summary="Restored local provenance.",
+                    mutations=(
+                        RepairMutation(
+                            path=path,
+                            body=repaired,
+                            reason="Restored a local source reference.",
+                        ),
+                    ),
+                ),
+                model_requests=1,
+            )
+
+    monkeypatch.setattr(run_planner, "PydanticPlanner", RepairingPlanner)
+    monkeypatch.setattr(run_planner, "validate_librarian_skill", lambda _template: None)
+    monkeypatch.setattr(
+        run_planner,
+        "librarian_skill_provenance",
+        lambda _brain_root: {
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        },
+    )
+
+    exit_code = run_planner.main(
+        [
+            "--live",
+            "--source",
+            str(FIXTURE),
+            "--case",
+            str(CASE),
+            "--brain-root",
+            str(tmp_path / "brain"),
+            "--include-payload",
+        ]
+    )
+
+    result = json.loads(capsys.readouterr().out)
+    payload = result["case_result"]["payload"]
+    assert exit_code == 0
+    assert result["model_requests"] == 2
+    assert result["repair_model_requests"] == 1
+    assert result["repair_plan_sha256"] == payload["repair_plan_sha256"]
+    assert payload["repair_plan"] is not None
+    assert payload["repair_plan"]["summary"] == "Restored local provenance."
 
 
 def test_production_equivalent_worktree_records_a_bounded_semantic_repair_attempt():
@@ -1036,16 +1126,20 @@ def test_production_equivalent_worktree_scores_the_final_repaired_body():
             )
 
     with eval_worktree.prepared(case, source_text, template=str(run_planner.DEFAULT_WORKTREE)) as worktree:
-        result = eval_worktree.apply_with_production_repair(
+        result, _active_plan, repair_plan = eval_worktree.apply_with_production_repair(
             worktree,
             broken,
             CorrectingPlanner(),
             planning_model_requests=1,
             max_turns=2,
+            return_plan=True,
+            return_repair_plan=True,
         )
         final = eval_worktree.effective_plan(worktree, broken)
 
     assert result["passed"] is True, result
+    assert repair_plan is not None
+    assert repair_plan.summary == "Restored local provenance."
     assert planner_eval.score(final, case, source_text=source_text)["passed"] is True
 
 

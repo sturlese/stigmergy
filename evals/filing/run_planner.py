@@ -193,13 +193,14 @@ def main(argv: list[str] | None = None) -> int:
             context=evaluation.context,
         )
         if args.execution_mode == PRODUCTION_EQUIVALENT_MODE:
-            gates, plan_for_score = apply_with_production_repair(
+            gates, plan_for_score, recorded_repair_plan = apply_with_production_repair(
                 evaluation,
                 run.plan,
                 planner,
                 planning_model_requests=run.model_requests,
                 max_turns=args.max_turns,
                 return_plan=True,
+                return_repair_plan=True,
             )
         else:
             gates = apply_and_gate(evaluation, run.plan)
@@ -212,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
             gates["semantic_revision_model_requests"] = 0
             gates["repair_rejection"] = None
             gates["repair_mutation_shape"] = []
+            recorded_repair_plan = None
         scored_plan = effective_plan(evaluation, plan_for_score) if gates["passed"] else plan_for_score
         semantic = score(scored_plan, case, source_text=source_text)
         planning_model_requests = int(run.model_requests)
@@ -235,6 +237,23 @@ def main(argv: list[str] | None = None) -> int:
             "applied": gates["semantic_revision_applied"],
             "model_requests": semantic_revision_model_requests,
         }
+        repair_plan_payload = (
+            recorded_repair_plan.model_dump(mode="json")
+            if recorded_repair_plan is not None
+            else None
+        )
+        repair_plan_sha256 = (
+            hashlib.sha256(
+                json.dumps(
+                    repair_plan_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if repair_plan_payload is not None
+            else None
+        )
         output_payload = {
             "brain_prompt": brain_prompt,
             "case_sha256": case_sha256,
@@ -246,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             ),
             "semantic_revision": semantic_revision,
+            "repair_plan": repair_plan_payload,
+            "repair_plan_sha256": repair_plan_sha256,
             "effective_plan": scored_plan.model_dump(mode="json"),
             "score": semantic,
             "gates": gates,
@@ -276,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
             "semantic_revision_applied": gates["semantic_revision_applied"],
             "semantic_revision_model_requests": semantic_revision_model_requests,
             "repair_model_requests": repair_model_requests,
+            "repair_plan_sha256": repair_plan_sha256,
             "schema_retry_count": schema_retry_count,
             "semantic_repair_count": gates["semantic_repair_count"],
             "elapsed_ms": elapsed_ms,

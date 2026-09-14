@@ -13,13 +13,15 @@ gate map: mutation and identity quality, links and reference resolution, readabl
 provenance, entity relationships, anti-fragmentation, writer gates, actual model requests, derived
 schema retries, semantic-revision trigger/attempt/application and request metrics, semantic-repair
 count, elapsed time, and a content-addressed output reference. Its
-canonical payload retains the original draft, any reviewed replacement, and the effective derived plan,
-never source text. The gate rebuilds pristine ACL-safe context and the complete internal authorized-page
+canonical payload retains the original draft, any reviewed replacement, nullable canonical `RepairPlan`
+and its SHA-256, and the effective derived plan, never source text. A repair plan is recorded only when
+the pure-create structural-repair request actually runs; otherwise both fields are null. The gate rebuilds pristine ACL-safe context and the complete internal authorized-page
 set, replays the draft/review through the production writer once, and requires its canonical effective
 plan to equal the recorded plan before deriving the revision telemetry, semantic score, writer gate,
 raw gate map, and blind-review effective-page hash against the current case and fixture. Token usage is recorded only when the runner
 exposes it; provider fields are never inferred. Schema v3 is obsolete because it cannot bind the original
-draft and reviewed-plan telemetry required for that replay.
+draft and reviewed-plan telemetry required for that replay. This is a v4 clean cut: an older v4 record
+without the nullable repair fields is not replayable admission evidence and must be rerun.
 
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use the production Azure route and the fixed

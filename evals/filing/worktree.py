@@ -133,6 +133,7 @@ def apply_with_production_repair(
     planning_model_requests: int,
     max_turns: int,
     return_plan: bool = False,
+    return_repair_plan: bool = False,
 ):
     """Exercise the production filing gate and its single bounded model-repair path in memory."""
     root = worktree.root
@@ -167,6 +168,7 @@ def apply_with_production_repair(
     semantic_revision_model_requests = 0
     repair_rejection = None
     repair_mutation_shape = []
+    recorded_repair_plan = None
     active_plan = plan
     if semantic_revision_required:
         remaining_requests = max(0, int(max_turns) - int(planning_model_requests))
@@ -251,6 +253,7 @@ def apply_with_production_repair(
             repair_model_requests = int(repair_run.model_requests)
             semantic_repair_count = int(repair_model_requests > 0)
             repair_mutation_shape = _repair_shape(repair_run.plan)
+            recorded_repair_plan = repair_run.plan if repair_model_requests > 0 else None
             repaired = _apply_repair_plan(
                 root,
                 violations,
@@ -291,7 +294,13 @@ def apply_with_production_repair(
         "repair_rejection": repair_rejection,
         "repair_mutation_shape": repair_mutation_shape,
     }
-    return (result, active_plan) if return_plan else result
+    if return_plan and return_repair_plan:
+        return result, active_plan, recorded_repair_plan
+    if return_plan:
+        return result, active_plan
+    if return_repair_plan:
+        return result, recorded_repair_plan
+    return result
 
 
 def effective_plan(worktree: EvaluationWorktree, plan):

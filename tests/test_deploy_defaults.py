@@ -223,6 +223,7 @@ def _write_review_bundle(root: pathlib.Path, artifact: dict) -> None:
                             if candidate_case["payload"]["reviewed_plan"] is not None
                             else None
                         ),
+                        "repair_plan_sha256": candidate_case["payload"]["repair_plan_sha256"],
                         "semantic_revision": candidate_case["payload"]["semantic_revision"],
                         "implementation": implementation,
                         "run_id": candidate_run["run_id"],
@@ -573,6 +574,8 @@ def _parity_artifact(
             "plan": plan.model_dump(mode="json"),
             "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
             "semantic_revision": revision,
+            "repair_plan": None,
+            "repair_plan_sha256": None,
             "effective_plan": effective.model_dump(mode="json"),
             "score": score,
             "gates": gates,
@@ -596,6 +599,7 @@ def _parity_artifact(
             "semantic_revision_applied": revision["applied"],
             "semantic_revision_model_requests": revision["model_requests"],
             "repair_model_requests": 0,
+            "repair_plan_sha256": None,
             "schema_retry_count": 0,
             "semantic_repair_count": 0,
             "elapsed_ms": 1,

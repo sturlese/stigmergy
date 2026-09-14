@@ -85,6 +85,7 @@
           "semantic_revision_applied": false,
           "semantic_revision_model_requests": 0,
           "repair_model_requests": 0,
+          "repair_plan_sha256": null,
           "schema_retry_count": 0,
           "semantic_repair_count": 0,
           "elapsed_ms": 1234,
@@ -131,6 +132,8 @@
               "applied": false,
               "model_requests": 0
             },
+            "repair_plan": null,
+            "repair_plan_sha256": null,
             "effective_plan": "complete post-repair FilingPlan JSON",
             "score": "the exact score object repeated above",
             "gates": "the exact writer-gate object repeated above",

@@ -22,7 +22,7 @@ except ModuleNotFoundError:
 from stigmergy.kernel.llm import LIBRARIAN_REASONING_LEVEL
 from stigmergy.knowledge.context import authorized_derived_page_paths, filing_context
 from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
-from stigmergy.knowledge.plan import FilingPlan
+from stigmergy.knowledge.plan import FilingPlan, RepairPlan
 from stigmergy.knowledge.planner import PlanRun
 from stigmergy.knowledge.write_guard import WriteContext
 from stigmergy.knowledge.writer import GateRefused, requires_semantic_revision
@@ -590,6 +590,8 @@ def _verify_case_payload(
         "plan": None if not isinstance(payload, dict) else payload.get("plan"),
         "reviewed_plan": None if not isinstance(payload, dict) else payload.get("reviewed_plan"),
         "semantic_revision": _semantic_revision_telemetry(item),
+        "repair_plan": None if not isinstance(payload, dict) else payload.get("repair_plan"),
+        "repair_plan_sha256": item.get("repair_plan_sha256"),
         "effective_plan": None if not isinstance(payload, dict) else payload.get("effective_plan"),
         "score": item.get("score"),
         "gates": item.get("gates"),
@@ -608,6 +610,11 @@ def _verify_case_payload(
         reviewed = (
             FilingPlan.model_validate(payload["reviewed_plan"])
             if payload["reviewed_plan"] is not None
+            else None
+        )
+        recorded_repair = (
+            RepairPlan.model_validate(payload["repair_plan"])
+            if payload["repair_plan"] is not None
             else None
         )
         recorded_effective = FilingPlan.model_validate(payload["effective_plan"])
@@ -658,20 +665,20 @@ def _verify_case_payload(
                 _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
             if not telemetry["applied"] and reviewed is not None:
                 _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
-            if item.get("repair_model_requests") != 0:
-                _failure(failures, implementation, "case-repair-replay", case_id=case_id)
-                return
             replay_planner = _RecordedRevisionPlanner(
                 reviewed,
+                recorded_repair,
                 model_requests=telemetry["model_requests"],
+                repair_model_requests=item["repair_model_requests"],
             )
-            writer, replayed_plan = apply_with_production_repair(
+            writer, replayed_plan, replayed_repair = apply_with_production_repair(
                 worktree,
                 draft,
                 replay_planner,
                 planning_model_requests=item["planning_model_requests"],
                 max_turns=item["configured_max_turns"],
                 return_plan=True,
+                return_repair_plan=True,
             )
             replayed_effective_plan = (
                 effective_plan(worktree, replayed_plan) if writer["passed"] else replayed_plan
@@ -685,6 +692,16 @@ def _verify_case_payload(
         "semantic_repair_count"
     ) != item.get("semantic_repair_count"):
         _failure(failures, implementation, "case-repair-telemetry", case_id=case_id)
+    _verify_repair_evidence(
+        item,
+        payload,
+        recorded_repair,
+        replayed_repair,
+        telemetry=telemetry,
+        implementation=implementation,
+        case_id=case_id,
+        failures=failures,
+    )
     replayed_effective_payload = replayed_effective_plan.model_dump(mode="json")
     if _canonical_json(replayed_effective_payload) != _canonical_json(recorded_effective.model_dump(mode="json")):
         _failure(failures, implementation, "replay-effective-plan-mismatch", case_id=case_id)
@@ -707,9 +724,18 @@ def _verify_case_payload(
 class _RecordedRevisionPlanner:
     """Replay only the recorded complete replacement plan; never call a model."""
 
-    def __init__(self, plan: FilingPlan | None, *, model_requests: int):
+    def __init__(
+        self,
+        plan: FilingPlan | None,
+        repair_plan: RepairPlan | None,
+        *,
+        model_requests: int,
+        repair_model_requests: int,
+    ):
         self.plan = plan
+        self.repair_plan = repair_plan
         self.model_requests = model_requests
+        self.repair_model_requests = repair_model_requests
 
     def revise(self, **_kwargs) -> PlanRun:
         if self.plan is None:
@@ -717,7 +743,9 @@ class _RecordedRevisionPlanner:
         return PlanRun(self.plan, model_requests=self.model_requests)
 
     def repair(self, **_kwargs) -> PlanRun:
-        raise GateRefused("recorded structural repair is unavailable")
+        if self.repair_plan is None:
+            raise GateRefused("recorded structural repair is unavailable")
+        return PlanRun(self.repair_plan, model_requests=self.repair_model_requests)
 
 
 def _semantic_revision_telemetry(item: dict) -> dict:
@@ -736,6 +764,50 @@ def _recorded_writer_gates(gates: dict) -> dict:
         "violations": gates.get("violations"),
         "changed_paths": gates.get("changed_paths"),
     }
+
+
+def _verify_repair_evidence(
+    item: dict,
+    payload: dict,
+    recorded_repair: RepairPlan | None,
+    replayed_repair: RepairPlan | None,
+    *,
+    telemetry: dict,
+    implementation: str,
+    case_id: str,
+    failures: list[dict],
+) -> None:
+    """Require the one bounded structural repair to be canonical and replayable."""
+    repair_requests = item.get("repair_model_requests")
+    repair_count = item.get("semantic_repair_count")
+    recorded_payload = payload.get("repair_plan")
+    recorded_hash = payload.get("repair_plan_sha256")
+    evidence_valid = "repair_plan_sha256" in item and item.get("repair_plan_sha256") == recorded_hash
+    if recorded_repair is None:
+        evidence_valid = (
+            evidence_valid
+            and recorded_payload is None
+            and recorded_hash is None
+            and repair_requests == 0
+            and repair_count == 0
+            and replayed_repair is None
+        )
+    else:
+        canonical_repair = recorded_repair.model_dump(mode="json")
+        expected_hash = hashlib.sha256(_canonical_json(canonical_repair)).hexdigest()
+        evidence_valid = (
+            evidence_valid
+            and _canonical_json(recorded_payload) == _canonical_json(canonical_repair)
+            and recorded_hash == expected_hash
+            and repair_requests > 0
+            and repair_count == 1
+            and not telemetry["required"]
+            and not telemetry["applied"]
+            and replayed_repair is not None
+            and _canonical_json(replayed_repair.model_dump(mode="json")) == _canonical_json(canonical_repair)
+        )
+    if not evidence_valid:
+        _failure(failures, implementation, "case-repair-evidence", case_id=case_id)
 
 
 def _empty_revision_telemetry() -> dict:
@@ -998,10 +1070,12 @@ def _verify_unblind_review(
                 or candidate.get("effective_pages_sha256") != mapped.get("effective_pages_sha256")
                 or candidate.get("draft_plan_sha256") != mapped.get("draft_plan_sha256")
                 or candidate.get("reviewed_plan_sha256") != mapped.get("reviewed_plan_sha256")
+                or candidate.get("repair_plan_sha256") != mapped.get("repair_plan_sha256")
                 or candidate.get("semantic_revision") != mapped.get("semantic_revision")
                 or not _SHA256.fullmatch(mapped.get("case_output_sha256", ""))
                 or not _SHA256.fullmatch(mapped.get("effective_pages_sha256", ""))
                 or not _SHA256.fullmatch(mapped.get("draft_plan_sha256", ""))
+                or not _nullable_sha256(mapped.get("repair_plan_sha256"))
             ):
                 _failure(failures, "review", "blind-review-evidence")
                 return
@@ -1069,6 +1143,7 @@ def _blind_case_binding(
         "reviewed_plan_sha256": (
             hashlib.sha256(_canonical_json(reviewed)).hexdigest() if reviewed is not None else None
         ),
+        "repair_plan_sha256": payload.get("repair_plan_sha256"),
         "semantic_revision": revision,
     }
 
@@ -1082,6 +1157,10 @@ def _indexed_pairs(value, key: str) -> dict[str, dict]:
         if isinstance(item, dict) and _recorded_text(item.get(key))
     }
     return indexed if len(indexed) == len(value) else {}
+
+
+def _nullable_sha256(value) -> bool:
+    return value is None or (isinstance(value, str) and _SHA256.fullmatch(value) is not None)
 
 
 def _reviewer_labels_match(pair: dict, labels: set[str]) -> bool:

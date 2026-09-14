@@ -10,7 +10,7 @@ from evals.filing import planner_eval
 from evals.filing import worktree as eval_worktree
 from evals.filing.constants import PRODUCTION_EQUIVALENT_MODE
 from evals.filing.parity import current_release_inputs, evaluate
-from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation
+from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation, RepairMutation, RepairPlan
 from stigmergy.knowledge.planner import PlanRun
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +46,28 @@ class _RecordedRevisionPlanner:
 
     def revise(self, **_kwargs) -> PlanRun:
         return PlanRun(self.plan, model_requests=1)
+
+
+class _RecordedRepairPlanner:
+    def repair(self, *, files, **_kwargs) -> PlanRun:
+        path, body = next(iter(files.items()))
+        repaired_body = body.replace(
+            "app under different harness configurations.",
+            f"app under different harness configurations. (Source: `{SOURCE}`)",
+        )
+        return PlanRun(
+            RepairPlan(
+                summary="Restored the required local source citation.",
+                mutations=(
+                    RepairMutation(
+                        path=path,
+                        body=repaired_body,
+                        reason="Restored the local source citation.",
+                    ),
+                ),
+            ),
+            model_requests=1,
+        )
 
 
 def _plan(case_id: str, *, passing: bool) -> FilingPlan:
@@ -119,13 +141,38 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
     source_text = EXPECTED.fixture_paths[case_id].read_text(encoding="utf-8")
     plan = _plan(case_id, passing=passing)
     active_plan = plan
+    recorded_repair = None
     revision = {"required": False, "attempted": False, "applied": False, "model_requests": 0}
     with eval_worktree.prepared(
         case,
         source_text,
         template=str(EXPECTED.repo_root / "evals" / "filing" / "repo"),
     ) as worktree:
-        if case_id == "harness_engineering_seeded" and passing:
+        if case_id == "harness_engineering" and passing:
+            broken = plan.model_copy(
+                update={
+                    "mutations": (
+                        plan.mutations[0].model_copy(
+                            update={
+                                "body": plan.mutations[0].body.replace(
+                                    f" (Source: `{SOURCE}`)", ""
+                                )
+                            }
+                        ),
+                    )
+                }
+            )
+            plan = broken
+            gates, active_plan, recorded_repair = eval_worktree.apply_with_production_repair(
+                worktree,
+                plan,
+                _RecordedRepairPlanner(),
+                planning_model_requests=1,
+                max_turns=2,
+                return_plan=True,
+                return_repair_plan=True,
+            )
+        elif case_id == "harness_engineering_seeded" and passing:
             gates, active_plan = eval_worktree.apply_with_production_repair(
                 worktree,
                 plan,
@@ -159,6 +206,12 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
         "plan": plan.model_dump(mode="json"),
         "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
         "semantic_revision": revision,
+        "repair_plan": recorded_repair.model_dump(mode="json") if recorded_repair is not None else None,
+        "repair_plan_sha256": (
+            hashlib.sha256(_canonical(recorded_repair.model_dump(mode="json"))).hexdigest()
+            if recorded_repair is not None
+            else None
+        ),
         "effective_plan": effective.model_dump(mode="json"),
         "score": semantic,
         "gates": gates,
@@ -170,6 +223,11 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
 
 def _case_result(case_id: str, repeat: int, *, implementation: str, passed: bool, runtime: dict) -> dict:
     payload = _payload(case_id, implementation=implementation, passing=passed)
+    model_requests = (
+        1
+        + payload["semantic_revision"]["model_requests"]
+        + payload["gates"].get("repair_model_requests", 0)
+    )
     digest = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -181,17 +239,18 @@ def _case_result(case_id: str, repeat: int, *, implementation: str, passed: bool
         "runtime": runtime,
         "execution_mode": PRODUCTION_EQUIVALENT_MODE,
         "configured_max_turns": 2,
-        "model_requests": 1 + payload["semantic_revision"]["model_requests"],
+        "model_requests": model_requests,
         "planning_model_requests": 1,
         "semantic_revision_required": payload["semantic_revision"]["required"],
         "semantic_revision_attempted": payload["semantic_revision"]["attempted"],
         "semantic_revision_applied": payload["semantic_revision"]["applied"],
         "semantic_revision_model_requests": payload["semantic_revision"]["model_requests"],
-        "repair_model_requests": 0,
+        "repair_model_requests": payload["gates"].get("repair_model_requests", 0),
+        "repair_plan_sha256": payload["repair_plan_sha256"],
         "schema_retry_count": 0,
-        "semantic_repair_count": 0,
+        "semantic_repair_count": payload["gates"].get("semantic_repair_count", 0),
         "elapsed_ms": 42 + repeat,
-        "usage": {"requests": 1},
+        "usage": {"requests": model_requests},
         "score": copy.deepcopy(payload["score"]),
         "gates": copy.deepcopy(payload["gates"]),
         "raw_gates": copy.deepcopy(payload["raw_gates"]),
@@ -295,6 +354,7 @@ def _write_review_bundle(root: Path, artifact: dict) -> None:
                         if candidate_case["payload"]["reviewed_plan"] is not None
                         else None
                     ),
+                    "repair_plan_sha256": candidate_case["payload"]["repair_plan_sha256"],
                     "semantic_revision": candidate_case["payload"]["semantic_revision"],
                 }
                 entries.append(entry)
@@ -449,6 +509,23 @@ def test_parity_gate_accepts_complete_case_level_evidence_and_three_selected_rep
     assert evaluate(_artifact(tmp_path), expected=EXPECTED, review_root=tmp_path)["passed"] is True
 
 
+def test_parity_admits_one_pure_create_structural_repair_within_two_requests(tmp_path):
+    artifact = _artifact(tmp_path)
+    repair_case = next(
+        case
+        for run in artifact["runs"]
+        if run["implementation"] == "stigmergy"
+        for case in run["case_results"]
+        if case["case_id"] == "harness_engineering"
+    )
+
+    assert repair_case["repair_model_requests"] == 1
+    assert repair_case["model_requests"] == 2
+    assert repair_case["payload"]["repair_plan"] is not None
+    assert repair_case["repair_plan_sha256"] == repair_case["payload"]["repair_plan_sha256"]
+    assert evaluate(artifact, expected=EXPECTED, review_root=tmp_path)["passed"] is True
+
+
 def test_honest_hippocampus_baseline_may_fail_hard_gates_without_relaxing_replay_validation(tmp_path):
     artifact = _artifact(tmp_path)
     artifact["runs"][0] = _run("hippocampus", "hippocampus-reference-1", "medium", 1, passed=False)
@@ -530,6 +607,54 @@ def test_parity_gate_rejects_tampered_payload_hash_score_and_gates(tmp_path):
     artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["score"]["passed"] = False
     assert "case-payload" in _reasons(artifact, tmp_path)
+
+
+def test_parity_rejects_missing_extra_or_tampered_structural_repair_evidence(tmp_path):
+    artifact = _artifact(tmp_path)
+    repair_case = next(
+        case
+        for run in artifact["runs"]
+        if run["implementation"] == "stigmergy"
+        for case in run["case_results"]
+        if case["case_id"] == "harness_engineering"
+    )
+    repair_case["payload"]["repair_plan"] = None
+    repair_case["payload"]["repair_plan_sha256"] = None
+    repair_case["repair_plan_sha256"] = None
+    repair_case["output"]["sha256"] = hashlib.sha256(_canonical(repair_case["payload"])).hexdigest()
+    repair_case["output"]["artifact_ref"] = f"sha256:{repair_case['output']['sha256']}"
+    _write_review_bundle(tmp_path, artifact)
+    assert "case-repair-evidence" in _reasons(artifact, tmp_path)
+
+    artifact = _artifact(tmp_path)
+    pure_case = next(
+        case
+        for run in artifact["runs"]
+        if run["implementation"] == "stigmergy"
+        for case in run["case_results"]
+        if case["case_id"] == "decision_trace_quality"
+    )
+    extra_repair = RepairPlan(summary="Unexpected repair evidence.").model_dump(mode="json")
+    extra_hash = hashlib.sha256(_canonical(extra_repair)).hexdigest()
+    pure_case["payload"]["repair_plan"] = extra_repair
+    pure_case["payload"]["repair_plan_sha256"] = extra_hash
+    pure_case["repair_plan_sha256"] = extra_hash
+    pure_case["output"]["sha256"] = hashlib.sha256(_canonical(pure_case["payload"])).hexdigest()
+    pure_case["output"]["artifact_ref"] = f"sha256:{pure_case['output']['sha256']}"
+    _write_review_bundle(tmp_path, artifact)
+    assert "case-repair-evidence" in _reasons(artifact, tmp_path)
+
+    artifact = _artifact(tmp_path)
+    repair_case = next(
+        case
+        for run in artifact["runs"]
+        if run["implementation"] == "stigmergy"
+        for case in run["case_results"]
+        if case["case_id"] == "harness_engineering"
+    )
+    repair_case["payload"]["repair_plan"]["mutations"][0]["body"] += " tampered"
+    _write_review_bundle(tmp_path, artifact)
+    assert "case-output-hash" in _reasons(artifact, tmp_path)
 
 
 def test_parity_rejects_a_valid_but_different_recorded_effective_plan(tmp_path):
@@ -647,6 +772,27 @@ def test_parity_replays_the_original_draft_trigger_and_two_request_budget(tmp_pa
     artifact["runs"][1]["case_results"][0]["model_requests"] = 3
     artifact["runs"][1]["case_results"][0]["planning_model_requests"] = 3
     assert "case-observability" in _reasons(artifact, tmp_path)
+
+    artifact = _artifact(tmp_path)
+    seeded = next(
+        item
+        for item in artifact["runs"][1]["case_results"]
+        if item["case_id"] == "harness_engineering_seeded"
+    )
+    forbidden_repair = RepairPlan(summary="A third request must not be admitted.").model_dump(mode="json")
+    forbidden_hash = hashlib.sha256(_canonical(forbidden_repair)).hexdigest()
+    seeded["repair_model_requests"] = 1
+    seeded["repair_plan_sha256"] = forbidden_hash
+    seeded["semantic_repair_count"] = 1
+    seeded["model_requests"] = 3
+    seeded["usage"] = {"requests": 3}
+    seeded["payload"]["repair_plan"] = forbidden_repair
+    seeded["payload"]["repair_plan_sha256"] = forbidden_hash
+    seeded["output"]["sha256"] = hashlib.sha256(_canonical(seeded["payload"])).hexdigest()
+    seeded["output"]["artifact_ref"] = f"sha256:{seeded['output']['sha256']}"
+    _write_review_bundle(tmp_path, artifact)
+
+    assert {"case-observability", "case-repair-evidence"} <= _reasons(artifact, tmp_path)
 
 
 def test_parity_rejects_schema_v3_as_missing_replayable_revision_evidence(tmp_path):
