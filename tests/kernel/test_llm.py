@@ -73,13 +73,13 @@ def test_only_the_librarian_model_is_pinned_to_the_verified_host(monkeypatch):
         assert model.settings["openrouter_provider"]["allow_fallbacks"] is True
 
 
-def test_librarian_requests_high_reasoning_without_returning_reasoning(monkeypatch):
+def test_librarian_requests_medium_reasoning_without_returning_reasoning(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     model, settings = llm.build_model(llm.LIBRARIAN_MODEL)
 
     assert settings is model.settings
-    assert llm.LIBRARIAN_REASONING_LEVEL == "high"
+    assert llm.LIBRARIAN_REASONING_LEVEL == "medium"
     assert model.settings["openrouter_reasoning"] == {
         "effort": llm.LIBRARIAN_REASONING_LEVEL,
         "exclude": True,
@@ -193,7 +193,7 @@ def test_librarian_native_output_request_uses_strict_json_schema_and_pins_azure(
     assert payloads[0]["response_format"]["json_schema"]["strict"] is True
     assert payloads[0]["response_format"]["json_schema"]["name"] == "FilingPlan"
     assert payloads[0]["reasoning"] == {
-        "effort": "high",
+        "effort": "medium",
         "exclude": True,
     }
 

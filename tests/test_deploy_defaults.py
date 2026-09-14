@@ -388,7 +388,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
         }
 
     selected = [
-        run("stigmergy", f"matrix-high-{repeat}", "high", repeat, True)
+        run("stigmergy", f"matrix-medium-{repeat}", "medium", repeat, True)
         for repeat in range(1, 4)
     ]
 
@@ -408,12 +408,11 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
         "reasoning_matrix": [
             matrix("minimal", False),
             matrix("low", False),
-            matrix("medium", False),
             {
-                "reasoning_level": "high",
+                "reasoning_level": "medium",
                 "runtime": {
                     "model": "openai/gpt-5.4",
-                    "reasoning_level": "high",
+                    "reasoning_level": "medium",
                     "provider": "azure",
                 },
                 "runs": selected,
@@ -431,7 +430,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
                 "source_cases": expected.source_cases,
                 "runs": {
                     "hippocampus": ["hippocampus-recorded-run"],
-                "stigmergy": ["matrix-high-1", "matrix-high-2", "matrix-high-3"],
+                "stigmergy": ["matrix-medium-1", "matrix-medium-2", "matrix-medium-3"],
                 },
             },
         },
@@ -646,7 +645,7 @@ def _parity_artifact(
             ],
         }
 
-    selected = [run("stigmergy", f"matrix-high-{repeat}", "high") for repeat in range(1, 4)]
+    selected = [run("stigmergy", f"matrix-medium-{repeat}", "medium") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
         "schema_version": 4,
@@ -667,11 +666,11 @@ def _parity_artifact(
                 "runs": [run("stigmergy", f"matrix-{level}-1", level, passing=False)],
                 "passed": False,
             }
-            for level in ("minimal", "low", "medium")
+            for level in ("minimal", "low")
         ] + [
             {
-                "reasoning_level": "high",
-                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "high", "provider": "azure"},
+                "reasoning_level": "medium",
+                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "medium", "provider": "azure"},
                 "runs": selected,
                 "passed": True,
             }
