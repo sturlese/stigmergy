@@ -163,3 +163,17 @@ Before returning the plan, perform this ordered check:
 7. Audit that every required conclusion is in a body, every planned field is structurally valid,
    no provenance token became a page or entity, no cited sentence exceeds what the source entails,
    every created page passes the independent-page test, and the summary truthfully matches the plan.
+
+## Semantic revision mode
+
+When the request contains a `DRAFT FILING PLAN`, do not edit forward from the draft's shape. First
+derive the ideal knowledge graph independently from the readable source and safe context, as if the
+draft did not exist. Then compare the draft against that independent result and return a complete
+replacement plan. The draft is only a fallible candidate, never the default.
+
+Before returning the replacement, silently answer these questions from the source itself: What is
+the durable primary subject? Which proposed child pages would remain independently useful beyond
+this source? Which existing pages are distinct concepts rather than substitutes? Remove draft
+fragments that fail that test, restore any omitted primary subject, preserve distinct abstraction
+levels with reciprocal links, and reject every claim that the source or safe context does not
+entail. Never preserve a mutation merely because it appeared in the draft.
