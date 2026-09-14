@@ -356,7 +356,21 @@ def _revision_prompt(
         f"PROVENANCE\n{fence(json.dumps(provenance, ensure_ascii=False, sort_keys=True))}\n\n"
         f"READABLE SOURCE\n{fence(source_text)}\n\n"
         f"SAFE EXISTING CONTEXT\n{fence(context)}\n\n"
-        f"DRAFT FILING PLAN\n{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
+        f"DRAFT FILING PLAN\n{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
+        "FINAL REVIEW CHECKLIST: apply this after reading the entire draft.\n"
+        "- Represent the source's durable primary subject in a cohesive, cold-readable page.\n"
+        "- Split out a child concept only when it has a stable name, its own mechanism and "
+        "significance, concrete source evidence, and likely reuse beyond this source. Omit draft "
+        "pages that are merely headings, framework sections, examples, benchmark names, or "
+        "implementation details.\n"
+        "- Every factual statement must be entailed by the source or safe context. Do not infer "
+        "vendors, ownership, capabilities, definitions, comparisons, or causal claims.\n"
+        "- Preserve relevant existing relationships and make links reciprocal between related "
+        "pages mutated by this plan.\n"
+        "- Respect the exact action schema: create uses role/title/body/entities and no path; "
+        "update uses an existing path/body/entities and no role/title; delete uses an existing "
+        "path/reason and no role/title/body. Use null rather than invented or inapplicable fields.\n"
+        "Return the complete replacement FilingPlan only."
     )
     _guard_prompt(prompt)
     return prompt

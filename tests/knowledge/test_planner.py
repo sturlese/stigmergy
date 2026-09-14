@@ -253,6 +253,13 @@ def test_revision_reuses_the_exact_safe_context_and_returns_a_filing_plan(tmp_pa
     assert "DRAFT FILING PLAN" in captured["prompt"]
     assert json.dumps(draft.model_dump(mode="json"), sort_keys=True) in captured["prompt"]
     assert "collapsed abstraction levels" in captured["prompt"]
+    assert captured["prompt"].rfind("FINAL REVIEW CHECKLIST") > captured["prompt"].find(
+        "DRAFT FILING PLAN"
+    )
+    assert "durable primary subject" in captured["prompt"]
+    assert "stable name" in captured["prompt"]
+    assert "make links reciprocal" in captured["prompt"]
+    assert "exact action schema" in captured["prompt"]
 
 
 def test_planner_rejects_a_prompt_over_its_byte_budget(monkeypatch):
