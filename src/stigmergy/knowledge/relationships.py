@@ -26,14 +26,10 @@ def has_entity_relationship_evidence(
         return False
     paragraphs = re.split(r"\n[ \t]*\n", body)
     name_pattern = re.compile(rf"(?<!\w){re.escape(normalized_name)}(?!\w)")
-    for index, paragraph in enumerate(paragraphs):
+    for paragraph in paragraphs:
         if not name_pattern.search(_normalized(paragraph)):
             continue
         if _has_declared_attribution(paragraph, allowed_sources):
-            return True
-        if index + 1 < len(paragraphs) and _has_declared_attribution(
-            paragraphs[index + 1], allowed_sources
-        ):
             return True
     return False
 

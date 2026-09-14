@@ -44,10 +44,15 @@ def _page(body: str) -> CorpusPage:
     )
 
 
-def test_entity_relationship_evidence_normalizes_unicode_and_rejects_later_attribution():
+def test_entity_relationship_evidence_requires_attribution_in_the_same_paragraph():
     cited = f"**Claude\u202fCode** is a coding-agent environment. (Source: `{SOURCE}`)"
 
     assert has_entity_relationship_evidence(cited, "Claude Code", (SOURCE,)) is True
+    assert has_entity_relationship_evidence(
+        f"**Claude Code** is a coding-agent environment.\n\n(Source: `{SOURCE}`)",
+        "Claude Code",
+        (SOURCE,),
+    ) is False
     assert has_entity_relationship_evidence(
         f"**Claude Code** is a coding-agent environment.\n\nUnrelated analysis.\n\n(Source: `{SOURCE}`)",
         "Claude Code",
@@ -61,14 +66,17 @@ def test_entity_relationship_evidence_normalizes_unicode_and_rejects_later_attri
 
 
 def test_editorial_lint_uses_the_shared_entity_relationship_predicate():
-    page = _page(f"# Harness Engineering\n\nClaude Code supports the implementation.\n\n(Source: `{SOURCE}`)")
+    page = _page(
+        f"# Harness Engineering\n\nClaude Code supports the implementation. "
+        f"(Source: `{SOURCE}`)"
+    )
 
     valid = _editorial_violations({PAGE: page}, {ENTITY_ID: _record()}, frozenset({PAGE}))
     invalid = _editorial_violations(
         {
             PAGE: _page(
                 f"# Harness Engineering\n\nClaude Code supports the implementation.\n\n"
-                f"Unrelated analysis.\n\n(Source: `{SOURCE}`)"
+                f"(Source: `{SOURCE}`)"
             )
         },
         {ENTITY_ID: _record()},
