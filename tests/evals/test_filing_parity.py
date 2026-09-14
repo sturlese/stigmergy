@@ -216,9 +216,131 @@ def _unstable_matrix_item(level: str) -> dict:
     }
 
 
-def _artifact() -> dict:
+def _canonical(value) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _write_review_bundle(root: Path, artifact: dict) -> None:
+    """Build external, content-addressed review evidence for the validator contract."""
+    root.mkdir(parents=True, exist_ok=True)
+    baseline = next(run for run in artifact["runs"] if run["implementation"] == "hippocampus")
+    selected = [run for run in artifact["runs"] if run["implementation"] == "stigmergy"]
+    baseline_cases = {case["case_id"]: case for case in baseline["case_results"]}
+    comparisons = []
+    mappings = []
+    reviewer_pairs = []
+    regressions = []
+    for run in selected:
+        for case in run["case_results"]:
+            comparison_id = f"comparison-{case['case_id']}-{run['run_id']}"
+            entries = []
+            for implementation, _candidate_run, candidate_case in (
+                ("hippocampus", baseline, baseline_cases[case["case_id"]]),
+                ("stigmergy", run, case),
+            ):
+                label = "candidate-" + hashlib.sha256(
+                    f"{comparison_id}:{implementation}".encode()
+                ).hexdigest()[:16]
+                entry = {
+                    "label": label,
+                    "case_output_sha256": candidate_case["output"]["sha256"],
+                    "effective_pages_sha256": hashlib.sha256(
+                        _canonical(candidate_case["payload"]["effective_plan"])
+                    ).hexdigest(),
+                }
+                entries.append(entry)
+            comparisons.append({"comparison_id": comparison_id, "candidates": entries})
+            labels = [
+                {
+                    **entry,
+                    "implementation": implementation,
+                    "run_id": candidate_run["run_id"],
+                }
+                for entry, (implementation, candidate_run) in zip(
+                    entries, (("hippocampus", baseline), ("stigmergy", run)), strict=True
+                )
+            ]
+            mappings.append({"comparison_id": comparison_id, "labels": labels})
+            regression = {
+                "comparison_id": comparison_id,
+                "candidate_label": labels[0]["label"],
+                "implementation": "hippocampus",
+                "run_id": baseline["run_id"],
+                "case_output_sha256": labels[0]["case_output_sha256"],
+                "effective_pages_sha256": labels[0]["effective_pages_sha256"],
+                "reason": "Fixture baseline regression.",
+            }
+            regressions.append(regression)
+            reviewer_pairs.append(
+                {
+                    "pair_id": comparison_id,
+                    "judgments": {"fixture": {"winner": "tie", "reason": "Fixture."}},
+                    "overall": {"winner": "tie", "reason": "Fixture."},
+                    "material_regression": {
+                        "side": labels[0]["label"],
+                        "reason": regression["reason"],
+                    },
+                }
+            )
+    packet = {"schema_version": 1, "comparisons": comparisons}
+    packet_bytes = _canonical(packet)
+    packet_canonical = hashlib.sha256(packet_bytes).hexdigest()
+    packet_name = f"blind-review-packet-{packet_canonical}.json"
+    (root / packet_name).write_bytes(packet_bytes)
+    mapping = {"schema_version": 1, "packet_sha256": packet_canonical, "mapping": mappings}
+    mapping_bytes = _canonical(mapping)
+    mapping_canonical = hashlib.sha256(mapping_bytes).hexdigest()
+    mapping_name = f"blind-review-mapping-{mapping_canonical}.secret.json"
+    (root / mapping_name).write_bytes(mapping_bytes)
+    response = {
+        "reviewer_identity": "fixture-reviewer",
+        "method": "fixture-blind-pairwise",
+        "packet_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        "pairs": reviewer_pairs,
+    }
+    response_bytes = _canonical(response)
+    response_canonical = hashlib.sha256(response_bytes).hexdigest()
+    response_name = f"blind-reviewer-response-{response_canonical}.json"
+    (root / response_name).write_bytes(response_bytes)
+    review = {
+        "schema_version": "blind-editorial-review-unblind-v2",
+        "verdict": "no_material_stigmergy_regression",
+        "reviewer_response": {
+            "path": response_name,
+            "raw_sha256": hashlib.sha256(response_bytes).hexdigest(),
+            "canonical_sha256": response_canonical,
+            "artifact_ref": f"sha256:{response_canonical}",
+        },
+        "packet": {
+            "path": packet_name,
+            "raw_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+            "canonical_sha256": packet_canonical,
+        },
+        "mapping": {
+            "path": mapping_name,
+            "raw_sha256": hashlib.sha256(mapping_bytes).hexdigest(),
+            "canonical_sha256": mapping_canonical,
+        },
+        "unblinding": {
+            "material_regressions": regressions,
+            "stigmergy_material_regressions": [],
+        },
+    }
+    review_bytes = _canonical(review)
+    review_canonical = hashlib.sha256(review_bytes).hexdigest()
+    (root / f"blind-review-unblind-{review_canonical}.json").write_bytes(review_bytes)
+    artifact["admission_status"] = "passed"
+    artifact["blind_review_packet"] = {
+        "status": "completed",
+        "raw_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        "canonical_sha256": packet_canonical,
+    }
+    artifact["blind_editorial_review"]["provenance"]["artifact_ref"] = f"sha256:{review_canonical}"
+
+
+def _artifact(review_root: Path) -> dict:
     selected = [_run("stigmergy", f"matrix-high-{repeat}", "high", repeat, passed=True) for repeat in range(1, 4)]
-    return {
+    artifact = {
         "schema_version": 3,
         "corpus_sha256": CORPUS,
         "initial_graph_ref": INITIAL,
@@ -247,7 +369,6 @@ def _artifact() -> dict:
             "provenance": {
                 "reviewer": "fixture",
                 "method": "blind-pairwise",
-                "artifact_ref": "fixture-review",
                 "corpus_sha256": CORPUS,
                 "initial_graph_ref": INITIAL,
                 "source_cases": EXPECTED.source_cases,
@@ -258,6 +379,8 @@ def _artifact() -> dict:
             },
         },
     }
+    _write_review_bundle(review_root, artifact)
+    return artifact
 
 
 def _rebind_review(artifact: dict) -> None:
@@ -267,97 +390,134 @@ def _rebind_review(artifact: dict) -> None:
     }
 
 
-def _reasons(artifact: dict) -> set[str]:
-    result = evaluate(artifact, expected=EXPECTED)
+def _reasons(artifact: dict, review_root: Path) -> set[str]:
+    result = evaluate(artifact, expected=EXPECTED, review_root=review_root)
     assert result["passed"] is False
     return {item["reason"] for item in result["failures"]}
 
 
-def test_parity_gate_accepts_complete_case_level_evidence_and_three_selected_repeats():
-    assert evaluate(_artifact(), expected=EXPECTED)["passed"] is True
+def test_parity_gate_accepts_complete_case_level_evidence_and_three_selected_repeats(tmp_path):
+    assert evaluate(_artifact(tmp_path), expected=EXPECTED, review_root=tmp_path)["passed"] is True
 
 
-def test_honest_hippocampus_baseline_may_fail_hard_gates_without_relaxing_replay_validation():
-    artifact = _artifact()
+def test_honest_hippocampus_baseline_may_fail_hard_gates_without_relaxing_replay_validation(tmp_path):
+    artifact = _artifact(tmp_path)
     artifact["runs"][0] = _run("hippocampus", "hippocampus-reference-1", "medium", 1, passed=False)
+    _write_review_bundle(tmp_path, artifact)
 
-    assert evaluate(artifact, expected=EXPECTED)["passed"] is True
+    assert evaluate(artifact, expected=EXPECTED, review_root=tmp_path)["passed"] is True
 
     artifact["runs"][0]["case_results"][0]["payload"]["effective_plan"]["summary"] = "tampered"
-    assert {"case-payload", "case-output-hash"} & _reasons(artifact)
+    assert {"case-payload", "case-output-hash"} & _reasons(artifact, tmp_path)
 
 
-def test_blind_review_must_reference_each_baseline_and_selected_run():
-    artifact = _artifact()
+def test_blind_review_must_reference_each_baseline_and_selected_run(tmp_path):
+    artifact = _artifact(tmp_path)
     artifact["blind_editorial_review"]["provenance"]["runs"]["hippocampus"] = []
-    assert "stale-or-mismatched-review" in _reasons(artifact)
+    assert "stale-or-mismatched-review" in _reasons(artifact, tmp_path)
 
-    artifact = _artifact()
+    artifact = _artifact(tmp_path)
     artifact["blind_editorial_review"]["provenance"]["runs"]["stigmergy"].pop()
-    assert "stale-or-mismatched-review" in _reasons(artifact)
+    assert "stale-or-mismatched-review" in _reasons(artifact, tmp_path)
 
 
-def test_parity_gate_rejects_aggregate_only_or_missing_case_evidence():
-    artifact = _artifact()
+def test_parity_gate_rejects_aggregate_only_or_missing_case_evidence(tmp_path):
+    artifact = _artifact(tmp_path)
     artifact["runs"][0].pop("case_results")
-    assert "aggregate-only-evidence" in _reasons(artifact)
+    assert "aggregate-only-evidence" in _reasons(artifact, tmp_path)
 
-    artifact = _artifact()
+    artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"].pop()
-    assert "missing-case-result" in _reasons(artifact)
+    assert "missing-case-result" in _reasons(artifact, tmp_path)
 
 
-def test_parity_gate_rejects_duplicate_or_failed_case_repeats():
-    artifact = _artifact()
+def test_parity_gate_rejects_duplicate_or_failed_case_repeats(tmp_path):
+    artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"].append(copy.deepcopy(artifact["runs"][1]["case_results"][0]))
-    assert "duplicate-case-result" in _reasons(artifact)
+    assert "duplicate-case-result" in _reasons(artifact, tmp_path)
 
-    artifact = _artifact()
+    artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["raw_gates"]["writer"] = False
-    assert {"case-failed", "case-payload"} <= _reasons(artifact)
+    assert {"case-failed", "case-payload"} <= _reasons(artifact, tmp_path)
 
 
-def test_parity_gate_requires_selected_production_equivalent_three_repeat_evidence():
-    artifact = _artifact()
+def test_parity_gate_requires_selected_production_equivalent_three_repeat_evidence(tmp_path):
+    artifact = _artifact(tmp_path)
     artifact["runs"][1]["execution"]["mode"] = "planner-only"
-    assert "production-equivalence" in _reasons(artifact)
+    assert "production-equivalence" in _reasons(artifact, tmp_path)
 
-    artifact = _artifact()
+    artifact = _artifact(tmp_path)
     artifact["runs"].pop()
     artifact["reasoning_matrix"][-1]["runs"].pop()
     _rebind_review(artifact)
-    assert {"selected-reasoning-insufficient-repeats", "selected-run-mismatch"} <= _reasons(artifact)
+    assert {"selected-reasoning-insufficient-repeats", "selected-run-mismatch"} <= _reasons(artifact, tmp_path)
 
 
-def test_parity_gate_requires_a_complete_lowest_passing_reasoning_matrix():
-    artifact = _artifact()
+def test_parity_gate_requires_a_complete_lowest_passing_reasoning_matrix(tmp_path):
+    artifact = _artifact(tmp_path)
     artifact["reasoning_matrix"][1] = _matrix_item("low", passed=True)
-    assert "reasoning-not-lowest-passing" in _reasons(artifact)
+    assert "reasoning-not-lowest-passing" in _reasons(artifact, tmp_path)
 
-    artifact = _artifact()
+    artifact = _artifact(tmp_path)
     artifact["reasoning_matrix"].pop(1)
-    assert "reasoning-matrix-incomplete" in _reasons(artifact)
+    assert "reasoning-matrix-incomplete" in _reasons(artifact, tmp_path)
 
 
-def test_parity_gate_rejects_prompt_drift_and_nonimmutable_output_metadata():
-    artifact = _artifact()
+def test_parity_gate_rejects_prompt_drift_and_nonimmutable_output_metadata(tmp_path):
+    artifact = _artifact(tmp_path)
     artifact["brain_prompt"]["sha256"] = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-    assert "candidate-brain-prompt" in _reasons(artifact)
+    assert "candidate-brain-prompt" in _reasons(artifact, tmp_path)
 
-    artifact = _artifact()
+    artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["output"]["artifact_ref"] = "mutable-path"
-    assert "case-output" in _reasons(artifact)
+    assert "case-output" in _reasons(artifact, tmp_path)
 
 
-def test_parity_gate_rejects_tampered_payload_hash_score_and_gates():
-    artifact = _artifact()
+def test_parity_gate_rejects_tampered_payload_hash_score_and_gates(tmp_path):
+    artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["payload"]["effective_plan"]["summary"] = "tampered"
-    assert {"case-payload", "case-output-hash"} & _reasons(artifact)
+    assert {"case-payload", "case-output-hash"} & _reasons(artifact, tmp_path)
 
-    artifact = _artifact()
+    artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["score"]["passed"] = False
-    assert "case-payload" in _reasons(artifact)
+    assert "case-payload" in _reasons(artifact, tmp_path)
 
-    artifact = _artifact()
+    artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["gates"]["passed"] = False
-    assert "case-payload" in _reasons(artifact)
+    assert "case-payload" in _reasons(artifact, tmp_path)
+
+
+def test_parity_gate_rejects_pending_or_nonterminal_admission_packet(tmp_path):
+    artifact = _artifact(tmp_path)
+    artifact["admission_status"] = "awaiting-blind-editorial-review"
+    artifact["pending_full_artifact_fields"] = ["blind_editorial_review"]
+    artifact["blind_review_packet"]["status"] = "awaiting-reviewer-response"
+
+    assert {
+        "admission-status",
+        "pending-admission-field",
+        "blind-review-packet",
+    } <= _reasons(artifact, tmp_path)
+
+
+def test_parity_gate_rejects_missing_or_tampered_content_addressed_review_evidence(tmp_path):
+    artifact = _artifact(tmp_path)
+    digest = artifact["blind_editorial_review"]["provenance"]["artifact_ref"].removeprefix("sha256:")
+    review = tmp_path / f"blind-review-unblind-{digest}.json"
+    review.write_text("{}", encoding="utf-8")
+    assert "blind-review-evidence" in _reasons(artifact, tmp_path)
+
+    artifact = _artifact(tmp_path)
+    digest = artifact["blind_editorial_review"]["provenance"]["artifact_ref"].removeprefix("sha256:")
+    (tmp_path / f"blind-review-unblind-{digest}.json").unlink()
+    assert "blind-review-evidence" in _reasons(artifact, tmp_path)
+
+
+def test_parity_gate_rejects_selected_reasoning_that_differs_from_runtime_librarian_setting(tmp_path):
+    artifact = _artifact(tmp_path)
+    for run in artifact["runs"][1:]:
+        run["runtime"]["reasoning_level"] = "low"
+        for case in run["case_results"]:
+            case["runtime"]["reasoning_level"] = "low"
+
+    assert {"runtime-production-reasoning", "selected-production-reasoning"} <= _reasons(artifact, tmp_path)

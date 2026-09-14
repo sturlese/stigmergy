@@ -27,9 +27,18 @@ canonical payload digest, semantic score, writer result, and raw gate map is sti
 
 Every Stigmergy reasoning-level candidate records full per-case runs using the same corpus, initial
 graph, case hashes, candidate commit, skill hash, runtime route, and complete raw gate map. The
-selected production level must be the first passing level in the ordered matrix. The runner accepts a
-diagnostic `planner-only` mode, but that evidence can never select a production level. Missing, stale,
-mismatched, aggregate-only, incomplete, or failing selected-Stigmergy evidence rejects the release.
+selected production level must be the first passing level in the ordered matrix and equal the one
+runtime librarian reasoning setting. The runner accepts a diagnostic `planner-only` mode, but that
+evidence can never select a production level. Missing, stale, mismatched, aggregate-only, incomplete,
+or failing selected-Stigmergy evidence rejects the release.
+
+An admission packet is terminal only when `admission_status` is `passed`, no field is pending, and
+`blind_review_packet.status` is `completed`. Its `blind_editorial_review.provenance.artifact_ref` is a
+`sha256:<digest>` reference to `blind-review-unblind-<digest>.json` in the same external evidence
+directory. The validator loads that record and its content-addressed reviewer response, blind packet,
+and private mapping; it verifies their raw and canonical hashes, packet bindings, candidate labels,
+case-output coverage, reviewed run IDs, and the mechanically derived verdict. Keep the complete
+evidence bundle outside the candidate checkout; a self-reported verdict or mutable path is rejected.
 
 Run one immutable case-result record with the production-equivalent path:
 

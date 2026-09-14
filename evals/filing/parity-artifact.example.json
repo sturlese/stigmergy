@@ -1,6 +1,12 @@
 {
   "schema_version": 3,
   "example_only": true,
+  "admission_status": "passed",
+  "blind_review_packet": {
+    "status": "completed",
+    "raw_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    "canonical_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  },
   "baseline_contract": {
     "implementation": "hippocampus",
     "role": "comparative-only",
@@ -140,7 +146,7 @@
     "provenance": {
       "reviewer": "recorded reviewer identity",
       "method": "blind-pairwise",
-      "artifact_ref": "immutable review artifact reference",
+      "artifact_ref": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
       "runs": {
         "hippocampus": [
           "reference repeat IDs"

@@ -79,8 +79,9 @@ def test_librarian_requests_high_reasoning_without_returning_reasoning(monkeypat
     model, settings = llm.build_model(llm.LIBRARIAN_MODEL)
 
     assert settings is model.settings
+    assert llm.LIBRARIAN_REASONING_LEVEL == "high"
     assert model.settings["openrouter_reasoning"] == {
-        "effort": "high",
+        "effort": llm.LIBRARIAN_REASONING_LEVEL,
         "exclude": True,
     }
 

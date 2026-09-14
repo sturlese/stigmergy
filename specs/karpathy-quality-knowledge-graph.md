@@ -143,6 +143,7 @@ filing or repair records a typed operational failure without committing a partia
     only after at least three independent production-equivalent repeats per case under the configured
     two-request budget; runtime route, observed requests, derived schema retries, semantic repairs,
     elapsed time, available usage, raw gates, and content-addressed output references are recorded.
+    The selected level must equal the single reasoning-effort setting used by the production librarian.
     Every result binds the case and fixture hashes and the exact brain-prompt commit/hash; its
     source-free original/effective plan payload is content-hashed and replayed by the admission gate.
     A stronger model may be used only as an offline evaluation judge.

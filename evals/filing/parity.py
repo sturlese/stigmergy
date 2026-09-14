@@ -19,6 +19,7 @@ except ModuleNotFoundError:
     from evals.filing.planner_eval import load_case, score
     from evals.filing.worktree import apply_and_gate, prepared
 
+from stigmergy.kernel.llm import LIBRARIAN_REASONING_LEVEL
 from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
 from stigmergy.knowledge.plan import FilingPlan
 
@@ -60,6 +61,7 @@ STIGMERGY_RUNTIME = {"model": "openai/gpt-5.4", "provider": "azure"}
 ARTIFACT_SCHEMA_VERSION = 3
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_REF = re.compile(r"^[0-9a-f]{40}$")
+_CONTENT_ADDRESS = re.compile(r"^sha256:([0-9a-f]{64})$")
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -134,7 +136,12 @@ def current_release_inputs(
     )
 
 
-def evaluate(artifact: dict, *, expected: ReleaseInputs | None = None) -> dict:
+def evaluate(
+    artifact: dict,
+    *,
+    expected: ReleaseInputs | None = None,
+    review_root: Path | None = None,
+) -> dict:
     """Validate per-case provenance, observability, and reasoning-level selection."""
     expected = expected or current_release_inputs(ROOT)
     failures: list[dict] = []
@@ -157,6 +164,7 @@ def evaluate(artifact: dict, *, expected: ReleaseInputs | None = None) -> dict:
         _failure(failures, "artifact", "candidate-fixtures")
     if expected.brain_prompt is None or brain_prompt != expected.brain_prompt:
         _failure(failures, "artifact", "candidate-brain-prompt")
+    _admission_state(artifact, failures)
 
     runs = _implementation_runs(artifact.get("runs"), corpus, initial, expected, failures)
     missing = sorted(REQUIRED_IMPLEMENTATIONS - set(runs))
@@ -165,7 +173,15 @@ def evaluate(artifact: dict, *, expected: ReleaseInputs | None = None) -> dict:
     selected_runs = runs.get("stigmergy", ())
     selected_level = _selected_level(selected_runs, failures)
     _blind_review(
-        artifact.get("blind_editorial_review"), corpus, initial, case_hashes, runs, failures
+        artifact.get("blind_editorial_review"),
+        corpus,
+        initial,
+        case_hashes,
+        runs,
+        review_root=review_root,
+        candidate_root=expected.repo_root,
+        packet_state=artifact.get("blind_review_packet"),
+        failures=failures,
     )
     _reasoning_matrix(
         artifact.get("reasoning_matrix"),
@@ -231,6 +247,28 @@ def _brain_prompt(value, failures: list[dict]) -> dict[str, str] | None:
     return {"commit": commit, "sha256": digest}
 
 
+def _admission_state(artifact: dict, failures: list[dict]) -> None:
+    """Reject incomplete release packets before examining their self-reported result."""
+    if artifact.get("admission_status") != "passed":
+        _failure(failures, "artifact", "admission-status")
+    if _has_pending_field(artifact):
+        _failure(failures, "artifact", "pending-admission-field")
+    packet = artifact.get("blind_review_packet")
+    if not isinstance(packet, dict) or packet.get("status") != "completed":
+        _failure(failures, "review", "blind-review-packet")
+
+
+def _has_pending_field(value) -> bool:
+    if isinstance(value, dict):
+        return any(
+            "pending" in str(key).lower() or _has_pending_field(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_has_pending_field(item) for item in value)
+    return False
+
+
 def _implementation_runs(value, corpus, initial, expected, failures: list[dict]) -> dict[str, list[dict]]:
     if not isinstance(value, list) or not value:
         _failure(failures, "artifact", "runs")
@@ -252,6 +290,7 @@ def _implementation_runs(value, corpus, initial, expected, failures: list[dict])
             # applying Stigmergy's admission threshold to a different filing workflow.
             require_passing=implementation == "stigmergy",
             require_production_equivalent=implementation == "stigmergy",
+            require_runtime_reasoning=implementation == "stigmergy",
             failures=failures,
         )
         if run_id:
@@ -271,6 +310,7 @@ def _validate_run(
     expected: ReleaseInputs,
     require_passing: bool,
     require_production_equivalent: bool,
+    require_runtime_reasoning: bool,
     failures: list[dict],
 ) -> str | None:
     if any(field in item for field in ("score", "gates", "raw_gates")):
@@ -284,12 +324,15 @@ def _validate_run(
         _recorded_text(runtime.get(field)) for field in REQUIRED_RUNTIME_FIELDS
     ):
         _failure(failures, implementation, "runtime-metadata")
-    elif implementation == "stigmergy" and (
-        runtime.get("model") != STIGMERGY_RUNTIME["model"]
-        or runtime.get("provider") != STIGMERGY_RUNTIME["provider"]
-        or runtime.get("reasoning_level") not in REASONING_LEVELS
-    ):
-        _failure(failures, implementation, "runtime-route")
+    elif implementation == "stigmergy":
+        if (
+            runtime.get("model") != STIGMERGY_RUNTIME["model"]
+            or runtime.get("provider") != STIGMERGY_RUNTIME["provider"]
+            or runtime.get("reasoning_level") not in REASONING_LEVELS
+        ):
+            _failure(failures, implementation, "runtime-route")
+        if require_runtime_reasoning and runtime.get("reasoning_level") != LIBRARIAN_REASONING_LEVEL:
+            _failure(failures, implementation, "runtime-production-reasoning")
     execution = item.get("execution")
     if not isinstance(execution, dict) or not _recorded_text(execution.get("mode")) or not _nonnegative_int(
         execution.get("configured_max_turns")
@@ -506,17 +549,32 @@ def _selected_level(runs: list[dict], failures: list[dict]) -> str | None:
     if len(levels) != 1 or not levels <= set(REASONING_LEVELS):
         _failure(failures, "stigmergy", "selected-reasoning-inconsistent")
         return None
-    return levels.pop()
+    level = levels.pop()
+    if level != LIBRARIAN_REASONING_LEVEL:
+        _failure(failures, "stigmergy", "selected-production-reasoning")
+    return level
 
 
-def _blind_review(value, corpus, initial, case_hashes, runs, failures: list[dict]) -> None:
+def _blind_review(
+    value,
+    corpus,
+    initial,
+    case_hashes,
+    runs,
+    *,
+    review_root: Path | None,
+    candidate_root: Path,
+    packet_state,
+    failures: list[dict],
+) -> None:
     if not isinstance(value, dict) or value.get("verdict") != "no_material_stigmergy_regression":
         _failure(failures, "review", "blind-editorial-review")
         return
     provenance = value.get("provenance")
+    reference = _content_address(provenance.get("artifact_ref") if isinstance(provenance, dict) else None)
     if not isinstance(provenance, dict) or not all(
-        _recorded_text(provenance.get(field)) for field in ("reviewer", "method", "artifact_ref")
-    ):
+        _recorded_text(provenance.get(field)) for field in ("reviewer", "method")
+    ) or reference is None:
         _failure(failures, "review", "blind-review-provenance")
         return
     expected_run_ids = {
@@ -536,6 +594,242 @@ def _blind_review(value, corpus, initial, case_hashes, runs, failures: list[dict
         or normalized_review_runs != expected_run_ids
     ):
         _failure(failures, "review", "stale-or-mismatched-review")
+        return
+    root = _external_review_root(review_root, candidate_root, failures)
+    if root is None:
+        return
+    review = _load_content_addressed_json(
+        root, prefix="blind-review-unblind-", digest=reference, suffix=".json", failures=failures
+    )
+    if review is None:
+        return
+    if review.get("verdict") != value["verdict"]:
+        _failure(failures, "review", "blind-review-evidence")
+        return
+    response = _load_review_document(
+        root,
+        review.get("reviewer_response"),
+        prefix="blind-reviewer-response-",
+        suffix=".json",
+        require_reference=True,
+        failures=failures,
+    )
+    packet = _load_review_document(
+        root,
+        review.get("packet"),
+        prefix="blind-review-packet-",
+        suffix=".json",
+        require_reference=False,
+        failures=failures,
+    )
+    mapping = _load_review_document(
+        root,
+        review.get("mapping"),
+        prefix="blind-review-mapping-",
+        suffix=".secret.json",
+        require_reference=False,
+        failures=failures,
+    )
+    if response is None or packet is None or mapping is None:
+        return
+    response_raw, response_value = response
+    packet_raw, packet_value = packet
+    _mapping = mapping[1]
+    if not _packet_state_matches(packet_state, packet_raw, packet_value):
+        _failure(failures, "review", "blind-review-packet")
+        return
+    if (
+        response_value.get("packet_sha256") != hashlib.sha256(packet_raw).hexdigest()
+        or _mapping.get("packet_sha256") != hashlib.sha256(_canonical_json(packet_value)).hexdigest()
+    ):
+        _failure(failures, "review", "blind-review-evidence")
+        return
+    _verify_unblind_review(review, response_value, packet_value, _mapping, runs, failures)
+
+
+def _content_address(value) -> str | None:
+    match = _CONTENT_ADDRESS.fullmatch(value) if isinstance(value, str) else None
+    return match.group(1) if match else None
+
+
+def _external_review_root(
+    review_root: Path | None, candidate_root: Path, failures: list[dict]
+) -> Path | None:
+    if review_root is None:
+        _failure(failures, "review", "blind-review-evidence")
+        return None
+    root = review_root.resolve()
+    if root.is_relative_to(candidate_root.resolve()):
+        _failure(failures, "review", "review-evidence-root")
+        return None
+    return root
+
+
+def _load_content_addressed_json(
+    root: Path,
+    *,
+    prefix: str,
+    digest: str,
+    suffix: str,
+    failures: list[dict],
+) -> dict | None:
+    path = root / f"{prefix}{digest}{suffix}"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _failure(failures, "review", "blind-review-evidence")
+        return None
+    if hashlib.sha256(_canonical_json(value)).hexdigest() != digest:
+        _failure(failures, "review", "blind-review-evidence")
+        return None
+    return value
+
+
+def _load_review_document(
+    root: Path,
+    metadata,
+    *,
+    prefix: str,
+    suffix: str,
+    require_reference: bool,
+    failures: list[dict],
+) -> tuple[bytes, dict] | None:
+    if not isinstance(metadata, dict):
+        _failure(failures, "review", "blind-review-evidence")
+        return None
+    canonical = metadata.get("canonical_sha256")
+    raw_digest = metadata.get("raw_sha256")
+    reference = _content_address(metadata.get("artifact_ref"))
+    if (
+        not isinstance(canonical, str)
+        or not _SHA256.fullmatch(canonical)
+        or not isinstance(raw_digest, str)
+        or not _SHA256.fullmatch(raw_digest)
+        or (require_reference and reference != canonical)
+        or (not require_reference and reference is not None and reference != canonical)
+        or metadata.get("path") != f"{prefix}{canonical}{suffix}"
+    ):
+        _failure(failures, "review", "blind-review-evidence")
+        return None
+    path = root / metadata["path"]
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        _failure(failures, "review", "blind-review-evidence")
+        return None
+    if hashlib.sha256(raw).hexdigest() != raw_digest or hashlib.sha256(_canonical_json(value)).hexdigest() != canonical:
+        _failure(failures, "review", "blind-review-evidence")
+        return None
+    return raw, value
+
+
+def _packet_state_matches(packet_state, raw: bytes, packet: dict) -> bool:
+    return isinstance(packet_state, dict) and packet_state == {
+        "status": "completed",
+        "raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "canonical_sha256": hashlib.sha256(_canonical_json(packet)).hexdigest(),
+    }
+
+
+def _verify_unblind_review(review, response, packet, mapping, runs, failures: list[dict]) -> None:
+    packet_pairs = _indexed_pairs(packet.get("comparisons"), "comparison_id")
+    mapping_pairs = _indexed_pairs(mapping.get("mapping"), "comparison_id")
+    response_pairs = _indexed_pairs(response.get("pairs"), "pair_id")
+    if not packet_pairs or set(packet_pairs) != set(mapping_pairs) or set(packet_pairs) != set(response_pairs):
+        _failure(failures, "review", "blind-review-evidence")
+        return
+    known_outputs = {
+        (item.get("implementation"), item.get("run_id"), case.get("output", {}).get("sha256"))
+        for values in runs.values()
+        for item in values
+        for case in item.get("case_results", [])
+        if isinstance(case, dict)
+    }
+    expected_regressions = []
+    reviewed_outputs = set()
+    for comparison_id, packet_pair in packet_pairs.items():
+        mapping_pair = mapping_pairs[comparison_id]
+        response_pair = response_pairs[comparison_id]
+        candidates = _indexed_pairs(packet_pair.get("candidates"), "label")
+        labels = _indexed_pairs(mapping_pair.get("labels"), "label")
+        if len(candidates) != 2 or set(candidates) != set(labels):
+            _failure(failures, "review", "blind-review-evidence")
+            return
+        for label, mapped in labels.items():
+            candidate = candidates[label]
+            if (
+                candidate.get("case_output_sha256") != mapped.get("case_output_sha256")
+                or candidate.get("effective_pages_sha256") != mapped.get("effective_pages_sha256")
+                or not _SHA256.fullmatch(mapped.get("case_output_sha256", ""))
+                or not _SHA256.fullmatch(mapped.get("effective_pages_sha256", ""))
+            ):
+                _failure(failures, "review", "blind-review-evidence")
+                return
+            output = (mapped.get("implementation"), mapped.get("run_id"), mapped.get("case_output_sha256"))
+            if output not in known_outputs:
+                _failure(failures, "review", "blind-review-evidence")
+                return
+            reviewed_outputs.add(output)
+        if not _reviewer_labels_match(response_pair, set(labels)):
+            _failure(failures, "review", "blind-review-evidence")
+            return
+        regression = response_pair.get("material_regression")
+        if not isinstance(regression, dict) or regression.get("side") not in labels:
+            _failure(failures, "review", "blind-review-evidence")
+            return
+        selected = labels[regression["side"]]
+        expected_regressions.append(
+            {
+                "comparison_id": comparison_id,
+                "candidate_label": selected["label"],
+                "implementation": selected["implementation"],
+                "run_id": selected["run_id"],
+                "case_output_sha256": selected["case_output_sha256"],
+                "effective_pages_sha256": selected["effective_pages_sha256"],
+                "reason": regression.get("reason"),
+            }
+        )
+    if reviewed_outputs != known_outputs:
+        _failure(failures, "review", "blind-review-evidence")
+        return
+    unblinding = review.get("unblinding")
+    stigmergy_regressions = [
+        item for item in expected_regressions if item["implementation"] == "stigmergy"
+    ]
+    if (
+        not isinstance(unblinding, dict)
+        or unblinding.get("material_regressions") != expected_regressions
+        or unblinding.get("stigmergy_material_regressions") != stigmergy_regressions
+        or (review.get("verdict") == "no_material_stigmergy_regression" and stigmergy_regressions)
+    ):
+        _failure(failures, "review", "blind-review-evidence")
+
+
+def _indexed_pairs(value, key: str) -> dict[str, dict]:
+    if not isinstance(value, list):
+        return {}
+    indexed = {
+        item.get(key): item
+        for item in value
+        if isinstance(item, dict) and _recorded_text(item.get(key))
+    }
+    return indexed if len(indexed) == len(value) else {}
+
+
+def _reviewer_labels_match(pair: dict, labels: set[str]) -> bool:
+    if not isinstance(pair, dict):
+        return False
+    winners = []
+    judgments = pair.get("judgments")
+    if isinstance(judgments, dict):
+        winners.extend(
+            judgment.get("winner") for judgment in judgments.values() if isinstance(judgment, dict)
+        )
+    overall = pair.get("overall")
+    if isinstance(overall, dict):
+        winners.append(overall.get("winner"))
+    return all(winner in labels | {"tie"} for winner in winners)
 
 
 def _reasoning_matrix(
@@ -584,6 +878,7 @@ def _reasoning_matrix(
                 expected=expected,
                 require_passing=False,
                 require_production_equivalent=True,
+                require_runtime_reasoning=level == LIBRARIAN_REASONING_LEVEL,
                 failures=failures,
             )
             if run_id:
@@ -670,6 +965,7 @@ def main(argv: list[str] | None = None) -> int:
                 brain_root=Path(args.brain_root),
                 brain_commit=args.brain_commit,
             ),
+            review_root=Path(args.artifact).resolve().parent,
         )
     except (OSError, ReleaseInputError, ValueError, json.JSONDecodeError) as error:
         parser.error(str(error))

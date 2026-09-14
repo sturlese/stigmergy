@@ -104,8 +104,9 @@ For a librarian/compiler release, validate the recorded real-model parity artifa
 deployment command: `python evals/filing/parity.py --artifact <result.json>`. The command is a
 fail-closed release gate: a non-zero result blocks rollout. The artifact must bind both independent
 implementation runs to the same corpus, immutable initial graph, source-case hashes, Stigmergy
-commit, librarian skill hash, recorded raw gates, blind review provenance, and the lowest-passing
-reasoning-level matrix.
+commit, librarian skill hash, recorded raw gates, a verified content-addressed blind-review bundle,
+and the lowest-passing reasoning-level matrix bound to the production librarian setting. Keep the
+artifact and its review bundle outside the candidate checkout.
 
 ## Nightly reconciliation
 

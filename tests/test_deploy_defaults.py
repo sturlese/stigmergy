@@ -178,6 +178,122 @@ def _raw_gates(*, passed=True):
     return {gate: "passed" if passed else "failed" for gate in parity.REQUIRED_SEMANTIC_GATES}
 
 
+def _canonical(value) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _write_review_bundle(root: pathlib.Path, artifact: dict) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    baseline = next(run for run in artifact["runs"] if run["implementation"] == "hippocampus")
+    selected = [run for run in artifact["runs"] if run["implementation"] == "stigmergy"]
+    baseline_cases = {case["case_id"]: case for case in baseline["case_results"]}
+    comparisons, mappings, pairs, regressions = [], [], [], []
+    for run in selected:
+        for case in run["case_results"]:
+            comparison_id = f"comparison-{case['case_id']}-{run['run_id']}"
+            labels = []
+            for implementation, candidate_run, candidate_case in (
+                ("hippocampus", baseline, baseline_cases[case["case_id"]]),
+                ("stigmergy", run, case),
+            ):
+                label = "candidate-" + hashlib.sha256(
+                    f"{comparison_id}:{implementation}".encode()
+                ).hexdigest()[:16]
+                labels.append(
+                    {
+                        "label": label,
+                        "case_output_sha256": candidate_case["output"]["sha256"],
+                        "effective_pages_sha256": hashlib.sha256(
+                            _canonical(candidate_case["payload"]["effective_plan"])
+                        ).hexdigest(),
+                        "implementation": implementation,
+                        "run_id": candidate_run["run_id"],
+                    }
+                )
+            comparisons.append(
+                {
+                    "comparison_id": comparison_id,
+                    "candidates": [
+                        {key: value for key, value in label.items() if key not in {"implementation", "run_id"}}
+                        for label in labels
+                    ],
+                }
+            )
+            mappings.append({"comparison_id": comparison_id, "labels": labels})
+            regression = {
+                "comparison_id": comparison_id,
+                "candidate_label": labels[0]["label"],
+                "implementation": "hippocampus",
+                "run_id": baseline["run_id"],
+                "case_output_sha256": labels[0]["case_output_sha256"],
+                "effective_pages_sha256": labels[0]["effective_pages_sha256"],
+                "reason": "Fixture baseline regression.",
+            }
+            regressions.append(regression)
+            pairs.append(
+                {
+                    "pair_id": comparison_id,
+                    "judgments": {"fixture": {"winner": "tie", "reason": "Fixture."}},
+                    "overall": {"winner": "tie", "reason": "Fixture."},
+                    "material_regression": {"side": labels[0]["label"], "reason": regression["reason"]},
+                }
+            )
+    packet = {"schema_version": 1, "comparisons": comparisons}
+    packet_bytes = _canonical(packet)
+    packet_digest = hashlib.sha256(packet_bytes).hexdigest()
+    packet_name = f"blind-review-packet-{packet_digest}.json"
+    (root / packet_name).write_bytes(packet_bytes)
+    mapping = {"schema_version": 1, "packet_sha256": packet_digest, "mapping": mappings}
+    mapping_bytes = _canonical(mapping)
+    mapping_digest = hashlib.sha256(mapping_bytes).hexdigest()
+    mapping_name = f"blind-review-mapping-{mapping_digest}.secret.json"
+    (root / mapping_name).write_bytes(mapping_bytes)
+    response = {
+        "reviewer_identity": "fixture-reviewer",
+        "method": "fixture-blind-pairwise",
+        "packet_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        "pairs": pairs,
+    }
+    response_bytes = _canonical(response)
+    response_digest = hashlib.sha256(response_bytes).hexdigest()
+    response_name = f"blind-reviewer-response-{response_digest}.json"
+    (root / response_name).write_bytes(response_bytes)
+    review = {
+        "schema_version": "blind-editorial-review-unblind-v2",
+        "verdict": "no_material_stigmergy_regression",
+        "reviewer_response": {
+            "path": response_name,
+            "raw_sha256": hashlib.sha256(response_bytes).hexdigest(),
+            "canonical_sha256": response_digest,
+            "artifact_ref": f"sha256:{response_digest}",
+        },
+        "packet": {
+            "path": packet_name,
+            "raw_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+            "canonical_sha256": packet_digest,
+        },
+        "mapping": {
+            "path": mapping_name,
+            "raw_sha256": hashlib.sha256(mapping_bytes).hexdigest(),
+            "canonical_sha256": mapping_digest,
+        },
+        "unblinding": {
+            "material_regressions": regressions,
+            "stigmergy_material_regressions": [],
+        },
+    }
+    review_bytes = _canonical(review)
+    review_digest = hashlib.sha256(review_bytes).hexdigest()
+    (root / f"blind-review-unblind-{review_digest}.json").write_bytes(review_bytes)
+    artifact["admission_status"] = "passed"
+    artifact["blind_review_packet"] = {
+        "status": "completed",
+        "raw_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        "canonical_sha256": packet_digest,
+    }
+    artifact["blind_editorial_review"]["provenance"]["artifact_ref"] = f"sha256:{review_digest}"
+
+
 def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
     expected = parity.current_release_inputs(repo)
     assert expected.commit == commit
@@ -477,7 +593,7 @@ def _parity_artifact(
 
     selected = [run("stigmergy", f"matrix-high-{repeat}", "high") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
-    return {
+    artifact = {
         "schema_version": 3,
         "corpus_sha256": corpus,
         "initial_graph_ref": initial,
@@ -521,6 +637,8 @@ def _parity_artifact(
             },
         },
     }
+    _write_review_bundle(repo.parent, artifact)
+    return artifact
 
 
 def test_deploy_bakes_all_controls_then_restores_defaults(tmp_path):
