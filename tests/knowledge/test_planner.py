@@ -258,6 +258,8 @@ def test_revision_reuses_the_exact_safe_context_and_returns_a_filing_plan(tmp_pa
     )
     assert "durable primary subject" in captured["prompt"]
     assert "stable name" in captured["prompt"]
+    assert "every entity listed on a mutation" in captured["prompt"]
+    assert "material quantitative outcomes" in captured["prompt"]
     assert "make links reciprocal" in captured["prompt"]
     assert "exact action schema" in captured["prompt"]
 

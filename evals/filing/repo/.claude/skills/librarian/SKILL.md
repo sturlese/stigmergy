@@ -75,7 +75,9 @@ meaning; never delete or collapse a page merely because concepts overlap.
 Every created or materially updated page must be cold-readable and useful without the source:
 state what it is, why it matters, how it works, its source-supported framework or mechanism, and
 the concrete examples, extensions, tradeoffs, and connections that make it reusable. Preserve the
-complete named or enumerated framework: do not reduce a six-part mechanism to generic bullets.
+complete named or enumerated framework and each source-reported example's distinguishing details,
+including material quantitative outcomes; do not reduce a six-part mechanism or a measured result
+to generic prose.
 Every newly added or changed factual conclusion needs a local citation using the exact supplied
 source path: `(Source: `sources/YYYY/MM/<capture-id>.md`)`. Copy `source_path` from the original
 capture data exactly; never replace it with a title, URL, label, or guessed path. One citation may
@@ -117,8 +119,10 @@ IDs. Include the paired
 `external_namespace` and `external_id` only for an explicit, stable identity identifier.
 
 Choose entities per page, never copy an entity list across page mutations. Only explicit `entities`
-references are anchored. Every selected identity has a visible relationship and local source
-citation on that exact page. Put that relationship and citation in the same paragraph or bullet.
+references are anchored. For every selected identity, write its name, source-supported material
+relationship, and exact local source citation together in one sentence or bullet on that mutation's
+page. A shared citation after a multi-entity list does not anchor the individual relationships; cite
+each item separately or remove that identity from the mutation.
 Entity relationships must be aboutness,
 responsibility, participation, material authorship, or another stated material connection: the
 source supplies an entity-specific action, role, or connection, not an incidental mention. Do not
