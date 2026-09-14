@@ -434,12 +434,20 @@ def _case_observability(
     for field in (
         "model_requests",
         "planning_model_requests",
+        "semantic_revision_model_requests",
         "repair_model_requests",
         "schema_retry_count",
         "semantic_repair_count",
         "elapsed_ms",
     ):
         if not _nonnegative_int(item.get(field)):
+            _failure(failures, implementation, "case-observability", case_id=case_id, field=field)
+    for field in (
+        "semantic_revision_required",
+        "semantic_revision_attempted",
+        "semantic_revision_applied",
+    ):
+        if not isinstance(item.get(field), bool):
             _failure(failures, implementation, "case-observability", case_id=case_id, field=field)
     usage = item.get("usage")
     if usage is not None and (
@@ -458,8 +466,14 @@ def _case_observability(
     if _nonnegative_int(model_requests):
         if (
             _nonnegative_int(item.get("planning_model_requests"))
+            and _nonnegative_int(item.get("semantic_revision_model_requests"))
             and _nonnegative_int(item.get("repair_model_requests"))
-            and item["planning_model_requests"] + item["repair_model_requests"] != model_requests
+            and (
+                item["planning_model_requests"]
+                + item["semantic_revision_model_requests"]
+                + item["repair_model_requests"]
+                != model_requests
+            )
         ):
             _failure(failures, implementation, "case-observability", case_id=case_id, field="model_requests")
         if _nonnegative_int(item.get("schema_retry_count")) and item["schema_retry_count"] > model_requests:
@@ -469,6 +483,16 @@ def _case_observability(
             and item["semantic_repair_count"] > item.get("repair_model_requests", 0)
         ):
             _failure(failures, implementation, "case-observability", case_id=case_id, field="semantic_repair_count")
+        if item.get("semantic_revision_applied") and not item.get("semantic_revision_required"):
+            _failure(failures, implementation, "case-observability", case_id=case_id, field="semantic_revision_applied")
+        if item.get("semantic_revision_model_requests", 0) and not item.get("semantic_revision_attempted"):
+            _failure(
+                failures,
+                implementation,
+                "case-observability",
+                case_id=case_id,
+                field="semantic_revision_model_requests",
+            )
     if item.get("execution_mode") == "planner-only" and item.get("semantic_repair_count") != 0:
         _failure(failures, implementation, "case-observability", case_id=case_id, field="semantic_repair_count")
     _verify_case_payload(item, implementation, case_id, expected, failures)

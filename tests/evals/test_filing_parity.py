@@ -147,6 +147,10 @@ def _case_result(case_id: str, repeat: int, *, implementation: str, passed: bool
         "configured_max_turns": 2,
         "model_requests": 1,
         "planning_model_requests": 1,
+        "semantic_revision_required": False,
+        "semantic_revision_attempted": False,
+        "semantic_revision_applied": False,
+        "semantic_revision_model_requests": 0,
         "repair_model_requests": 0,
         "schema_retry_count": 0,
         "semantic_repair_count": 0,
@@ -481,6 +485,14 @@ def test_parity_gate_rejects_tampered_payload_hash_score_and_gates(tmp_path):
     artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["score"]["passed"] = False
     assert "case-payload" in _reasons(artifact, tmp_path)
+
+
+def test_parity_gate_rejects_unaccounted_semantic_revision_requests(tmp_path):
+    artifact = _artifact(tmp_path)
+    artifact["runs"][1]["case_results"][0]["semantic_revision_model_requests"] = 1
+    artifact["runs"][1]["case_results"][0]["semantic_revision_attempted"] = True
+
+    assert "case-observability" in _reasons(artifact, tmp_path)
 
     artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["gates"]["passed"] = False

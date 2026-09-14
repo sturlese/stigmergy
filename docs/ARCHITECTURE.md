@@ -36,7 +36,9 @@ reservation so the same reaction can retry safely.
 ## Filing and gates
 
 The worker extracts each artifact, stores readable derivatives, deterministically renders one
-source page, retrieves only safe context, and requests one structured `FilingPlan`. The plan may
+source page, retrieves only safe context, and requests one structured draft `FilingPlan`. A draft
+that updates or deletes a visible page, or accounts for recompile prior pages, receives one complete
+semantic revision with the identical source, provenance, and safe context before application. The plan may
 create, update, consolidate, or delete zero or more notes/concepts; propose identity claims; add
 contradictions; or make no wiki mutation. A reusable idea, rather than the incoming source, is the
 graph unit: related evidence stays cohesive, while independently reusable conclusions become
@@ -45,11 +47,11 @@ separate pages with meaningful links.
 The candidate tree must pass page, source immutability, reference, link, ACL-flow, entity,
 contradiction, registry, changed-path, and trusted-writer checks before the branch advances. New and
 updated knowledge pages must be cold-readable, use a matching H1, place source attribution near
-their factual conclusions, and explain material page and entity relationships in prose. A bounded
-semantic repair receives the original source, the same safe context, and only the Markdown bodies
-of authorized pages; the writer reconstructs each page with its original metadata. It replaces the
-complete candidate plan or nothing. If it cannot pass the gates, the immutable source lands alone with a
-typed `plan_rejected` report. Every landed operation records a friendly manifest plus a hash-verified
+their factual conclusions, and explain material page and entity relationships in prose. A revised
+plan replaces its draft or nothing; it is applied only after the usual writer gates. Pure-create
+plans may use the remaining bounded body-only repair path, whose authorized metadata the writer
+reconstructs. If either path cannot pass the gates, the immutable source lands alone with a typed
+`plan_rejected` report. Every landed operation records a friendly manifest plus a hash-verified
 exact patch.
 
 ## Visibility

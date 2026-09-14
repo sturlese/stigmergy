@@ -11,7 +11,8 @@ to the SHA-256 of its versioned case and readable fixture, plus the commit and S
 knowledge-repository librarian prompt that executed it. Each case result records the full raw semantic
 gate map: mutation and identity quality, links and reference resolution, readable bodies, local
 provenance, entity relationships, anti-fragmentation, writer gates, actual model requests, derived
-schema retries, semantic-repair count, elapsed time, and a content-addressed output reference. Its
+schema retries, semantic-revision trigger/attempt/application and request metrics, semantic-repair
+count, elapsed time, and a content-addressed output reference. Its
 canonical payload retains the original and effective derived plans, never source text. The gate
 recalculates that payload hash, semantic score, writer gate, and raw gate map against the current case
 and fixture. Token usage is recorded only when the runner exposes it; provider fields are never inferred.

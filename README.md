@@ -89,9 +89,11 @@ It never rewrites `sources/` and never broadens an ACL. Deletion is a separate e
 
 Each accepted knowledge mutation must be readable without reopening the source: it states the
 supported conclusion, gives local source attribution, and explains every material page or entity
-relationship in prose. The writer may make one bounded semantic repair using the same source and
-safe context. If the plan still fails, it commits only the immutable source and reports the plan as
-rejected; it never leaves a partial derived graph.
+relationship in prose. A draft that changes a visible existing page receives one bounded semantic
+revision using the same source and safe context; the revision replaces the complete plan or nothing.
+Pure-create drafts retain the bounded repair path for structural writer violations. If either path
+fails, the writer commits only the immutable source and reports the plan as rejected; it never
+leaves a partial derived graph.
 
 ## The knowledge model
 
@@ -279,10 +281,11 @@ alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenA
 credentials are rejected. The librarian's strict provider-native JSON Schema plans are pinned to
 Azure, with no provider fallback; requests require supported parameters, deny data collection,
 and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
-Each writer attempt makes at most two model requests across filing, schema retries, and any semantic
-repair. A schema retry consumes the same attempt budget, so a repair is attempted only with a
-remaining request. Retryable failures use the existing bounded queue-attempt policy; answer and OCR
-requests retain same-model provider failover.
+Each writer attempt makes at most two model requests across filing, schema retries, semantic draft
+revision, and any bounded repair. A visible-page draft revision consumes the remaining request; if
+it is unavailable or fails writer gates, the unreviewed draft is never applied. Retryable failures
+use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider
+failover.
 
 `POST /admin/api/knowledge/recompile` is a separate master-only control: it rebuilds only derived
 notes, concepts, links, and entity anchors from immutable sources in one isolated worktree. It

@@ -17,6 +17,11 @@ Return exactly one complete `FilingPlan`, not prose or a request for approval. I
 zero or more mutations, identity proposals, and contradiction proposals. Its summary must state
 only what the plan actually does.
 
+When a request includes `DRAFT FILING PLAN`, treat it as a fallible draft and return one complete
+replacement `FilingPlan`, never a patch or commentary. Recheck source-supported omissions,
+abstraction-level collapse, reciprocal page links, material evidence-producing identities, local
+citations, and unresolved contradictions using only the supplied source and visible context.
+
 - Use `create` only for a normal `concept` or `note`, with `role`, `title`, and a complete body.
   A create has no path and must explicitly emit `entities: [...]`; use `entities: []` when there
   are no deliberate entity anchors.

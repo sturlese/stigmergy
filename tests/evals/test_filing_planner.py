@@ -813,6 +813,10 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     assert payload["configured_max_turns"] == expected_max_turns
     assert payload["model_requests"] == 1
     assert payload["planning_model_requests"] == 1
+    assert payload["semantic_revision_required"] is False
+    assert payload["semantic_revision_attempted"] is False
+    assert payload["semantic_revision_applied"] is False
+    assert payload["semantic_revision_model_requests"] == 0
     assert payload["repair_model_requests"] == 0
     assert payload["schema_retry_count"] == 0
     assert payload["semantic_repair_count"] == 0
@@ -845,9 +849,11 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     expected_case_result = {
         key: payload[key]
         for key in (
-                "brain_prompt", "case_id", "case_sha256", "fixture_sha256", "runtime",
-                "execution_mode", "configured_max_turns", "model_requests",
-            "planning_model_requests", "repair_model_requests", "schema_retry_count",
+            "brain_prompt", "case_id", "case_sha256", "fixture_sha256", "runtime",
+            "execution_mode", "configured_max_turns", "model_requests",
+            "planning_model_requests", "semantic_revision_required",
+            "semantic_revision_attempted", "semantic_revision_applied",
+            "semantic_revision_model_requests", "repair_model_requests", "schema_retry_count",
             "semantic_repair_count", "elapsed_ms", "usage", "score",
             "gates", "raw_gates", "output",
         )
@@ -1033,6 +1039,56 @@ def test_production_equivalent_worktree_scores_the_final_repaired_body():
         final = eval_worktree.effective_plan(worktree, broken)
 
     assert result["passed"] is True, result
+    assert planner_eval.score(final, case, source_text=source_text)["passed"] is True
+
+
+def test_production_equivalent_worktree_revises_a_visible_page_draft_before_scoring():
+    case = planner_eval.load_case(SEEDED_CASE)
+    source_text = FIXTURE.read_text(encoding="utf-8")
+    entities = ("Santi", "OpenAI", "Anthropic", "LangChain")
+    base = _plan(entities=entities, links=entities)
+    agent_harness = PageMutation(
+        action="update",
+        path="wiki/concepts/Agent Harness.md",
+        body=(
+            "# Agent Harness\n\nThe [[Agent Harness]] implements the broader "
+            "[[Harness Engineering]] discipline. Santi, OpenAI, LangChain, and Anthropic "
+            f"provide the source-backed evidence. (Source: `{SOURCE}`)"
+        ),
+        entities=entities,
+        reason="Preserved the lower-level operational concept.",
+    )
+    draft = base.model_copy(update={"mutations": (agent_harness,)})
+    revision = base.model_copy(update={"mutations": (*base.mutations, agent_harness)})
+
+    class RevisingPlanner:
+        def __init__(self):
+            self.calls = []
+
+        def revise(self, **kwargs):
+            self.calls.append(kwargs)
+            return PlanRun(revision, model_requests=1)
+
+    planner = RevisingPlanner()
+    with eval_worktree.prepared(case, source_text, template=str(run_planner.DEFAULT_WORKTREE)) as worktree:
+        result, reviewed = eval_worktree.apply_with_production_repair(
+            worktree,
+            draft,
+            planner,
+            planning_model_requests=1,
+            max_turns=2,
+            return_plan=True,
+        )
+        final = eval_worktree.effective_plan(worktree, reviewed)
+
+    assert result["passed"] is True, result
+    assert result["semantic_revision_required"] is True
+    assert result["semantic_revision_attempted"] is True
+    assert result["semantic_revision_applied"] is True
+    assert result["semantic_revision_model_requests"] == 1
+    assert planner.calls[0]["context"] == worktree.context
+    assert planner.calls[0]["draft"] == draft
+    assert planner.calls[0]["max_requests"] == 1
     assert planner_eval.score(final, case, source_text=source_text)["passed"] is True
 
 

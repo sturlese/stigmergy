@@ -19,6 +19,7 @@ from stigmergy.knowledge import contradictions
 from stigmergy.knowledge.context import filing_context, render_context
 from stigmergy.knowledge.lint import check
 from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
+from stigmergy.knowledge.plan import FilingPlan
 from stigmergy.knowledge.repair import repair_deterministic
 from stigmergy.knowledge.write_guard import WriteContext, WriteRefused
 from stigmergy.knowledge.writer import (
@@ -29,6 +30,7 @@ from stigmergy.knowledge.writer import (
     _capture_repair_files,
     _restore_mutable,
     _snapshot_mutable,
+    requires_semantic_revision,
 )
 
 
@@ -126,7 +128,8 @@ def apply_with_production_repair(
     *,
     planning_model_requests: int,
     max_turns: int,
-) -> dict:
+    return_plan: bool = False,
+):
     """Exercise the production filing gate and its single bounded model-repair path in memory."""
     root = worktree.root
     context = filing_context(
@@ -142,39 +145,76 @@ def apply_with_production_repair(
     plan_rejection = ""
     repair_model_requests = 0
     semantic_repair_count = 0
+    semantic_revision_required = requires_semantic_revision(plan, context)
+    semantic_revision_attempted = False
+    semantic_revision_applied = False
+    semantic_revision_model_requests = 0
     repair_rejection = None
     repair_mutation_shape = []
-    try:
-        _apply_filing_plan(
-            root,
-            plan,
-            context=WriteContext(None, worktree.envelope.audience, unrestricted=True),
-            envelope=worktree.envelope,
-            relative_source=worktree.source_path,
-            readable_artifacts=(worktree.source_text,),
-            reasons=reasons,
-            visible_entities=tuple(context["entities"]),
-            visible_entity_ids=frozenset(item["id"] for item in context["entities"]),
-            allowed_contradiction_sources=frozenset(
-                {worktree.source_path, *(item["path"] for item in context["source_evidence"])}
-            ),
-        )
-        repair_deterministic(root)
-    except (
-        KnowledgeWriteError,
-        PageContractError,
-        entity_service.EntityOperationError,
-        WriteRefused,
-        contradictions.ContradictionContractError,
-    ) as error:
-        plan_invalid = True
-        plan_rejection = error.__class__.__name__
+    active_plan = plan
+    if semantic_revision_required:
+        remaining_requests = max(0, int(max_turns) - int(planning_model_requests))
+        if remaining_requests < 1:
+            plan_invalid = True
+            plan_rejection = "semantic-revision-budget-exhausted"
+        else:
+            semantic_revision_attempted = True
+            try:
+                revision_run = planner.revise(
+                    worktree=root,
+                    envelope=worktree.envelope,
+                    source_path=worktree.source_path,
+                    source_text=worktree.source_text,
+                    context=rendered_context,
+                    draft=plan,
+                    max_requests=remaining_requests,
+                )
+            except Exception:
+                plan_invalid = True
+                plan_rejection = "semantic-revision-failed"
+            else:
+                semantic_revision_model_requests = int(revision_run.model_requests)
+                if (
+                    semantic_revision_model_requests > remaining_requests
+                    or not isinstance(revision_run.plan, FilingPlan)
+                ):
+                    plan_invalid = True
+                    plan_rejection = "semantic-revision-failed"
+                else:
+                    active_plan = revision_run.plan
+                    semantic_revision_applied = True
+    if not plan_invalid:
+        try:
+            _apply_filing_plan(
+                root,
+                active_plan,
+                context=WriteContext(None, worktree.envelope.audience, unrestricted=True),
+                envelope=worktree.envelope,
+                relative_source=worktree.source_path,
+                readable_artifacts=(worktree.source_text,),
+                reasons=reasons,
+                visible_entities=tuple(context["entities"]),
+                visible_entity_ids=frozenset(item["id"] for item in context["entities"]),
+                allowed_contradiction_sources=frozenset(
+                    {worktree.source_path, *(item["path"] for item in context["source_evidence"])}
+                ),
+            )
+            repair_deterministic(root)
+        except (
+            KnowledgeWriteError,
+            PageContractError,
+            entity_service.EntityOperationError,
+            WriteRefused,
+            contradictions.ContradictionContractError,
+        ) as error:
+            plan_invalid = True
+            plan_rejection = error.__class__.__name__
 
     editorial_paths = frozenset(
         path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
     )
     violations = check(root, editorial_paths=editorial_paths) if not plan_invalid else ()
-    if violations:
+    if violations and not semantic_revision_required:
         try:
             repair_files = _capture_repair_files(
                 root,
@@ -215,19 +255,27 @@ def apply_with_production_repair(
             if violations:
                 plan_invalid = True
                 plan_rejection = "unrepaired-gate-violations"
+    elif violations:
+        plan_invalid = True
+        plan_rejection = "unrepaired-gate-violations"
 
     if plan_invalid:
         _restore_mutable(root, snapshot)
-    return {
+    result = {
         "passed": not plan_invalid and not violations,
         "violations": [{"path": item.path, "code": item.code} for item in violations],
         "changed_paths": sorted(reasons),
         "plan_rejection": plan_rejection or None,
         "repair_model_requests": repair_model_requests,
         "semantic_repair_count": semantic_repair_count,
+        "semantic_revision_required": semantic_revision_required,
+        "semantic_revision_attempted": semantic_revision_attempted,
+        "semantic_revision_applied": semantic_revision_applied,
+        "semantic_revision_model_requests": semantic_revision_model_requests,
         "repair_rejection": repair_rejection,
         "repair_mutation_shape": repair_mutation_shape,
     }
+    return (result, active_plan) if return_plan else result
 
 
 def effective_plan(worktree: EvaluationWorktree, plan):

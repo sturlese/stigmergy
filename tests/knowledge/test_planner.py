@@ -224,6 +224,37 @@ def test_repair_mutation_accepts_only_body():
         )
 
 
+def test_revision_reuses_the_exact_safe_context_and_returns_a_filing_plan(tmp_path, monkeypatch):
+    subject = planner.PydanticPlanner(_settings())
+    captured = {}
+
+    async def run_structured(**kwargs):
+        captured.update(kwargs)
+        return planner.PlanRun(FilingPlan(summary="Revised the supported decision."), model_requests=1)
+
+    monkeypatch.setattr(subject, "_run_structured", run_structured)
+    context = '{"candidates":[{"path":"wiki/notes/Visible.md"}],"entities":[]}'
+    draft = FilingPlan(summary="Draft decision")
+
+    result = subject.revise(
+        worktree=_worktree(tmp_path),
+        envelope=_envelope(),
+        source_path="sources/2026/08/capture.md",
+        source_text="Decision: renew for one year.",
+        context=context,
+        draft=draft,
+        max_requests=1,
+    )
+
+    assert isinstance(result.plan, FilingPlan)
+    assert captured["output_type"] is FilingPlan
+    assert captured["max_requests"] == 1
+    assert context in captured["prompt"]
+    assert "DRAFT FILING PLAN" in captured["prompt"]
+    assert json.dumps(draft.model_dump(mode="json"), sort_keys=True) in captured["prompt"]
+    assert "collapsed abstraction levels" in captured["prompt"]
+
+
 def test_planner_rejects_a_prompt_over_its_byte_budget(monkeypatch):
     monkeypatch.setattr(planner, "MAX_PLANNER_PROMPT_BYTES", 10)
 

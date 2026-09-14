@@ -102,19 +102,20 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 | Runtime purpose | Model |
 |---|---|
-| librarian filing and semantic repair | `openrouter:openai/gpt-5.4` |
+| librarian filing, semantic revision, and repair | `openrouter:openai/gpt-5.4` |
 | cited answers | `z-ai/glm-5.2` |
 | vector embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | scanned-page and image OCR | `qwen/qwen3-vl-8b-instruct` |
 
-Deterministic linting is the gardener's detection step and makes no model call. Semantic repair is
-the only model-backed part of a garden run and uses the librarian's `openrouter:openai/gpt-5.4`
-model. Librarian calls request reasoning effort `high` with reasoning excluded from returned output
-and require strict provider-native JSON Schema plans. OpenRouter requires supported parameters,
-denies data collection, and requires zero-data-retention processing. The librarian is pinned to
-Azure, with no provider fallback. Each writer attempt makes at most two model requests, including
-one schema repair. Retryable failures use the existing bounded queue-attempt policy; answer and OCR
-requests retain same-model provider failover. Model fallback is prohibited. The application never reads,
+Deterministic linting is the gardener's detection step and makes no model call. Semantic revision
+and repair use the librarian's `openrouter:openai/gpt-5.4` model. Librarian calls request reasoning
+effort `high` with reasoning excluded from returned output and require strict provider-native JSON
+Schema plans. OpenRouter requires supported parameters, denies data collection, and requires
+zero-data-retention processing. The librarian is pinned to Azure, with no provider fallback. Each
+writer attempt makes at most two model requests across draft filing, schema retries, semantic
+revision, and repair; an eligible draft is never applied without its revision. Retryable failures
+use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider
+failover. Model fallback is prohibited. The application never reads,
 forwards, or falls back to Anthropic, OpenAI, Gemini, or another direct model-provider credential.
 
 ## 5. Target system
@@ -466,7 +467,7 @@ Submitting the form creates an ordinary capture with `intent.resolution_of`. It 
 These names remain, but their responsibilities become small and precise:
 
 - **Linter:** a pure detector library. Given a candidate repository tree, it returns deterministic, structured violations. It has no database backlog and no side effects.
-- **Repair:** pure, bounded transformation primitives used by the writer: deterministic rewrites, link/anchor sweeps, registry regeneration, explicit deletion, and a constrained model repair when semantics are required. A semantic repair receives the original source and the same ACL-safe filing context, and replaces the complete candidate plan or nothing. It is not a daemon, queue, or user-facing workflow.
+- **Repair:** pure, bounded transformation primitives used by the writer: deterministic rewrites, link/anchor sweeps, registry regeneration, explicit deletion, a complete model plan revision when an eligible draft changes visible derived context, and a constrained body repair for ineligible drafts. A semantic revision receives the original source and the same ACL-safe filing context, and replaces the complete candidate plan or nothing. It is not a daemon, queue, or user-facing workflow.
 - **Gardener:** the single scheduled orchestrator that runs the linter and repair primitives autonomously inside the existing writer process.
 
 There is no separate gardener worker and repair worker. The one knowledge writer performs:

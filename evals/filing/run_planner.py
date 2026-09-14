@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Run one source through the production-equivalent filing evaluation path.
 
-The default runs the planner, the real temporary-worktree writer gates, and the bounded semantic
-repair path without opening a database or writing Git. ``planner-only`` is a diagnostic mode that
-skips semantic repair. Every result is a single immutable, case-level evidence record suitable for
+The default runs the planner, semantic draft revision when production would require it, the real
+temporary-worktree writer gates, and the bounded structural repair path without opening a database
+or writing Git. ``planner-only`` is a diagnostic mode that skips both model-backed follow-ups.
+Every result is a single immutable, case-level evidence record suitable for
 embedding in the parity artifact. The request can cost money.
 
 Example:
@@ -109,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         "--execution-mode",
         choices=(PRODUCTION_EQUIVALENT_MODE, PLANNER_ONLY_MODE),
         default=PRODUCTION_EQUIVALENT_MODE,
-        help="production-equivalent exercises bounded semantic repair; planner-only is diagnostic",
+        help="production-equivalent exercises draft revision and bounded repair; planner-only is diagnostic",
     )
     parser.add_argument(
         "--run-id",
@@ -192,26 +193,35 @@ def main(argv: list[str] | None = None) -> int:
             context=evaluation.context,
         )
         if args.execution_mode == PRODUCTION_EQUIVALENT_MODE:
-            gates = apply_with_production_repair(
+            gates, plan_for_score = apply_with_production_repair(
                 evaluation,
                 run.plan,
                 planner,
                 planning_model_requests=run.model_requests,
                 max_turns=args.max_turns,
+                return_plan=True,
             )
         else:
             gates = apply_and_gate(evaluation, run.plan)
+            plan_for_score = run.plan
             gates["repair_model_requests"] = 0
             gates["semantic_repair_count"] = 0
+            gates["semantic_revision_required"] = False
+            gates["semantic_revision_attempted"] = False
+            gates["semantic_revision_applied"] = False
+            gates["semantic_revision_model_requests"] = 0
             gates["repair_rejection"] = None
             gates["repair_mutation_shape"] = []
-        scored_plan = effective_plan(evaluation, run.plan) if gates["passed"] else run.plan
+        scored_plan = effective_plan(evaluation, plan_for_score) if gates["passed"] else plan_for_score
         semantic = score(scored_plan, case, source_text=source_text)
         planning_model_requests = int(run.model_requests)
+        semantic_revision_model_requests = int(gates["semantic_revision_model_requests"])
         repair_model_requests = int(gates["repair_model_requests"])
-        model_requests = planning_model_requests + repair_model_requests
-        schema_retry_count = max(0, planning_model_requests - 1) + max(
-            0, repair_model_requests - int(gates["semantic_repair_count"] > 0)
+        model_requests = planning_model_requests + semantic_revision_model_requests + repair_model_requests
+        schema_retry_count = (
+            max(0, planning_model_requests - 1)
+            + max(0, semantic_revision_model_requests - int(gates["semantic_revision_attempted"]))
+            + max(0, repair_model_requests - int(gates["semantic_repair_count"] > 0))
         )
         raw_gates = {
             gate: semantic[gate]["passed"]
@@ -249,6 +259,10 @@ def main(argv: list[str] | None = None) -> int:
             "configured_max_turns": args.max_turns,
             "model_requests": model_requests,
             "planning_model_requests": planning_model_requests,
+            "semantic_revision_required": gates["semantic_revision_required"],
+            "semantic_revision_attempted": gates["semantic_revision_attempted"],
+            "semantic_revision_applied": gates["semantic_revision_applied"],
+            "semantic_revision_model_requests": semantic_revision_model_requests,
             "repair_model_requests": repair_model_requests,
             "schema_retry_count": schema_retry_count,
             "semantic_repair_count": gates["semantic_repair_count"],

@@ -326,6 +326,9 @@ def _recompile_derived(
         raise GateRefused(f"recompile source preflight failed: {error}") from error
     _clear_derived_pages(worktree)
     model_requests = 0
+    planning_model_requests = 0
+    semantic_revision_model_requests = 0
+    semantic_revision_count = 0
     gate_violations = 0
     tombstone_authorizations: dict[str, set[str]] = {}
     for relative_source in source_paths:
@@ -364,8 +367,34 @@ def _recompile_derived(
             source_text=source.text,
             context=rendered_context,
         )
-        model_requests += plan_run.model_requests
-        plan, tombstones = _prepare_recompile_plan(plan_run.plan, prior_pages=prior_pages)
+        planning_requests = int(plan_run.model_requests)
+        planning_model_requests += planning_requests
+        model_requests += planning_requests
+        plan = plan_run.plan
+        if requires_semantic_revision(plan, safe_context):
+            remaining_requests = max(0, int(deps.settings.max_turns) - planning_requests)
+            if remaining_requests < 1:
+                raise GateRefused("recompile semantic revision budget exhausted")
+            try:
+                revision_run = deps.planner.revise(
+                    worktree=worktree,
+                    envelope=envelope,
+                    source_path=relative_source,
+                    source_text=source.text,
+                    context=rendered_context,
+                    draft=plan,
+                    max_requests=remaining_requests,
+                )
+            except Exception as error:
+                raise GateRefused("recompile semantic revision failed") from error
+            revision_requests = int(revision_run.model_requests)
+            semantic_revision_model_requests += revision_requests
+            model_requests += revision_requests
+            if revision_requests > remaining_requests or not isinstance(revision_run.plan, FilingPlan):
+                raise GateRefused("recompile semantic revision failed")
+            plan = revision_run.plan
+            semantic_revision_count += 1
+        plan, tombstones = _prepare_recompile_plan(plan, prior_pages=prior_pages)
         for path in tombstones:
             tombstone_authorizations.setdefault(path, set()).add(relative_source)
         try:
@@ -422,6 +451,9 @@ def _recompile_derived(
         "created_entities": len(after_entities - before_entities),
         "authorized_page_removals": authorized_page_removals,
         "model_requests": model_requests,
+        "planning_model_requests": planning_model_requests,
+        "semantic_revision_model_requests": semantic_revision_model_requests,
+        "semantic_revision_count": semantic_revision_count,
         "link_health": {"violations": gate_violations, "clean": True},
         "idempotent": not entries,
     }
@@ -620,36 +652,76 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         plan_invalid = False
         plan_rejection = ""
         plan_skipped: list[str] = []
-        model_requests = plan_run.model_requests
-        try:
-            _apply_filing_plan(
-                worktree,
-                plan_run.plan,
-                context=context,
-                envelope=envelope,
-                relative_source=relative_source,
-                readable_artifacts=tuple(item.result.text for item in extracted),
-                reasons=reasons,
-                visible_entities=visible_entities,
-                visible_entity_ids=visible_entity_ids,
-                allowed_contradiction_sources=allowed_contradiction_sources,
-                skipped=plan_skipped,
-            )
-            repair_deterministic(worktree)
-        except (
-            KnowledgeWriteError,
-            PageContractError,
-            EntityOperationError,
-            WriteRefused,
-            contradictions.ContradictionContractError,
-        ) as error:
-            plan_invalid = True
-            plan_rejection = str(error)
+        planning_model_requests = int(plan_run.model_requests)
+        semantic_revision_model_requests = 0
+        repair_model_requests = 0
+        semantic_revision_required = requires_semantic_revision(plan_run.plan, safe_context)
+        semantic_revision_attempted = False
+        semantic_revision_applied = False
+        plan = plan_run.plan
+        model_requests = planning_model_requests
+        if semantic_revision_required:
+            remaining_requests = max(0, int(deps.settings.max_turns) - model_requests)
+            if remaining_requests < 1:
+                plan_invalid = True
+                plan_rejection = "semantic revision budget exhausted"
+            else:
+                semantic_revision_attempted = True
+                try:
+                    revision_run = deps.planner.revise(
+                        worktree=worktree,
+                        envelope=envelope,
+                        source_path=relative_source,
+                        source_text=source_text,
+                        context=rendered_context,
+                        draft=plan,
+                        max_requests=remaining_requests,
+                    )
+                except Exception:
+                    plan_invalid = True
+                    plan_rejection = "semantic revision failed"
+                else:
+                    semantic_revision_model_requests = int(revision_run.model_requests)
+                    model_requests += semantic_revision_model_requests
+                    if (
+                        semantic_revision_model_requests > remaining_requests
+                        or not isinstance(revision_run.plan, FilingPlan)
+                    ):
+                        plan_invalid = True
+                        plan_rejection = "semantic revision failed"
+                    else:
+                        plan = revision_run.plan
+                        semantic_revision_applied = True
+        if not plan_invalid:
+            try:
+                _apply_filing_plan(
+                    worktree,
+                    plan,
+                    context=context,
+                    envelope=envelope,
+                    relative_source=relative_source,
+                    readable_artifacts=tuple(item.result.text for item in extracted),
+                    reasons=reasons,
+                    visible_entities=visible_entities,
+                    visible_entity_ids=visible_entity_ids,
+                    allowed_contradiction_sources=allowed_contradiction_sources,
+                    skipped=plan_skipped,
+                )
+                repair_deterministic(worktree)
+            except (
+                KnowledgeWriteError,
+                PageContractError,
+                EntityOperationError,
+                WriteRefused,
+                contradictions.ContradictionContractError,
+            ) as error:
+                plan_invalid = True
+                plan_rejection = str(error)
         editorial_paths = frozenset(
             path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
         )
         violations = check(worktree, editorial_paths=editorial_paths) if not plan_invalid else ()
-        if violations:
+        if violations and not semantic_revision_required:
             try:
                 repair_files = _capture_repair_files(
                     worktree,
@@ -667,7 +739,8 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                     context=rendered_context,
                     max_requests=max(0, int(deps.settings.max_turns) - model_requests),
                 )
-                model_requests += repair_run.model_requests
+                repair_model_requests = int(repair_run.model_requests)
+                model_requests += repair_model_requests
                 repaired = _apply_repair_plan(
                     worktree,
                     violations,
@@ -689,6 +762,10 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                     # Codes only: a violation's path names a page, and the report is read by the submitter.
                     codes = ", ".join(sorted({item.code for item in violations}))
                     plan_rejection = f"knowledge gates found {codes}"
+        elif violations:
+            plan_invalid = True
+            codes = ", ".join(sorted({item.code for item in violations}))
+            plan_rejection = f"knowledge gates found {codes}"
         if plan_invalid:
             # Gate messages are fixed sentences, never source or model text.
             log.warning("filing plan rejected for %s: %s", envelope.capture_id, plan_rejection)
@@ -733,12 +810,34 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             "summary": summary,
             "wiki_changes": wiki_changes,
             "model_requests": model_requests,
+            "planning_model_requests": planning_model_requests,
+            "semantic_revision_required": semantic_revision_required,
+            "semantic_revision_attempted": semantic_revision_attempted,
+            "semantic_revision_applied": semantic_revision_applied,
+            "semantic_revision_model_requests": semantic_revision_model_requests,
+            "repair_model_requests": repair_model_requests,
             "plan_rejected": plan_invalid,
             "plan_rejection": plan_rejection,
             # Empty when the plan was rejected outright: nothing of it was kept to drop from.
             "plan_skipped": [] if plan_invalid else plan_skipped,
         },
     )
+
+
+def requires_semantic_revision(plan: FilingPlan, safe_context: dict) -> bool:
+    """Review drafts that alter a visible page or must account for recompile provenance."""
+    visible_paths = {
+        candidate.get("path")
+        for candidate in safe_context.get("candidates", ())
+        if isinstance(candidate, dict) and candidate.get("path")
+    }
+    if any(
+        mutation.action in {"update", "delete"} and mutation.path in visible_paths
+        for mutation in plan.mutations
+    ):
+        return True
+    recompile = safe_context.get("recompile")
+    return isinstance(recompile, dict) and bool(recompile.get("prior_pages"))
 
 
 def _delete(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteResult:
