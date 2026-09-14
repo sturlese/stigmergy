@@ -40,6 +40,17 @@ and private mapping; it verifies their raw and canonical hashes, packet bindings
 case-output coverage, reviewed run IDs, and the mechanically derived verdict. Keep the complete
 evidence bundle outside the candidate checkout; a self-reported verdict or mutable path is rejected.
 
+### Trust boundary
+
+This gate verifies the integrity and internal consistency of evidence produced by a trusted release
+operator. The operator gives an independent reviewer only the blind packet and response schema, stores
+the returned JSON verbatim, and performs the mechanical unblind. Content addressing proves which bytes
+were reviewed; it does not authenticate the reviewer against an operator who controls the release host.
+Such an operator is outside the current threat model because the same Fly authority can bypass the local
+deploy entrypoint entirely. Defending against that actor requires moving deployment credentials and
+review generation into a protected external CI environment; a locally managed signing key would not
+create a meaningful additional trust boundary.
+
 Run one immutable case-result record with the production-equivalent path:
 
 ```bash

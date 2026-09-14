@@ -108,6 +108,13 @@ commit, librarian skill hash, recorded raw gates, a verified content-addressed b
 and the lowest-passing reasoning-level matrix bound to the production librarian setting. Keep the
 artifact and its review bundle outside the candidate checkout.
 
+The gate trusts the release operator and verifies evidence integrity within that operational boundary.
+Give the reviewer only the blind packet and response schema, retain the response verbatim, and unblind
+it mechanically. The hashes prove byte identity and binding, not reviewer identity against a malicious
+operator with Fly credentials. That actor is out of scope for the local deployment flow: protecting
+against it requires a protected CI environment to own both deployment authority and reviewer
+attestation, rather than a signing key stored on the same release host.
+
 ## Nightly reconciliation
 
 The knowledge repository owns a pinned GitHub Actions workflow scheduled at `17 4 * * *` with
