@@ -6,6 +6,7 @@ import contextlib
 import os
 
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:openai/gpt-5.4"
@@ -81,6 +82,11 @@ def build_model(model_name: str = ANSWER_MODEL):
     model = OpenRouterModel(
         model_name.removeprefix("openrouter:"),
         provider=OpenRouterProvider(api_key=key),
+        profile=(
+            OpenAIModelProfile(openai_chat_supports_max_completion_tokens=True)
+            if model_name == LIBRARIAN_MODEL
+            else None
+        ),
         settings=model_settings,
     )
     return model, model_settings

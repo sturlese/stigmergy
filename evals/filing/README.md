@@ -33,7 +33,9 @@ hard gates may honestly fail under Stigmergy's writer rubric, but every case, pr
 canonical payload digest, semantic score, writer result, and raw gate map is still replay-verified.
 
 Every Stigmergy reasoning-level candidate records full per-case runs using the same corpus, initial
-graph, case hashes, candidate commit, skill hash, runtime route, exact `max_tokens` ceiling, and complete raw gate map. The
+graph, case hashes, candidate commit, skill hash, runtime route, exact `max_tokens` ceiling, and
+complete raw gate map. The runtime field names the abstract model setting; the librarian sends it to
+OpenRouter as `max_completion_tokens`. The
 selected production level must be the first passing level in the ordered matrix and equal the one
 runtime librarian reasoning setting. The runner accepts a diagnostic `planner-only` mode, but that
 evidence can never select a production level. Missing, stale, mismatched, aggregate-only, incomplete,
