@@ -278,7 +278,7 @@ One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, no model fallback 
 alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenAI, or Gemini
 credentials are rejected. The librarian's strict provider-native JSON Schema plans are pinned to
 Azure, with no provider fallback; requests require supported parameters, deny data collection,
-and require zero-data-retention processing. Librarian reasoning is `medium` and excluded from output.
+and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
 Each writer attempt makes at most two model requests across filing, schema retries, and any semantic
 repair. A schema retry consumes the same attempt budget, so a repair is attempted only with a
 remaining request. Retryable failures use the existing bounded queue-attempt policy; answer and OCR

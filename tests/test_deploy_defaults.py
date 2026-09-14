@@ -591,7 +591,7 @@ def _parity_artifact(
             ],
         }
 
-    selected = [run("stigmergy", f"matrix-medium-{repeat}", "medium") for repeat in range(1, 4)]
+    selected = [run("stigmergy", f"matrix-high-{repeat}", "high") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
         "schema_version": 3,
@@ -612,11 +612,11 @@ def _parity_artifact(
                 "runs": [run("stigmergy", f"matrix-{level}-1", level, passing=False)],
                 "passed": False,
             }
-            for level in ("minimal", "low")
+            for level in ("minimal", "low", "medium")
         ] + [
             {
-                "reasoning_level": "medium",
-                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "medium", "provider": "azure"},
+                "reasoning_level": "high",
+                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "high", "provider": "azure"},
                 "runs": selected,
                 "passed": True,
             }

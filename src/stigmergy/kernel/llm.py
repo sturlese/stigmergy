@@ -9,7 +9,7 @@ from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettin
 
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:openai/gpt-5.4"
-LIBRARIAN_REASONING_LEVEL = "medium"
+LIBRARIAN_REASONING_LEVEL = "high"
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
 APPROVED_MODELS = frozenset(
     {ANSWER_MODEL, LIBRARIAN_MODEL, OCR_MODEL}

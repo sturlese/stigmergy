@@ -339,7 +339,7 @@ def _write_review_bundle(root: Path, artifact: dict) -> None:
 
 
 def _artifact(review_root: Path) -> dict:
-    selected = [_run("stigmergy", f"matrix-medium-{repeat}", "medium", repeat, passed=True) for repeat in range(1, 4)]
+    selected = [_run("stigmergy", f"matrix-high-{repeat}", "high", repeat, passed=True) for repeat in range(1, 4)]
     artifact = {
         "schema_version": 3,
         "corpus_sha256": CORPUS,
@@ -356,9 +356,10 @@ def _artifact(review_root: Path) -> dict:
         "reasoning_matrix": [
             _matrix_item("minimal", passed=False),
             _unstable_matrix_item("low"),
+            _unstable_matrix_item("medium"),
             {
-                "reasoning_level": "medium",
-                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "medium", "provider": "azure"},
+                "reasoning_level": "high",
+                "runtime": {"model": "openai/gpt-5.4", "reasoning_level": "high", "provider": "azure"},
                 "runs": copy.deepcopy(selected),
                 "passed": True,
             },
@@ -373,7 +374,7 @@ def _artifact(review_root: Path) -> dict:
                 "source_cases": EXPECTED.source_cases,
                 "runs": {
                     "hippocampus": ["hippocampus-reference-1"],
-                    "stigmergy": ["matrix-medium-1", "matrix-medium-2", "matrix-medium-3"],
+                    "stigmergy": ["matrix-high-1", "matrix-high-2", "matrix-high-3"],
                 },
             },
         },
