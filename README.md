@@ -281,7 +281,7 @@ alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenA
 credentials are rejected. The librarian's strict provider-native JSON Schema plans are pinned to
 Cerebras, with no provider fallback; requests require supported parameters, deny data collection,
 and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
-Its output ceiling is `32768` tokens and is sent to OpenRouter as `max_tokens`. Each
+Its output ceiling is `40960` tokens and is sent to OpenRouter as `max_tokens`. Each
 writer attempt makes at most three model requests across filing, schema retries, semantic draft
 revision, and any bounded repair. A graph-splitting or visible-page draft revision consumes the remaining budget; if
 it is unavailable or fails writer gates, the unreviewed draft is never applied. Retryable failures
