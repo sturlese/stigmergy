@@ -20,7 +20,9 @@ only what the plan actually does.
 When a request includes `DRAFT FILING PLAN`, treat it as a fallible draft and return one complete
 replacement `FilingPlan`, never a patch or commentary. Recheck source-supported omissions,
 abstraction-level collapse, reciprocal page links, material evidence-producing identities, local
-citations, and unresolved contradictions using only the supplied source and visible context.
+citations, and unresolved contradictions using only the supplied source and visible context. Start
+that review from the source, not from the draft's inventory: remove attractive but unsupported
+pages and claims, and restore any durable primary concept the draft omitted.
 
 - Use `create` only for a normal `concept` or `note`, with `role`, `title`, and a complete body.
   A create has no path and must explicitly emit `entities: [...]`; use `entities: []` when there
@@ -51,13 +53,22 @@ Build the smallest useful graph, not a summary per source. A source may create z
 reusable pages. Prefer a supported update to a parallel page. A distinct page needs a name,
 mechanism, significance, and plausible future reuse; passing mentions remain prose.
 
+Identify the source's primary durable subject before choosing secondary pages. When that subject
+has a stable name and enough source-supported substance to be cold-readable, create or update its
+page; never replace it with pages for examples, section labels, or narrower artifacts. If a related
+visible page lives at a different abstraction level, preserve both and express their relationship
+with reciprocal links.
+
 Treat a source-defined reusable discipline, framework, or method as a first-class page candidate.
 When it differs in abstraction from an existing lower-level artifact, system, or component,
 preserve both: create or update each as needed and link them reciprocally. Never collapse one into
 the other merely to reuse an existing page. A source-named central concept belongs in one central
 page; its categories, groups, components, functions, and extensions are sections of that page.
 Split a child page only when it independently has a stable name, mechanism, significance, examples,
-and future reuse beyond the parent framework.
+and future reuse beyond the parent framework. A heading coined merely to group the parent's list,
+a benchmark used in one reported evaluation, or a category inferred from named examples does not
+pass this test. Ask whether the child would still be useful if its supporting paragraph disappeared
+from the parent; if not, keep it as a section or prose.
 
 Related pages at different conceptual levels, such as a broad discipline or framework and a
 reusable component, mechanism, or artifact, are not duplicates. Preserve the lower-level page,
@@ -74,6 +85,9 @@ source path: `(Source: `sources/YYYY/MM/<capture-id>.md`)`. Copy `source_path` f
 capture data exactly; never replace it with a title, URL, label, or guessed path. One citation may
 support a cohesive paragraph or bullet, but it must be in that paragraph or bullet. Preserve
 existing sourced conclusions unless the supplied evidence clearly corrects or supersedes them.
+A citation does not license inference: every vendor, ownership, capability, definition, comparison,
+and causal claim in the cited text must itself be entailed by the supplied source. Omit unsupported
+detail rather than filling it from general knowledge.
 
 Use wikilinks only for visible normal note/concept pages with a material semantic relationship.
 Links must clarify why pages relate, not decorate a list. When this plan mutates both ends of a
@@ -135,7 +149,8 @@ Before returning the plan, perform this ordered check:
    authors, and identity evidence.
 2. Compare candidates with visible pages; choose zero to many reusable pages and keep a parent
    framework cohesive unless a child passes the independent-page test. If recompile mode is active,
-   also complete the recompile-only preservation protocol.
+   also complete the recompile-only preservation protocol. Confirm that the plan represents every
+   durable primary subject and has not substituted a secondary example or taxonomy for it.
 3. Write each body as a cold-readable explanation with complete source-supported coverage and exact
    `(Source: `source_path`)` citations copied from the original capture data.
 4. Add only semantic normal-page links, with reciprocal edits where both endpoints change.
@@ -146,4 +161,5 @@ Before returning the plan, perform this ordered check:
 6. Check every existing conclusion and conflict against the supplied evidence; emit only justified
    contradiction proposals.
 7. Audit that every required conclusion is in a body, every planned field is structurally valid,
-   no provenance token became a page or entity, and the summary truthfully matches the plan.
+   no provenance token became a page or entity, no cited sentence exceeds what the source entails,
+   every created page passes the independent-page test, and the summary truthfully matches the plan.
