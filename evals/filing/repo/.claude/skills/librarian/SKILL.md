@@ -49,32 +49,28 @@ An empty mutation list is valid only when `recompile.prior_pages` is empty.
 
 ## Editorial policy
 
-Build the smallest useful graph, not a summary per source. A source may create zero to many
-reusable pages. Prefer a supported update to a parallel page. A distinct page needs a name,
-mechanism, significance, and plausible future reuse; passing mentions remain prose.
+Build a useful graph, not a summary per source. A source may create zero to many reusable pages.
+Choose its graph shape in this order:
 
-Identify the source's primary durable subject before choosing secondary pages. When that subject
-has a stable name and enough source-supported substance to be cold-readable, create or update its
-page; never replace it with pages for examples, section labels, or narrower artifacts. If a related
-visible page lives at a different abstraction level, preserve both and express their relationship
-with reciprocal links.
+1. Identify the source's primary durable subject.
+2. Reuse an existing page only when it represents that same subject at the same abstraction level.
+   Similar words or thematic overlap are not identity. A broad discipline or framework is distinct
+   from a component, artifact, mechanism, implementation, or example that it contains.
+3. Create or update one complete, cold-readable primary page. Fold the subject's categories, groups,
+   components, functions, and extensions into that page as sections.
+4. Only after the primary page is complete, consider a child page. Split it only when the child
+   independently has a stable name, mechanism, significance, concrete examples, and likely future
+   reuse beyond this source. A heading coined to group the parent's list, a benchmark used in one
+   evaluation, or a category inferred from examples remains inside the primary page.
+5. Preserve useful existing pages at other abstraction levels, update their distinct definitions
+   when the source supports it, and link related pages reciprocally when this plan mutates both.
 
-Treat a source-defined reusable discipline, framework, or method as a first-class page candidate.
-When it differs in abstraction from an existing lower-level artifact, system, or component,
-preserve both: create or update each as needed and link them reciprocally. Never collapse one into
-the other merely to reuse an existing page. A source-named central concept belongs in one central
-page; its categories, groups, components, functions, and extensions are sections of that page.
-Split a child page only when it independently has a stable name, mechanism, significance, examples,
-and future reuse beyond the parent framework. A heading coined merely to group the parent's list,
-a benchmark used in one reported evaluation, or a category inferred from named examples does not
-pass this test. Ask whether the child would still be useful if its supporting paragraph disappeared
-from the parent; if not, keep it as a section or prose.
-
-Related pages at different conceptual levels, such as a broad discipline or framework and a
-reusable component, mechanism, or artifact, are not duplicates. Preserve the lower-level page,
-update its distinct definition, and link both pages reciprocally. Delete only a true semantic
-duplicate with no independently durable name, mechanism, significance, or future reuse; never
-delete merely because pages overlap or because a new page is broader.
+A source-named discipline, framework, or method is a first-class primary subject when the source
+explains it substantially. Never replace it with pages for examples, section labels, narrower
+artifacts, or a merely related existing page. Ask whether each proposed child would still be useful
+if its supporting paragraph disappeared from the parent; if not, keep it as a section or prose.
+Delete only a true semantic duplicate at the same abstraction level with no independently durable
+meaning; never delete or collapse a page merely because concepts overlap.
 
 Every created or materially updated page must be cold-readable and useful without the source:
 state what it is, why it matters, how it works, its source-supported framework or mechanism, and
