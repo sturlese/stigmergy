@@ -43,7 +43,7 @@ source corpus and initial graph, including cold-readable bodies, local citations
 connections, entity precision and relationships, anti-fragmentation, writer gates, ACL safety, and
 a provenance-bearing blind editorial review. Evidence is per case and per repeat: the selected
 Stigmergy level needs three independent production-equivalent repeats of every case under the fixed
-two-request production budget. It records observed request, retry, repair, elapsed-time, available
+three-request production budget. It records observed request, retry, repair, elapsed-time, available
 usage metadata, case and fixture hashes, and the exact brain-prompt commit/hash. The release gate
 replays the source-free draft, reviewed replacement telemetry, and effective plan before permitting
 deployment only at the lowest passing level.

@@ -238,7 +238,7 @@ def _case_result(case_id: str, repeat: int, *, implementation: str, passed: bool
         "brain_prompt": copy.deepcopy(payload["brain_prompt"]),
         "runtime": runtime,
         "execution_mode": PRODUCTION_EQUIVALENT_MODE,
-        "configured_max_turns": 2,
+        "configured_max_turns": 3,
         "model_requests": model_requests,
         "planning_model_requests": 1,
         "semantic_revision_required": payload["semantic_revision"]["required"],
@@ -281,7 +281,7 @@ def _run(implementation: str, run_id: str, level: str, repeat: int, *, passed: b
         "implementation": implementation,
         "run_id": run_id,
         "runtime": runtime,
-        "execution": {"mode": PRODUCTION_EQUIVALENT_MODE, "configured_max_turns": 2},
+        "execution": {"mode": PRODUCTION_EQUIVALENT_MODE, "configured_max_turns": 3},
         "provenance": provenance,
         "case_results": [
             _case_result(case_id, repeat, implementation=implementation, passed=passed, runtime=runtime)
@@ -749,7 +749,7 @@ def test_parity_gate_rejects_unaccounted_semantic_revision_requests(tmp_path):
     assert "case-payload" in _reasons(artifact, tmp_path)
 
 
-def test_parity_replays_the_original_draft_trigger_and_two_request_budget(tmp_path):
+def test_parity_replays_the_original_draft_trigger_and_three_request_budget(tmp_path):
     artifact = _artifact(tmp_path)
     seeded = next(
         item for item in artifact["runs"][1]["case_results"]
@@ -774,8 +774,8 @@ def test_parity_replays_the_original_draft_trigger_and_two_request_budget(tmp_pa
     assert "case-semantic-revision-trigger" in _reasons(artifact, tmp_path)
 
     artifact = _artifact(tmp_path)
-    artifact["runs"][1]["case_results"][0]["model_requests"] = 3
-    artifact["runs"][1]["case_results"][0]["planning_model_requests"] = 3
+    artifact["runs"][1]["case_results"][0]["model_requests"] = 4
+    artifact["runs"][1]["case_results"][0]["planning_model_requests"] = 4
     assert "case-observability" in _reasons(artifact, tmp_path)
 
     artifact = _artifact(tmp_path)
@@ -784,7 +784,7 @@ def test_parity_replays_the_original_draft_trigger_and_two_request_budget(tmp_pa
         for item in artifact["runs"][1]["case_results"]
         if item["case_id"] == "harness_engineering_seeded"
     )
-    forbidden_repair = RepairPlan(summary="A third request must not be admitted.").model_dump(mode="json")
+    forbidden_repair = RepairPlan(summary="A repair after revision must not be admitted.").model_dump(mode="json")
     forbidden_hash = hashlib.sha256(_canonical(forbidden_repair)).hexdigest()
     seeded["repair_model_requests"] = 1
     seeded["repair_plan_sha256"] = forbidden_hash
@@ -797,7 +797,7 @@ def test_parity_replays_the_original_draft_trigger_and_two_request_budget(tmp_pa
     seeded["output"]["artifact_ref"] = f"sha256:{seeded['output']['sha256']}"
     _write_review_bundle(tmp_path, artifact)
 
-    assert {"case-observability", "case-repair-evidence"} <= _reasons(artifact, tmp_path)
+    assert "case-repair-evidence" in _reasons(artifact, tmp_path)
 
 
 def test_parity_rejects_schema_v3_as_missing_replayable_revision_evidence(tmp_path):

@@ -170,10 +170,10 @@ def test_deployed_librarian_uses_the_supported_default_model(surface, configured
     assert configured == expected, surface
 
 
-def test_deployed_librarian_allows_only_one_schema_repair():
-    assert librarian_config.DEFAULT_MAX_TURNS == 2
-    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MAX_TURNS"] == "2"
-    assert _env_example_value("STIGMERGY_LIBRARIAN_MAX_TURNS") == "2"
+def test_deployed_librarian_uses_the_three_request_budget():
+    assert librarian_config.DEFAULT_MAX_TURNS == 3
+    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MAX_TURNS"] == "3"
+    assert _env_example_value("STIGMERGY_LIBRARIAN_MAX_TURNS") == "3"
 
 
 def test_specification_names_the_exact_librarian_model():

@@ -113,7 +113,7 @@ effort `high` with reasoning excluded from returned output and an output ceiling
 sent as `max_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
 requires supported parameters, denies data collection, and requires
 zero-data-retention processing. The librarian is pinned to Cerebras, with no provider fallback. Each
-writer attempt makes at most two model requests across draft filing, schema retries, semantic
+writer attempt makes at most three model requests across draft filing, schema retries, semantic
 revision, and repair; an eligible draft is never applied without its revision. Retryable failures
 use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider
 failover. Model fallback is prohibited. The application never reads,

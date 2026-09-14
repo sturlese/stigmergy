@@ -24,8 +24,8 @@ draft and reviewed-plan telemetry required for that replay. This is a v4 clean c
 without the nullable repair fields or the Stigmergy `max_tokens` ceiling is not replayable admission evidence and must be rerun.
 
 The selected Stigmergy level requires at least three independent, complete,
-`production-equivalent` repeats per case. Those runs use the production Azure route and the fixed
-two-request budget, exercise the temporary-worktree writer and bounded semantic-repair path, and must
+`production-equivalent` repeats per case. Those runs use the production Cerebras route and the fixed
+three-request budget, exercise the temporary-worktree writer and bounded semantic-repair path, and must
 all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
 blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a
 material regression. Hippocampus is comparative baseline evidence, not an admission candidate: its
@@ -82,7 +82,7 @@ content hash only. Add `--include-payload` only when recording a local release a
 derived page bodies and an explicit stderr warning, but never the supplied source text. The emitted
 `case_result` with that flag is the exact object embedded under its repeat's `case_results` array.
 Use the same repeat ID for every case in one matrix repeat; record a new ID for each independent
-repeat. The top-level repeat records the shared runtime, execution mode, two-request budget, and
+repeat. The top-level repeat records the shared runtime, execution mode, three-request budget, and
 candidate provenance. The validator requires the nested records to repeat that runtime and budget,
 so summaries cannot stand in for individual outcomes.
 

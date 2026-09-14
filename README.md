@@ -282,8 +282,8 @@ credentials are rejected. The librarian's strict provider-native JSON Schema pla
 Cerebras, with no provider fallback; requests require supported parameters, deny data collection,
 and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
 Its output ceiling is `16384` tokens and is sent to OpenRouter as `max_tokens`. Each
-writer attempt makes at most two model requests across filing, schema retries, semantic draft
-revision, and any bounded repair. A visible-page draft revision consumes the remaining request; if
+writer attempt makes at most three model requests across filing, schema retries, semantic draft
+revision, and any bounded repair. A visible-page draft revision consumes the remaining budget; if
 it is unavailable or fails writer gates, the unreviewed draft is never applied. Retryable failures
 use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider
 failover.

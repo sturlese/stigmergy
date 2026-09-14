@@ -332,7 +332,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
             "case_id": case_id,
             "runtime": runtime,
             "execution_mode": "production-equivalent",
-            "configured_max_turns": 2,
+            "configured_max_turns": 3,
             "model_requests": 1,
             "planning_model_requests": 1,
             "semantic_revision_required": False,
@@ -364,7 +364,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
             "implementation": implementation,
             "run_id": run_id,
             "runtime": runtime,
-            "execution": {"mode": "production-equivalent", "configured_max_turns": 2},
+            "execution": {"mode": "production-equivalent", "configured_max_turns": 3},
             "provenance": run_provenance,
             "case_results": [
                 case_result(case_id, repeat, passed, runtime)
@@ -593,7 +593,7 @@ def _parity_artifact(
             "brain_prompt": brain_prompt,
             "runtime": runtime,
             "execution_mode": "production-equivalent",
-            "configured_max_turns": 2,
+            "configured_max_turns": 3,
             "model_requests": 1 + revision["model_requests"],
             "planning_model_requests": 1,
             "semantic_revision_required": revision["required"],
@@ -635,7 +635,7 @@ def _parity_artifact(
             "implementation": implementation,
             "run_id": run_id,
             "runtime": runtime,
-            "execution": {"mode": "production-equivalent", "configured_max_turns": 2},
+            "execution": {"mode": "production-equivalent", "configured_max_turns": 3},
             "provenance": provenance,
             "case_results": [
                 case_result(

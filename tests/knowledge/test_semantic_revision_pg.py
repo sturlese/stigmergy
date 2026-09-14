@@ -150,7 +150,7 @@ def test_visible_update_uses_full_semantic_revision_before_application(clean_que
     assert planner.revision_calls[0]["context"] == planner.plan_context
     assert planner.revision_calls[0]["draft"] == draft
     assert planner.revision_calls[0]["source_path"] == source
-    assert planner.revision_calls[0]["max_requests"] == 1
+    assert planner.revision_calls[0]["max_requests"] == 2
     assert item["report"]["model_requests"] == 2
     assert item["report"]["planning_model_requests"] == 1
     assert item["report"]["semantic_revision_model_requests"] == 1
@@ -248,7 +248,7 @@ def test_failed_semantic_revision_never_falls_back_to_the_draft(clean_queue, tar
     assert "Draft-only content" not in existing
 
 
-def test_visible_update_fails_closed_when_the_draft_consumes_the_two_request_budget(
+def test_visible_update_fails_closed_when_the_draft_consumes_the_three_request_budget(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -285,14 +285,14 @@ def test_visible_update_fails_closed_when_the_draft_consumes_the_two_request_bud
 
     class ExhaustedPlanner(RevisionPlanner):
         def revise(self, **_kwargs):
-            raise AssertionError("no third model request is permitted")
+            raise AssertionError("no fourth model request is permitted")
 
-    planner = ExhaustedPlanner(draft, draft, planning_requests=2)
+    planner = ExhaustedPlanner(draft, draft, planning_requests=3)
     item, outcome = _process(clean_queue, target_repo, store, planner)
 
     assert outcome.status == schema.LANDED
     assert planner.revision_calls == []
-    assert item["report"]["model_requests"] == 2
+    assert item["report"]["model_requests"] == 3
     assert item["report"]["plan_rejection"] == "semantic revision budget exhausted"
     assert _changed_paths(target_repo, item["commit_sha"]) == [source]
 
@@ -547,5 +547,5 @@ def test_recompile_revises_a_create_only_draft_when_prior_pages_exist(clean_queu
     assert outcome.status == schema.LANDED
     assert len(planner.revision_calls) == 1
     assert planner.revision_calls[0]["draft"].mutations[0].action == "create"
-    assert planner.revision_calls[0]["max_requests"] == 1
+    assert planner.revision_calls[0]["max_requests"] == 2
     assert item["report"]["semantic_revision_count"] == 1

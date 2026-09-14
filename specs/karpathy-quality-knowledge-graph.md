@@ -141,7 +141,7 @@ filing or repair records a typed operational failure without committing a partia
 14. **KG-14:** Production continues to use `openai/gpt-oss-120b` through the approved Cerebras
     OpenRouter route. The lowest reasoning level that passes every hard reference case is selected
     only after at least three independent production-equivalent repeats per case under the configured
-    two-request budget; runtime route, observed requests, derived schema retries, semantic repairs,
+    three-request budget; runtime route, observed requests, derived schema retries, semantic repairs,
     elapsed time, available usage, raw gates, and content-addressed output references are recorded.
     The selected level must equal the single reasoning-effort setting used by the production librarian.
     Every result binds the case and fixture hashes and the exact brain-prompt commit/hash; its

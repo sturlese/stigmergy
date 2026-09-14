@@ -9,7 +9,7 @@ from stigmergy.kernel.llm import LIBRARIAN_MODEL, OCR_MODEL
 from stigmergy.librarian.errors import LibrarianConfigError
 
 DEFAULT_MODEL = LIBRARIAN_MODEL
-DEFAULT_MAX_TURNS = 2
+DEFAULT_MAX_TURNS = 3
 DEFAULT_TIMEOUT_S = 300
 DEFAULT_POLL_INTERVAL_S = 3.0
 GATE_BUDGET_S = 120
