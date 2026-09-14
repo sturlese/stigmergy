@@ -109,7 +109,7 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 Deterministic linting is the gardener's detection step and makes no model call. Semantic repair is
 the only model-backed part of a garden run and uses the librarian's `openrouter:openai/gpt-5.4`
-model. Librarian calls request reasoning effort `high` with reasoning excluded from returned output
+model. Librarian calls request reasoning effort `medium` with reasoning excluded from returned output
 and require strict provider-native JSON Schema plans. OpenRouter requires supported parameters,
 denies data collection, and requires zero-data-retention processing. The librarian is pinned to
 Azure, with no provider fallback. Each writer attempt makes at most two model requests, including
