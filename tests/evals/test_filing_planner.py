@@ -393,14 +393,22 @@ def test_harness_score_requires_each_page_anchor_to_have_its_own_cited_relations
     assert result["passed"] is False
 
 
-def test_entity_relationship_accepts_an_immediately_following_collective_attribution():
+def test_entity_relationship_rejects_a_following_collective_attribution():
     body = (
         "## Examples\n\n"
         "- **OpenAI** built a large internal software product through an agent harness.\n\n"
         f"These examples support the conclusion. (Source: `{SOURCE}`)"
     )
 
-    assert has_entity_relationship_evidence(body, "OpenAI", (SOURCE,)) is True
+    assert has_entity_relationship_evidence(body, "OpenAI", (SOURCE,)) is False
+    assert has_entity_relationship_evidence(
+        body.replace(
+            "agent harness.\n\nThese examples support the conclusion.",
+            f"agent harness. (Source: `{SOURCE}`)\n\nThese examples support the conclusion.",
+        ),
+        "OpenAI",
+        (SOURCE,),
+    ) is True
     assert has_entity_relationship_evidence(
         body.replace("\n\nThese examples", "\n\nUnrelated analysis.\n\nThese examples"),
         "OpenAI",
