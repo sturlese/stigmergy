@@ -145,8 +145,11 @@ def apply_with_production_repair(
     rendered_context = render_context(context)
     authorized_existing_paths = authorized_derived_page_paths(
         root,
-        capture_acl=worktree.envelope.audience,
-        actor_groups=None,
+        write_context=WriteContext(
+            None,
+            worktree.envelope.audience,
+            unrestricted=True,
+        ),
     )
     reasons = {}
     snapshot = _snapshot_mutable(root)
@@ -371,7 +374,11 @@ def _source(case: dict, source_text: str) -> tuple[schema.CaptureEnvelope, str, 
         capture_id=capture_id,
         idempotency_key=f"filing-eval:{capture_id}",
         actor=schema.Actor(subject="filing-eval", display_name="Filing evaluation"),
-        audience=None,
+        audience=(
+            tuple(case["audience"])
+            if case.get("audience") is not None
+            else None
+        ),
         origin=schema.Origin(
             adapter="mcp",
             captured_at=dt.datetime(2026, 9, 12, 14, 36, 31, tzinfo=dt.UTC),
@@ -406,7 +413,11 @@ def _seed_pages(root: Path, case: dict, source_path: str) -> None:
                 role=role,
                 title=title,
                 body=item["body"].replace("{source_path}", source_path),
-                acl=None,
+                acl=(
+                    tuple(item["audience"])
+                    if item.get("audience") is not None
+                    else None
+                ),
                 sources=(source_path,),
                 status="developing",
                 page_id=item.get("id"),

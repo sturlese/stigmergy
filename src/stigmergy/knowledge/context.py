@@ -13,6 +13,7 @@ from stigmergy.knowledge.sources import (
     read_source,
     source_file_size,
 )
+from stigmergy.knowledge.write_guard import WriteContext, WriteRefused, allow_existing
 from stigmergy.server.acl import visible
 from stigmergy.server.identity import principal_from_text
 
@@ -174,10 +175,9 @@ def filing_context(
 def authorized_derived_page_paths(
     root: str,
     *,
-    capture_acl: tuple[str, ...] | None,
-    actor_groups: frozenset[str] | None,
+    write_context: WriteContext,
 ) -> frozenset[str]:
-    """Return every derived page that may be changed without extending model context."""
+    """Return derived paths admitted by the writer without extending model context."""
     paths = set()
     for folder in ("wiki/notes", "wiki/concepts"):
         base = Path(root, *folder.split("/"))
@@ -186,8 +186,11 @@ def authorized_derived_page_paths(
         for path in base.glob("*.md"):
             relative = path.relative_to(root).as_posix()
             page = parse_page(relative, path.read_text(encoding="utf-8"))
-            if _admits(page.acl, actor_groups=actor_groups, capture_acl=capture_acl):
-                paths.add(page.path)
+            try:
+                allow_existing(write_context, page.acl)
+            except WriteRefused:
+                continue
+            paths.add(page.path)
     return frozenset(paths)
 
 

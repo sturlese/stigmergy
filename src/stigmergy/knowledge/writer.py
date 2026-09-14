@@ -357,8 +357,7 @@ def _recompile_derived(
         )
         authorized_existing_paths = authorized_derived_page_paths(
             worktree,
-            capture_acl=envelope.audience,
-            actor_groups=None,
+            write_context=write_context,
         )
         safe_context["recompile"] = {
             "prior_pages": [
@@ -642,8 +641,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         )
         authorized_existing_paths = authorized_derived_page_paths(
             worktree,
-            capture_acl=envelope.audience,
-            actor_groups=groups,
+            write_context=context,
         )
         visible_entities = tuple(safe_context["entities"])
         visible_entity_ids = frozenset(

@@ -1,6 +1,8 @@
 import json
 import subprocess
 
+import pytest
+
 from stigmergy.capture import evidence, queue, schema
 from stigmergy.capture.schema import Actor
 from stigmergy.capture.service import CaptureService
@@ -404,6 +406,61 @@ def test_authorized_page_outside_bounded_context_still_requires_semantic_revisio
     }
     assert len(planner.revision_calls) == 1
     assert item["report"]["semantic_revision_required"] is True
+
+
+@pytest.mark.parametrize("action", ("update", "delete"))
+def test_asymmetric_capture_acl_revises_authorized_hidden_context_page(
+    clean_queue, target_repo, action
+):
+    store = evidence.MemoryEvidenceStore()
+    actor = Actor(subject="alice", display_name="Alice")
+    _seed_page(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=("engineering",),
+        key=f"semantic-revision-asymmetric-seed-{action}",
+        title="Engineering Target",
+        text="Engineering-only context must not enter a wider capture prompt.",
+    )
+    _receipt, source = _capture(
+        clean_queue,
+        store,
+        actor=actor,
+        audience=("engineering", "finance"),
+        key=f"semantic-revision-asymmetric-{action}",
+        text="The wider capture authorizes an engineering target revision.",
+    )
+    mutation = PageMutation(
+        action=action,
+        path="wiki/concepts/Engineering Target.md",
+        reason="The source changes an existing engineering concept.",
+        **(
+            {
+                "body": _body(
+                    "Engineering Target",
+                    "The authorized target remains an engineering-only concept.",
+                    source,
+                )
+            }
+            if action == "update"
+            else {}
+        ),
+    )
+    draft = FilingPlan(summary="Revised an authorized asymmetric-ACL target.", mutations=(mutation,))
+    planner = RevisionPlanner(draft, draft)
+
+    item, outcome = _process(clean_queue, target_repo, store, planner)
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["semantic_revision_required"] is True
+    assert item["report"]["semantic_revision_attempted"] is True
+    assert item["report"]["semantic_revision_applied"] is True
+    assert len(planner.revision_calls) == 1
+    assert "Engineering Target" not in planner.plan_context
+    assert "Engineering-only context" not in planner.plan_context
+    assert planner.revision_calls[0]["context"] == planner.plan_context
 
 
 def test_inaccessible_page_update_never_becomes_semantic_revision_eligible(clean_queue, target_repo):

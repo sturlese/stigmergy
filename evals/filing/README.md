@@ -15,8 +15,9 @@ schema retries, semantic-revision trigger/attempt/application and request metric
 count, elapsed time, and a content-addressed output reference. Its
 canonical payload retains the original draft, any reviewed replacement, and the effective derived plan,
 never source text. The gate rebuilds pristine ACL-safe context and the complete internal authorized-page
-set to recalculate the revision trigger, revision telemetry, payload hash, semantic score, writer gate,
-and raw gate map against the current case and fixture. Token usage is recorded only when the runner
+set, replays the draft/review through the production writer once, and requires its canonical effective
+plan to equal the recorded plan before deriving the revision telemetry, semantic score, writer gate,
+raw gate map, and blind-review effective-page hash against the current case and fixture. Token usage is recorded only when the runner
 exposes it; provider fields are never inferred. Schema v3 is obsolete because it cannot bind the original
 draft and reviewed-plan telemetry required for that replay.
 

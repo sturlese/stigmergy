@@ -14,17 +14,18 @@ from pathlib import Path
 
 try:
     from planner_eval import load_case, score
-    from worktree import apply_and_gate, apply_with_production_repair, prepared
+    from worktree import apply_with_production_repair, effective_plan, prepared
 except ModuleNotFoundError:
     from evals.filing.planner_eval import load_case, score
-    from evals.filing.worktree import apply_and_gate, apply_with_production_repair, prepared
+    from evals.filing.worktree import apply_with_production_repair, effective_plan, prepared
 
 from stigmergy.kernel.llm import LIBRARIAN_REASONING_LEVEL
 from stigmergy.knowledge.context import authorized_derived_page_paths, filing_context
 from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
 from stigmergy.knowledge.plan import FilingPlan
 from stigmergy.knowledge.planner import PlanRun
-from stigmergy.knowledge.writer import requires_semantic_revision
+from stigmergy.knowledge.write_guard import WriteContext
+from stigmergy.knowledge.writer import GateRefused, requires_semantic_revision
 
 try:
     from constants import (
@@ -173,7 +174,15 @@ def evaluate(
         _failure(failures, "artifact", "candidate-brain-prompt")
     _admission_state(artifact, failures)
 
-    runs = _implementation_runs(artifact.get("runs"), corpus, initial, expected, failures)
+    replayed_effective: dict[tuple[str, str, str], dict] = {}
+    runs = _implementation_runs(
+        artifact.get("runs"),
+        corpus,
+        initial,
+        expected,
+        failures,
+        replayed_effective=replayed_effective,
+    )
     missing = sorted(REQUIRED_IMPLEMENTATIONS - set(runs))
     for implementation in missing:
         _failure(failures, implementation, "missing-implementation")
@@ -188,6 +197,7 @@ def evaluate(
         review_root=review_root,
         candidate_root=expected.repo_root,
         packet_state=artifact.get("blind_review_packet"),
+        replayed_effective=replayed_effective,
         failures=failures,
     )
     _reasoning_matrix(
@@ -198,6 +208,7 @@ def evaluate(
         initial,
         expected,
         failures,
+        replayed_effective=replayed_effective,
     )
     return {
         "passed": not failures,
@@ -276,7 +287,15 @@ def _has_pending_field(value) -> bool:
     return False
 
 
-def _implementation_runs(value, corpus, initial, expected, failures: list[dict]) -> dict[str, list[dict]]:
+def _implementation_runs(
+    value,
+    corpus,
+    initial,
+    expected,
+    failures: list[dict],
+    *,
+    replayed_effective: dict[tuple[str, str, str], dict],
+) -> dict[str, list[dict]]:
     if not isinstance(value, list) or not value:
         _failure(failures, "artifact", "runs")
         return {}
@@ -299,6 +318,7 @@ def _implementation_runs(value, corpus, initial, expected, failures: list[dict])
             require_production_equivalent=implementation == "stigmergy",
             require_runtime_reasoning=implementation == "stigmergy",
             failures=failures,
+            replayed_effective=replayed_effective,
         )
         if run_id:
             if run_id in seen_run_ids:
@@ -319,6 +339,7 @@ def _validate_run(
     require_production_equivalent: bool,
     require_runtime_reasoning: bool,
     failures: list[dict],
+    replayed_effective: dict[tuple[str, str, str], dict],
 ) -> str | None:
     if any(field in item for field in ("score", "gates", "raw_gates")):
         _failure(failures, implementation, "aggregate-only-evidence")
@@ -359,6 +380,8 @@ def _validate_run(
         execution=execution,
         require_passing=require_passing,
         failures=failures,
+        run_id=run_id,
+        replayed_effective=replayed_effective,
     )
     return run_id
 
@@ -392,6 +415,8 @@ def _case_results(
     execution,
     require_passing,
     failures,
+    run_id,
+    replayed_effective,
 ) -> dict[str, dict]:
     if not isinstance(value, list) or not value:
         _failure(failures, implementation, "aggregate-only-evidence")
@@ -417,6 +442,8 @@ def _case_results(
             expected,
             require_passing,
             failures,
+            run_id=run_id,
+            replayed_effective=replayed_effective,
         )
         if require_passing and not _case_passed(item):
             _failure(failures, implementation, "case-failed", case_id=case_id)
@@ -434,6 +461,8 @@ def _case_observability(
     expected: ReleaseInputs,
     require_passing: bool,
     failures: list[dict],
+    run_id: str | None,
+    replayed_effective: dict[tuple[str, str, str], dict],
 ) -> None:
     if item.get("runtime") != runtime:
         _failure(failures, implementation, "case-runtime", case_id=case_id)
@@ -533,6 +562,8 @@ def _case_observability(
         execution=execution,
         require_passing=require_passing,
         failures=failures,
+        run_id=run_id,
+        replayed_effective=replayed_effective,
     )
 
 
@@ -545,6 +576,8 @@ def _verify_case_payload(
     execution: dict | None,
     require_passing: bool,
     failures: list[dict],
+    run_id: str | None,
+    replayed_effective: dict[tuple[str, str, str], dict],
 ) -> None:
     """Recompute all source-free evidence that a case result claims to have observed."""
     if case_id not in expected.case_paths:
@@ -577,10 +610,9 @@ def _verify_case_payload(
             if payload["reviewed_plan"] is not None
             else None
         )
-        effective = FilingPlan.model_validate(payload["effective_plan"])
+        recorded_effective = FilingPlan.model_validate(payload["effective_plan"])
         case = load_case(expected.case_paths[case_id])
         source_text = expected.fixture_paths[case_id].read_text(encoding="utf-8")
-        semantic = score(effective, case, source_text=source_text)
         with prepared(
             case,
             source_text,
@@ -594,8 +626,11 @@ def _verify_case_payload(
             )
             authorized_existing_paths = authorized_derived_page_paths(
                 worktree.root,
-                capture_acl=worktree.envelope.audience,
-                actor_groups=None,
+                write_context=WriteContext(
+                    None,
+                    worktree.envelope.audience,
+                    unrestricted=True,
+                ),
             )
             revision_required = requires_semantic_revision(
                 draft,
@@ -623,39 +658,47 @@ def _verify_case_payload(
                 _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
             if not telemetry["applied"] and reviewed is not None:
                 _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
-            if telemetry["applied"] and reviewed is not None:
-                replay_planner = _RecordedRevisionPlanner(
-                    reviewed,
-                    model_requests=telemetry["model_requests"],
-                )
-                replay_gates, _ = apply_with_production_repair(
-                    worktree,
-                    draft,
-                    replay_planner,
-                    planning_model_requests=item["planning_model_requests"],
-                    max_turns=item["configured_max_turns"],
-                    return_plan=True,
-                )
-                if _semantic_revision_telemetry(replay_gates) != telemetry:
-                    _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
-                if replay_gates["passed"] != bool((item.get("gates") or {}).get("passed")):
-                    _failure(failures, implementation, "case-writer-gate", case_id=case_id)
-        with prepared(
-            case,
-            source_text,
-            template=str(expected.repo_root / "evals" / "filing" / "repo"),
-        ) as worktree:
-            writer = apply_and_gate(worktree, effective)
+            if item.get("repair_model_requests") != 0:
+                _failure(failures, implementation, "case-repair-replay", case_id=case_id)
+                return
+            replay_planner = _RecordedRevisionPlanner(
+                reviewed,
+                model_requests=telemetry["model_requests"],
+            )
+            writer, replayed_plan = apply_with_production_repair(
+                worktree,
+                draft,
+                replay_planner,
+                planning_model_requests=item["planning_model_requests"],
+                max_turns=item["configured_max_turns"],
+                return_plan=True,
+            )
+            replayed_effective_plan = (
+                effective_plan(worktree, replayed_plan) if writer["passed"] else replayed_plan
+            )
     except (OSError, ValueError, TypeError) as error:
         _failure(failures, implementation, "case-replay", case_id=case_id, error=error.__class__.__name__)
         return
+    if _semantic_revision_telemetry(writer) != telemetry:
+        _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
+    if writer.get("repair_model_requests") != item.get("repair_model_requests") or writer.get(
+        "semantic_repair_count"
+    ) != item.get("semantic_repair_count"):
+        _failure(failures, implementation, "case-repair-telemetry", case_id=case_id)
+    replayed_effective_payload = replayed_effective_plan.model_dump(mode="json")
+    if _canonical_json(replayed_effective_payload) != _canonical_json(recorded_effective.model_dump(mode="json")):
+        _failure(failures, implementation, "replay-effective-plan-mismatch", case_id=case_id)
+        return
+    if run_id is not None:
+        replayed_effective[(implementation, run_id, case_id)] = replayed_effective_payload
+    semantic = score(replayed_effective_plan, case, source_text=source_text)
     expected_raw_gates = {
         **{gate: semantic[gate]["passed"] for gate in sorted(semantic) if gate != "passed"},
         "writer": writer["passed"],
     }
     if item.get("score") != semantic:
         _failure(failures, implementation, "case-semantic-score", case_id=case_id)
-    if (item.get("gates") or {}).get("passed") != writer["passed"]:
+    if item.get("gates") not in (_recorded_writer_gates(writer), writer):
         _failure(failures, implementation, "case-writer-gate", case_id=case_id)
     if item.get("raw_gates") != expected_raw_gates:
         _failure(failures, implementation, "case-raw-gates", case_id=case_id)
@@ -664,12 +707,17 @@ def _verify_case_payload(
 class _RecordedRevisionPlanner:
     """Replay only the recorded complete replacement plan; never call a model."""
 
-    def __init__(self, plan: FilingPlan, *, model_requests: int):
+    def __init__(self, plan: FilingPlan | None, *, model_requests: int):
         self.plan = plan
         self.model_requests = model_requests
 
     def revise(self, **_kwargs) -> PlanRun:
+        if self.plan is None:
+            raise GateRefused("recorded semantic revision is unavailable")
         return PlanRun(self.plan, model_requests=self.model_requests)
+
+    def repair(self, **_kwargs) -> PlanRun:
+        raise GateRefused("recorded structural repair is unavailable")
 
 
 def _semantic_revision_telemetry(item: dict) -> dict:
@@ -678,6 +726,15 @@ def _semantic_revision_telemetry(item: dict) -> dict:
         "attempted": item.get("semantic_revision_attempted"),
         "applied": item.get("semantic_revision_applied"),
         "model_requests": item.get("semantic_revision_model_requests"),
+    }
+
+
+def _recorded_writer_gates(gates: dict) -> dict:
+    """Keep the public writer-gate record separate from internal replay telemetry."""
+    return {
+        "passed": gates.get("passed"),
+        "violations": gates.get("violations"),
+        "changed_paths": gates.get("changed_paths"),
     }
 
 
@@ -720,6 +777,7 @@ def _blind_review(
     review_root: Path | None,
     candidate_root: Path,
     packet_state,
+    replayed_effective: dict[tuple[str, str, str], dict],
     failures: list[dict],
 ) -> None:
     if not isinstance(value, dict) or value.get("verdict") != "no_material_stigmergy_regression":
@@ -799,7 +857,15 @@ def _blind_review(
     ):
         _failure(failures, "review", "blind-review-evidence")
         return
-    _verify_unblind_review(review, response_value, packet_value, _mapping, runs, failures)
+    _verify_unblind_review(
+        review,
+        response_value,
+        packet_value,
+        _mapping,
+        runs,
+        replayed_effective,
+        failures,
+    )
 
 
 def _content_address(value) -> str | None:
@@ -887,7 +953,15 @@ def _packet_state_matches(packet_state, raw: bytes, packet: dict) -> bool:
     }
 
 
-def _verify_unblind_review(review, response, packet, mapping, runs, failures: list[dict]) -> None:
+def _verify_unblind_review(
+    review,
+    response,
+    packet,
+    mapping,
+    runs,
+    replayed_effective: dict[tuple[str, str, str], dict],
+    failures: list[dict],
+) -> None:
     packet_pairs = _indexed_pairs(packet.get("comparisons"), "comparison_id")
     mapping_pairs = _indexed_pairs(mapping.get("mapping"), "comparison_id")
     response_pairs = _indexed_pairs(response.get("pairs"), "pair_id")
@@ -896,7 +970,12 @@ def _verify_unblind_review(review, response, packet, mapping, runs, failures: li
         return
     known_outputs = {
         (item.get("implementation"), item.get("run_id"), case.get("output", {}).get("sha256")):
-        _blind_case_binding(case)
+        _blind_case_binding(
+            case,
+            replayed_effective_plan=replayed_effective.get(
+                (item.get("implementation"), item.get("run_id"), case.get("case_id"))
+            ),
+        )
         for values in runs.values()
         for item in values
         for case in item.get("case_results", [])
@@ -967,12 +1046,16 @@ def _verify_unblind_review(review, response, packet, mapping, runs, failures: li
         _failure(failures, "review", "blind-review-evidence")
 
 
-def _blind_case_binding(case: dict) -> dict | None:
+def _blind_case_binding(
+    case: dict,
+    *,
+    replayed_effective_plan: dict | None,
+) -> dict | None:
     payload = case.get("payload")
     if not isinstance(payload, dict):
         return None
     plan = payload.get("plan")
-    effective = payload.get("effective_plan")
+    effective = replayed_effective_plan
     revision = payload.get("semantic_revision")
     reviewed = payload.get("reviewed_plan")
     if not isinstance(plan, dict) or not isinstance(effective, dict) or not isinstance(revision, dict):
@@ -1024,6 +1107,8 @@ def _reasoning_matrix(
     initial: str | None,
     expected: ReleaseInputs,
     failures: list[dict],
+    *,
+    replayed_effective: dict[tuple[str, str, str], dict],
 ) -> None:
     if not isinstance(matrix, list) or not matrix:
         _failure(failures, "stigmergy", "reasoning-matrix")
@@ -1064,6 +1149,7 @@ def _reasoning_matrix(
                 require_production_equivalent=True,
                 require_runtime_reasoning=level == LIBRARIAN_REASONING_LEVEL,
                 failures=failures,
+                replayed_effective=replayed_effective,
             )
             if run_id:
                 if run_id in matrix_run_ids:

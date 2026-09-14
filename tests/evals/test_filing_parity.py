@@ -4,6 +4,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from evals.filing import planner_eval
 from evals.filing import worktree as eval_worktree
 from evals.filing.constants import PRODUCTION_EQUIVALENT_MODE
@@ -528,6 +530,81 @@ def test_parity_gate_rejects_tampered_payload_hash_score_and_gates(tmp_path):
     artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["score"]["passed"] = False
     assert "case-payload" in _reasons(artifact, tmp_path)
+
+
+def test_parity_rejects_a_valid_but_different_recorded_effective_plan(tmp_path):
+    artifact = _artifact(tmp_path)
+    case = artifact["runs"][1]["case_results"][0]
+    case["payload"]["effective_plan"]["summary"] = "A valid but non-replayed effective plan."
+    case["output"]["sha256"] = hashlib.sha256(_canonical(case["payload"])).hexdigest()
+    case["output"]["artifact_ref"] = f"sha256:{case['output']['sha256']}"
+    _write_review_bundle(tmp_path, artifact)
+
+    assert "replay-effective-plan-mismatch" in _reasons(artifact, tmp_path)
+
+
+@pytest.mark.parametrize("action", ("update", "delete"))
+def test_parity_worktree_revises_an_authorized_page_omitted_from_model_context(action):
+    case = {
+        "source_title": "Asymmetric ACL filing case",
+        "source_path": SOURCE,
+        "audience": ["engineering", "finance"],
+        "seed_pages": [
+            {
+                "id": "engineering_target",
+                "role": "concept",
+                "title": "Engineering Target",
+                "body": "# Engineering Target\n\nEngineering-only body. (Source: `{source_path}`)",
+                "audience": ["engineering"],
+            }
+        ],
+    }
+    source_text = "A capture shared by engineering and finance revises an engineering concept."
+    mutation = PageMutation(
+        action=action,
+        path="wiki/concepts/Engineering Target.md",
+        reason="The capture changes the existing engineering target.",
+        **(
+            {
+                "body": "# Engineering Target\n\nRevised engineering-only body. (Source: `"
+                + SOURCE
+                + "`)"
+            }
+            if action == "update"
+            else {}
+        ),
+    )
+    draft = FilingPlan(summary="Revised an asymmetric-ACL target.", mutations=(mutation,))
+
+    class RecordingPlanner:
+        def __init__(self):
+            self.calls = []
+
+        def revise(self, **kwargs):
+            self.calls.append(kwargs)
+            return PlanRun(draft, model_requests=1)
+
+    planner = RecordingPlanner()
+    with eval_worktree.prepared(
+        case,
+        source_text,
+        template=str(ROOT / "evals" / "filing" / "repo"),
+    ) as worktree:
+        gates, _active = eval_worktree.apply_with_production_repair(
+            worktree,
+            draft,
+            planner,
+            planning_model_requests=1,
+            max_turns=2,
+            return_plan=True,
+        )
+
+    assert gates["semantic_revision_required"] is True
+    assert gates["semantic_revision_attempted"] is True
+    assert gates["semantic_revision_applied"] is True
+    assert len(planner.calls) == 1
+    assert "Engineering Target" not in planner.calls[0]["context"]
+    assert "Engineering-only body" not in planner.calls[0]["context"]
 
 
 def test_parity_gate_rejects_unaccounted_semantic_revision_requests(tmp_path):
