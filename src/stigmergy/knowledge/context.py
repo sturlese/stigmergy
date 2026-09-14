@@ -171,6 +171,26 @@ def filing_context(
     return context
 
 
+def authorized_derived_page_paths(
+    root: str,
+    *,
+    capture_acl: tuple[str, ...] | None,
+    actor_groups: frozenset[str] | None,
+) -> frozenset[str]:
+    """Return every derived page that may be changed without extending model context."""
+    paths = set()
+    for folder in ("wiki/notes", "wiki/concepts"):
+        base = Path(root, *folder.split("/"))
+        if not base.is_dir():
+            continue
+        for path in base.glob("*.md"):
+            relative = path.relative_to(root).as_posix()
+            page = parse_page(relative, path.read_text(encoding="utf-8"))
+            if _admits(page.acl, actor_groups=actor_groups, capture_acl=capture_acl):
+                paths.add(page.path)
+    return frozenset(paths)
+
+
 def render_context(context: dict) -> str:
     rendered = json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2)
     if len(rendered.encode("utf-8")) > MAX_PLANNER_CONTEXT_BYTES:

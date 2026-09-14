@@ -37,7 +37,8 @@ reservation so the same reaction can retry safely.
 
 The worker extracts each artifact, stores readable derivatives, deterministically renders one
 source page, retrieves only safe context, and requests one structured draft `FilingPlan`. A draft
-that updates or deletes a visible page, or accounts for recompile prior pages, receives one complete
+that updates or deletes any ACL-authorized derived page, whether or not it is among the bounded page
+bodies visible to the model, or accounts for recompile prior pages, receives one complete
 semantic revision with the identical source, provenance, and safe context before application. The plan may
 create, update, consolidate, or delete zero or more notes/concepts; propose identity claims; add
 contradictions; or make no wiki mutation. A reusable idea, rather than the incoming source, is the

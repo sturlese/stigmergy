@@ -467,7 +467,7 @@ Submitting the form creates an ordinary capture with `intent.resolution_of`. It 
 These names remain, but their responsibilities become small and precise:
 
 - **Linter:** a pure detector library. Given a candidate repository tree, it returns deterministic, structured violations. It has no database backlog and no side effects.
-- **Repair:** pure, bounded transformation primitives used by the writer: deterministic rewrites, link/anchor sweeps, registry regeneration, explicit deletion, a complete model plan revision when an eligible draft changes visible derived context, and a constrained body repair for ineligible drafts. A semantic revision receives the original source and the same ACL-safe filing context, and replaces the complete candidate plan or nothing. It is not a daemon, queue, or user-facing workflow.
+- **Repair:** pure, bounded transformation primitives used by the writer: deterministic rewrites, link/anchor sweeps, registry regeneration, explicit deletion, a complete model plan revision when an eligible draft changes an ACL-authorized derived page, and a constrained body repair for ineligible drafts. Eligibility uses the complete authorized path set internally, never extra page bodies or paths in the model context. A semantic revision receives the original source and the same ACL-safe filing context, and replaces the complete candidate plan or nothing. It is not a daemon, queue, or user-facing workflow.
 - **Gardener:** the single scheduled orchestrator that runs the linter and repair primitives autonomously inside the existing writer process.
 
 There is no separate gardener worker and repair worker. The one knowledge writer performs:

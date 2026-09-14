@@ -6,16 +6,19 @@ every versioned filing case and fixture, and the exact checked-out brain prompt.
 self-attest those inputs. This is a release gate, not a fake-backend test or a score-only benchmark.
 
 The artifact contains one complete result for every current case inside every recorded repeat. It
-does not accept a summary score standing in for individual case results. Schema v3 binds every result
+does not accept a summary score standing in for individual case results. Schema v4 binds every result
 to the SHA-256 of its versioned case and readable fixture, plus the commit and SHA-256 of the exact
 knowledge-repository librarian prompt that executed it. Each case result records the full raw semantic
 gate map: mutation and identity quality, links and reference resolution, readable bodies, local
 provenance, entity relationships, anti-fragmentation, writer gates, actual model requests, derived
 schema retries, semantic-revision trigger/attempt/application and request metrics, semantic-repair
 count, elapsed time, and a content-addressed output reference. Its
-canonical payload retains the original and effective derived plans, never source text. The gate
-recalculates that payload hash, semantic score, writer gate, and raw gate map against the current case
-and fixture. Token usage is recorded only when the runner exposes it; provider fields are never inferred.
+canonical payload retains the original draft, any reviewed replacement, and the effective derived plan,
+never source text. The gate rebuilds pristine ACL-safe context and the complete internal authorized-page
+set to recalculate the revision trigger, revision telemetry, payload hash, semantic score, writer gate,
+and raw gate map against the current case and fixture. Token usage is recorded only when the runner
+exposes it; provider fields are never inferred. Schema v3 is obsolete because it cannot bind the original
+draft and reviewed-plan telemetry required for that replay.
 
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use the production Azure route and the fixed
@@ -38,7 +41,9 @@ An admission packet is terminal only when `admission_status` is `passed`, no fie
 `sha256:<digest>` reference to `blind-review-unblind-<digest>.json` in the same external evidence
 directory. The validator loads that record and its content-addressed reviewer response, blind packet,
 and private mapping; it verifies their raw and canonical hashes, packet bindings, candidate labels,
-case-output coverage, reviewed run IDs, and the mechanically derived verdict. Keep the complete
+case-output coverage, reviewed run IDs, and the mechanically derived verdict. The blind packet also
+binds draft/review plan hashes and revision telemetry without exposing implementation, model, provider,
+or run identity. Keep the complete
 evidence bundle outside the candidate checkout; a self-reported verdict or mutable path is rejected.
 
 ### Trust boundary

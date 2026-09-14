@@ -9,6 +9,7 @@ from evals.filing import worktree as eval_worktree
 from evals.filing.constants import PRODUCTION_EQUIVALENT_MODE
 from evals.filing.parity import current_release_inputs, evaluate
 from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation
+from stigmergy.knowledge.planner import PlanRun
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE_EXPECTED = current_release_inputs(ROOT)
@@ -35,6 +36,14 @@ HARNESS_BODY = (
     f"app under different harness configurations. (Source: `{SOURCE}`)"
 )
 _PAYLOADS: dict[tuple[str, bool], dict] = {}
+
+
+class _RecordedRevisionPlanner:
+    def __init__(self, plan: FilingPlan):
+        self.plan = plan
+
+    def revise(self, **_kwargs) -> PlanRun:
+        return PlanRun(self.plan, model_requests=1)
 
 
 def _plan(case_id: str, *, passing: bool) -> FilingPlan:
@@ -107,13 +116,36 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
     case = planner_eval.load_case(EXPECTED.case_paths[case_id])
     source_text = EXPECTED.fixture_paths[case_id].read_text(encoding="utf-8")
     plan = _plan(case_id, passing=passing)
-    semantic = planner_eval.score(plan, case, source_text=source_text)
+    active_plan = plan
+    revision = {"required": False, "attempted": False, "applied": False, "model_requests": 0}
     with eval_worktree.prepared(
         case,
         source_text,
         template=str(EXPECTED.repo_root / "evals" / "filing" / "repo"),
     ) as worktree:
-        gates = eval_worktree.apply_and_gate(worktree, plan)
+        if case_id == "harness_engineering_seeded" and passing:
+            gates, active_plan = eval_worktree.apply_with_production_repair(
+                worktree,
+                plan,
+                _RecordedRevisionPlanner(plan),
+                planning_model_requests=1,
+                max_turns=2,
+                return_plan=True,
+            )
+            revision = {
+                "required": gates["semantic_revision_required"],
+                "attempted": gates["semantic_revision_attempted"],
+                "applied": gates["semantic_revision_applied"],
+                "model_requests": gates["semantic_revision_model_requests"],
+            }
+        else:
+            gates = eval_worktree.apply_and_gate(worktree, plan)
+        effective = (
+            eval_worktree.effective_plan(worktree, active_plan)
+            if gates["passed"]
+            else active_plan
+        )
+    semantic = planner_eval.score(effective, case, source_text=source_text)
     raw_gates = {
         **{gate: semantic[gate]["passed"] for gate in sorted(semantic) if gate != "passed"},
         "writer": gates["passed"],
@@ -123,7 +155,9 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
         "case_sha256": EXPECTED.source_cases[case_id],
         "fixture_sha256": EXPECTED.source_fixtures[case_id],
         "plan": plan.model_dump(mode="json"),
-        "effective_plan": plan.model_dump(mode="json"),
+        "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
+        "semantic_revision": revision,
+        "effective_plan": effective.model_dump(mode="json"),
         "score": semantic,
         "gates": gates,
         "raw_gates": raw_gates,
@@ -145,12 +179,12 @@ def _case_result(case_id: str, repeat: int, *, implementation: str, passed: bool
         "runtime": runtime,
         "execution_mode": PRODUCTION_EQUIVALENT_MODE,
         "configured_max_turns": 2,
-        "model_requests": 1,
+        "model_requests": 1 + payload["semantic_revision"]["model_requests"],
         "planning_model_requests": 1,
-        "semantic_revision_required": False,
-        "semantic_revision_attempted": False,
-        "semantic_revision_applied": False,
-        "semantic_revision_model_requests": 0,
+        "semantic_revision_required": payload["semantic_revision"]["required"],
+        "semantic_revision_attempted": payload["semantic_revision"]["attempted"],
+        "semantic_revision_applied": payload["semantic_revision"]["applied"],
+        "semantic_revision_model_requests": payload["semantic_revision"]["model_requests"],
         "repair_model_requests": 0,
         "schema_retry_count": 0,
         "semantic_repair_count": 0,
@@ -251,6 +285,15 @@ def _write_review_bundle(root: Path, artifact: dict) -> None:
                     "effective_pages_sha256": hashlib.sha256(
                         _canonical(candidate_case["payload"]["effective_plan"])
                     ).hexdigest(),
+                    "draft_plan_sha256": hashlib.sha256(
+                        _canonical(candidate_case["payload"]["plan"])
+                    ).hexdigest(),
+                    "reviewed_plan_sha256": (
+                        hashlib.sha256(_canonical(candidate_case["payload"]["reviewed_plan"])).hexdigest()
+                        if candidate_case["payload"]["reviewed_plan"] is not None
+                        else None
+                    ),
+                    "semantic_revision": candidate_case["payload"]["semantic_revision"],
                 }
                 entries.append(entry)
             comparisons.append({"comparison_id": comparison_id, "candidates": entries})
@@ -345,7 +388,7 @@ def _write_review_bundle(root: Path, artifact: dict) -> None:
 def _artifact(review_root: Path) -> dict:
     selected = [_run("stigmergy", f"matrix-high-{repeat}", "high", repeat, passed=True) for repeat in range(1, 4)]
     artifact = {
-        "schema_version": 3,
+        "schema_version": 4,
         "corpus_sha256": CORPUS,
         "initial_graph_ref": INITIAL,
         "stigmergy_commit": EXPECTED.commit,
@@ -497,6 +540,43 @@ def test_parity_gate_rejects_unaccounted_semantic_revision_requests(tmp_path):
     artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["gates"]["passed"] = False
     assert "case-payload" in _reasons(artifact, tmp_path)
+
+
+def test_parity_replays_the_original_draft_trigger_and_two_request_budget(tmp_path):
+    artifact = _artifact(tmp_path)
+    seeded = next(
+        item for item in artifact["runs"][1]["case_results"]
+        if item["case_id"] == "harness_engineering_seeded"
+    )
+    seeded["semantic_revision_required"] = False
+    seeded["semantic_revision_attempted"] = False
+    seeded["semantic_revision_applied"] = False
+    seeded["semantic_revision_model_requests"] = 0
+    seeded["model_requests"] = 1
+    seeded["usage"] = {"requests": 1}
+    seeded["payload"]["semantic_revision"] = {
+        "required": False,
+        "attempted": False,
+        "applied": False,
+        "model_requests": 0,
+    }
+    seeded["output"]["sha256"] = hashlib.sha256(_canonical(seeded["payload"])).hexdigest()
+    seeded["output"]["artifact_ref"] = f"sha256:{seeded['output']['sha256']}"
+    _write_review_bundle(tmp_path, artifact)
+
+    assert "case-semantic-revision-trigger" in _reasons(artifact, tmp_path)
+
+    artifact = _artifact(tmp_path)
+    artifact["runs"][1]["case_results"][0]["model_requests"] = 3
+    artifact["runs"][1]["case_results"][0]["planning_model_requests"] = 3
+    assert "case-observability" in _reasons(artifact, tmp_path)
+
+
+def test_parity_rejects_schema_v3_as_missing_replayable_revision_evidence(tmp_path):
+    artifact = _artifact(tmp_path)
+    artifact["schema_version"] = 3
+
+    assert "schema-v3-obsolete" in _reasons(artifact, tmp_path)
 
 
 def test_parity_gate_rejects_pending_or_nonterminal_admission_packet(tmp_path):

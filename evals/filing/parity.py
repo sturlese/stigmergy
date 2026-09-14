@@ -14,14 +14,17 @@ from pathlib import Path
 
 try:
     from planner_eval import load_case, score
-    from worktree import apply_and_gate, prepared
+    from worktree import apply_and_gate, apply_with_production_repair, prepared
 except ModuleNotFoundError:
     from evals.filing.planner_eval import load_case, score
-    from evals.filing.worktree import apply_and_gate, prepared
+    from evals.filing.worktree import apply_and_gate, apply_with_production_repair, prepared
 
 from stigmergy.kernel.llm import LIBRARIAN_REASONING_LEVEL
+from stigmergy.knowledge.context import authorized_derived_page_paths, filing_context
 from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
 from stigmergy.knowledge.plan import FilingPlan
+from stigmergy.knowledge.planner import PlanRun
+from stigmergy.knowledge.writer import requires_semantic_revision
 
 try:
     from constants import (
@@ -58,7 +61,7 @@ REQUIRED_SEMANTIC_GATES = frozenset(
     }
 )
 STIGMERGY_RUNTIME = {"model": "openai/gpt-5.4", "provider": "azure"}
-ARTIFACT_SCHEMA_VERSION = 3
+ARTIFACT_SCHEMA_VERSION = 4
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_REF = re.compile(r"^[0-9a-f]{40}$")
 _CONTENT_ADDRESS = re.compile(r"^sha256:([0-9a-f]{64})$")
@@ -146,7 +149,11 @@ def evaluate(
     expected = expected or current_release_inputs(ROOT)
     failures: list[dict] = []
     if artifact.get("schema_version") != ARTIFACT_SCHEMA_VERSION:
-        _failure(failures, "artifact", "schema-version")
+        _failure(
+            failures,
+            "artifact",
+            "schema-v3-obsolete" if artifact.get("schema_version") == 3 else "schema-version",
+        )
     corpus = _sha(artifact.get("corpus_sha256"), "corpus_sha256", failures)
     initial = _ref(artifact.get("initial_graph_ref"), "initial_graph_ref", failures)
     commit = _ref(artifact.get("stigmergy_commit"), "stigmergy_commit", failures)
@@ -401,7 +408,16 @@ def _case_results(
         found[case_id] = item
         if case_id not in expected.source_cases:
             _failure(failures, implementation, "unknown-case-result", case_id=case_id)
-        _case_observability(item, implementation, case_id, runtime, execution, expected, failures)
+        _case_observability(
+            item,
+            implementation,
+            case_id,
+            runtime,
+            execution,
+            expected,
+            require_passing,
+            failures,
+        )
         if require_passing and not _case_passed(item):
             _failure(failures, implementation, "case-failed", case_id=case_id)
     for case_id in sorted(set(expected.source_cases) - set(found)):
@@ -416,6 +432,7 @@ def _case_observability(
     runtime: dict | None,
     execution: dict | None,
     expected: ReleaseInputs,
+    require_passing: bool,
     failures: list[dict],
 ) -> None:
     if item.get("runtime") != runtime:
@@ -476,6 +493,11 @@ def _case_observability(
             )
         ):
             _failure(failures, implementation, "case-observability", case_id=case_id, field="model_requests")
+        if (
+            _nonnegative_int((execution or {}).get("configured_max_turns"))
+            and model_requests > execution["configured_max_turns"]
+        ):
+            _failure(failures, implementation, "case-observability", case_id=case_id, field="max_turns")
         if _nonnegative_int(item.get("schema_retry_count")) and item["schema_retry_count"] > model_requests:
             _failure(failures, implementation, "case-observability", case_id=case_id, field="schema_retry_count")
         if (
@@ -485,6 +507,14 @@ def _case_observability(
             _failure(failures, implementation, "case-observability", case_id=case_id, field="semantic_repair_count")
         if item.get("semantic_revision_applied") and not item.get("semantic_revision_required"):
             _failure(failures, implementation, "case-observability", case_id=case_id, field="semantic_revision_applied")
+        if item.get("semantic_revision_applied") and item.get("semantic_revision_model_requests", 0) < 1:
+            _failure(
+                failures,
+                implementation,
+                "case-observability",
+                case_id=case_id,
+                field="semantic_revision_model_requests",
+            )
         if item.get("semantic_revision_model_requests", 0) and not item.get("semantic_revision_attempted"):
             _failure(
                 failures,
@@ -495,7 +525,15 @@ def _case_observability(
             )
     if item.get("execution_mode") == "planner-only" and item.get("semantic_repair_count") != 0:
         _failure(failures, implementation, "case-observability", case_id=case_id, field="semantic_repair_count")
-    _verify_case_payload(item, implementation, case_id, expected, failures)
+    _verify_case_payload(
+        item,
+        implementation,
+        case_id,
+        expected,
+        execution=execution,
+        require_passing=require_passing,
+        failures=failures,
+    )
 
 
 def _verify_case_payload(
@@ -503,6 +541,9 @@ def _verify_case_payload(
     implementation: str,
     case_id: str,
     expected: ReleaseInputs,
+    *,
+    execution: dict | None,
+    require_passing: bool,
     failures: list[dict],
 ) -> None:
     """Recompute all source-free evidence that a case result claims to have observed."""
@@ -514,6 +555,8 @@ def _verify_case_payload(
         "case_sha256": item.get("case_sha256"),
         "fixture_sha256": item.get("fixture_sha256"),
         "plan": None if not isinstance(payload, dict) else payload.get("plan"),
+        "reviewed_plan": None if not isinstance(payload, dict) else payload.get("reviewed_plan"),
+        "semantic_revision": _semantic_revision_telemetry(item),
         "effective_plan": None if not isinstance(payload, dict) else payload.get("effective_plan"),
         "score": item.get("score"),
         "gates": item.get("gates"),
@@ -528,11 +571,75 @@ def _verify_case_payload(
         _failure(failures, implementation, "case-output-hash", case_id=case_id)
         return
     try:
-        FilingPlan.model_validate(payload["plan"])
+        draft = FilingPlan.model_validate(payload["plan"])
+        reviewed = (
+            FilingPlan.model_validate(payload["reviewed_plan"])
+            if payload["reviewed_plan"] is not None
+            else None
+        )
         effective = FilingPlan.model_validate(payload["effective_plan"])
         case = load_case(expected.case_paths[case_id])
         source_text = expected.fixture_paths[case_id].read_text(encoding="utf-8")
         semantic = score(effective, case, source_text=source_text)
+        with prepared(
+            case,
+            source_text,
+            template=str(expected.repo_root / "evals" / "filing" / "repo"),
+        ) as worktree:
+            safe_context = filing_context(
+                worktree.root,
+                source_text=worktree.source_text,
+                capture_acl=worktree.envelope.audience,
+                actor_groups=None,
+            )
+            authorized_existing_paths = authorized_derived_page_paths(
+                worktree.root,
+                capture_acl=worktree.envelope.audience,
+                actor_groups=None,
+            )
+            revision_required = requires_semantic_revision(
+                draft,
+                safe_context,
+                authorized_existing_paths=authorized_existing_paths,
+            )
+            telemetry = _semantic_revision_telemetry(item)
+            if telemetry["required"] != revision_required:
+                _failure(failures, implementation, "case-semantic-revision-trigger", case_id=case_id)
+            if not revision_required and telemetry != _empty_revision_telemetry():
+                _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
+            passing_production_case = (
+                require_passing
+                and (execution or {}).get("mode") == PRODUCTION_EQUIVALENT_MODE
+                and _case_passed(item)
+            )
+            if revision_required and passing_production_case and not (
+                telemetry["attempted"]
+                and telemetry["applied"]
+                and telemetry["model_requests"] >= 1
+                and reviewed is not None
+            ):
+                _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
+            if telemetry["applied"] and reviewed is None:
+                _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
+            if not telemetry["applied"] and reviewed is not None:
+                _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
+            if telemetry["applied"] and reviewed is not None:
+                replay_planner = _RecordedRevisionPlanner(
+                    reviewed,
+                    model_requests=telemetry["model_requests"],
+                )
+                replay_gates, _ = apply_with_production_repair(
+                    worktree,
+                    draft,
+                    replay_planner,
+                    planning_model_requests=item["planning_model_requests"],
+                    max_turns=item["configured_max_turns"],
+                    return_plan=True,
+                )
+                if _semantic_revision_telemetry(replay_gates) != telemetry:
+                    _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
+                if replay_gates["passed"] != bool((item.get("gates") or {}).get("passed")):
+                    _failure(failures, implementation, "case-writer-gate", case_id=case_id)
         with prepared(
             case,
             source_text,
@@ -552,6 +659,30 @@ def _verify_case_payload(
         _failure(failures, implementation, "case-writer-gate", case_id=case_id)
     if item.get("raw_gates") != expected_raw_gates:
         _failure(failures, implementation, "case-raw-gates", case_id=case_id)
+
+
+class _RecordedRevisionPlanner:
+    """Replay only the recorded complete replacement plan; never call a model."""
+
+    def __init__(self, plan: FilingPlan, *, model_requests: int):
+        self.plan = plan
+        self.model_requests = model_requests
+
+    def revise(self, **_kwargs) -> PlanRun:
+        return PlanRun(self.plan, model_requests=self.model_requests)
+
+
+def _semantic_revision_telemetry(item: dict) -> dict:
+    return {
+        "required": item.get("semantic_revision_required"),
+        "attempted": item.get("semantic_revision_attempted"),
+        "applied": item.get("semantic_revision_applied"),
+        "model_requests": item.get("semantic_revision_model_requests"),
+    }
+
+
+def _empty_revision_telemetry() -> dict:
+    return {"required": False, "attempted": False, "applied": False, "model_requests": 0}
 
 
 def _canonical_json(value) -> bytes:
@@ -764,7 +895,8 @@ def _verify_unblind_review(review, response, packet, mapping, runs, failures: li
         _failure(failures, "review", "blind-review-evidence")
         return
     known_outputs = {
-        (item.get("implementation"), item.get("run_id"), case.get("output", {}).get("sha256"))
+        (item.get("implementation"), item.get("run_id"), case.get("output", {}).get("sha256")):
+        _blind_case_binding(case)
         for values in runs.values()
         for item in values
         for case in item.get("case_results", [])
@@ -785,13 +917,18 @@ def _verify_unblind_review(review, response, packet, mapping, runs, failures: li
             if (
                 candidate.get("case_output_sha256") != mapped.get("case_output_sha256")
                 or candidate.get("effective_pages_sha256") != mapped.get("effective_pages_sha256")
+                or candidate.get("draft_plan_sha256") != mapped.get("draft_plan_sha256")
+                or candidate.get("reviewed_plan_sha256") != mapped.get("reviewed_plan_sha256")
+                or candidate.get("semantic_revision") != mapped.get("semantic_revision")
                 or not _SHA256.fullmatch(mapped.get("case_output_sha256", ""))
                 or not _SHA256.fullmatch(mapped.get("effective_pages_sha256", ""))
+                or not _SHA256.fullmatch(mapped.get("draft_plan_sha256", ""))
             ):
                 _failure(failures, "review", "blind-review-evidence")
                 return
             output = (mapped.get("implementation"), mapped.get("run_id"), mapped.get("case_output_sha256"))
-            if output not in known_outputs:
+            binding = known_outputs.get(output)
+            if binding is None or any(mapped.get(key) != value for key, value in binding.items()):
                 _failure(failures, "review", "blind-review-evidence")
                 return
             reviewed_outputs.add(output)
@@ -814,7 +951,7 @@ def _verify_unblind_review(review, response, packet, mapping, runs, failures: li
                 "reason": regression.get("reason"),
             }
         )
-    if reviewed_outputs != known_outputs:
+    if reviewed_outputs != set(known_outputs):
         _failure(failures, "review", "blind-review-evidence")
         return
     unblinding = review.get("unblinding")
@@ -828,6 +965,29 @@ def _verify_unblind_review(review, response, packet, mapping, runs, failures: li
         or (review.get("verdict") == "no_material_stigmergy_regression" and stigmergy_regressions)
     ):
         _failure(failures, "review", "blind-review-evidence")
+
+
+def _blind_case_binding(case: dict) -> dict | None:
+    payload = case.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    plan = payload.get("plan")
+    effective = payload.get("effective_plan")
+    revision = payload.get("semantic_revision")
+    reviewed = payload.get("reviewed_plan")
+    if not isinstance(plan, dict) or not isinstance(effective, dict) or not isinstance(revision, dict):
+        return None
+    if reviewed is not None and not isinstance(reviewed, dict):
+        return None
+    return {
+        "case_output_sha256": (case.get("output") or {}).get("sha256"),
+        "effective_pages_sha256": hashlib.sha256(_canonical_json(effective)).hexdigest(),
+        "draft_plan_sha256": hashlib.sha256(_canonical_json(plan)).hexdigest(),
+        "reviewed_plan_sha256": (
+            hashlib.sha256(_canonical_json(reviewed)).hexdigest() if reviewed is not None else None
+        ),
+        "semantic_revision": revision,
+    }
 
 
 def _indexed_pairs(value, key: str) -> dict[str, dict]:

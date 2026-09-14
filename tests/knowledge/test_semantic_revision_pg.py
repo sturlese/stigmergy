@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 from stigmergy.capture import evidence, queue, schema
@@ -344,6 +345,107 @@ def test_semantic_revision_receives_only_the_same_acl_filtered_context(clean_que
     assert planner.revision_calls[0]["context"] == planner.plan_context
     assert "Private Finance Concept" not in planner.plan_context
     assert "Private finance context" not in planner.plan_context
+
+
+def test_authorized_page_outside_bounded_context_still_requires_semantic_revision(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    actor = Actor(subject="marc", display_name="Marc")
+    for index in range(13):
+        _seed_page(
+            clean_queue,
+            target_repo,
+            store,
+            actor=actor,
+            audience=None,
+            key=f"semantic-revision-candidate-{index}",
+            title=f"Candidate {index:02}",
+            text="Common signal keeps records current.",
+        )
+    _seed_page(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="semantic-revision-authorized-target",
+        title="Zebra Target",
+        text="Common signal keeps records current.",
+    )
+    _receipt, source = _capture(
+        clean_queue,
+        store,
+        actor=actor,
+        audience=None,
+        key="semantic-revision-authorized-update",
+        text="Common signal keeps records current.",
+    )
+    draft = FilingPlan(
+        summary="Updated an authorized page outside the bounded context.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Zebra Target.md",
+                body=_body("Zebra Target", "The durable target remains current.", source),
+                reason="The source updates an existing durable page.",
+            ),
+        ),
+    )
+    planner = RevisionPlanner(draft, draft)
+
+    item, outcome = _process(clean_queue, target_repo, store, planner)
+
+    context = json.loads(planner.plan_context)
+    assert outcome.status == schema.LANDED
+    assert len(context["candidates"]) == 12
+    assert "wiki/concepts/Zebra Target.md" not in {
+        candidate["path"] for candidate in context["candidates"]
+    }
+    assert len(planner.revision_calls) == 1
+    assert item["report"]["semantic_revision_required"] is True
+
+
+def test_inaccessible_page_update_never_becomes_semantic_revision_eligible(clean_queue, target_repo):
+    store = evidence.MemoryEvidenceStore()
+    _seed_page(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="bob", display_name="Bob"),
+        audience=("finance",),
+        key="semantic-revision-inaccessible-seed",
+        title="Private Finance Target",
+        text="Private finance evidence remains restricted.",
+    )
+    actor = Actor(subject="alice", display_name="Alice")
+    _receipt, source = _capture(
+        clean_queue,
+        store,
+        actor=actor,
+        audience=("engineering",),
+        key="semantic-revision-inaccessible-update",
+        text="Engineering evidence must not reveal finance context.",
+    )
+    draft = FilingPlan(
+        summary="Attempted hidden update.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Private Finance Target.md",
+                body=_body("Private Finance Target", "Hidden content must not land.", source),
+                reason="The hidden target is not available to this capture.",
+            ),
+        ),
+    )
+    planner = RevisionPlanner(draft, draft)
+
+    item, outcome = _process(clean_queue, target_repo, store, planner)
+
+    assert outcome.status == schema.LANDED
+    assert planner.revision_calls == []
+    assert "Private Finance Target" not in planner.plan_context
+    assert item["report"]["semantic_revision_required"] is False
 
 
 def test_recompile_revises_a_create_only_draft_when_prior_pages_exist(clean_queue, target_repo):

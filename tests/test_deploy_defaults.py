@@ -11,6 +11,7 @@ import pytest
 from evals.filing import parity, planner_eval
 from evals.filing import worktree as eval_worktree
 from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation
+from stigmergy.knowledge.planner import PlanRun
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy"
@@ -29,6 +30,14 @@ ROSTER = {
 }
 REGISTRY = {"version": 1, "entities": {}, "redirects": {}}
 CHANNELS = {"C0123456789": ["finance"]}
+
+
+class _RecordedRevisionPlanner:
+    def __init__(self, plan: FilingPlan):
+        self.plan = plan
+
+    def revise(self, **_kwargs) -> PlanRun:
+        return PlanRun(self.plan, model_requests=1)
 
 
 @pytest.mark.parametrize("name, expected", sorted(EMPTY_DEFAULTS.items()))
@@ -206,6 +215,15 @@ def _write_review_bundle(root: pathlib.Path, artifact: dict) -> None:
                         "effective_pages_sha256": hashlib.sha256(
                             _canonical(candidate_case["payload"]["effective_plan"])
                         ).hexdigest(),
+                        "draft_plan_sha256": hashlib.sha256(
+                            _canonical(candidate_case["payload"]["plan"])
+                        ).hexdigest(),
+                        "reviewed_plan_sha256": (
+                            hashlib.sha256(_canonical(candidate_case["payload"]["reviewed_plan"])).hexdigest()
+                            if candidate_case["payload"]["reviewed_plan"] is not None
+                            else None
+                        ),
+                        "semantic_revision": candidate_case["payload"]["semantic_revision"],
                         "implementation": implementation,
                         "run_id": candidate_run["run_id"],
                     }
@@ -514,13 +532,36 @@ def _parity_artifact(
         case = planner_eval.load_case(expected.case_paths[case_id])
         source_text = expected.fixture_paths[case_id].read_text(encoding="utf-8")
         plan = _plan_for_case(case_id) if passing else FilingPlan(summary="Deliberately failing result.")
-        score = planner_eval.score(plan, case, source_text=source_text)
+        active_plan = plan
+        revision = {"required": False, "attempted": False, "applied": False, "model_requests": 0}
         with eval_worktree.prepared(
             case,
             source_text,
             template=str(expected.repo_root / "evals" / "filing" / "repo"),
         ) as worktree:
-            gates = eval_worktree.apply_and_gate(worktree, plan)
+            if case_id == "harness_engineering_seeded" and passing:
+                gates, active_plan = eval_worktree.apply_with_production_repair(
+                    worktree,
+                    plan,
+                    _RecordedRevisionPlanner(plan),
+                    planning_model_requests=1,
+                    max_turns=2,
+                    return_plan=True,
+                )
+                revision = {
+                    "required": gates["semantic_revision_required"],
+                    "attempted": gates["semantic_revision_attempted"],
+                    "applied": gates["semantic_revision_applied"],
+                    "model_requests": gates["semantic_revision_model_requests"],
+                }
+            else:
+                gates = eval_worktree.apply_and_gate(worktree, plan)
+            effective = (
+                eval_worktree.effective_plan(worktree, active_plan)
+                if gates["passed"]
+                else active_plan
+            )
+        score = planner_eval.score(effective, case, source_text=source_text)
         raw_gates = {
             **{gate: score[gate]["passed"] for gate in sorted(score) if gate != "passed"},
             "writer": gates["passed"],
@@ -530,7 +571,9 @@ def _parity_artifact(
             "case_sha256": expected.source_cases[case_id],
             "fixture_sha256": expected.source_fixtures[case_id],
             "plan": plan.model_dump(mode="json"),
-            "effective_plan": plan.model_dump(mode="json"),
+            "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
+            "semantic_revision": revision,
+            "effective_plan": effective.model_dump(mode="json"),
             "score": score,
             "gates": gates,
             "raw_gates": raw_gates,
@@ -546,12 +589,12 @@ def _parity_artifact(
             "runtime": runtime,
             "execution_mode": "production-equivalent",
             "configured_max_turns": 2,
-            "model_requests": 1,
+            "model_requests": 1 + revision["model_requests"],
             "planning_model_requests": 1,
-            "semantic_revision_required": False,
-            "semantic_revision_attempted": False,
-            "semantic_revision_applied": False,
-            "semantic_revision_model_requests": 0,
+            "semantic_revision_required": revision["required"],
+            "semantic_revision_attempted": revision["attempted"],
+            "semantic_revision_applied": revision["applied"],
+            "semantic_revision_model_requests": revision["model_requests"],
             "repair_model_requests": 0,
             "schema_retry_count": 0,
             "semantic_repair_count": 0,
@@ -602,7 +645,7 @@ def _parity_artifact(
     selected = [run("stigmergy", f"matrix-high-{repeat}", "high") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
-        "schema_version": 3,
+        "schema_version": 4,
         "corpus_sha256": corpus,
         "initial_graph_ref": initial,
         "stigmergy_commit": expected.commit,

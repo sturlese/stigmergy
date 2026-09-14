@@ -16,7 +16,11 @@ from stigmergy.capture.source import render_source
 from stigmergy.entities import service as entity_service
 from stigmergy.entities.model import registry_bytes
 from stigmergy.knowledge import contradictions
-from stigmergy.knowledge.context import filing_context, render_context
+from stigmergy.knowledge.context import (
+    authorized_derived_page_paths,
+    filing_context,
+    render_context,
+)
 from stigmergy.knowledge.lint import check
 from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
 from stigmergy.knowledge.plan import FilingPlan
@@ -139,13 +143,22 @@ def apply_with_production_repair(
         actor_groups=None,
     )
     rendered_context = render_context(context)
+    authorized_existing_paths = authorized_derived_page_paths(
+        root,
+        capture_acl=worktree.envelope.audience,
+        actor_groups=None,
+    )
     reasons = {}
     snapshot = _snapshot_mutable(root)
     plan_invalid = False
     plan_rejection = ""
     repair_model_requests = 0
     semantic_repair_count = 0
-    semantic_revision_required = requires_semantic_revision(plan, context)
+    semantic_revision_required = requires_semantic_revision(
+        plan,
+        context,
+        authorized_existing_paths=authorized_existing_paths,
+    )
     semantic_revision_attempted = False
     semantic_revision_applied = False
     semantic_revision_model_requests = 0

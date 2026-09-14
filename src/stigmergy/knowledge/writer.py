@@ -25,7 +25,12 @@ from stigmergy.entities.service import (
 )
 from stigmergy.kernel.deadline import hard_deadline
 from stigmergy.knowledge import contradictions
-from stigmergy.knowledge.context import actor_scope, filing_context, render_context
+from stigmergy.knowledge.context import (
+    actor_scope,
+    authorized_derived_page_paths,
+    filing_context,
+    render_context,
+)
 from stigmergy.knowledge.contract import validate_librarian_skill_at_ref
 from stigmergy.knowledge.lint import Violation, check
 from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
@@ -350,6 +355,11 @@ def _recompile_derived(
             capture_acl=envelope.audience,
             actor_groups=None,
         )
+        authorized_existing_paths = authorized_derived_page_paths(
+            worktree,
+            capture_acl=envelope.audience,
+            actor_groups=None,
+        )
         safe_context["recompile"] = {
             "prior_pages": [
                 _recompile_prior_page_context(prior_pages[path])
@@ -371,7 +381,11 @@ def _recompile_derived(
         planning_model_requests += planning_requests
         model_requests += planning_requests
         plan = plan_run.plan
-        if requires_semantic_revision(plan, safe_context):
+        if requires_semantic_revision(
+            plan,
+            safe_context,
+            authorized_existing_paths=authorized_existing_paths,
+        ):
             remaining_requests = max(0, int(deps.settings.max_turns) - planning_requests)
             if remaining_requests < 1:
                 raise GateRefused("recompile semantic revision budget exhausted")
@@ -626,6 +640,11 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             capture_acl=envelope.audience,
             actor_groups=groups,
         )
+        authorized_existing_paths = authorized_derived_page_paths(
+            worktree,
+            capture_acl=envelope.audience,
+            actor_groups=groups,
+        )
         visible_entities = tuple(safe_context["entities"])
         visible_entity_ids = frozenset(
             item["id"] for item in visible_entities
@@ -655,7 +674,11 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         planning_model_requests = int(plan_run.model_requests)
         semantic_revision_model_requests = 0
         repair_model_requests = 0
-        semantic_revision_required = requires_semantic_revision(plan_run.plan, safe_context)
+        semantic_revision_required = requires_semantic_revision(
+            plan_run.plan,
+            safe_context,
+            authorized_existing_paths=authorized_existing_paths,
+        )
         semantic_revision_attempted = False
         semantic_revision_applied = False
         plan = plan_run.plan
@@ -824,15 +847,15 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
     )
 
 
-def requires_semantic_revision(plan: FilingPlan, safe_context: dict) -> bool:
-    """Review drafts that alter a visible page or must account for recompile provenance."""
-    visible_paths = {
-        candidate.get("path")
-        for candidate in safe_context.get("candidates", ())
-        if isinstance(candidate, dict) and candidate.get("path")
-    }
+def requires_semantic_revision(
+    plan: FilingPlan,
+    safe_context: dict,
+    *,
+    authorized_existing_paths: frozenset[str],
+) -> bool:
+    """Review drafts that alter any ACL-authorized page or preserve recompile history."""
     if any(
-        mutation.action in {"update", "delete"} and mutation.path in visible_paths
+        mutation.action in {"update", "delete"} and mutation.path in authorized_existing_paths
         for mutation in plan.mutations
     ):
         return True

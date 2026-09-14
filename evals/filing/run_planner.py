@@ -229,11 +229,23 @@ def main(argv: list[str] | None = None) -> int:
             if gate != "passed"
         }
         raw_gates["writer"] = gates["passed"]
+        semantic_revision = {
+            "required": gates["semantic_revision_required"],
+            "attempted": gates["semantic_revision_attempted"],
+            "applied": gates["semantic_revision_applied"],
+            "model_requests": semantic_revision_model_requests,
+        }
         output_payload = {
             "brain_prompt": brain_prompt,
             "case_sha256": case_sha256,
             "fixture_sha256": fixture_sha256,
             "plan": run.plan.model_dump(mode="json"),
+            "reviewed_plan": (
+                plan_for_score.model_dump(mode="json")
+                if gates["semantic_revision_applied"]
+                else None
+            ),
+            "semantic_revision": semantic_revision,
             "effective_plan": scored_plan.model_dump(mode="json"),
             "score": semantic,
             "gates": gates,

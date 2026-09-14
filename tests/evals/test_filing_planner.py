@@ -834,6 +834,13 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     if include_payload:
         assert "payload" in payload["case_result"]
         assert "--include-payload emits derived page bodies" in captured.err
+        assert payload["case_result"]["payload"]["reviewed_plan"] is None
+        assert payload["case_result"]["payload"]["semantic_revision"] == {
+            "required": False,
+            "attempted": False,
+            "applied": False,
+            "model_requests": 0,
+        }
         assert payload["output"]["sha256"] == hashlib.sha256(
             json.dumps(
                 payload["case_result"]["payload"],
