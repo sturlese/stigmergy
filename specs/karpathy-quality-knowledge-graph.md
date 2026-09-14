@@ -138,7 +138,7 @@ filing or repair records a typed operational failure without committing a partia
     Hippocampus is a comparative baseline whose complete evidence remains replay-verified even where
     it honestly fails Stigmergy-specific writer gates. A blind pairwise editorial review finds no
     material Stigmergy regression before deployment.
-14. **KG-14:** Production continues to use `openai/gpt-5.4` through the approved Azure
+14. **KG-14:** Production continues to use `openai/gpt-oss-120b` through the approved Cerebras
     OpenRouter route. The lowest reasoning level that passes every hard reference case is selected
     only after at least three independent production-equivalent repeats per case under the configured
     two-request budget; runtime route, observed requests, derived schema retries, semantic repairs,

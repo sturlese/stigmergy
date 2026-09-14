@@ -16,7 +16,7 @@ from stigmergy.knowledge.plan import FilingPlan
 
 def test_runtime_model_contract_is_exact():
     assert llm.ANSWER_MODEL == "openrouter:z-ai/glm-5.2"
-    assert llm.LIBRARIAN_MODEL == "openrouter:openai/gpt-5.4"
+    assert llm.LIBRARIAN_MODEL == "openrouter:openai/gpt-oss-120b"
     assert llm.OCR_MODEL == "openrouter:qwen/qwen3-vl-8b-instruct"
     assert {
         llm.ANSWER_MODEL,
@@ -49,13 +49,13 @@ def test_non_librarian_models_enable_provider_failover_without_relaxing_privacy(
         assert model.settings["openrouter_provider"] == llm.OPENROUTER_PROVIDER_POLICY
 
 
-def test_librarian_is_pinned_to_azure_for_native_structured_output():
+def test_librarian_is_pinned_to_cerebras_for_native_structured_output():
     assert llm.provider_policy(llm.LIBRARIAN_MODEL) == {
         "allow_fallbacks": False,
         "require_parameters": True,
         "data_collection": "deny",
         "zdr": True,
-        "only": ["azure"],
+        "only": ["cerebras"],
     }
 
 
@@ -64,7 +64,7 @@ def test_only_the_librarian_model_is_pinned_to_the_verified_host(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     librarian, _ = llm.build_model(llm.LIBRARIAN_MODEL)
-    assert librarian.settings["openrouter_provider"]["only"] == ["azure"]
+    assert librarian.settings["openrouter_provider"]["only"] == ["cerebras"]
     assert librarian.settings["openrouter_provider"]["allow_fallbacks"] is False
 
     for configured in (llm.ANSWER_MODEL, llm.OCR_MODEL):
@@ -80,7 +80,7 @@ def test_librarian_requests_high_reasoning_without_returning_reasoning(monkeypat
 
     assert settings is model.settings
     assert llm.LIBRARIAN_REASONING_LEVEL == "high"
-    assert llm.LIBRARIAN_MAX_TOKENS == 32768
+    assert llm.LIBRARIAN_MAX_TOKENS == 16384
     assert model.settings["max_tokens"] == llm.LIBRARIAN_MAX_TOKENS
     assert model.settings["openrouter_reasoning"] == {
         "effort": llm.LIBRARIAN_REASONING_LEVEL,
@@ -107,8 +107,8 @@ def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypat
             "id": "test-completion",
             "object": "chat.completion",
             "created": 0,
-            "model": "openai/gpt-5.4",
-            "provider": "azure",
+            "model": "openai/gpt-oss-120b",
+            "provider": "cerebras",
             "choices": [{
                 "index": 0,
                 "message": {"role": "assistant", "content": "ok"},
@@ -132,10 +132,10 @@ def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypat
     model = asyncio.run(run_twice())
 
     expected = llm.provider_policy(llm.LIBRARIAN_MODEL)
-    assert [payload["model"] for payload in payloads] == ["openai/gpt-5.4"] * 2
+    assert [payload["model"] for payload in payloads] == ["openai/gpt-oss-120b"] * 2
     assert [payload["provider"] for payload in payloads] == [expected, expected]
-    assert [payload["max_completion_tokens"] for payload in payloads] == [32768, 32768]
-    assert all("max_tokens" not in payload for payload in payloads)
+    assert [payload["max_tokens"] for payload in payloads] == [16384, 16384]
+    assert all("max_completion_tokens" not in payload for payload in payloads)
     assert model.settings["openrouter_provider"] == expected
 
 
@@ -180,7 +180,7 @@ def test_non_librarian_requests_keep_the_default_output_parameter_mapping(monkey
     assert "max_completion_tokens" not in payloads[0]
 
 
-def test_librarian_native_output_request_uses_strict_json_schema_and_pins_azure(monkeypatch):
+def test_librarian_native_output_request_uses_strict_json_schema_and_pins_cerebras(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     payloads = []
 
@@ -190,8 +190,8 @@ def test_librarian_native_output_request_uses_strict_json_schema_and_pins_azure(
             "id": "test-completion",
             "object": "chat.completion",
             "created": 0,
-            "model": "openai/gpt-5.4",
-            "provider": "azure",
+            "model": "openai/gpt-oss-120b",
+            "provider": "cerebras",
             "choices": [{
                 "index": 0,
                 "message": {
@@ -226,13 +226,13 @@ def test_librarian_native_output_request_uses_strict_json_schema_and_pins_azure(
     assert len(payloads) == 1
     assert "tool_choice" not in payloads[0]
     assert "tools" not in payloads[0]
-    assert payloads[0]["model"] == "openai/gpt-5.4"
+    assert payloads[0]["model"] == "openai/gpt-oss-120b"
     assert payloads[0]["provider"] == {
         "allow_fallbacks": False,
         "require_parameters": True,
         "data_collection": "deny",
         "zdr": True,
-        "only": ["azure"],
+        "only": ["cerebras"],
     }
     assert payloads[0]["response_format"]["type"] == "json_schema"
     assert payloads[0]["response_format"]["json_schema"]["strict"] is True

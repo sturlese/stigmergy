@@ -279,9 +279,9 @@ Report vulnerabilities privately: [`SECURITY.md`](./SECURITY.md).
 One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, no model fallback or direct
 alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenAI, or Gemini
 credentials are rejected. The librarian's strict provider-native JSON Schema plans are pinned to
-Azure, with no provider fallback; requests require supported parameters, deny data collection,
+Cerebras, with no provider fallback; requests require supported parameters, deny data collection,
 and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
-Its output ceiling is `32768` tokens and is sent to OpenRouter as `max_completion_tokens`. Each
+Its output ceiling is `16384` tokens and is sent to OpenRouter as `max_tokens`. Each
 writer attempt makes at most two model requests across filing, schema retries, semantic draft
 revision, and any bounded repair. A visible-page draft revision consumes the remaining request; if
 it is unavailable or fails writer gates, the unreviewed draft is never applied. Retryable failures
@@ -306,7 +306,7 @@ as comparative, replay-verified baseline evidence and is not a Stigmergy admissi
 
 | Purpose | Model |
 |---|---|
-| filing and semantic repair | `openai/gpt-5.4` |
+| filing and semantic repair | `openai/gpt-oss-120b` |
 | cited answers | `z-ai/glm-5.2` |
 | embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |

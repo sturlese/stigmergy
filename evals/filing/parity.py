@@ -62,8 +62,8 @@ REQUIRED_SEMANTIC_GATES = frozenset(
     }
 )
 STIGMERGY_RUNTIME = {
-    "model": "openai/gpt-5.4",
-    "provider": "azure",
+    "model": "openai/gpt-oss-120b",
+    "provider": "cerebras",
     "max_tokens": LIBRARIAN_MAX_TOKENS,
 }
 ARTIFACT_SCHEMA_VERSION = 4

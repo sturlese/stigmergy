@@ -352,7 +352,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
 
     def run(implementation: str, run_id: str, level: str, repeat: int, passed: bool) -> dict:
         runtime = (
-            {"model": "openai/gpt-5.4", "reasoning_level": level, "provider": "azure", "max_tokens": 32768}
+            {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 16384}
             if implementation == "stigmergy"
             else {"model": "fixture", "reasoning_level": level, "provider": "fixture"}
         )
@@ -376,10 +376,10 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
         return {
             "reasoning_level": level,
             "runtime": {
-                "model": "openai/gpt-5.4",
+                "model": "openai/gpt-oss-120b",
                 "reasoning_level": level,
-                "provider": "azure",
-                "max_tokens": 32768,
+                "provider": "cerebras",
+                "max_tokens": 16384,
             },
             "runs": [
                 run("stigmergy", f"matrix-{level}-{repeat}", level, repeat, passed)
@@ -413,10 +413,10 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
             {
                 "reasoning_level": "high",
                 "runtime": {
-                    "model": "openai/gpt-5.4",
+                    "model": "openai/gpt-oss-120b",
                     "reasoning_level": "high",
-                    "provider": "azure",
-                    "max_tokens": 32768,
+                    "provider": "cerebras",
+                    "max_tokens": 16384,
                 },
                 "runs": selected,
                 "passed": True,
@@ -615,7 +615,7 @@ def _parity_artifact(
 
     def run(implementation: str, run_id: str, level: str, *, passing: bool = True) -> dict:
         runtime = (
-            {"model": "openai/gpt-5.4", "reasoning_level": level, "provider": "azure", "max_tokens": 32768}
+            {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 16384}
             if implementation == "stigmergy"
             else {"model": "fixture", "reasoning_level": level, "provider": "fixture"}
         )
@@ -666,10 +666,10 @@ def _parity_artifact(
             {
                 "reasoning_level": level,
                 "runtime": {
-                    "model": "openai/gpt-5.4",
+                    "model": "openai/gpt-oss-120b",
                     "reasoning_level": level,
-                    "provider": "azure",
-                    "max_tokens": 32768,
+                    "provider": "cerebras",
+                    "max_tokens": 16384,
                 },
                 "runs": [run("stigmergy", f"matrix-{level}-1", level, passing=False)],
                 "passed": False,
@@ -679,10 +679,10 @@ def _parity_artifact(
             {
                 "reasoning_level": "high",
                 "runtime": {
-                    "model": "openai/gpt-5.4",
+                    "model": "openai/gpt-oss-120b",
                     "reasoning_level": "high",
-                    "provider": "azure",
-                    "max_tokens": 32768,
+                    "provider": "cerebras",
+                    "max_tokens": 16384,
                 },
                 "runs": selected,
                 "passed": True,

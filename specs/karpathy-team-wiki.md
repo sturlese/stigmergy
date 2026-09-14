@@ -102,17 +102,17 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 | Runtime purpose | Model |
 |---|---|
-| librarian filing, semantic revision, and repair | `openrouter:openai/gpt-5.4` |
+| librarian filing, semantic revision, and repair | `openrouter:openai/gpt-oss-120b` |
 | cited answers | `z-ai/glm-5.2` |
 | vector embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | scanned-page and image OCR | `qwen/qwen3-vl-8b-instruct` |
 
 Deterministic linting is the gardener's detection step and makes no model call. Semantic revision
-and repair use the librarian's `openrouter:openai/gpt-5.4` model. Librarian calls request reasoning
-effort `high` with reasoning excluded from returned output and an output ceiling of `32768` tokens,
-sent as `max_completion_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
+and repair use the librarian's `openrouter:openai/gpt-oss-120b` model. Librarian calls request reasoning
+effort `high` with reasoning excluded from returned output and an output ceiling of `16384` tokens,
+sent as `max_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
 requires supported parameters, denies data collection, and requires
-zero-data-retention processing. The librarian is pinned to Azure, with no provider fallback. Each
+zero-data-retention processing. The librarian is pinned to Cerebras, with no provider fallback. Each
 writer attempt makes at most two model requests across draft filing, schema retries, semantic
 revision, and repair; an eligible draft is never applied without its revision. Retryable failures
 use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider

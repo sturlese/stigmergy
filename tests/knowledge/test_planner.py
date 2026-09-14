@@ -46,7 +46,7 @@ def _worktree(tmp_path):
 
 def _settings(*, max_turns=2):
     return SimpleNamespace(
-        model="openrouter:openai/gpt-5.4",
+        model="openrouter:openai/gpt-oss-120b",
         timeout_s=5,
         max_turns=max_turns,
     )

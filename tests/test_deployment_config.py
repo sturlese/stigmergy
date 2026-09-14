@@ -166,7 +166,7 @@ def test_static_environment_contains_no_credentials():
     ),
 )
 def test_deployed_librarian_uses_the_supported_default_model(surface, configured):
-    expected = "openrouter:openai/gpt-5.4"
+    expected = "openrouter:openai/gpt-oss-120b"
     assert configured == expected, surface
 
 

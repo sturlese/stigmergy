@@ -38,10 +38,10 @@
       "implementation": "stigmergy",
       "run_id": "matrix-high-repeat-1",
       "runtime": {
-        "model": "openai/gpt-5.4",
+        "model": "openai/gpt-oss-120b",
         "reasoning_level": "high",
-        "provider": "azure",
-        "max_tokens": 32768
+        "provider": "cerebras",
+        "max_tokens": 16384
       },
       "execution": {
         "mode": "production-equivalent",
@@ -73,10 +73,10 @@
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           },
           "runtime": {
-            "model": "openai/gpt-5.4",
+            "model": "openai/gpt-oss-120b",
             "reasoning_level": "high",
-            "provider": "azure",
-            "max_tokens": 32768
+            "provider": "cerebras",
+            "max_tokens": 16384
           },
           "execution_mode": "production-equivalent",
           "configured_max_turns": 2,
@@ -149,10 +149,10 @@
     {
       "reasoning_level": "high",
       "runtime": {
-        "model": "openai/gpt-5.4",
+        "model": "openai/gpt-oss-120b",
         "reasoning_level": "high",
-        "provider": "azure",
-        "max_tokens": 32768
+        "provider": "cerebras",
+        "max_tokens": 16384
       },
       "runs": [
         "The complete selected-run objects are repeated here, once for every independent repeat."

@@ -757,10 +757,10 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
             self.settings = settings
 
     def build_librarian_model(model_name):
-        assert model_name == "openrouter:openai/gpt-5.4"
+        assert model_name == "openrouter:openai/gpt-oss-120b"
         settings = {
-            "openrouter_provider": {"only": ["azure"], "allow_fallbacks": False},
-            "max_tokens": 32768,
+            "openrouter_provider": {"only": ["cerebras"], "allow_fallbacks": False},
+            "max_tokens": 16384,
             "openrouter_reasoning": {"effort": "high", "exclude": True},
         }
         return Model(settings), settings
@@ -802,7 +802,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     assert exit_code == 0
     assert calls[0]["settings"].repo != str(brain_root)
     assert calls[0]["settings"].max_turns == expected_max_turns
-    assert calls[0]["settings"].model == "openrouter:openai/gpt-5.4"
+    assert calls[0]["settings"].model == "openrouter:openai/gpt-oss-120b"
     assert source_text in calls[1]["source_text"]
     assert calls[1]["source_path"] == "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
     assert '"candidates": []' in calls[1]["context"]
@@ -824,10 +824,10 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     assert payload["semantic_repair_count"] == 0
     assert payload["usage"] == {"requests": 1}
     assert payload["runtime"] == {
-        "model": "openai/gpt-5.4",
+        "model": "openai/gpt-oss-120b",
         "reasoning_level": expected_reasoning,
-        "provider": "azure",
-        "max_tokens": 32768,
+        "provider": "cerebras",
+        "max_tokens": 16384,
     }
     assert payload["score"]["passed"] is True
     assert payload["gates"]["passed"] is True
@@ -880,7 +880,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
             "effort": expected_reasoning,
             "exclude": True,
         }
-        assert factory().settings["max_tokens"] == 32768
+        assert factory().settings["max_tokens"] == 16384
     else:
         assert factory is None
 
