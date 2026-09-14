@@ -109,7 +109,7 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 Deterministic linting is the gardener's detection step and makes no model call. Semantic revision
 and repair use the librarian's `openrouter:openai/gpt-oss-120b` model. Librarian calls request reasoning
-effort `high` with reasoning excluded from returned output and an output ceiling of `16384` tokens,
+effort `high` with reasoning excluded from returned output and an output ceiling of `32768` tokens,
 sent as `max_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
 requires supported parameters, denies data collection, and requires
 zero-data-retention processing. The librarian is pinned to Cerebras, with no provider fallback. Each

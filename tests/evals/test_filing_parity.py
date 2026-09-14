@@ -273,7 +273,7 @@ def _run(implementation: str, run_id: str, level: str, repeat: int, *, passed: b
             brain_prompt=copy.deepcopy(BRAIN_PROMPT),
         )
     runtime = (
-        {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 16384}
+        {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 32768}
         if implementation == "stigmergy"
         else {"model": "fixture", "reasoning_level": level, "provider": "fixture"}
     )
@@ -293,7 +293,7 @@ def _run(implementation: str, run_id: str, level: str, repeat: int, *, passed: b
 def _matrix_item(level: str, *, passed: bool, repeats: int = 1) -> dict:
     return {
         "reasoning_level": level,
-        "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 16384},
+        "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 32768},
         "runs": [
             _run("stigmergy", f"matrix-{level}-{repeat}", level, repeat, passed=passed)
             for repeat in range(1, repeats + 1)
@@ -309,7 +309,7 @@ def _unstable_matrix_item(level: str) -> dict:
     ]
     return {
         "reasoning_level": level,
-        "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 16384},
+        "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 32768},
         "runs": runs,
         "passed": False,
     }
@@ -472,7 +472,7 @@ def _artifact(review_root: Path) -> dict:
                     "model": "openai/gpt-oss-120b",
                     "reasoning_level": "high",
                     "provider": "cerebras",
-                    "max_tokens": 16384,
+                    "max_tokens": 32768,
                 },
                 "runs": copy.deepcopy(selected),
                 "passed": True,

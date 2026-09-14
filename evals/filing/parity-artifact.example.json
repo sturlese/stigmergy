@@ -41,7 +41,7 @@
         "model": "openai/gpt-oss-120b",
         "reasoning_level": "high",
         "provider": "cerebras",
-        "max_tokens": 16384
+        "max_tokens": 32768
       },
       "execution": {
         "mode": "production-equivalent",
@@ -76,7 +76,7 @@
             "model": "openai/gpt-oss-120b",
             "reasoning_level": "high",
             "provider": "cerebras",
-            "max_tokens": 16384
+            "max_tokens": 32768
           },
           "execution_mode": "production-equivalent",
           "configured_max_turns": 3,
@@ -152,7 +152,7 @@
         "model": "openai/gpt-oss-120b",
         "reasoning_level": "high",
         "provider": "cerebras",
-        "max_tokens": 16384
+        "max_tokens": 32768
       },
       "runs": [
         "The complete selected-run objects are repeated here, once for every independent repeat."

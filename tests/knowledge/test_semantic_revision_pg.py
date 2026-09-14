@@ -202,6 +202,50 @@ def test_pure_create_does_not_invoke_semantic_revision(clean_queue, target_repo)
     assert item["report"]["semantic_revision_attempted"] is False
 
 
+def test_multi_page_create_uses_semantic_revision_to_reject_fragmentation(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    actor = Actor(subject="marc", display_name="Marc")
+    _receipt, source = _capture(
+        clean_queue,
+        store,
+        actor=actor,
+        audience=None,
+        key="semantic-revision-multi-create",
+        text="A source establishes one concept with a supporting detail.",
+    )
+    central = PageMutation(
+        action="create",
+        role="concept",
+        title="Standalone Concept",
+        body=_body("Standalone Concept", "The source establishes a reusable concept.", source),
+        entities=(),
+        reason="The central concept has independent future reuse.",
+    )
+    fragment = PageMutation(
+        action="create",
+        role="concept",
+        title="Standalone Detail",
+        body=_body("Standalone Detail", "This detail belongs in the central concept.", source),
+        entities=(),
+        reason="The draft split out a supporting detail.",
+    )
+    draft = FilingPlan(summary="Created a fragmented graph.", mutations=(central, fragment))
+    revision = FilingPlan(summary="Kept the graph cohesive.", mutations=(central,))
+    planner = RevisionPlanner(draft, revision)
+
+    item, outcome = _process(clean_queue, target_repo, store, planner)
+
+    assert outcome.status == schema.LANDED
+    assert len(planner.revision_calls) == 1
+    assert planner.revision_calls[0]["max_requests"] == 2
+    assert item["report"]["model_requests"] == 2
+    assert item["report"]["semantic_revision_required"] is True
+    assert "wiki/concepts/Standalone Concept.md" in _changed_paths(target_repo, item["commit_sha"])
+    assert "wiki/concepts/Standalone Detail.md" not in _changed_paths(target_repo, item["commit_sha"])
+
+
 def test_failed_semantic_revision_never_falls_back_to_the_draft(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     actor = Actor(subject="marc", display_name="Marc")

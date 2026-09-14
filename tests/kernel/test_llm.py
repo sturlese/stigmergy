@@ -80,7 +80,7 @@ def test_librarian_requests_high_reasoning_without_returning_reasoning(monkeypat
 
     assert settings is model.settings
     assert llm.LIBRARIAN_REASONING_LEVEL == "high"
-    assert llm.LIBRARIAN_MAX_TOKENS == 16384
+    assert llm.LIBRARIAN_MAX_TOKENS == 32768
     assert model.settings["max_tokens"] == llm.LIBRARIAN_MAX_TOKENS
     assert model.settings["openrouter_reasoning"] == {
         "effort": llm.LIBRARIAN_REASONING_LEVEL,
@@ -134,7 +134,7 @@ def test_openrouter_provider_policy_survives_two_real_adapter_requests(monkeypat
     expected = llm.provider_policy(llm.LIBRARIAN_MODEL)
     assert [payload["model"] for payload in payloads] == ["openai/gpt-oss-120b"] * 2
     assert [payload["provider"] for payload in payloads] == [expected, expected]
-    assert [payload["max_tokens"] for payload in payloads] == [16384, 16384]
+    assert [payload["max_tokens"] for payload in payloads] == [32768, 32768]
     assert all("max_completion_tokens" not in payload for payload in payloads)
     assert model.settings["openrouter_provider"] == expected
 

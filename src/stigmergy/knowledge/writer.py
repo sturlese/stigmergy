@@ -851,7 +851,9 @@ def requires_semantic_revision(
     *,
     authorized_existing_paths: frozenset[str],
 ) -> bool:
-    """Review drafts that alter any ACL-authorized page or preserve recompile history."""
+    """Review graph splits, authorized page changes, and preserved recompile history."""
+    if sum(mutation.action == "create" for mutation in plan.mutations) > 1:
+        return True
     if any(
         mutation.action in {"update", "delete"} and mutation.path in authorized_existing_paths
         for mutation in plan.mutations
