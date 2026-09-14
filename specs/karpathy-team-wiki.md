@@ -482,6 +482,10 @@ A master may request `GardenRequest(mode="recompile")` through the backoffice. R
 same writer and all the same gates, reconstructs only derived notes, concepts, links, and entity
 anchors from immutable sources in an isolated worktree, and preserves source pages and valid
 source-backed identities. Any failed source, repair, or gate abandons the complete candidate.
+The planner receives every ACL-safe prior derived page backed by the current source. Each prior
+path must be recreated or updated in the fresh candidate, or explicitly tombstoned with a `delete`
+mutation. A vanished multi-source page requires a tombstone from every backing source. A source
+with no prior derived page may still produce an empty plan; no deterministic page is synthesized.
 Recompile is recorded as `operation: recompile` in its run report but retains the existing `garden`
 trigger in the unified change ledger; no additional ledger trigger is introduced.
 

@@ -105,7 +105,9 @@ both inside the writer, applies the normal gates, and lands at most one commit. 
 summary, never a permanent assignment to a person. A master-only recompile uses the same
 `GardenRequest` path in `recompile` mode to rebuild derived notes, concepts, links, and entity
 anchors from the complete immutable-source corpus in an isolated worktree. It preserves sources and
-valid source-backed identities, aborts the complete candidate on any failed source or gate, and
+valid source-backed identities. Every ACL-safe prior page must be explicitly reconstructed or
+tombstoned by each backing source before it may disappear; sources with no prior derived page may
+still yield an empty plan. Recompile aborts the complete candidate on any failed source or gate, and
 records its commit under the existing `garden` change-ledger trigger. Due garden checks and
 expired-upload cleanup run under continuous queue load as well as while idle.
 

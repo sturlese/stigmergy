@@ -25,6 +25,13 @@ only what the plan actually does.
   `entities: null` to preserve current anchors, or a complete `entities: [...]` list to replace them.
 - Use `delete` only to consolidate a duplicate or obsolete normal page, with path and reason, and
   emit `entities: null`.
+- When `SAFE EXISTING CONTEXT` contains `recompile.prior_pages`, the derived candidate started
+  empty. Account for every exact prior path: recreate it when it remains durable, update it only
+  when that path already exists in current `candidates`, or emit `delete` as an explicit tombstone
+  when it is truly obsolete or consolidated. A tombstone authorizes absence from the fresh
+  candidate; it does not delete a second time. Never tombstone and recreate the same path. For a
+  consolidation, create or update the replacement and name that replacement in the delete reason.
+  An empty mutation list is valid only when `recompile.prior_pages` is empty.
 - Never create pages, notes, concepts, or entities for a capture ID, post ID, URL slug, document
   identifier, or other provenance token. Keep those in source metadata and citations.
 - Do not create sources, captures, entities, indexes, logs, ACL records, or retired page roles.
@@ -120,7 +127,8 @@ Before returning the plan, perform this ordered check:
 1. Read the source completely; list durable concepts, named framework members, examples, extensions,
    authors, and identity evidence.
 2. Compare candidates with visible pages; choose zero to many reusable pages and keep a parent
-   framework cohesive unless a child passes the independent-page test.
+   framework cohesive unless a child passes the independent-page test. During recompile, give
+   every `recompile.prior_pages` path one explicit recreate, update, or delete disposition.
 3. Write each body as a cold-readable explanation with complete source-supported coverage and exact
    `(Source: `source_path`)` citations copied from the original capture data.
 4. Add only semantic normal-page links, with reciprocal edits where both endpoints change.

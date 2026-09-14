@@ -2481,6 +2481,280 @@ def test_master_recompile_preserves_sources_reuses_identity_and_is_idempotent(
     assert repeated["commit_sha"] == ""
 
 
+def test_master_recompile_rejects_empty_plan_that_would_delete_sole_derived_page(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    page_path = "wiki/notes/Recompile preservation.md"
+    seed = FilingPlan(
+        summary="Recorded durable knowledge",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Recompile preservation",
+                body=(
+                    "# Recompile preservation\n\n"
+                    "The operating decision remains durable knowledge."
+                ),
+                entities=(),
+                reason="The source records a durable operating decision",
+            ),
+        ),
+    )
+    receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        key="recompile-preservation-seed",
+        text="The operating decision remains durable knowledge.",
+        plan=seed,
+        editorial=True,
+    )
+    assert outcome.status == schema.LANDED
+    source = source_path(schema.parse_capture(receipt["request"]))
+    before = subprocess.check_output(
+        ["git", "rev-parse", "main"], cwd=target_repo, text=True
+    ).strip()
+    page_before = subprocess.check_output(
+        ["git", "show", f"main:{page_path}"], cwd=target_repo, text=True
+    )
+
+    queue.enqueue_garden(
+        clean_queue,
+        schema.GardenRequest(
+            idempotency_key="recompile-preservation-empty",
+            actor=Actor(subject="marc", display_name="Marc"),
+            rationale="Recompile without silently dropping durable knowledge",
+            mode="recompile",
+        ),
+    )
+    _item, failed = worker.process_next(
+        clean_queue,
+        WriterDeps(
+            config.Settings(repo=str(target_repo), branch="main", backend="scripted"),
+            store,
+            ScriptedPlanner(FilingPlan(summary="Found no new durable knowledge")),
+            str(target_repo),
+        ),
+    )
+
+    assert failed.status == schema.FAILED
+    assert subprocess.check_output(
+        ["git", "rev-parse", "main"], cwd=target_repo, text=True
+    ).strip() == before
+    assert subprocess.check_output(
+        ["git", "show", f"main:{page_path}"], cwd=target_repo, text=True
+    ) == page_before
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"main:{source}"],
+        cwd=target_repo,
+        check=False,
+    ).returncode == 0
+
+
+def test_master_recompile_accepts_explicit_tombstone_for_prior_derived_page(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    page_path = "wiki/notes/Obsolete recompile knowledge.md"
+    seed = FilingPlan(
+        summary="Recorded knowledge that later becomes obsolete",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Obsolete recompile knowledge",
+                body="# Obsolete recompile knowledge\n\nThe old procedure remains in force.",
+                entities=(),
+                reason="The source records the old procedure",
+            ),
+        ),
+    )
+    receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        key="recompile-tombstone-seed",
+        text="The old procedure remains in force.",
+        plan=seed,
+        editorial=True,
+    )
+    assert outcome.status == schema.LANDED
+    source = source_path(schema.parse_capture(receipt["request"]))
+    plan = FilingPlan(
+        summary="Retired obsolete knowledge explicitly",
+        mutations=(
+            PageMutation(
+                action="delete",
+                path=page_path,
+                reason="The source no longer supports a durable current procedure",
+            ),
+        ),
+    )
+    queue.enqueue_garden(
+        clean_queue,
+        schema.GardenRequest(
+            idempotency_key="recompile-tombstone",
+            actor=Actor(subject="marc", display_name="Marc"),
+            rationale="Retire obsolete derived knowledge explicitly",
+            mode="recompile",
+        ),
+    )
+
+    item, recompiled = worker.process_next(
+        clean_queue,
+        WriterDeps(
+            config.Settings(repo=str(target_repo), branch="main", backend="scripted"),
+            store,
+            ScriptedPlanner(plan),
+            str(target_repo),
+        ),
+    )
+
+    assert recompiled.status == schema.LANDED
+    assert item["report"]["authorized_page_removals"] == 1
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"main:{page_path}"],
+        cwd=target_repo,
+        check=False,
+    ).returncode != 0
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"main:{source}"],
+        cwd=target_repo,
+        check=False,
+    ).returncode == 0
+
+
+def test_master_recompile_requires_tombstone_when_consolidating_prior_page(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    old_path = "wiki/notes/Legacy operating guide.md"
+    seed = FilingPlan(
+        summary="Recorded the legacy guide",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Legacy operating guide",
+                body="# Legacy operating guide\n\nThe guide records the durable operating method.",
+                entities=(),
+                reason="The source records the operating method",
+            ),
+        ),
+    )
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        key="recompile-consolidation-seed",
+        text="The guide records the durable operating method.",
+        plan=seed,
+        editorial=True,
+    )
+    assert outcome.status == schema.LANDED
+    plan = FilingPlan(
+        summary="Consolidated the legacy guide into the current method",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Current operating method",
+                body="# Current operating method\n\nThe durable operating method is consolidated here.",
+                entities=(),
+                reason="This page is the durable replacement",
+            ),
+            PageMutation(
+                action="delete",
+                path=old_path,
+                reason="Consolidated into wiki/concepts/Current operating method.md",
+            ),
+        ),
+    )
+    queue.enqueue_garden(
+        clean_queue,
+        schema.GardenRequest(
+            idempotency_key="recompile-consolidation",
+            actor=Actor(subject="marc", display_name="Marc"),
+            rationale="Consolidate prior derived knowledge explicitly",
+            mode="recompile",
+        ),
+    )
+
+    item, recompiled = worker.process_next(
+        clean_queue,
+        WriterDeps(
+            config.Settings(repo=str(target_repo), branch="main", backend="scripted"),
+            store,
+            EditorialFixturePlanner(plan),
+            str(target_repo),
+        ),
+    )
+
+    assert recompiled.status == schema.LANDED
+    assert item["report"]["authorized_page_removals"] == 1
+    tree = subprocess.check_output(
+        ["git", "ls-tree", "-r", "--name-only", "main"], cwd=target_repo, text=True
+    ).splitlines()
+    assert old_path not in tree
+    assert "wiki/concepts/Current operating method.md" in tree
+
+
+def test_master_recompile_allows_empty_plan_for_source_without_prior_derived_page(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    empty = FilingPlan(summary="The source has no durable graph contribution")
+    _receipt, _item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        key="recompile-source-only-seed",
+        text="A transient observation with no durable conclusion.",
+        plan=empty,
+    )
+    assert outcome.status == schema.LANDED
+    before = subprocess.check_output(
+        ["git", "rev-parse", "main"], cwd=target_repo, text=True
+    ).strip()
+    queue.enqueue_garden(
+        clean_queue,
+        schema.GardenRequest(
+            idempotency_key="recompile-source-only-empty",
+            actor=Actor(subject="marc", display_name="Marc"),
+            rationale="Keep a source-only capture source-only",
+            mode="recompile",
+        ),
+    )
+
+    item, recompiled = worker.process_next(
+        clean_queue,
+        WriterDeps(
+            config.Settings(repo=str(target_repo), branch="main", backend="scripted"),
+            store,
+            ScriptedPlanner(empty),
+            str(target_repo),
+        ),
+    )
+
+    assert recompiled.status == schema.LANDED
+    assert item["commit_sha"] == ""
+    assert item["report"]["idempotent"] is True
+    assert item["report"]["authorized_page_removals"] == 0
+    assert subprocess.check_output(
+        ["git", "rev-parse", "main"], cwd=target_repo, text=True
+    ).strip() == before
+
+
 def test_recompile_records_one_garden_ledger_row_under_previous_trigger_constraint(
     clean_queue, target_repo, monkeypatch
 ):

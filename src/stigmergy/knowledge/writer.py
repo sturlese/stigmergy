@@ -311,6 +311,9 @@ def _recompile_derived(
         path: _path(worktree, path).read_text(encoding="utf-8")
         for path in _derived_paths(worktree)
     }
+    previous_page_records = {
+        path: parse_page(path, text) for path, text in previous_pages.items()
+    }
     source_paths = tuple(
         path.relative_to(worktree).as_posix()
         for path in sorted(Path(worktree, "sources").glob("*/*/*.md"))
@@ -324,6 +327,7 @@ def _recompile_derived(
     _clear_derived_pages(worktree)
     model_requests = 0
     gate_violations = 0
+    tombstone_authorizations: dict[str, set[str]] = {}
     for relative_source in source_paths:
         try:
             source = read_recompile_source(worktree, relative_source)
@@ -331,13 +335,28 @@ def _recompile_derived(
             raise GateRefused(f"recompile source changed after preflight: {relative_source}") from error
         relative_source = source.path
         envelope = source_envelope(source)
+        write_context = WriteContext(None, envelope.audience, unrestricted=True)
+        prior_pages = _recompile_prior_pages(
+            previous_page_records,
+            source=relative_source,
+            context=write_context,
+        )
         safe_context = filing_context(
             worktree,
             source_text=source.text,
             capture_acl=envelope.audience,
             actor_groups=None,
         )
-        rendered_context = render_context(safe_context)
+        safe_context["recompile"] = {
+            "prior_pages": [
+                _recompile_prior_page_context(prior_pages[path])
+                for path in sorted(prior_pages)
+            ],
+        }
+        try:
+            rendered_context = render_context(safe_context)
+        except ValueError as error:
+            raise GateRefused("recompile prior-page context exceeds its safe limit") from error
         plan_run = deps.planner.plan(
             worktree=worktree,
             envelope=envelope,
@@ -346,12 +365,14 @@ def _recompile_derived(
             context=rendered_context,
         )
         model_requests += plan_run.model_requests
-        plan = plan_run.plan
+        plan, tombstones = _prepare_recompile_plan(plan_run.plan, prior_pages=prior_pages)
+        for path in tombstones:
+            tombstone_authorizations.setdefault(path, set()).add(relative_source)
         try:
             _apply_filing_plan(
                 worktree,
                 plan,
-                context=WriteContext(None, envelope.audience, unrestricted=True),
+                context=write_context,
                 envelope=envelope,
                 relative_source=relative_source,
                 readable_artifacts=(source.body,),
@@ -378,6 +399,11 @@ def _recompile_derived(
         ) as error:
             raise GateRefused(f"recompile rejected source {relative_source}") from error
     _restore_recompiled_page_identity(worktree, previous_pages)
+    authorized_page_removals = _gate_recompile_disappearance(
+        previous_page_records,
+        final_paths=_derived_paths(worktree),
+        tombstone_authorizations=tombstone_authorizations,
+    )
     final_violations = check(worktree)
     if final_violations:
         gate_violations += len(final_violations)
@@ -394,6 +420,7 @@ def _recompile_derived(
         # it; an operator must use the explicit entity lifecycle path to remove an orphan.
         "removed_entities": 0,
         "created_entities": len(after_entities - before_entities),
+        "authorized_page_removals": authorized_page_removals,
         "model_requests": model_requests,
         "link_health": {"violations": gate_violations, "clean": True},
         "idempotent": not entries,
@@ -415,6 +442,102 @@ def _derived_paths(root: str) -> set[str]:
         for folder in ("wiki/notes", "wiki/concepts")
         for path in Path(root, folder).glob("*.md")
     }
+
+
+def _recompile_prior_pages(previous_pages: dict, *, source: str, context: WriteContext) -> dict:
+    """Return every prior page backed by this source, or fail before exposing unsafe content."""
+    result = {}
+    for path, page in previous_pages.items():
+        if source not in page.sources:
+            continue
+        try:
+            allow_existing(context, page.acl)
+        except WriteRefused as error:
+            raise GateRefused(
+                "recompile prior page is outside its backing source audience"
+            ) from error
+        result[path] = page
+    return result
+
+
+def _recompile_prior_page_context(page) -> dict:
+    return {
+        "path": page.path,
+        "title": page.title,
+        "type": page.role,
+        "status": page.status,
+        "entities": list(page.entities),
+        "sources": list(page.sources),
+        "body": page.body,
+    }
+
+
+def _prepare_recompile_plan(plan: FilingPlan, *, prior_pages: dict) -> tuple[FilingPlan, frozenset[str]]:
+    """Require an explicit model disposition for every prior source-backed page."""
+    delete_paths = [
+        mutation.path or "" for mutation in plan.mutations if mutation.action == "delete"
+    ]
+    tombstones = frozenset(delete_paths)
+    if len(tombstones) != len(delete_paths):
+        raise GateRefused("recompile plan repeats a prior-page tombstone")
+    unknown = tombstones - set(prior_pages)
+    if unknown:
+        raise GateRefused("recompile plan tombstones a page not backed by this source")
+    retained = set()
+    try:
+        for mutation in plan.mutations:
+            if mutation.action == "create":
+                retained.add(page_path(mutation.role or "", mutation.title or ""))
+            elif mutation.action == "update":
+                retained.add(mutation.path or "")
+    except PageContractError as error:
+        raise GateRefused("recompile plan has an invalid page target") from error
+    if tombstones & retained:
+        raise GateRefused("recompile plan cannot tombstone and recreate the same page")
+    for path in tombstones:
+        try:
+            if contradictions.parse_all(prior_pages[path].body):
+                raise GateRefused(
+                    "recompile cannot tombstone a page with unresolved contradictions"
+                )
+        except contradictions.ContradictionContractError as error:
+            raise GateRefused("recompile prior-page contradiction data is invalid") from error
+    if set(prior_pages) - retained - tombstones:
+        raise GateRefused(
+            "recompile plan omitted prior derived knowledge without an explicit tombstone"
+        )
+    if not tombstones:
+        return plan, tombstones
+    return (
+        plan.model_copy(
+            update={
+                "mutations": tuple(
+                    mutation for mutation in plan.mutations if mutation.action != "delete"
+                )
+            }
+        ),
+        tombstones,
+    )
+
+
+def _gate_recompile_disappearance(
+    previous_pages: dict,
+    *,
+    final_paths: set[str],
+    tombstone_authorizations: dict[str, set[str]],
+) -> int:
+    """A vanished page requires an explicit tombstone from every backing source."""
+    removed = 0
+    for path, page in previous_pages.items():
+        if path in final_paths:
+            continue
+        backing_sources = set(page.sources)
+        if not backing_sources or tombstone_authorizations.get(path, set()) != backing_sources:
+            raise GateRefused(
+                "recompile cannot remove a page without every backing source's authorization"
+            )
+        removed += 1
+    return removed
 
 
 def _restore_recompiled_page_identity(root: str, previous_pages: dict[str, str]) -> None:

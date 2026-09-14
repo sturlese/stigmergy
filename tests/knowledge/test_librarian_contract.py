@@ -260,6 +260,16 @@ def test_librarian_preserves_related_pages_at_distinct_conceptual_levels():
     assert "never delete merely because pages overlap or because a new page is broader" in text
 
 
+def test_librarian_requires_explicit_disposition_for_every_prior_recompile_page():
+    text = " ".join(FROZEN.read_text().casefold().split())
+
+    assert "when `safe existing context` contains `recompile.prior_pages`" in text
+    assert "account for every exact prior path" in text
+    assert "a tombstone authorizes absence from the fresh candidate" in text
+    assert "never tombstone and recreate the same path" in text
+    assert "an empty mutation list is valid only when `recompile.prior_pages` is empty" in text
+
+
 def test_librarian_distinguishes_evidentiary_identities_from_incidental_examples():
     text = " ".join(FROZEN.read_text().casefold().split())
     assert "stated action, measurement, decision, report, or result" in text
