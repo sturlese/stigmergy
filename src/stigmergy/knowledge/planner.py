@@ -947,7 +947,9 @@ def _graph_compliance_prompt(
         "CONTEXT body and retain each prior source-attributed clause verbatim unless the readable source "
         "explicitly corrects it; make the smallest insertions needed to repair the listed violations. Put "
         "missing anchors in a cited paragraph or section assigned to that updated subject. Never repair an "
-        "update by importing a sibling subject's entities, examples, measurements, or detailed mechanism.\n\n"
+        "update by importing a sibling subject's entities, examples, measurements, or detailed mechanism. "
+        "For a misplaced-entity-evidence violation, remove the listed detailed evidence only from the "
+        "non-owner page and retain it on its authoritative owner.\n\n"
         f"GRAPH-SHAPE VIOLATIONS\n{fence(json.dumps(violations, ensure_ascii=False))}\n\n"
         "PREVIOUS DRAFT\n"
         f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
@@ -1194,9 +1196,7 @@ def graph_shape_violations(
         bodies[resolution_key(subject.title)] = body
         subject_bodies[subject.title] = body
         normalized_body = _normalized_lexical_text(body)
-        missing_terms = [
-            term for term in subject.required_terms if _normalized_lexical_text(term) not in normalized_body
-        ]
+        missing_terms = [term for term in subject.required_terms if not _required_term_present(normalized_body, term)]
         if missing_terms:
             violations.append(f"required-terms:{subject.title}: missing={sorted(missing_terms)!r}")
         if _has_required_term_inventory(body, subject.required_terms):
@@ -1251,6 +1251,34 @@ def graph_shape_violations(
             if smaller >= 50 and len(left_words & right_words) * 4 >= smaller * 3:
                 violations.append(f"overlapping-page-body:{left_title}:{right_title}")
 
+    owned_evidence = {
+        subject.title: {
+            (resolution_key(entity.name), _normalized_lexical_text(term))
+            for entity in subject.entities
+            for term in entity.evidence_terms
+        }
+        for subject in shape.subjects
+    }
+    for owner in shape.subjects:
+        for entity in owner.entities:
+            entity_key = resolution_key(entity.name)
+            evidence_terms = {term: _normalized_lexical_text(term) for term in entity.evidence_terms}
+            for other_title, other_body in subject_bodies.items():
+                if other_title == owner.title:
+                    continue
+                other_allowed = owned_evidence.get(other_title, set())
+                other_normalized = _normalized_lexical_text(other_body)
+                misplaced = sorted(
+                    term
+                    for term, normalized in evidence_terms.items()
+                    if (entity_key, normalized) not in other_allowed and normalized in other_normalized
+                )
+                if misplaced:
+                    violations.append(
+                        f"misplaced-entity-evidence:{other_title}: owner={owner.title} "
+                        f"entity={entity.name} terms={misplaced!r}"
+                    )
+
     seen_proposals = set()
     for proposal in plan.entities:
         key = resolution_key(proposal.name)
@@ -1287,6 +1315,14 @@ def _normalized_lexical_text(value: str) -> str:
     """Compare model-selected lexical anchors across harmless typography differences."""
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return " ".join(re.findall(r"\w+", normalized, flags=re.UNICODE))
+
+
+def _required_term_present(normalized_body: str, term: str) -> bool:
+    normalized = _normalized_lexical_text(term)
+    if normalized in normalized_body:
+        return True
+    tokens = normalized.split()
+    return bool(tokens and tokens[0] in {"a", "an", "the"} and " ".join(tokens[1:]) in normalized_body)
 
 
 def _has_required_term_inventory(body: str, required_terms: tuple[str, ...]) -> bool:

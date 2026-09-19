@@ -65,11 +65,7 @@ def _settings(*, max_turns=6):
 
 
 def _native_model(summary: str) -> FunctionModel:
-    return FunctionModel(
-        lambda _messages, _info: ModelResponse(
-            parts=[TextPart(json.dumps({"summary": summary}))]
-        )
-    )
+    return FunctionModel(lambda _messages, _info: ModelResponse(parts=[TextPart(json.dumps({"summary": summary}))]))
 
 
 def _filing_model(summary: str) -> FunctionModel:
@@ -98,11 +94,7 @@ def _filing_model(summary: str) -> FunctionModel:
             {"summary": summary},
         )
     )
-    return FunctionModel(
-        lambda _messages, _info: ModelResponse(
-            parts=[TextPart(json.dumps(next(responses)))]
-        )
-    )
+    return FunctionModel(lambda _messages, _info: ModelResponse(parts=[TextPart(json.dumps(next(responses)))]))
 
 
 def test_pydantic_planner_returns_a_typed_filing_plan_without_a_network_call(tmp_path):
@@ -255,12 +247,8 @@ def test_graph_topology_routes_identities_to_entity_enrichment(abstraction):
     with pytest.raises(ValueError, match="entity enrichment"):
         GraphSubject(
             title="Northstar Signal Lab" if abstraction == "organization" else "Mira Chen",
-            title_evidence=(
-                "Northstar Signal Lab" if abstraction == "organization" else "Mira Chen"
-            ),
-            name_variants=(
-                "Northstar Signal Lab" if abstraction == "organization" else "Mira Chen",
-            ),
+            title_evidence=("Northstar Signal Lab" if abstraction == "organization" else "Mira Chen"),
+            name_variants=("Northstar Signal Lab" if abstraction == "organization" else "Mira Chen",),
             role="note",
             abstraction=abstraction,
             abstraction_evidence="researcher at Northstar Signal Lab",
@@ -286,8 +274,8 @@ def test_graph_shape_gate_enforces_inventory_entities_and_reciprocal_links():
                 role="concept",
                 title="Harness Engineering",
                 body=(
-                        "# Harness Engineering\n\nThe six capabilities and extensions improve "
-                        "the [[Agent Harness]]. [[Santi]] (@santi) authored the explanation."
+                    "# Harness Engineering\n\nThe six capabilities and extensions improve "
+                    "the [[Agent Harness]]. [[Santi]] (@santi) authored the explanation."
                 ),
                 entities=("Santi",),
                 reason="Created the reusable practice.",
@@ -306,9 +294,7 @@ def test_graph_shape_gate_enforces_inventory_entities_and_reciprocal_links():
     incomplete = plan.model_copy(
         update={
             "mutations": (
-                plan.mutations[0].model_copy(
-                    update={"body": plan.mutations[0].body.replace(" and extensions", "")}
-                ),
+                plan.mutations[0].model_copy(update={"body": plan.mutations[0].body.replace(" and extensions", "")}),
                 plan.mutations[1],
             )
         }
@@ -345,9 +331,7 @@ def test_graph_shape_gate_rejects_term_dumps_and_duplicate_page_bodies():
     )
     plan = FilingPlan(
         summary="Duplicated a lexical inventory.",
-        entities=(
-            EntityProposal(name="Santi", entity_type="person", aliases=("@santi",)),
-        ),
+        entities=(EntityProposal(name="Santi", entity_type="person", aliases=("@santi",)),),
         mutations=(
             PageMutation(
                 action="create",
@@ -374,6 +358,95 @@ def test_graph_shape_gate_rejects_term_dumps_and_duplicate_page_bodies():
     assert "duplicate-page-body:Harness Engineering:Agent Harness" in violations
 
 
+def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
+    subject = (
+        _graph_shape()
+        .subjects[1]
+        .model_copy(update={"required_terms": ("a working environment or isolated workspace contains execution",)})
+    )
+    shape = GraphShape(
+        summary="Preserve the system capability.",
+        subjects=(subject,),
+        existing_relations=(),
+    )
+    plan = FilingPlan(
+        summary="Created the system page.",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Agent Harness",
+                body=("# Agent Harness\n\nA **working environment** or isolated workspace contains execution."),
+                entities=(),
+                reason="Created the reusable system.",
+            ),
+        ),
+    )
+
+    assert planner.graph_shape_violations(shape, plan) == ()
+
+
+def test_graph_shape_gate_rejects_entity_evidence_copied_to_a_sibling_page():
+    harness, agent_harness = _graph_shape().subjects
+    openai = GraphEntity(
+        name="OpenAI",
+        entity_type="organization",
+        aliases=(),
+        relationship_kind="produced_evidence",
+        relationship="Built one million lines and 1,500 pull requests through the practice.",
+        evidence_terms=("one million lines", "1,500 pull requests"),
+    )
+    shape = GraphShape(
+        summary="Keep attributed evidence on its primary page.",
+        subjects=(
+            harness.model_copy(
+                update={
+                    "required_terms": harness.required_terms + openai.evidence_terms,
+                    "entities": harness.entities + (openai,),
+                }
+            ),
+            agent_harness,
+        ),
+        existing_relations=(),
+    )
+    plan = FilingPlan(
+        summary="Copied practice evidence onto the system page.",
+        entities=(
+            EntityProposal(name="Santi", entity_type="person", aliases=("@santi",)),
+            EntityProposal(name="OpenAI", entity_type="organization"),
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Harness Engineering",
+                body=(
+                    "# Harness Engineering\n\nThe six capabilities and extensions improve the "
+                    "system. Santi (@santi) authored the explanation. OpenAI built one million "
+                    "lines and 1,500 pull requests."
+                ),
+                entities=("Santi", "OpenAI"),
+                reason="Created the practice.",
+            ),
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Agent Harness",
+                body=("# Agent Harness\n\nThe runtime includes one million lines and 1,500 pull requests."),
+                entities=(),
+                reason="Created the system.",
+            ),
+        ),
+    )
+
+    violations = planner.graph_shape_violations(shape, plan)
+
+    assert (
+        "misplaced-entity-evidence:Agent Harness: owner=Harness Engineering "
+        "entity=OpenAI terms=['1,500 pull requests', 'one million lines']"
+    ) in violations
+
+
 def test_graph_enrichment_allows_shared_evidence_across_distinct_abstraction_levels():
     harness, agent_harness = _graph_shape().subjects
     shared_terms = (
@@ -388,19 +461,14 @@ def test_graph_enrichment_allows_shared_evidence_across_distinct_abstraction_lev
         summary="Keep practice evidence separate from system evidence.",
         subjects=(
             harness.model_copy(update={"required_terms": shared_terms + ("improvement",)}),
-            agent_harness.model_copy(
-                update={"required_terms": shared_terms + ("runtime", "interfaces")}
-            ),
+            agent_harness.model_copy(update={"required_terms": shared_terms + ("runtime", "interfaces")}),
         ),
         existing_relations=(),
     )
     topology = GraphTopology.model_validate(
         {
             "summary": shape.summary,
-            "subjects": [
-                subject.model_dump(exclude={"required_terms", "entities"})
-                for subject in shape.subjects
-            ],
+            "subjects": [subject.model_dump(exclude={"required_terms", "entities"}) for subject in shape.subjects],
             "existing_relations": [],
         }
     )
@@ -436,10 +504,7 @@ def test_graph_enrichment_corrects_entity_evidence_missing_from_page_inventory()
     topology = GraphTopology.model_validate(
         {
             "summary": shape.summary,
-            "subjects": [
-                subject.model_dump(exclude={"required_terms", "entities"})
-                for subject in shape.subjects
-            ],
+            "subjects": [subject.model_dump(exclude={"required_terms", "entities"}) for subject in shape.subjects],
             "existing_relations": [],
         }
     )
@@ -457,13 +522,8 @@ def test_graph_enrichment_rejects_terms_not_copied_contiguously_from_source():
     topology = GraphTopology.model_validate(
         {
             "summary": shape.summary,
-            "subjects": [
-                subject.model_dump(exclude={"required_terms", "entities"})
-                for subject in shape.subjects
-            ],
-            "existing_relations": [
-                relation.model_dump(mode="json") for relation in shape.existing_relations
-            ],
+            "subjects": [subject.model_dump(exclude={"required_terms", "entities"}) for subject in shape.subjects],
+            "existing_relations": [relation.model_dump(mode="json") for relation in shape.existing_relations],
         }
     )
 
@@ -474,8 +534,7 @@ def test_graph_enrichment_rejects_terms_not_copied_contiguously_from_source():
     )
 
     assert violations == (
-        "graph-enrichment required terms are not contiguous source spans: "
-        "Harness Engineering; missing=['extensions']",
+        "graph-enrichment required terms are not contiguous source spans: Harness Engineering; missing=['extensions']",
     )
 
 
@@ -484,13 +543,8 @@ def test_graph_enrichment_projection_restores_topology_and_preserves_valid_evide
     topology = GraphTopology.model_validate(
         {
             "summary": shape.summary,
-            "subjects": [
-                subject.model_dump(exclude={"required_terms", "entities"})
-                for subject in shape.subjects
-            ],
-            "existing_relations": [
-                relation.model_dump(mode="json") for relation in shape.existing_relations
-            ],
+            "subjects": [subject.model_dump(exclude={"required_terms", "entities"}) for subject in shape.subjects],
+            "existing_relations": [relation.model_dump(mode="json") for relation in shape.existing_relations],
         }
     )
     harness, agent_harness = shape.subjects
@@ -512,16 +566,11 @@ def test_graph_enrichment_projection_restores_topology_and_preserves_valid_evide
                 }
             ),
             agent_harness,
-            agent_harness.model_copy(
-                update={"required_terms": ("not copied",), "entities": (evidence,)}
-            ),
+            agent_harness.model_copy(update={"required_terms": ("not copied",), "entities": (evidence,)}),
         ),
         existing_relations=(),
     )
-    source_text = (
-        "Harness Engineering defines six capabilities. The Agent Harness runtime improved from "
-        "rank 30."
-    )
+    source_text = "Harness Engineering defines six capabilities. The Agent Harness runtime improved from rank 30."
 
     projected = planner._project_graph_enrichment(
         topology,
@@ -538,11 +587,14 @@ def test_graph_enrichment_projection_restores_topology_and_preserves_valid_evide
     assert projected.subjects[1].required_terms == ("runtime", "rank 30")
     assert [entity.name for entity in projected.subjects[1].entities] == ["LangChain"]
     assert projected.existing_relations == topology.existing_relations
-    assert planner.graph_topology_violations(
-        topology,
-        projected,
-        source_text=source_text,
-    ) == ()
+    assert (
+        planner.graph_topology_violations(
+            topology,
+            projected,
+            source_text=source_text,
+        )
+        == ()
+    )
 
 
 def test_graph_shape_gate_requires_local_citations_for_each_factual_block():
@@ -557,9 +609,7 @@ def test_graph_shape_gate_requires_local_citations_for_each_factual_block():
         "- [[Agent Harness]] is the system this practice improves.\n"
     )
 
-    assert planner._uncited_factual_blocks(body, source_path) == (
-        "An uncited source-grounded definition.",
-    )
+    assert planner._uncited_factual_blocks(body, source_path) == ("An uncited source-grounded definition.",)
 
 
 def test_graph_shape_gate_rejects_a_duplicated_entity_name_prefix():
@@ -571,8 +621,10 @@ def test_graph_shape_gate_rejects_a_duplicated_entity_name_prefix():
                 action="create",
                 role="concept",
                 title="Harness Engineering",
-                body=("# Harness Engineering\n\nThe six capabilities and extensions improve "
-                      "the [[Agent Harness]]. Santi (@santi) Santi authored the explanation."),
+                body=(
+                    "# Harness Engineering\n\nThe six capabilities and extensions improve "
+                    "the [[Agent Harness]]. Santi (@santi) Santi authored the explanation."
+                ),
                 entities=("Santi",),
                 reason="Created the reusable practice.",
             ),
@@ -606,11 +658,14 @@ def test_graph_compilation_prompt_allows_concise_shared_context_for_cold_readers
 def test_update_graph_gate_accepts_a_preserved_distinct_local_source_citation():
     prior_source = "sources/2026/07/prior.md"
 
-    assert planner._uncited_factual_blocks(
-        f"Prior supported context. (Source: `{prior_source}`)",
-        "sources/2026/08/current.md",
-        allow_any_source=True,
-    ) == ()
+    assert (
+        planner._uncited_factual_blocks(
+            f"Prior supported context. (Source: `{prior_source}`)",
+            "sources/2026/08/current.md",
+            allow_any_source=True,
+        )
+        == ()
+    )
 
 
 def test_cited_list_supports_its_lead_in_but_not_an_uncited_sibling_item():
@@ -668,11 +723,7 @@ def test_native_output_allows_one_schema_repair_within_the_total_request_budget(
 
     def respond(_messages, agent_info):
         calls.append(agent_info.output_tools)
-        text = (
-            "not structured output"
-            if len(calls) == 1
-            else '{"summary":"Filed after the schema repair"}'
-        )
+        text = "not structured output" if len(calls) == 1 else '{"summary":"Filed after the schema repair"}'
         return ModelResponse(parts=[TextPart(text)])
 
     subject = planner.PydanticPlanner(
@@ -680,11 +731,13 @@ def test_native_output_allows_one_schema_repair_within_the_total_request_budget(
         model_factory=lambda: FunctionModel(respond),
     )
 
-    result = asyncio.run(subject._run_structured(
-        output_type=FilingPlan,
-        instructions="File supported conclusions only.",
-        prompt="A supported conclusion.",
-    ))
+    result = asyncio.run(
+        subject._run_structured(
+            output_type=FilingPlan,
+            instructions="File supported conclusions only.",
+            prompt="A supported conclusion.",
+        )
+    )
 
     assert calls == [[], []]
     assert result.plan.summary == "Filed after the schema repair"
@@ -704,11 +757,13 @@ def test_native_output_never_exceeds_the_two_request_budget_after_schema_repairs
     )
 
     with pytest.raises(UnexpectedModelBehavior, match="maximum output retries"):
-        asyncio.run(subject._run_structured(
-            output_type=FilingPlan,
-            instructions="File supported conclusions only.",
-            prompt="A supported conclusion.",
-        ))
+        asyncio.run(
+            subject._run_structured(
+                output_type=FilingPlan,
+                instructions="File supported conclusions only.",
+                prompt="A supported conclusion.",
+            )
+        )
 
     assert calls == [[], []]
 
@@ -809,9 +864,7 @@ def test_revision_reuses_the_exact_safe_context_and_returns_a_filing_plan(tmp_pa
     assert "DRAFT FILING PLAN" in captured["prompt"]
     assert json.dumps(draft.model_dump(mode="json"), sort_keys=True) in captured["prompt"]
     assert "collapsed abstraction levels" in captured["prompt"]
-    assert captured["prompt"].rfind("FINAL REVIEW CHECKLIST") > captured["prompt"].find(
-        "DRAFT FILING PLAN"
-    )
+    assert captured["prompt"].rfind("FINAL REVIEW CHECKLIST") > captured["prompt"].find("DRAFT FILING PLAN")
     assert "every durable primary subject" in captured["prompt"]
     assert "practice remains distinct from the system or artifact it designs" in captured["prompt"]
     assert "framework members" in captured["prompt"]
@@ -834,6 +887,8 @@ def test_planner_rejects_a_prompt_over_its_byte_budget(monkeypatch):
             source_text="long source text",
             context="",
         )
+
+
 def test_graph_phase_instruction_does_not_conflict_with_requested_schema():
     assert "requested structured graph" in planner._GRAPH_SHAPE_INSTRUCTIONS
     assert "Return only the requested GraphShape" not in planner._GRAPH_SHAPE_INSTRUCTIONS
