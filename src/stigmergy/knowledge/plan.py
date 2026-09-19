@@ -208,11 +208,12 @@ class GraphSubject(GraphTopologySubject):
             max_length=30,
             description=(
                 "Verbatim loss-prevention anchors that the compiled page must preserve naturally, not "
-                "an outline or output order. Include every explicitly enumerated framework member, "
-                "named extension, and distinguishing result material to the subject. The same anchor "
-                "may support related abstraction levels when each page needs it for a cold reader. For "
-                "every produced_evidence entity, include the source spans that distinguish what that "
-                "identity demonstrated."
+                "an outline or output order. Across all subjects, the inventories must preserve every "
+                "explicitly enumerated framework member, named extension, and distinguishing result. "
+                "Give each anchor one primary owner by aboutness; repeat it on a sibling only when the "
+                "exact source span independently proves a distinct fact about both subjects. For every "
+                "produced_evidence entity assigned to this subject, include the source spans that "
+                "distinguish what that identity demonstrated."
             ),
         ),
     ]
@@ -221,8 +222,9 @@ class GraphSubject(GraphTopologySubject):
         Field(
             max_length=20,
             description=(
-                "Every source author and named identity credited with material evidence assigned "
-                "to this subject; exclude identities that are merely mentioned."
+                "Every source author and named identity with a material page-specific relationship "
+                "assigned to this subject; exclude identities that are merely mentioned or whose "
+                "evidence is owned by a sibling page."
             ),
         ),
     ]

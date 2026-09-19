@@ -599,7 +599,8 @@ def test_graph_compilation_prompt_allows_concise_shared_context_for_cold_readers
         graph_shape=_graph_shape(),
     )
 
-    assert "may repeat concise source-supported context needed for a cold reader" in prompt
+    assert "may paraphrase concise source-supported context needed for a cold reader" in prompt
+    assert "detailed mechanisms, inventories, entities, and examples belong" in prompt
 
 
 def test_update_graph_gate_accepts_a_preserved_distinct_local_source_citation():

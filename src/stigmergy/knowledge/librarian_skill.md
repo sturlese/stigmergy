@@ -142,9 +142,11 @@ claim, retain the prior evidence as explicitly superseded or conflicting context
 erasing its attribution.
 
 When related pages use the same source, each page must still stand on its own. They may repeat concise
-source-supported context needed for a cold reader, while framing detailed mechanisms, examples, and
-measurements for the abstraction that page explains. Evidence ownership must not starve one page into a
-generic cross-reference, and shared context must not become duplicated prose.
+source-supported context needed for a cold reader, but give each detailed mechanism, inventory, entity
+relationship, example, and measurement one primary page by aboutness. Prefer a concise paraphrase and an
+explained link on its sibling. Repeat detailed evidence only when the source independently establishes a
+distinct fact about both subjects. Make each page rich through its own definition, mechanism, significance,
+and evidence rather than copying its sibling or reducing it to a generic cross-reference.
 
 State material evidence limits. Mark reported examples as source-reported when they are not independently
 verified. If a source names an evaluation but omits scores, thresholds, or procedure detail, say so rather
@@ -194,6 +196,9 @@ or bullet on that page. Cite each identity relationship separately; a shared cit
 not anchor individual relationships. Remove an identity from that mutation if this cannot be done.
 Never copy an anchor list mechanically across related pages. A product named only as an example of a
 category is not an entity unless the source also attributes a material role, action, or result to it.
+Give an evidence-producing identity one primary page by aboutness. Anchor it on a sibling only when the
+source establishes a separate material relationship or result about that sibling; contextual reuse of the
+same example does not justify duplicating the entity anchor.
 For each mutation, its `entities` list must be exactly the identities with an individually cited
 relationship on that page, regardless of identities anchored on sibling mutations. Never use entity
 names as wikilinks.
@@ -220,9 +225,9 @@ Before returning the plan, verify:
    connections survive.
 4. Every changed claim is locally cited and strictly entailed by source or visible context.
 5. Every material author or evidence-producing actor is considered, and each selected entity has a
-   page-specific, individually cited relationship; the mutation's entity list contains no other name,
-   and no generic term or provenance token became an entity. Confirm no material author or actor was
-   dropped, and no provenance token became a page or entity.
+page-specific, individually cited relationship; the mutation's entity list contains no other name,
+and no generic term or provenance token became an entity. Confirm no material author or actor was
+dropped, and no provenance token became a page or entity.
 6. Every wikilink resolves to a visible normal page or one created by this plan; pages independently
    mutated by the plan have reciprocal links, context-only links do not force unrelated rewrites,
    conflicts are explicit, and all action fields are valid.
