@@ -141,13 +141,12 @@ Silence in the latest capture never authorizes forgetting prior knowledge. If ne
 claim, retain the prior evidence as explicitly superseded or conflicting context rather than silently
 erasing its attribution.
 
-Before writing an update, use two private passes. First copy every existing source-attributed claim into
-the draft before reorganising it. Then compare the final body with the prior page one clause at a time,
-marking each claim preserved, explicitly corrected, or conflicting. Silence and paraphrase are not
-correction: every preserved claim must retain its distinctive nouns, verbs, formulations, and original
-citation. A broader synonym does not preserve a narrower mechanism or memorable formulation; when a
-concise rewrite cannot retain one, keep the original sentence. Never satisfy this rule with a generic
-summary or an orphaned citation, and never output the ledger.
+Treat updates as conservative edits. Begin from the exact visible existing body. Unless new evidence
+explicitly corrects or conflicts with a source-attributed sentence or clause, retain that clause verbatim
+and add or reorganise material around it; an equivalent paraphrase is still a loss. Build a private clause
+ledger and compare the final body with the prior page before returning. If a concise rewrite cannot retain
+a distinctive formulation, keep the original sentence. Never satisfy this rule with a generic summary or
+an orphaned citation, and never output the ledger.
 
 When related pages use the same source, each page must still stand on its own. They may repeat concise
 source-supported context needed for a cold reader, but give each detailed mechanism, inventory, entity
@@ -172,7 +171,9 @@ A functional relationship is material: one subject may design, operate, control,
 audit, measure, consume, or produce decisions or outputs of another even when their mechanisms differ.
 Do not classify distinct abstraction levels as unrelated when that functional connection helps a cold reader.
 Every connection explanation must state a positive, useful relationship; never link a page while calling
-the subjects unrelated.
+the subjects unrelated. Compatible evidenced roles are enough without an explicit cross-mention: an
+evaluation or audit method relates to a visible system whose decisions or outputs it can evaluate. Label a
+role-derived connection as graph interpretation rather than source fact.
 
 ## Select and anchor entities
 
