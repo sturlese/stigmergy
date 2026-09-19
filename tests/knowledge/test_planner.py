@@ -370,7 +370,7 @@ def test_graph_shape_gate_rejects_term_dumps_and_duplicate_page_bodies():
     assert "duplicate-page-body:Harness Engineering:Agent Harness" in violations
 
 
-def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
+def test_graph_shape_gate_accepts_natural_paraphrases_without_losing_substantive_terms():
     subject = (
         _graph_shape()
         .subjects[1]
@@ -382,6 +382,7 @@ def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
                     "Skills MCP subagents and long term memory are extensions",
                     "loop repeats decide act observe and decide again",
                     "the Agent Harness turns those choices into work",
+                    "instructions tools feedback and durable memory",
                 )
             }
         )
@@ -403,7 +404,8 @@ def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
                     "contains execution. The model alone only takes text as input. Extensions such "
                     "as Skills, MCP, subagents, and long-term memory are built on the harness. The "
                     "loop repeats decide, act, observe, then decide. The system turns model choices "
-                    "into concrete work."
+                    "into concrete work. Tools and feedback execute actions. The system also supplies "
+                    "instructions and durable memory."
                 ),
                 entities=(),
                 reason="Created the reusable system.",

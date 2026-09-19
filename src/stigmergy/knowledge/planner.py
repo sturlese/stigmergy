@@ -1401,11 +1401,10 @@ def graph_shape_violations(
             continue
         bodies[resolution_key(subject.title)] = body
         subject_bodies[subject.title] = body
-        normalized_body = _normalized_lexical_text(body)
         missing_terms = [
             term
             for term in subject.required_terms
-            if not _required_term_present(normalized_body, term, subject_title=subject.title)
+            if not _required_term_present(body, term, subject_title=subject.title)
         ]
         if missing_terms:
             violations.append(f"required-terms:{subject.title}: missing={sorted(missing_terms)!r}")
@@ -1526,7 +1525,7 @@ def graph_shape_violations(
         for limit in coverage_audit.evidence_limits:
             body = bodies_by_key.get(resolution_key(limit.subject), "")
             if not _required_term_present(
-                _normalized_lexical_text(body),
+                body,
                 limit.statement,
                 subject_title=limit.subject,
             ):
@@ -1563,7 +1562,8 @@ def _structural_source_lists(source_text: str) -> tuple[tuple[str, tuple[str, ..
     return tuple(lists)
 
 
-def _required_term_present(normalized_body: str, term: str, *, subject_title: str | None = None) -> bool:
+def _required_term_present(body: str, term: str, *, subject_title: str | None = None) -> bool:
+    normalized_body = _normalized_lexical_text(body)
     normalized = _normalized_lexical_text(term)
     if normalized in normalized_body:
         return True
@@ -1608,9 +1608,9 @@ def _required_term_present(normalized_body: str, term: str, *, subject_title: st
         }
         if subject_title:
             required.difference_update(_normalized_lexical_text(subject_title).split())
-        window_size = len(tokens) * 3
-        for start in range(len(body_tokens)):
-            if len(required) >= 3 and required <= set(body_tokens[start : start + window_size]):
+        paragraphs = (_normalized_lexical_text(paragraph) for paragraph in re.split(r"\n\s*\n", body))
+        for paragraph in paragraphs:
+            if len(required) >= 3 and required <= set(paragraph.split()):
                 return True
     return False
 
