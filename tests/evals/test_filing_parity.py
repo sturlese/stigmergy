@@ -389,7 +389,7 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
             else active_plan
         )
     semantic = planner_eval.score(effective, case, source_text=source_text)
-    graph_shape_score = planner_eval.score_graph_shape(graph_shape, case)
+    graph_shape_score = planner_eval.score_graph_shape(graph_shape, case, effective)
     semantic["graph_shape"] = graph_shape_score
     semantic["passed"] = bool(semantic["passed"] and graph_shape_score["passed"])
     raw_gates = {

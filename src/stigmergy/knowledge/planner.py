@@ -929,8 +929,13 @@ def _graph_editorial_review_prompt(
         "concise reciprocal link for sibling context. Do not duplicate a generic page under two titles. "
         "Integrate required terms naturally into explanatory "
         "sentences and evidence. Reject comma-separated term dumps, compliance inventories, thin labels, "
-        "metadata restatements, and paragraphs whose only purpose is to satisfy lexical checks. Preserve every "
-        "supported enumerated member, extension, material result, exact entity relationship, alias, reciprocal "
+        "metadata restatements, and paragraphs whose only purpose is to satisfy lexical checks. Build a private "
+        "coverage table directly from the readable source before answering: include one row for every numbered, "
+        "bulleted, colon-labelled, or count-introduced member, assign it to exactly one page by aboutness unless "
+        "the source independently makes it material to more than one, and compare it with the compiled draft. "
+        "Repair every silently omitted member and never output the table. Copy restored evidence from the source "
+        "character-for-character, including spelling and hyphens. Preserve every supported enumerated member, "
+        "extension, material result, exact entity relationship, alias, reciprocal "
         "page link, and local source attribution. Every factual prose paragraph and every individual numbered "
         "or bulleted list item must contain its exact local source attribution; never use one shared citation "
         "for a whole list. Cite a factual list-introduction sentence separately even when every item below it "
@@ -942,7 +947,9 @@ def _graph_editorial_review_prompt(
         "exact local source attribution must occur inside each such paragraph or item; a citation elsewhere "
         "never counts. Fix every omission in this response rather than leaving it for a later repair.\n\n"
         "FALLIBLE COMPILED DRAFT\n"
-        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
+        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
+        "READABLE SOURCE TO AUDIT AGAIN\n"
+        f"{fence(source_text)}"
     )
     _guard_prompt(prompt)
     return prompt

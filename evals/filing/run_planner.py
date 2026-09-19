@@ -223,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             recorded_repair_plan = None
         scored_plan = effective_plan(evaluation, plan_for_score) if gates["passed"] else plan_for_score
         semantic = score(scored_plan, case, source_text=source_text)
-        graph_shape_score = score_graph_shape(run.graph_shape, case)
+        graph_shape_score = score_graph_shape(run.graph_shape, case, scored_plan)
         semantic["graph_shape"] = graph_shape_score
         semantic["passed"] = bool(semantic["passed"] and graph_shape_score["passed"])
         planning_model_requests = int(run.model_requests)

@@ -9,6 +9,7 @@ from evals.filing import worktree as eval_worktree
 from stigmergy.knowledge.plan import (
     EntityProposal,
     FilingPlan,
+    GraphShape,
     PageMutation,
     RepairMutation,
     RepairPlan,
@@ -306,6 +307,51 @@ def test_harness_score_accepts_unicode_dash_variants_in_semantic_requirements():
 
     assert result["bodies"]["missing_required_any"] == []
     assert result["passed"] is True
+
+
+def test_graph_shape_score_accepts_terms_recovered_by_editorial_review():
+    case = {
+        "graph_shape": {
+            "required_subjects": [],
+            "required_terms": ["long-term memory"],
+        }
+    }
+    shape = GraphShape(summary="No inventory term", subjects=(), existing_relations=())
+    plan = FilingPlan(
+        summary="Editorial recovery",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Agent Harness",
+                body="Long‑term memory extends the harness.",
+                entities=(),
+                reason="The source explains the extension.",
+            ),
+        ),
+    )
+
+    result = planner_eval.score_graph_shape(shape, case, plan)
+
+    assert result["recovered_required_terms"] == ["long-term memory"]
+    assert result["missing_required_terms"] == []
+    assert result["passed"] is True
+
+
+def test_graph_shape_score_rejects_terms_missing_from_inventory_and_published_plan():
+    case = {
+        "graph_shape": {
+            "required_subjects": [],
+            "required_terms": ["long-term memory"],
+        }
+    }
+    shape = GraphShape(summary="No inventory term", subjects=(), existing_relations=())
+
+    result = planner_eval.score_graph_shape(shape, case, FilingPlan(summary="No recovery"))
+
+    assert result["recovered_required_terms"] == []
+    assert result["missing_required_terms"] == ["long-term memory"]
+    assert result["passed"] is False
 
 
 def test_harness_score_rejects_entity_name_wikilinks_without_normal_pages():

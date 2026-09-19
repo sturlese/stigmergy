@@ -107,7 +107,11 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
     }
 
 
-def score_graph_shape(shape: GraphShape | None, case: dict) -> dict:
+def score_graph_shape(
+    shape: GraphShape | None,
+    case: dict,
+    plan: FilingPlan | None = None,
+) -> dict:
     """Score the agent-authored semantic topology separately from compiled mutations."""
     expectation = case.get("graph_shape")
     if not expectation:
@@ -151,15 +155,22 @@ def score_graph_shape(shape: GraphShape | None, case: dict) -> dict:
     ]
     required_terms = tuple(expectation.get("required_terms", ()))
     actual_terms = {
-        resolution_key(term)
+        _normalized_text(term)
         for subject in shape.subjects
         for term in subject.required_terms
     }
-    missing_terms = [
+    shape_missing_terms = [
         term
         for term in required_terms
-        if not any(resolution_key(term) in actual_term for actual_term in actual_terms)
+        if not any(_normalized_text(term) in actual_term for actual_term in actual_terms)
     ]
+    published_text = _normalized_text(
+        "\n".join(mutation.body or "" for mutation in (() if plan is None else plan.mutations))
+    )
+    recovered_terms = [
+        term for term in shape_missing_terms if _normalized_text(term) in published_text
+    ]
+    missing_terms = [term for term in shape_missing_terms if term not in recovered_terms]
     return {
         "recorded": True,
         "required": sorted(required),
@@ -167,6 +178,7 @@ def score_graph_shape(shape: GraphShape | None, case: dict) -> dict:
         "missing": sorted(missing),
         "unexpected": sorted(unexpected),
         "role_mismatches": role_mismatches,
+        "recovered_required_terms": recovered_terms,
         "missing_required_terms": missing_terms,
         "passed": not missing and not unexpected and not role_mismatches and not missing_terms,
     }

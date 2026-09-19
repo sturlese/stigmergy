@@ -812,7 +812,7 @@ def _verify_case_payload(
     if run_id is not None:
         replayed_effective[(implementation, run_id, case_id)] = replayed_effective_payload
     semantic = score(replayed_effective_plan, case, source_text=source_text)
-    graph_shape_score = score_graph_shape(recorded_shape, case)
+    graph_shape_score = score_graph_shape(recorded_shape, case, replayed_effective_plan)
     semantic["graph_shape"] = graph_shape_score
     semantic["passed"] = bool(semantic["passed"] and graph_shape_score["passed"])
     expected_raw_gates = {
