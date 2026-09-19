@@ -380,7 +380,7 @@ def _recompile_derived(
         planning_model_requests += planning_requests
         model_requests += planning_requests
         plan = plan_run.plan
-        if requires_semantic_revision(
+        if not plan_run.semantic_reviewed and requires_semantic_revision(
             plan,
             safe_context,
             authorized_existing_paths=authorized_existing_paths,
@@ -672,7 +672,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         planning_model_requests = int(plan_run.model_requests)
         semantic_revision_model_requests = 0
         repair_model_requests = 0
-        semantic_revision_required = requires_semantic_revision(
+        semantic_revision_required = not plan_run.semantic_reviewed and requires_semantic_revision(
             plan_run.plan,
             safe_context,
             authorized_existing_paths=authorized_existing_paths,
@@ -832,6 +832,11 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             "wiki_changes": wiki_changes,
             "model_requests": model_requests,
             "planning_model_requests": planning_model_requests,
+            "editorial_semantic_reviewed": plan_run.semantic_reviewed,
+            "editorial_intent_model_requests": plan_run.editorial_intent_model_requests,
+            "editorial_compilation_model_requests": plan_run.editorial_compilation_model_requests,
+            "editorial_compliance_model_requests": plan_run.editorial_compliance_model_requests,
+            "schema_retry_count": plan_run.schema_retry_count,
             "semantic_revision_required": semantic_revision_required,
             "semantic_revision_attempted": semantic_revision_attempted,
             "semantic_revision_applied": semantic_revision_applied,

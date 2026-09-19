@@ -11,7 +11,7 @@ from pydantic_ai.models.function import FunctionModel
 
 from stigmergy.capture import schema
 from stigmergy.knowledge import planner
-from stigmergy.knowledge.plan import FilingPlan, RepairMutation, RepairPlan
+from stigmergy.knowledge.plan import EditorialIntent, FilingPlan, RepairMutation, RepairPlan
 
 
 def _envelope() -> schema.CaptureEnvelope:
@@ -60,8 +60,24 @@ def _native_model(summary: str) -> FunctionModel:
     )
 
 
+def _planning_model(summary: str) -> FunctionModel:
+    calls = 0
+
+    def respond(_messages, _info):
+        nonlocal calls
+        calls += 1
+        payload = (
+            {"summary": "No durable graph mutations", "subjects": [], "entities": []}
+            if calls == 1
+            else {"summary": summary}
+        )
+        return ModelResponse(parts=[TextPart(json.dumps(payload))])
+
+    return FunctionModel(respond)
+
+
 def test_pydantic_planner_returns_a_typed_filing_plan_without_a_network_call(tmp_path):
-    model = _native_model("Filed the supported decision")
+    model = _planning_model("Filed the supported decision")
     subject = planner.PydanticPlanner(_settings(), model_factory=lambda: model)
 
     result = subject.plan(
@@ -74,7 +90,10 @@ def test_pydantic_planner_returns_a_typed_filing_plan_without_a_network_call(tmp
 
     assert result.plan.summary == "Filed the supported decision"
     assert result.plan.mutations == ()
-    assert result.model_requests == 1
+    assert result.model_requests == 2
+    assert result.semantic_reviewed is True
+    assert result.editorial_intent_model_requests == 1
+    assert result.editorial_compilation_model_requests == 1
 
 
 def test_pydantic_planner_runs_one_native_output_path(tmp_path, monkeypatch):
@@ -84,14 +103,22 @@ def test_pydantic_planner_runs_one_native_output_path(tmp_path, monkeypatch):
     )
     calls = []
 
-    async def run_filing(*, source_text, **_kwargs):
+    async def run_intent(*, source_text, **_kwargs):
         calls.append(source_text)
         assert "PO-EL27-1847" in source_text
         return planner.PlanRun(
-            plan=FilingPlan(summary="Filed the scanned purchase order"),
+            plan=EditorialIntent(summary="Preserve the purchase order decision"),
             model_requests=1,
         )
 
+    async def run_filing(*, source_text, **_kwargs):
+        calls.append(source_text)
+        return planner.PlanRun(
+            plan=FilingPlan(summary="Filed the scanned purchase order"),
+            model_requests=2,
+        )
+
+    monkeypatch.setattr(subject, "_run_intent", run_intent, raising=False)
     monkeypatch.setattr(subject, "_run_filing", run_filing, raising=False)
 
     result = subject.plan(
@@ -102,7 +129,10 @@ def test_pydantic_planner_runs_one_native_output_path(tmp_path, monkeypatch):
         context="",
     )
 
-    assert calls == ["## Page 1\n\nPURCHASE ORDER PO-EL27-1847"]
+    assert calls == [
+        "## Page 1\n\nPURCHASE ORDER PO-EL27-1847",
+        "## Page 1\n\nPURCHASE ORDER PO-EL27-1847",
+    ]
     assert isinstance(result.plan, FilingPlan)
     assert result.plan.summary == "Filed the scanned purchase order"
 

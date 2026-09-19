@@ -110,6 +110,89 @@ class EntityProposal(BaseModel):
         return self
 
 
+class EditorialSubject(BaseModel):
+    """One model-decided subject that the compiled filing plan must preserve."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: Literal["create", "update", "delete"]
+    role: Literal["note", "concept"] | None
+    path: Annotated[str, Field(min_length=1, max_length=500)] | None
+    title: Annotated[str, Field(min_length=1, max_length=300)]
+    abstraction: Annotated[str, Field(min_length=1, max_length=500)]
+    required_terms: Annotated[tuple[str, ...], Field(max_length=40)]
+    entities: Annotated[tuple[EntityName, ...], Field(max_length=20)]
+    related_pages: Annotated[tuple[str, ...], Field(max_length=20)]
+    reason: Annotated[str, Field(min_length=1, max_length=1000)]
+
+    @model_validator(mode="after")
+    def valid_action_shape(self):
+        if self.action == "create" and (self.role is None or self.path is not None):
+            raise ValueError("editorial create requires role and forbids path")
+        if self.action in {"update", "delete"} and not self.path:
+            raise ValueError("editorial update and delete require an existing path")
+        if self.action != "create" and self.role is not None:
+            raise ValueError("only editorial create accepts a role")
+        if self.action == "delete" and (self.required_terms or self.entities or self.related_pages):
+            raise ValueError("editorial delete cannot require body content")
+        if any(not value.strip() for value in (*self.required_terms, *self.related_pages)):
+            raise ValueError("editorial terms and related pages cannot be blank")
+        return self
+
+
+class EditorialIntent(BaseModel):
+    """Agent-authored semantic contract for one source before page drafting begins."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    summary: Annotated[str, Field(min_length=1, max_length=1000)]
+    subjects: Annotated[tuple[EditorialSubject, ...], Field(max_length=12)] = ()
+    entities: Annotated[tuple[EntityProposal, ...], Field(max_length=20)] = ()
+
+    @model_validator(mode="after")
+    def coherent_graph(self):
+        subject_keys = [resolution_key(subject.title) for subject in self.subjects]
+        if len(subject_keys) != len(set(subject_keys)):
+            raise ValueError("editorial subjects must have unique titles")
+        identity_names = {
+            resolution_key(value)
+            for proposal in self.entities
+            for value in (proposal.name, *proposal.aliases)
+        }
+        missing_entities = sorted(
+            {
+                entity
+                for subject in self.subjects
+                for entity in subject.entities
+                if resolution_key(entity) not in identity_names
+            }
+        )
+        if missing_entities:
+            raise ValueError(
+                "editorial subject entities require identity proposals: "
+                + ", ".join(missing_entities)
+            )
+        relations = {
+            resolution_key(subject.title): {
+                resolution_key(related) for related in subject.related_pages
+            }
+            for subject in self.subjects
+            if subject.action != "delete"
+        }
+        asymmetric = sorted(
+            f"{source}->{target}"
+            for source, targets in relations.items()
+            for target in targets
+            if target in relations and source not in relations[target]
+        )
+        if asymmetric:
+            raise ValueError(
+                "relationships between mutated editorial subjects must be reciprocal: "
+                + ", ".join(asymmetric)
+            )
+        return self
+
+
 class ContradictionClaim(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

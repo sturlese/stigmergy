@@ -132,6 +132,7 @@ def apply_with_production_repair(
     *,
     planning_model_requests: int,
     max_turns: int,
+    semantic_reviewed: bool = False,
     return_plan: bool = False,
     return_repair_plan: bool = False,
 ):
@@ -158,7 +159,7 @@ def apply_with_production_repair(
     plan_rejection = ""
     repair_model_requests = 0
     semantic_repair_count = 0
-    semantic_revision_required = requires_semantic_revision(
+    semantic_revision_required = not semantic_reviewed and requires_semantic_revision(
         plan,
         context,
         authorized_existing_paths=authorized_existing_paths,

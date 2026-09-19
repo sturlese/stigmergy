@@ -39,8 +39,8 @@ HARNESS_BODY = (
 )
 
 
-def test_production_reasoning_selects_high_from_the_runtime_setting():
-    assert constants.PRODUCTION_REASONING_LEVEL == "high"
+def test_production_reasoning_selects_medium_from_the_runtime_setting():
+    assert constants.PRODUCTION_REASONING_LEVEL == "medium"
     assert constants.PRODUCTION_REASONING_LEVEL in constants.REASONING_LEVELS
 
 
@@ -697,8 +697,8 @@ def test_harness_score_requires_santi_as_the_canonical_name_not_only_an_alias():
         "include_payload",
     ),
     (
-        ((), 3, (), "high", "production-equivalent", False),
-        (("--max-turns", "4", "--execution-mode", "planner-only"), 4, (), "high", "planner-only", True),
+        ((), 3, (), "medium", "production-equivalent", False),
+        (("--max-turns", "4", "--execution-mode", "planner-only"), 4, (), "medium", "planner-only", True),
         ((), 3, ("--reasoning-level", "low"), "low", "production-equivalent", False),
     ),
 )
@@ -862,8 +862,10 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
         key: payload[key]
         for key in (
             "brain_prompt", "case_id", "case_sha256", "fixture_sha256", "runtime",
-            "execution_mode", "configured_max_turns", "model_requests",
-            "planning_model_requests", "semantic_revision_required",
+                "execution_mode", "configured_max_turns", "model_requests",
+                "planning_model_requests", "editorial_semantic_reviewed",
+                "editorial_intent_model_requests", "editorial_compilation_model_requests",
+                "editorial_compliance_model_requests", "semantic_revision_required",
             "semantic_revision_attempted", "semantic_revision_applied",
             "semantic_revision_model_requests", "repair_model_requests", "schema_retry_count",
             "repair_plan_sha256", "semantic_repair_count", "elapsed_ms", "usage", "score",

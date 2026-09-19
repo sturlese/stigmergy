@@ -200,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
                 planner,
                 planning_model_requests=run.model_requests,
                 max_turns=args.max_turns,
+                semantic_reviewed=run.semantic_reviewed,
                 return_plan=True,
                 return_repair_plan=True,
             )
@@ -222,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         repair_model_requests = int(gates["repair_model_requests"])
         model_requests = planning_model_requests + semantic_revision_model_requests + repair_model_requests
         schema_retry_count = (
-            max(0, planning_model_requests - 1)
+            int(run.schema_retry_count)
             + max(0, semantic_revision_model_requests - int(gates["semantic_revision_attempted"]))
             + max(0, repair_model_requests - int(gates["semantic_repair_count"] > 0))
         )
@@ -260,6 +261,11 @@ def main(argv: list[str] | None = None) -> int:
             "case_sha256": case_sha256,
             "fixture_sha256": fixture_sha256,
             "plan": run.plan.model_dump(mode="json"),
+            "editorial_intent": (
+                run.editorial_intent.model_dump(mode="json")
+                if run.editorial_intent is not None
+                else None
+            ),
             "reviewed_plan": (
                 plan_for_score.model_dump(mode="json")
                 if gates["semantic_revision_applied"]
@@ -294,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
             "configured_max_turns": args.max_turns,
             "model_requests": model_requests,
             "planning_model_requests": planning_model_requests,
+            "editorial_semantic_reviewed": run.semantic_reviewed,
+            "editorial_intent_model_requests": run.editorial_intent_model_requests,
+            "editorial_compilation_model_requests": run.editorial_compilation_model_requests,
+            "editorial_compliance_model_requests": run.editorial_compliance_model_requests,
             "semantic_revision_required": gates["semantic_revision_required"],
             "semantic_revision_attempted": gates["semantic_revision_attempted"],
             "semantic_revision_applied": gates["semantic_revision_applied"],
