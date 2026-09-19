@@ -326,6 +326,7 @@ def test_graph_shape_gate_rejects_term_dumps_and_duplicate_page_bodies():
         existing_relations=(),
     )
     dumped = (
+        "## Additional Required Terms\n\n"
         "six capabilities, extensions, operating model, quality gates, feedback loops.\n\n"
         "Santi (@santi) authored the explanation."
     )
@@ -355,6 +356,7 @@ def test_graph_shape_gate_rejects_term_dumps_and_duplicate_page_bodies():
     violations = planner.graph_shape_violations(shape, plan)
 
     assert "required-term-inventory:Harness Engineering" in violations
+    assert "compliance-section:Harness Engineering" in violations
     assert "duplicate-page-body:Harness Engineering:Agent Harness" in violations
 
 

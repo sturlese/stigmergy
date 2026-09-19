@@ -737,7 +737,12 @@ def _graph_enrichment_prompt(
         "evidence_terms empty for authorship or attribution alone; they exist to preserve concrete results. "
         "Assign an entity and its evidence to the one subject whose conclusion the contribution primarily "
         "supports. Assign it to another subject only when the source establishes a separate material "
-        "relationship or result about that subject; a cross-link or contextual mention is not enough.\n\n"
+        "relationship or result about that subject; a cross-link or contextual mention is not enough. Follow "
+        "the source's argumentative structure: when it says examples or results support its main conclusion, "
+        "their primary owner is the central subject making that conclusion, not the system noun mentioned "
+        "inside the example. Apply a counterfactual test: evidence caused by designing, changing, configuring, "
+        "evaluating, or improving a target belongs to the practice; evidence about the unchanged target's "
+        "intrinsic components or operation belongs to the system.\n\n"
         "Run a separate global loss audit before comparing subjects: scan every explicit source enumeration and "
         "confirm that each named framework member, capability, extension, result, benchmark, metric, and "
         "implementation detail appears verbatim in its primary subject's required_terms. "
@@ -833,8 +838,11 @@ def _graph_enrichment_review_prompt(
         "metrics, "
         "methods, and examples incorrectly promoted to identities. For every count-introduced list, write the "
         "declared count and each member in a private checklist, then reject the draft if the counts differ. "
-        "Finally recheck that evidence is allocated "
-        "by aboutness across distinct subjects, every required term is a contiguous source span, every entity "
+        "Finally recheck that evidence is allocated by aboutness across distinct subjects. Use the source's "
+        "own stated conclusion and the counterfactual cause of each result: improvement or configuration "
+        "outcomes belong to the practice, while intrinsic components and operation belong to the system. "
+        "Reassign evidence selected merely because an example mentions the system noun. Then verify every "
+        "required term is a contiguous source span, every entity "
         "relationship is source-supported, and the authoritative topology is unchanged. The reviewed output, "
         "not the draft, becomes the compilation contract.\n\n"
         "FALLIBLE ENRICHMENT DRAFT\n"
@@ -1209,7 +1217,10 @@ def graph_shape_violations(
             )
             if uncited_blocks:
                 violations.append(f"local-citations:{subject.title}: missing={len(uncited_blocks)}")
-        if re.search(r"(?im)^#{1,6}\s+(?:required terms|inventory|compliance checklist)\s*$", body):
+        if re.search(
+            r"(?im)^#{1,6}\s+.*(?:required terms|inventory|compliance checklist).*$",
+            body,
+        ):
             violations.append(f"compliance-section:{subject.title}")
         expected_anchors = {resolution_key(entity.name) for entity in subject.entities}
         actual_anchors = {resolution_key(value) for value in mutation.entities or ()}

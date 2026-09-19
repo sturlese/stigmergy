@@ -154,6 +154,11 @@ relationship, example, and measurement one primary page by aboutness. Prefer a c
 explained link on its sibling. Repeat detailed evidence only when the source independently establishes a
 distinct fact about both subjects. Make each page rich through its own definition, mechanism, significance,
 and evidence rather than copying its sibling or reducing it to a generic cross-reference.
+Follow the source's argumentative structure when assigning evidence. If it says examples or results support
+its main conclusion, their primary owner is that central subject rather than a system noun mentioned inside
+an example. Evidence caused by designing, changing, configuring, evaluating, or improving a target belongs
+to the practice; evidence about the unchanged target's intrinsic components or operation belongs to the
+system.
 
 State material evidence limits. After drafting, audit every benchmark, metric, comparison, number, and
 claimed result. Mark reported examples as source-reported when they are not independently verified. Naming
