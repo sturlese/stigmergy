@@ -278,15 +278,16 @@ Report vulnerabilities privately: [`SECURITY.md`](./SECURITY.md).
 
 One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, no model fallback or direct
 alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenAI, or Gemini
-credentials are rejected. The librarian's strict provider-native JSON Schema plans are pinned to
-Cerebras, with no provider fallback; requests require supported parameters, deny data collection,
-and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
-Its output ceiling is `40960` tokens and is sent to OpenRouter as `max_tokens`. Each
-writer attempt makes at most three model requests across filing, schema retries, semantic draft
-revision, and any bounded repair. A graph-splitting or visible-page draft revision consumes the remaining budget; if
-it is unavailable or fails writer gates, the unreviewed draft is never applied. Retryable failures
-use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider
-failover.
+credentials are rejected. The librarian's strict provider-native JSON Schema compilation is pinned
+to Cerebras, with no provider fallback. One bounded editorial or compliance recovery request uses
+GPT-5.4 on Azure when the primary compiler cannot satisfy the quality contract. Both routes require
+supported parameters, deny data collection, and require zero-data-retention processing. Librarian
+reasoning is `medium` and excluded from output. Its output ceiling is `40960` tokens and is sent to
+OpenRouter as `max_tokens`. Each writer attempt makes at most fourteen model requests across graph
+topology, review, enrichment, compilation, compliance, schema retries, and bounded repair. If the
+budget is unavailable or the result fails writer gates, the unreviewed draft is never applied.
+Retryable failures use the existing bounded queue-attempt policy; answer and OCR requests retain
+same-model provider failover.
 
 `POST /admin/api/knowledge/recompile` is a separate master-only control: it rebuilds only derived
 notes, concepts, links, and entity anchors from immutable sources in one isolated worktree. It
@@ -307,6 +308,7 @@ as comparative, replay-verified baseline evidence and is not a Stigmergy admissi
 | Purpose | Model |
 |---|---|
 | filing and semantic repair | `openai/gpt-oss-120b` |
+| bounded librarian quality recovery | `openai/gpt-5.4` |
 | cited answers | `z-ai/glm-5.2` |
 | embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |

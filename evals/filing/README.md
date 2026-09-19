@@ -32,10 +32,11 @@ These gates complement rather than replace the blind review: deterministic check
 while the anonymous comparison remains the release authority for overall cold-read and reuse quality.
 
 The selected Stigmergy level requires at least three independent, complete,
-`production-equivalent` repeats per case. Those runs use the production Cerebras route, medium reasoning,
-deterministic temperature zero, and a bounded ten-request ceiling. A healthy graph-shaped capture uses six requests; the remaining
-budget is available only for schema or semantic correction. Runs exercise the temporary-worktree writer and bounded semantic-repair path, and must
-all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
+`production-equivalent` repeats per case. Those runs use the production Cerebras compiler, medium
+reasoning, deterministic temperature zero, and the same bounded fourteen-request ceiling as the
+writer. They also preserve the single Azure recovery request used by production for editorial or
+compliance correction. Runs exercise the temporary-worktree writer and bounded semantic-repair path,
+and must all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
 blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a
 material regression. Hippocampus is comparative baseline evidence, not an admission candidate: its
 hard gates may honestly fail under Stigmergy's writer rubric, but every case, provenance field,

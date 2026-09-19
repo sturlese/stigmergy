@@ -949,21 +949,6 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
 
     monkeypatch.setattr(run_planner, "PydanticPlanner", RecordingPlanner)
 
-    class Model:
-        def __init__(self, settings):
-            self.settings = settings
-
-    def build_librarian_model(model_name):
-        assert model_name == "openrouter:openai/gpt-oss-120b"
-        settings = {
-            "openrouter_provider": {"only": ["cerebras"], "allow_fallbacks": False},
-            "max_tokens": 40960,
-            "temperature": 0,
-            "openrouter_reasoning": {"effort": "medium", "exclude": True},
-        }
-        return Model(settings), settings
-
-    monkeypatch.setattr(run_planner, "build_model", build_librarian_model)
     monkeypatch.setattr(
         run_planner,
         "librarian_skill_provenance",
@@ -1106,16 +1091,10 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     if include_payload:
         expected_case_result["payload"] = payload["case_result"]["payload"]
     assert payload["case_result"] == expected_case_result
-    factory = calls[0]["model_factory"]
-    if reasoning_arguments:
-        assert factory is not None
-        assert factory().settings["openrouter_reasoning"] == {
-            "effort": expected_reasoning,
-            "exclude": True,
-        }
-        assert factory().settings["max_tokens"] == 40960
-    else:
-        assert factory is None
+    assert calls[0]["model_factory"] is None
+    assert calls[0]["reasoning_level_override"] == (
+        expected_reasoning if reasoning_arguments else None
+    )
 
 
 def test_cli_rejects_a_template_skill_that_does_not_match_the_packaged_skill(tmp_path, monkeypatch, capsys):
