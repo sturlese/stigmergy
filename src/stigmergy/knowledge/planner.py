@@ -1042,9 +1042,10 @@ def _prompt(
             "AUDITED EVIDENCE LIMITS\n"
             f"{fence(evidence_limits_payload)}\n\n"
             "Compile exactly those page subjects and targets into complete, cold-readable Markdown. Treat "
-            "required_terms as coverage anchors, never as an outline: preserve each string verbatim inside a "
-            "coherent explanation, grouped framework, or evidence narrative, and never mirror their order as "
-            "a raw list. Every page needs a precise definition, an explanatory mechanism, a useful compression "
+            "required_terms as coverage anchors, never as an outline or demanded wording: preserve every "
+            "substantive fact, name, and quantity in natural prose, freely reordering or inflecting connective "
+            "language, and never mirror anchor order as a raw list. Every page needs a precise definition, an "
+            "explanatory mechanism, a useful compression "
             "or insight, significance, concrete evidence, and material graph connections when visible context "
             "supports them. The GraphShape is a loss-prevention lower bound, never a completeness ceiling. "
             "Independently reconcile every source-declared count, framework, and named member against the "
@@ -1193,7 +1194,8 @@ def _graph_editorial_review_prompt(
         "every useful source-backed conclusion, "
         "relationship, and local attribution. Never erase prior knowledge merely because the latest capture "
         "does not repeat it. Copy restored new evidence from the source "
-        "character-for-character, including spelling and hyphens. Preserve every supported enumerated member, "
+        "without losing names, quantities, or substantive meaning; prefer grammatical synthesis over copying "
+        "anchor fragments character-for-character. Preserve every supported enumerated member, "
         "extension, material result, exact entity relationship, alias, reciprocal "
         "page link, and local source attribution. Use the new capture citation only for claims it supports; "
         "preserved context keeps its own citation. Every factual prose paragraph and every individual numbered "
@@ -1567,10 +1569,29 @@ def _required_term_present(normalized_body: str, term: str) -> bool:
         if matched == len(tokens):
             return True
     if len(tokens) >= 4:
-        required = set(tokens)
+        required = {
+            token
+            for token in tokens
+            if token
+            not in {
+                "a",
+                "an",
+                "and",
+                "again",
+                "as",
+                "at",
+                "in",
+                "into",
+                "of",
+                "on",
+                "or",
+                "the",
+                "to",
+            }
+        }
         window_size = len(tokens) * 3
         for start in range(len(body_tokens)):
-            if required <= set(body_tokens[start : start + window_size]):
+            if len(required) >= 3 and required <= set(body_tokens[start : start + window_size]):
                 return True
     return False
 

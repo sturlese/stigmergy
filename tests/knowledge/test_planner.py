@@ -380,6 +380,7 @@ def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
                     "a working environment or isolated workspace contains execution",
                     "model only takes text as input",
                     "Skills MCP subagents and long term memory are extensions",
+                    "loop repeats decide act observe and decide again",
                 )
             }
         )
@@ -399,7 +400,8 @@ def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
                 body=(
                     "# Agent Harness\n\nA **working environment** or isolated workspace "
                     "contains execution. The model alone only takes text as input. Extensions such "
-                    "as Skills, MCP, subagents, and long-term memory are built on the harness."
+                    "as Skills, MCP, subagents, and long-term memory are built on the harness. The "
+                    "loop repeats decide, act, observe, then decide."
                 ),
                 entities=(),
                 reason="Created the reusable system.",
