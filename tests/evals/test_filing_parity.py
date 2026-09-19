@@ -8,10 +8,25 @@ import pytest
 
 from evals.filing import planner_eval
 from evals.filing import worktree as eval_worktree
-from evals.filing.constants import PRODUCTION_EQUIVALENT_MODE
+from evals.filing.constants import PRODUCTION_EQUIVALENT_MODE, PRODUCTION_MAX_TURNS
 from evals.filing.parity import current_release_inputs, evaluate
-from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation, RepairMutation, RepairPlan
-from stigmergy.knowledge.planner import PlanRun
+from stigmergy.knowledge.plan import (
+    EntityProposal,
+    ExistingPageRelation,
+    FilingPlan,
+    GraphEntity,
+    GraphShape,
+    GraphSubject,
+    GraphTopology,
+    PageMutation,
+    RepairMutation,
+    RepairPlan,
+)
+from stigmergy.knowledge.planner import (
+    PlanRun,
+    graph_shape_violations,
+    graph_topology_violations,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE_EXPECTED = current_release_inputs(ROOT)
@@ -29,7 +44,7 @@ HARNESS_BODY = (
     "agent harness turns its text into work. The six capabilities are tools let the model "
     "request actions; a loop repeats decide, act, observe; memory/state preserves work; context "
     "selection chooses what the model sees; a working environment provides an isolated workspace; "
-    "and a clear objective and verification establish external acceptance criteria.\n\n"
+    f"and a clear objective and verification establish external acceptance criteria. (Source: `{SOURCE}`)\n\n"
     "The three trust capabilities are permissions and limits, observability through traces of "
     "context and outcomes, and evals using stable evaluation tasks. Skills, MCP, subagents, and "
     "long-term memory extend the same design. Santi (@santtiagom_) authored this explanation. "
@@ -73,8 +88,16 @@ class _RecordedRepairPlanner:
 def _plan(case_id: str, *, passing: bool) -> FilingPlan:
     if not passing:
         return FilingPlan(summary="Deliberately failing evaluation result.")
-    entities = tuple(
-        EntityProposal(name=name, entity_type="organization") for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
+    entities = (
+        EntityProposal(
+            name="Santi",
+            entity_type="person",
+            aliases=("@santtiagom_",),
+        ),
+        *tuple(
+            EntityProposal(name=name, entity_type="organization")
+            for name in ("OpenAI", "Anthropic", "LangChain")
+        ),
     )
     if case_id == "decision_trace_quality":
         return FilingPlan(
@@ -90,8 +113,9 @@ def _plan(case_id: str, *, passing: bool) -> FilingPlan:
                     title="Decision Trace Quality",
                     body=(
                         "# Decision Trace Quality\n\nDecision trace quality records the evidence behind "
-                        "a decision so later readers can inspect the result. Mira Chen authored the method "
-                        "and Northstar Signal Lab measured its use. (Source: "
+                        "a decision with a concise rationale so later readers can inspect the result. "
+                        "Mira Chen introduced the method "
+                        "and Northstar Signal Lab measured Recall at Five. (Source: "
                         "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)"
                     ),
                     entities=("Mira Chen", "Northstar Signal Lab"),
@@ -111,7 +135,29 @@ def _plan(case_id: str, *, passing: bool) -> FilingPlan:
         reason="The source explains the concept.",
     )
     if case_id == "harness_engineering":
-        return FilingPlan(summary="Filed Harness Engineering.", entities=entities, mutations=(mutation,))
+        return FilingPlan(
+            summary="Filed Harness Engineering and Agent Harness separately.",
+            entities=entities,
+            mutations=(
+                mutation.model_copy(
+                    update={
+                        "body": mutation.body.replace("agent harness", "[[Agent Harness]]", 1)
+                    }
+                ),
+                PageMutation(
+                    action="create",
+                    role="concept",
+                    title="Agent Harness",
+                    body=(
+                        "# Agent Harness\n\nAn agent harness is the operational system around a model. "
+                        "It is designed and improved through [[Harness Engineering]]. "
+                        f"(Source: `{SOURCE}`)"
+                    ),
+                    entities=(),
+                    reason="The source independently defines the target system.",
+                ),
+            ),
+        )
     return FilingPlan(
         summary="Enriched the seeded Harness Engineering graph.",
         entities=entities,
@@ -125,11 +171,149 @@ def _plan(case_id: str, *, passing: bool) -> FilingPlan:
                     "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain illustrate its "
                     f"leverage. (Source: `{SOURCE}`)"
                 ),
-                entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                entities=(),
                 reason="Existing concept gains evidence.",
             ),
         ),
     )
+
+
+def _graph_shape(case_id: str, *, implementation: str):
+    if implementation != "stigmergy":
+        return None, None, None
+    if case_id == "decision_trace_quality":
+        shape = GraphShape(
+            summary="File the method and enrich its credited identities.",
+            subjects=(
+                GraphSubject(
+                    title="Decision Trace Quality",
+                    title_evidence="Decision Trace Quality",
+                    name_variants=("Decision Trace Quality",),
+                    role="concept",
+                    abstraction="method",
+                    abstraction_evidence="a method for reviewing",
+                    significance="Makes automated decisions reproducible.",
+                    required_terms=("concise rationale", "Recall at Five"),
+                    entities=(
+                        GraphEntity(
+                            name="Mira Chen",
+                            entity_type="person",
+                            aliases=(),
+                            relationship_kind="responsible",
+                            relationship="Mira Chen introduced Decision Trace Quality",
+                            evidence_terms=(),
+                        ),
+                        GraphEntity(
+                            name="Northstar Signal Lab",
+                            entity_type="organization",
+                            aliases=(),
+                            relationship_kind="produced_evidence",
+                            relationship="Northstar Signal Lab measured Recall at Five",
+                            evidence_terms=("Recall at Five",),
+                        ),
+                    ),
+                ),
+            ),
+            existing_relations=(),
+        )
+    else:
+        relations = (
+            (
+                ExistingPageRelation(
+                    source_subject="Agent Harness",
+                    path="wiki/concepts/Agent Harness.md",
+                    relation="same_subject",
+                    reason="The seeded page has the exact canonical subject title.",
+                ),
+            )
+            if case_id == "harness_engineering_seeded"
+            else ()
+        )
+        shape = GraphShape(
+            summary="Keep the engineering practice separate from its target system.",
+            subjects=(
+                GraphSubject(
+                    title="Harness Engineering",
+                    title_evidence="Harness Engineering",
+                    name_variants=("Harness Engineering",),
+                    role="concept",
+                    abstraction="practice",
+                    abstraction_evidence="practice of designing and improving",
+                    significance="Improves agent reliability through harness design.",
+                    required_terms=(
+                        "Skills",
+                        "MCP",
+                        "subagents",
+                        "long-term memory",
+                        "one million lines",
+                        "1,500 pull requests",
+                        "rank 30",
+                        "top 5",
+                        "polished but broken",
+                        "working app",
+                    ),
+                    entities=(
+                        GraphEntity(
+                            name="Santi",
+                            entity_type="person",
+                            aliases=("@santtiagom_",),
+                            relationship_kind="authored",
+                            relationship="Santi authored this explanation",
+                            evidence_terms=(),
+                        ),
+                        GraphEntity(
+                            name="OpenAI",
+                            entity_type="organization",
+                            aliases=(),
+                            relationship_kind="produced_evidence",
+                            relationship="OpenAI built one million lines and 1,500 pull requests",
+                            evidence_terms=("one million lines", "1,500 pull requests"),
+                        ),
+                        GraphEntity(
+                            name="LangChain",
+                            entity_type="organization",
+                            aliases=(),
+                            relationship_kind="produced_evidence",
+                            relationship="LangChain rose from rank 30 to the top 5",
+                            evidence_terms=("rank 30", "top 5"),
+                        ),
+                        GraphEntity(
+                            name="Anthropic",
+                            entity_type="organization",
+                            aliases=(),
+                            relationship_kind="produced_evidence",
+                            relationship="Anthropic showed a polished but broken application versus a working app",
+                            evidence_terms=("polished but broken", "working app"),
+                        ),
+                    ),
+                ),
+                GraphSubject(
+                    title="Agent Harness",
+                    title_evidence="Agent Harness",
+                    name_variants=("Agent Harness",),
+                    role="concept",
+                    abstraction="system",
+                    abstraction_evidence="operational system",
+                    significance="Turns model choices into reliable work.",
+                    required_terms=("agent harness",),
+                    entities=(),
+                ),
+            ),
+            existing_relations=relations,
+        )
+    topology = GraphTopology.model_validate(
+        {
+            "summary": shape.summary,
+            "subjects": [
+                subject.model_dump(exclude={"required_terms", "entities"})
+                for subject in shape.subjects
+            ],
+            "existing_relations": [
+                relation.model_dump(mode="json") for relation in shape.existing_relations
+            ],
+        }
+    )
+    return shape, topology, topology
 
 
 def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
@@ -140,6 +324,23 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
     case = planner_eval.load_case(EXPECTED.case_paths[case_id])
     source_text = EXPECTED.fixture_paths[case_id].read_text(encoding="utf-8")
     plan = _plan(case_id, passing=passing)
+    graph_shape, graph_shape_draft, graph_shape_review = _graph_shape(
+        case_id,
+        implementation=implementation,
+    )
+    graph_shape_failures = (
+        list(
+            graph_topology_violations(graph_shape_review, graph_shape)
+            + graph_shape_violations(
+                graph_shape,
+                plan,
+                source_path=case["source_path"],
+            )
+        )
+        if graph_shape is not None and graph_shape_review is not None
+        else []
+    )
+    graph_semantic_reviewed = graph_shape is not None and not graph_shape_failures
     active_plan = plan
     recorded_repair = None
     revision = {"required": False, "attempted": False, "applied": False, "model_requests": 0}
@@ -148,38 +349,17 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
         source_text,
         template=str(EXPECTED.repo_root / "evals" / "filing" / "repo"),
     ) as worktree:
-        if case_id == "harness_engineering" and passing:
-            broken = plan.model_copy(
-                update={
-                    "mutations": (
-                        plan.mutations[0].model_copy(
-                            update={
-                                "body": plan.mutations[0].body.replace(
-                                    f" (Source: `{SOURCE}`)", ""
-                                )
-                            }
-                        ),
-                    )
-                }
-            )
-            plan = broken
+        if implementation == "stigmergy":
             gates, active_plan, recorded_repair = eval_worktree.apply_with_production_repair(
                 worktree,
                 plan,
-                _RecordedRepairPlanner(),
-                planning_model_requests=1,
-                max_turns=2,
+                _RecordedRevisionPlanner(plan),
+                planning_model_requests=5,
+                max_turns=PRODUCTION_MAX_TURNS,
+                graph_shape=graph_shape,
+                semantic_reviewed=graph_semantic_reviewed,
                 return_plan=True,
                 return_repair_plan=True,
-            )
-        elif case_id == "harness_engineering_seeded" and passing:
-            gates, active_plan = eval_worktree.apply_with_production_repair(
-                worktree,
-                plan,
-                _RecordedRevisionPlanner(plan),
-                planning_model_requests=1,
-                max_turns=2,
-                return_plan=True,
             )
             revision = {
                 "required": gates["semantic_revision_required"],
@@ -188,13 +368,30 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
                 "model_requests": gates["semantic_revision_model_requests"],
             }
         else:
-            gates = eval_worktree.apply_and_gate(worktree, plan)
+            gates, active_plan, recorded_repair = eval_worktree.apply_with_production_repair(
+                worktree,
+                plan,
+                _RecordedRevisionPlanner(plan),
+                planning_model_requests=1,
+                max_turns=PRODUCTION_MAX_TURNS,
+                return_plan=True,
+                return_repair_plan=True,
+            )
+            revision = {
+                "required": gates["semantic_revision_required"],
+                "attempted": gates["semantic_revision_attempted"],
+                "applied": gates["semantic_revision_applied"],
+                "model_requests": gates["semantic_revision_model_requests"],
+            }
         effective = (
             eval_worktree.effective_plan(worktree, active_plan)
             if gates["passed"]
             else active_plan
         )
     semantic = planner_eval.score(effective, case, source_text=source_text)
+    graph_shape_score = planner_eval.score_graph_shape(graph_shape, case)
+    semantic["graph_shape"] = graph_shape_score
+    semantic["passed"] = bool(semantic["passed"] and graph_shape_score["passed"])
     raw_gates = {
         **{gate: semantic[gate]["passed"] for gate in sorted(semantic) if gate != "passed"},
         "writer": gates["passed"],
@@ -204,6 +401,20 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
         "case_sha256": EXPECTED.source_cases[case_id],
         "fixture_sha256": EXPECTED.source_fixtures[case_id],
         "plan": plan.model_dump(mode="json"),
+        "graph_shape": (
+            graph_shape.model_dump(mode="json") if graph_shape is not None else None
+        ),
+        "graph_shape_draft": (
+            graph_shape_draft.model_dump(mode="json")
+            if graph_shape_draft is not None
+            else None
+        ),
+        "graph_shape_review": (
+            graph_shape_review.model_dump(mode="json")
+            if graph_shape_review is not None
+            else None
+        ),
+        "graph_shape_violations": graph_shape_failures,
         "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
         "semantic_revision": revision,
         "repair_plan": recorded_repair.model_dump(mode="json") if recorded_repair is not None else None,
@@ -223,8 +434,9 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
 
 def _case_result(case_id: str, repeat: int, *, implementation: str, passed: bool, runtime: dict) -> dict:
     payload = _payload(case_id, implementation=implementation, passing=passed)
+    planning_model_requests = 5 if implementation == "stigmergy" else 1
     model_requests = (
-        1
+        planning_model_requests
         + payload["semantic_revision"]["model_requests"]
         + payload["gates"].get("repair_model_requests", 0)
     )
@@ -238,9 +450,17 @@ def _case_result(case_id: str, repeat: int, *, implementation: str, passed: bool
         "brain_prompt": copy.deepcopy(payload["brain_prompt"]),
         "runtime": runtime,
         "execution_mode": PRODUCTION_EQUIVALENT_MODE,
-        "configured_max_turns": 3,
+        "configured_max_turns": PRODUCTION_MAX_TURNS,
         "model_requests": model_requests,
-        "planning_model_requests": 1,
+        "planning_model_requests": planning_model_requests,
+        "graph_shape_model_requests": 1 if implementation == "stigmergy" else 0,
+        "graph_shape_review_model_requests": 1 if implementation == "stigmergy" else 0,
+        "graph_shape_enrichment_model_requests": 1 if implementation == "stigmergy" else 0,
+        "compilation_model_requests": 1 if implementation == "stigmergy" else 0,
+        "graph_semantic_review_model_requests": 1 if implementation == "stigmergy" else 0,
+        "graph_semantic_reviewed": bool(
+            implementation == "stigmergy" and not payload["graph_shape_violations"]
+        ),
         "semantic_revision_required": payload["semantic_revision"]["required"],
         "semantic_revision_attempted": payload["semantic_revision"]["attempted"],
         "semantic_revision_applied": payload["semantic_revision"]["applied"],
@@ -281,7 +501,10 @@ def _run(implementation: str, run_id: str, level: str, repeat: int, *, passed: b
         "implementation": implementation,
         "run_id": run_id,
         "runtime": runtime,
-        "execution": {"mode": PRODUCTION_EQUIVALENT_MODE, "configured_max_turns": 3},
+        "execution": {
+            "mode": PRODUCTION_EQUIVALENT_MODE,
+            "configured_max_turns": PRODUCTION_MAX_TURNS,
+        },
         "provenance": provenance,
         "case_results": [
             _case_result(case_id, repeat, implementation=implementation, passed=passed, runtime=runtime)
@@ -293,7 +516,12 @@ def _run(implementation: str, run_id: str, level: str, repeat: int, *, passed: b
 def _matrix_item(level: str, *, passed: bool, repeats: int = 1) -> dict:
     return {
         "reasoning_level": level,
-        "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 40960},
+        "runtime": {
+            "model": "openai/gpt-oss-120b",
+            "reasoning_level": level,
+            "provider": "cerebras",
+            "max_tokens": 40960,
+        },
         "runs": [
             _run("stigmergy", f"matrix-{level}-{repeat}", level, repeat, passed=passed)
             for repeat in range(1, repeats + 1)
@@ -309,7 +537,12 @@ def _unstable_matrix_item(level: str) -> dict:
     ]
     return {
         "reasoning_level": level,
-        "runtime": {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 40960},
+        "runtime": {
+            "model": "openai/gpt-oss-120b",
+            "reasoning_level": level,
+            "provider": "cerebras",
+            "max_tokens": 40960,
+        },
         "runs": runs,
         "passed": False,
     }
@@ -448,9 +681,12 @@ def _write_review_bundle(root: Path, artifact: dict) -> None:
 
 
 def _artifact(review_root: Path) -> dict:
-    selected = [_run("stigmergy", f"matrix-high-{repeat}", "high", repeat, passed=True) for repeat in range(1, 4)]
+    selected = [
+        _run("stigmergy", f"matrix-medium-{repeat}", "medium", repeat, passed=True)
+        for repeat in range(1, 4)
+    ]
     artifact = {
-        "schema_version": 4,
+        "schema_version": 5,
         "corpus_sha256": CORPUS,
         "initial_graph_ref": INITIAL,
         "stigmergy_commit": EXPECTED.commit,
@@ -465,12 +701,11 @@ def _artifact(review_root: Path) -> dict:
         "reasoning_matrix": [
             _matrix_item("minimal", passed=False),
             _unstable_matrix_item("low"),
-            _unstable_matrix_item("medium"),
             {
-                "reasoning_level": "high",
+                "reasoning_level": "medium",
                 "runtime": {
                     "model": "openai/gpt-oss-120b",
-                    "reasoning_level": "high",
+                    "reasoning_level": "medium",
                     "provider": "cerebras",
                     "max_tokens": 40960,
                 },
@@ -488,7 +723,7 @@ def _artifact(review_root: Path) -> dict:
                 "source_cases": EXPECTED.source_cases,
                 "runs": {
                     "hippocampus": ["hippocampus-reference-1"],
-                    "stigmergy": ["matrix-high-1", "matrix-high-2", "matrix-high-3"],
+                    "stigmergy": ["matrix-medium-1", "matrix-medium-2", "matrix-medium-3"],
                 },
             },
         },
@@ -514,7 +749,7 @@ def test_parity_gate_accepts_complete_case_level_evidence_and_three_selected_rep
     assert evaluate(_artifact(tmp_path), expected=EXPECTED, review_root=tmp_path)["passed"] is True
 
 
-def test_parity_admits_one_pure_create_structural_repair_within_two_requests(tmp_path):
+def test_parity_admits_graph_reviewed_plans_without_a_post_planning_repair(tmp_path):
     artifact = _artifact(tmp_path)
     repair_case = next(
         case
@@ -524,9 +759,9 @@ def test_parity_admits_one_pure_create_structural_repair_within_two_requests(tmp
         if case["case_id"] == "harness_engineering"
     )
 
-    assert repair_case["repair_model_requests"] == 1
-    assert repair_case["model_requests"] == 2
-    assert repair_case["payload"]["repair_plan"] is not None
+    assert repair_case["repair_model_requests"] == 0
+    assert repair_case["model_requests"] == 5
+    assert repair_case["payload"]["repair_plan"] is None
     assert repair_case["repair_plan_sha256"] == repair_case["payload"]["repair_plan_sha256"]
     assert evaluate(artifact, expected=EXPECTED, review_root=tmp_path)["passed"] is True
 
@@ -614,23 +849,7 @@ def test_parity_gate_rejects_tampered_payload_hash_score_and_gates(tmp_path):
     assert "case-payload" in _reasons(artifact, tmp_path)
 
 
-def test_parity_rejects_missing_extra_or_tampered_structural_repair_evidence(tmp_path):
-    artifact = _artifact(tmp_path)
-    repair_case = next(
-        case
-        for run in artifact["runs"]
-        if run["implementation"] == "stigmergy"
-        for case in run["case_results"]
-        if case["case_id"] == "harness_engineering"
-    )
-    repair_case["payload"]["repair_plan"] = None
-    repair_case["payload"]["repair_plan_sha256"] = None
-    repair_case["repair_plan_sha256"] = None
-    repair_case["output"]["sha256"] = hashlib.sha256(_canonical(repair_case["payload"])).hexdigest()
-    repair_case["output"]["artifact_ref"] = f"sha256:{repair_case['output']['sha256']}"
-    _write_review_bundle(tmp_path, artifact)
-    assert "case-repair-evidence" in _reasons(artifact, tmp_path)
-
+def test_parity_rejects_extra_or_tampered_structural_repair_evidence(tmp_path):
     artifact = _artifact(tmp_path)
     pure_case = next(
         case
@@ -648,19 +867,6 @@ def test_parity_rejects_missing_extra_or_tampered_structural_repair_evidence(tmp
     pure_case["output"]["artifact_ref"] = f"sha256:{pure_case['output']['sha256']}"
     _write_review_bundle(tmp_path, artifact)
     assert "case-repair-evidence" in _reasons(artifact, tmp_path)
-
-    artifact = _artifact(tmp_path)
-    repair_case = next(
-        case
-        for run in artifact["runs"]
-        if run["implementation"] == "stigmergy"
-        for case in run["case_results"]
-        if case["case_id"] == "harness_engineering"
-    )
-    repair_case["payload"]["repair_plan"]["mutations"][0]["body"] += " tampered"
-    _write_review_bundle(tmp_path, artifact)
-    assert "case-output-hash" in _reasons(artifact, tmp_path)
-
 
 def test_parity_rejects_a_valid_but_different_recorded_effective_plan(tmp_path):
     artifact = _artifact(tmp_path)
@@ -749,29 +955,18 @@ def test_parity_gate_rejects_unaccounted_semantic_revision_requests(tmp_path):
     assert "case-payload" in _reasons(artifact, tmp_path)
 
 
-def test_parity_replays_the_original_draft_trigger_and_three_request_budget(tmp_path):
+def test_parity_replays_graph_review_and_the_bounded_request_budget(tmp_path):
     artifact = _artifact(tmp_path)
     seeded = next(
         item for item in artifact["runs"][1]["case_results"]
         if item["case_id"] == "harness_engineering_seeded"
     )
-    seeded["semantic_revision_required"] = False
-    seeded["semantic_revision_attempted"] = False
-    seeded["semantic_revision_applied"] = False
-    seeded["semantic_revision_model_requests"] = 0
-    seeded["model_requests"] = 1
-    seeded["usage"] = {"requests": 1}
-    seeded["payload"]["semantic_revision"] = {
-        "required": False,
-        "attempted": False,
-        "applied": False,
-        "model_requests": 0,
-    }
+    seeded["graph_semantic_reviewed"] = False
     seeded["output"]["sha256"] = hashlib.sha256(_canonical(seeded["payload"])).hexdigest()
     seeded["output"]["artifact_ref"] = f"sha256:{seeded['output']['sha256']}"
     _write_review_bundle(tmp_path, artifact)
 
-    assert "case-semantic-revision-trigger" in _reasons(artifact, tmp_path)
+    assert "case-graph-shape" in _reasons(artifact, tmp_path)
 
     artifact = _artifact(tmp_path)
     artifact["runs"][1]["case_results"][0]["model_requests"] = 4
@@ -789,8 +984,8 @@ def test_parity_replays_the_original_draft_trigger_and_three_request_budget(tmp_
     seeded["repair_model_requests"] = 1
     seeded["repair_plan_sha256"] = forbidden_hash
     seeded["semantic_repair_count"] = 1
-    seeded["model_requests"] = 3
-    seeded["usage"] = {"requests": 3}
+    seeded["model_requests"] = 6
+    seeded["usage"] = {"requests": 6}
     seeded["payload"]["repair_plan"] = forbidden_repair
     seeded["payload"]["repair_plan_sha256"] = forbidden_hash
     seeded["output"]["sha256"] = hashlib.sha256(_canonical(seeded["payload"])).hexdigest()
@@ -800,11 +995,11 @@ def test_parity_replays_the_original_draft_trigger_and_three_request_budget(tmp_
     assert "case-repair-evidence" in _reasons(artifact, tmp_path)
 
 
-def test_parity_rejects_schema_v3_as_missing_replayable_revision_evidence(tmp_path):
+def test_parity_rejects_schema_v4_as_missing_replayable_graph_evidence(tmp_path):
     artifact = _artifact(tmp_path)
-    artifact["schema_version"] = 3
+    artifact["schema_version"] = 4
 
-    assert "schema-v3-obsolete" in _reasons(artifact, tmp_path)
+    assert "schema-v4-obsolete" in _reasons(artifact, tmp_path)
 
 
 def test_parity_gate_rejects_pending_or_nonterminal_admission_packet(tmp_path):

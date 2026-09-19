@@ -9,7 +9,7 @@ from pathlib import Path
 
 from stigmergy.entities.service import _tokens as entity_tokens
 from stigmergy.kernel.normalize import resolution_key
-from stigmergy.knowledge.plan import FilingPlan, PageMutation
+from stigmergy.knowledge.plan import FilingPlan, GraphShape, PageMutation
 from stigmergy.knowledge.relationships import has_entity_relationship_evidence
 
 _DASH_VARIANTS = str.maketrans({character: "-" for character in "‐‑‒–—―−"})
@@ -104,6 +104,71 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
         "entity_relationships": entity_relationship_score,
         "entity_wikilinks": entity_wikilink_score,
         "anti_fragmentation": anti_fragmentation_score,
+    }
+
+
+def score_graph_shape(shape: GraphShape | None, case: dict) -> dict:
+    """Score the agent-authored semantic topology separately from compiled mutations."""
+    expectation = case.get("graph_shape")
+    if not expectation:
+        return {
+            "recorded": shape is not None,
+            "required": [],
+            "actual": [],
+            "missing": [],
+            "unexpected": [],
+            "passed": True,
+        }
+    required = {
+        (resolution_key(item["title"]), item["abstraction"])
+        for item in expectation.get("required_subjects", ())
+    }
+    if shape is None:
+        return {
+            "recorded": False,
+            "required": sorted(required),
+            "actual": [],
+            "missing": [],
+            "unexpected": [],
+            "passed": True,
+        }
+    actual = {
+        (resolution_key(subject.title), subject.abstraction)
+        for subject in (() if shape is None else shape.subjects)
+    }
+    missing = required - actual
+    unexpected = actual - required if expectation.get("closed", True) else set()
+    actual_roles = {resolution_key(subject.title): subject.role for subject in shape.subjects}
+    role_mismatches = [
+        {
+            "title": item["title"],
+            "required": item["role"],
+            "actual": actual_roles.get(resolution_key(item["title"])),
+        }
+        for item in expectation.get("required_subjects", ())
+        if item.get("role")
+        and actual_roles.get(resolution_key(item["title"])) != item["role"]
+    ]
+    required_terms = tuple(expectation.get("required_terms", ()))
+    actual_terms = {
+        resolution_key(term)
+        for subject in shape.subjects
+        for term in subject.required_terms
+    }
+    missing_terms = [
+        term
+        for term in required_terms
+        if not any(resolution_key(term) in actual_term for actual_term in actual_terms)
+    ]
+    return {
+        "recorded": True,
+        "required": sorted(required),
+        "actual": sorted(actual),
+        "missing": sorted(missing),
+        "unexpected": sorted(unexpected),
+        "role_mismatches": role_mismatches,
+        "missing_required_terms": missing_terms,
+        "passed": not missing and not unexpected and not role_mismatches and not missing_terms,
     }
 
 

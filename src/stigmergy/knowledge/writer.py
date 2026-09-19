@@ -57,6 +57,9 @@ from stigmergy.librarian import config, gitcmd
 log = logging.getLogger(__name__)
 
 WRITER_LOCK_KEY = int.from_bytes(b"KNOWWRIT", "big", signed=True)
+SEMANTIC_REVISION_MAX_REQUESTS = 2
+MAINTENANCE_REPAIR_MAX_REQUESTS = 2
+EDITORIAL_REPAIR_MAX_REQUESTS = 1
 
 
 class KnowledgeWriteError(RuntimeError):
@@ -164,7 +167,10 @@ def _garden(
                 source_path="",
                 source_text="",
                 context=repair_context,
-                max_requests=max(0, int(deps.settings.max_turns)),
+                max_requests=min(
+                    MAINTENANCE_REPAIR_MAX_REQUESTS,
+                    max(0, int(deps.settings.max_turns)),
+                ),
             )
             model_requests = repair_run.model_requests
             model_changed = _apply_repair_plan(
@@ -380,12 +386,17 @@ def _recompile_derived(
         planning_model_requests += planning_requests
         model_requests += planning_requests
         plan = plan_run.plan
+        if plan_run.graph_shape is not None and not plan_run.semantic_reviewed:
+            raise GateRefused("recompile graph-shape compliance failed")
         if not plan_run.semantic_reviewed and requires_semantic_revision(
             plan,
             safe_context,
             authorized_existing_paths=authorized_existing_paths,
         ):
-            remaining_requests = max(0, int(deps.settings.max_turns) - planning_requests)
+            remaining_requests = min(
+                SEMANTIC_REVISION_MAX_REQUESTS,
+                max(0, int(deps.settings.max_turns) - planning_requests),
+            )
             if remaining_requests < 1:
                 raise GateRefused("recompile semantic revision budget exhausted")
             try:
@@ -672,17 +683,27 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         planning_model_requests = int(plan_run.model_requests)
         semantic_revision_model_requests = 0
         repair_model_requests = 0
-        semantic_revision_required = not plan_run.semantic_reviewed and requires_semantic_revision(
-            plan_run.plan,
-            safe_context,
-            authorized_existing_paths=authorized_existing_paths,
+        graph_shape_failed = plan_run.graph_shape is not None and not plan_run.semantic_reviewed
+        semantic_revision_required = graph_shape_failed or (
+            not plan_run.semantic_reviewed
+            and requires_semantic_revision(
+                plan_run.plan,
+                safe_context,
+                authorized_existing_paths=authorized_existing_paths,
+            )
         )
         semantic_revision_attempted = False
         semantic_revision_applied = False
         plan = plan_run.plan
         model_requests = planning_model_requests
-        if semantic_revision_required:
-            remaining_requests = max(0, int(deps.settings.max_turns) - model_requests)
+        if graph_shape_failed:
+            plan_invalid = True
+            plan_rejection = "graph-shape compliance failed"
+        elif semantic_revision_required:
+            remaining_requests = min(
+                SEMANTIC_REVISION_MAX_REQUESTS,
+                max(0, int(deps.settings.max_turns) - model_requests),
+            )
             if remaining_requests < 1:
                 plan_invalid = True
                 plan_rejection = "semantic revision budget exhausted"
@@ -758,7 +779,10 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                     source_path=relative_source,
                     source_text=source_text,
                     context=rendered_context,
-                    max_requests=max(0, int(deps.settings.max_turns) - model_requests),
+                    max_requests=min(
+                        EDITORIAL_REPAIR_MAX_REQUESTS,
+                        max(0, int(deps.settings.max_turns) - model_requests),
+                    ),
                 )
                 repair_model_requests = int(repair_run.model_requests)
                 model_requests += repair_model_requests
@@ -832,11 +856,6 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             "wiki_changes": wiki_changes,
             "model_requests": model_requests,
             "planning_model_requests": planning_model_requests,
-            "editorial_semantic_reviewed": plan_run.semantic_reviewed,
-            "editorial_intent_model_requests": plan_run.editorial_intent_model_requests,
-            "editorial_compilation_model_requests": plan_run.editorial_compilation_model_requests,
-            "editorial_compliance_model_requests": plan_run.editorial_compliance_model_requests,
-            "schema_retry_count": plan_run.schema_retry_count,
             "semantic_revision_required": semantic_revision_required,
             "semantic_revision_attempted": semantic_revision_attempted,
             "semantic_revision_applied": semantic_revision_applied,

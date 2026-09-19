@@ -25,7 +25,7 @@ kill_timeout = "300s"
   ANSWER_LLM = "openrouter"
   ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
   STIGMERGY_LIBRARIAN_MODEL = "openrouter:openai/gpt-oss-120b"
-  STIGMERGY_LIBRARIAN_MAX_TURNS = "3"
+  STIGMERGY_LIBRARIAN_MAX_TURNS = "8"
   STIGMERGY_OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
   STIGMERGY_LIBRARIAN_TIMEOUT_S = "180"
 

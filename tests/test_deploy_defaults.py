@@ -10,8 +10,21 @@ import pytest
 
 from evals.filing import parity, planner_eval
 from evals.filing import worktree as eval_worktree
-from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation
-from stigmergy.knowledge.planner import PlanRun
+from stigmergy.knowledge.plan import (
+    EntityProposal,
+    ExistingPageRelation,
+    FilingPlan,
+    GraphEntity,
+    GraphShape,
+    GraphSubject,
+    GraphTopology,
+    PageMutation,
+)
+from stigmergy.knowledge.planner import (
+    PlanRun,
+    graph_shape_violations,
+    graph_topology_violations,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy"
@@ -448,7 +461,7 @@ def _plan_for_case(case_id: str) -> FilingPlan:
         "turns its text into work. The six capabilities are tools let the model request actions; a loop "
         "repeats decide, act, observe; memory/state preserves work; context selection chooses what the "
         "model sees; a working environment provides an isolated workspace; and a clear objective and "
-        "verification establish external acceptance criteria.\n\n"
+        f"verification establish external acceptance criteria. (Source: `{source}`)\n\n"
         "The three trust capabilities are permissions and limits, observability through traces of context "
         "and outcomes, and evals using stable evaluation tasks. Skills, MCP, subagents, and long-term "
         "memory extend the same design. Santi (@santtiagom_) authored this explanation. OpenAI built one "
@@ -470,8 +483,8 @@ def _plan_for_case(case_id: str) -> FilingPlan:
                     title="Decision Trace Quality",
                     body=(
                         "# Decision Trace Quality\n\nDecision trace quality records the evidence behind a "
-                        "decision so later readers can inspect the result. Mira Chen authored the method and "
-                        "Northstar Signal Lab measured its use. (Source: "
+                        "decision with a concise rationale so later readers can inspect the result. "
+                        "Mira Chen introduced the method and Northstar Signal Lab measured Recall at Five. (Source: "
                         "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)"
                     ),
                     entities=("Mira Chen", "Northstar Signal Lab"),
@@ -479,9 +492,16 @@ def _plan_for_case(case_id: str) -> FilingPlan:
                 ),
             ),
         )
-    entities = tuple(
-        EntityProposal(name=name, entity_type="organization")
-        for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
+    entities = (
+        EntityProposal(
+            name="Santi",
+            entity_type="person",
+            aliases=("@santtiagom_",),
+        ),
+        *tuple(
+            EntityProposal(name=name, entity_type="organization")
+            for name in ("OpenAI", "Anthropic", "LangChain")
+        ),
     )
     mutation = PageMutation(
         action="create",
@@ -496,7 +516,27 @@ def _plan_for_case(case_id: str) -> FilingPlan:
         reason="The source explains the concept.",
     )
     if case_id == "harness_engineering":
-        return FilingPlan(summary="Filed Harness Engineering.", entities=entities, mutations=(mutation,))
+        return FilingPlan(
+            summary="Filed Harness Engineering and Agent Harness separately.",
+            entities=entities,
+            mutations=(
+                mutation.model_copy(
+                    update={"body": mutation.body.replace("agent harness", "[[Agent Harness]]", 1)}
+                ),
+                PageMutation(
+                    action="create",
+                    role="concept",
+                    title="Agent Harness",
+                    body=(
+                        "# Agent Harness\n\nAn agent harness is the operational system around a model. "
+                        "It is designed and improved through [[Harness Engineering]]. "
+                        f"(Source: `{source}`)"
+                    ),
+                    entities=(),
+                    reason="The source independently defines the target system.",
+                ),
+            ),
+        )
     return FilingPlan(
         summary="Enriched the seeded harness graph.",
         entities=entities,
@@ -510,11 +550,149 @@ def _plan_for_case(case_id: str) -> FilingPlan:
                     "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain illustrate its "
                     f"leverage. (Source: `{source}`)"
                 ),
-                entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                entities=(),
                 reason="Existing concept gains evidence.",
             ),
         ),
     )
+
+
+def _graph_shape_for_case(case_id: str, *, stigmergy: bool):
+    if not stigmergy:
+        return None, None, None
+    if case_id == "decision_trace_quality":
+        shape = GraphShape(
+            summary="File the method and enrich its credited identities.",
+            subjects=(
+                GraphSubject(
+                    title="Decision Trace Quality",
+                    title_evidence="Decision Trace Quality",
+                    name_variants=("Decision Trace Quality",),
+                    role="concept",
+                    abstraction="method",
+                    abstraction_evidence="a method for reviewing",
+                    significance="Makes automated decisions reproducible.",
+                    required_terms=("concise rationale", "Recall at Five"),
+                    entities=(
+                        GraphEntity(
+                            name="Mira Chen",
+                            entity_type="person",
+                            aliases=(),
+                            relationship_kind="responsible",
+                            relationship="Mira Chen introduced Decision Trace Quality",
+                            evidence_terms=(),
+                        ),
+                        GraphEntity(
+                            name="Northstar Signal Lab",
+                            entity_type="organization",
+                            aliases=(),
+                            relationship_kind="produced_evidence",
+                            relationship="Northstar Signal Lab measured Recall at Five",
+                            evidence_terms=("Recall at Five",),
+                        ),
+                    ),
+                ),
+            ),
+            existing_relations=(),
+        )
+    else:
+        relations = (
+            (
+                ExistingPageRelation(
+                    source_subject="Agent Harness",
+                    path="wiki/concepts/Agent Harness.md",
+                    relation="same_subject",
+                    reason="The seeded page has the exact canonical subject title.",
+                ),
+            )
+            if case_id == "harness_engineering_seeded"
+            else ()
+        )
+        shape = GraphShape(
+            summary="Keep the engineering practice separate from its target system.",
+            subjects=(
+                GraphSubject(
+                    title="Harness Engineering",
+                    title_evidence="Harness Engineering",
+                    name_variants=("Harness Engineering",),
+                    role="concept",
+                    abstraction="practice",
+                    abstraction_evidence="practice of designing and improving",
+                    significance="Improves agent reliability through harness design.",
+                    required_terms=(
+                        "Skills",
+                        "MCP",
+                        "subagents",
+                        "long-term memory",
+                        "one million lines",
+                        "1,500 pull requests",
+                        "rank 30",
+                        "top 5",
+                        "polished but broken",
+                        "working app",
+                    ),
+                    entities=(
+                        GraphEntity(
+                            name="Santi",
+                            entity_type="person",
+                            aliases=("@santtiagom_",),
+                            relationship_kind="authored",
+                            relationship="Santi authored this explanation",
+                            evidence_terms=(),
+                        ),
+                        GraphEntity(
+                            name="OpenAI",
+                            entity_type="organization",
+                            aliases=(),
+                            relationship_kind="produced_evidence",
+                            relationship="OpenAI built one million lines and 1,500 pull requests",
+                            evidence_terms=("one million lines", "1,500 pull requests"),
+                        ),
+                        GraphEntity(
+                            name="LangChain",
+                            entity_type="organization",
+                            aliases=(),
+                            relationship_kind="produced_evidence",
+                            relationship="LangChain rose from rank 30 to the top 5",
+                            evidence_terms=("rank 30", "top 5"),
+                        ),
+                        GraphEntity(
+                            name="Anthropic",
+                            entity_type="organization",
+                            aliases=(),
+                            relationship_kind="produced_evidence",
+                            relationship="Anthropic showed a polished but broken application versus a working app",
+                            evidence_terms=("polished but broken", "working app"),
+                        ),
+                    ),
+                ),
+                GraphSubject(
+                    title="Agent Harness",
+                    title_evidence="Agent Harness",
+                    name_variants=("Agent Harness",),
+                    role="concept",
+                    abstraction="system",
+                    abstraction_evidence="operational system",
+                    significance="Turns model choices into reliable work.",
+                    required_terms=("agent harness",),
+                    entities=(),
+                ),
+            ),
+            existing_relations=relations,
+        )
+    topology = GraphTopology.model_validate(
+        {
+            "summary": shape.summary,
+            "subjects": [
+                subject.model_dump(exclude={"required_terms", "entities"})
+                for subject in shape.subjects
+            ],
+            "existing_relations": [
+                relation.model_dump(mode="json") for relation in shape.existing_relations
+            ],
+        }
+    )
+    return shape, topology, topology
 
 
 def _parity_artifact(
@@ -535,6 +713,24 @@ def _parity_artifact(
         case = planner_eval.load_case(expected.case_paths[case_id])
         source_text = expected.fixture_paths[case_id].read_text(encoding="utf-8")
         plan = _plan_for_case(case_id) if passing else FilingPlan(summary="Deliberately failing result.")
+        graph_shape, graph_shape_draft, graph_shape_review = _graph_shape_for_case(
+            case_id,
+            stigmergy=brain_prompt is not None,
+        )
+        graph_shape_failures = (
+            list(
+                graph_topology_violations(graph_shape_review, graph_shape)
+                + graph_shape_violations(
+                    graph_shape,
+                    plan,
+                    source_path=case["source_path"],
+                )
+            )
+            if graph_shape is not None and graph_shape_review is not None
+            else []
+        )
+        graph_semantic_reviewed = graph_shape is not None and not graph_shape_failures
+        planning_model_requests = 5 if brain_prompt is not None else 1
         active_plan = plan
         revision = {"required": False, "attempted": False, "applied": False, "model_requests": 0}
         with eval_worktree.prepared(
@@ -542,29 +738,31 @@ def _parity_artifact(
             source_text,
             template=str(expected.repo_root / "evals" / "filing" / "repo"),
         ) as worktree:
-            if case_id == "harness_engineering_seeded" and passing:
-                gates, active_plan = eval_worktree.apply_with_production_repair(
-                    worktree,
-                    plan,
-                    _RecordedRevisionPlanner(plan),
-                    planning_model_requests=1,
-                    max_turns=2,
-                    return_plan=True,
-                )
-                revision = {
-                    "required": gates["semantic_revision_required"],
-                    "attempted": gates["semantic_revision_attempted"],
-                    "applied": gates["semantic_revision_applied"],
-                    "model_requests": gates["semantic_revision_model_requests"],
-                }
-            else:
-                gates = eval_worktree.apply_and_gate(worktree, plan)
+            gates, active_plan = eval_worktree.apply_with_production_repair(
+                worktree,
+                plan,
+                _RecordedRevisionPlanner(plan),
+                planning_model_requests=planning_model_requests,
+                max_turns=parity.PRODUCTION_MAX_TURNS,
+                graph_shape=graph_shape,
+                semantic_reviewed=graph_semantic_reviewed,
+                return_plan=True,
+            )
+            revision = {
+                "required": gates["semantic_revision_required"],
+                "attempted": gates["semantic_revision_attempted"],
+                "applied": gates["semantic_revision_applied"],
+                "model_requests": gates["semantic_revision_model_requests"],
+            }
             effective = (
                 eval_worktree.effective_plan(worktree, active_plan)
                 if gates["passed"]
                 else active_plan
             )
         score = planner_eval.score(effective, case, source_text=source_text)
+        graph_shape_score = planner_eval.score_graph_shape(graph_shape, case)
+        score["graph_shape"] = graph_shape_score
+        score["passed"] = bool(score["passed"] and graph_shape_score["passed"])
         raw_gates = {
             **{gate: score[gate]["passed"] for gate in sorted(score) if gate != "passed"},
             "writer": gates["passed"],
@@ -574,6 +772,20 @@ def _parity_artifact(
             "case_sha256": expected.source_cases[case_id],
             "fixture_sha256": expected.source_fixtures[case_id],
             "plan": plan.model_dump(mode="json"),
+            "graph_shape": (
+                graph_shape.model_dump(mode="json") if graph_shape is not None else None
+            ),
+            "graph_shape_draft": (
+                graph_shape_draft.model_dump(mode="json")
+                if graph_shape_draft is not None
+                else None
+            ),
+            "graph_shape_review": (
+                graph_shape_review.model_dump(mode="json")
+                if graph_shape_review is not None
+                else None
+            ),
+            "graph_shape_violations": graph_shape_failures,
             "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
             "semantic_revision": revision,
             "repair_plan": None,
@@ -586,6 +798,7 @@ def _parity_artifact(
         digest = hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
+        model_requests = planning_model_requests + revision["model_requests"]
         return {
             "case_id": case_id,
             "case_sha256": expected.source_cases[case_id],
@@ -593,9 +806,15 @@ def _parity_artifact(
             "brain_prompt": brain_prompt,
             "runtime": runtime,
             "execution_mode": "production-equivalent",
-            "configured_max_turns": 3,
-            "model_requests": 1 + revision["model_requests"],
-            "planning_model_requests": 1,
+            "configured_max_turns": parity.PRODUCTION_MAX_TURNS,
+            "model_requests": model_requests,
+            "planning_model_requests": planning_model_requests,
+            "graph_shape_model_requests": 1 if brain_prompt is not None else 0,
+            "graph_shape_review_model_requests": 1 if brain_prompt is not None else 0,
+            "graph_shape_enrichment_model_requests": 1 if brain_prompt is not None else 0,
+            "compilation_model_requests": 1 if brain_prompt is not None else 0,
+            "graph_semantic_review_model_requests": 1 if brain_prompt is not None else 0,
+            "graph_semantic_reviewed": bool(graph_semantic_reviewed),
             "semantic_revision_required": revision["required"],
             "semantic_revision_attempted": revision["attempted"],
             "semantic_revision_applied": revision["applied"],
@@ -605,7 +824,7 @@ def _parity_artifact(
             "schema_retry_count": 0,
             "semantic_repair_count": 0,
             "elapsed_ms": 1,
-            "usage": {"requests": 1},
+            "usage": {"requests": model_requests},
             "score": score,
             "gates": gates,
             "raw_gates": raw_gates,
@@ -635,7 +854,10 @@ def _parity_artifact(
             "implementation": implementation,
             "run_id": run_id,
             "runtime": runtime,
-            "execution": {"mode": "production-equivalent", "configured_max_turns": 3},
+            "execution": {
+                "mode": "production-equivalent",
+                "configured_max_turns": parity.PRODUCTION_MAX_TURNS,
+            },
             "provenance": provenance,
             "case_results": [
                 case_result(
@@ -648,10 +870,13 @@ def _parity_artifact(
             ],
         }
 
-    selected = [run("stigmergy", f"matrix-high-{repeat}", "high") for repeat in range(1, 4)]
+    selected = [
+        run("stigmergy", f"matrix-medium-{repeat}", "medium")
+        for repeat in range(1, 4)
+    ]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
-        "schema_version": 4,
+        "schema_version": 5,
         "corpus_sha256": corpus,
         "initial_graph_ref": initial,
         "stigmergy_commit": expected.commit,
@@ -674,13 +899,13 @@ def _parity_artifact(
                 "runs": [run("stigmergy", f"matrix-{level}-1", level, passing=False)],
                 "passed": False,
             }
-            for level in ("minimal", "low", "medium")
+            for level in ("minimal", "low")
         ] + [
             {
-                "reasoning_level": "high",
+                "reasoning_level": "medium",
                 "runtime": {
                     "model": "openai/gpt-oss-120b",
-                    "reasoning_level": "high",
+                    "reasoning_level": "medium",
                     "provider": "cerebras",
                     "max_tokens": 40960,
                 },

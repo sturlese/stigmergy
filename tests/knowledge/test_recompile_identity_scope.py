@@ -6,6 +6,7 @@ import pytest
 from stigmergy.knowledge import contradictions, writer
 from stigmergy.knowledge.pages import parse_page, render_page
 from stigmergy.knowledge.plan import ContradictionClaim, EntityProposal, FilingPlan, PageMutation
+from stigmergy.knowledge.planner import PlanRun
 from stigmergy.knowledge.write_guard import WriteContext
 
 
@@ -52,7 +53,7 @@ def test_recompile_does_not_converge_hidden_name_matches_across_scopes(tmp_path,
 
     class Planner:
         def plan(self, **_kwargs):
-            return SimpleNamespace(plan=plan, model_requests=1)
+            return PlanRun(plan=plan, model_requests=1)
 
     def record_application(_root, applied_plan, **kwargs):
         observed["plan"] = applied_plan

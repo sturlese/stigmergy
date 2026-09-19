@@ -132,6 +132,7 @@ def apply_with_production_repair(
     *,
     planning_model_requests: int,
     max_turns: int,
+    graph_shape=None,
     semantic_reviewed: bool = False,
     return_plan: bool = False,
     return_repair_plan: bool = False,
@@ -159,10 +160,14 @@ def apply_with_production_repair(
     plan_rejection = ""
     repair_model_requests = 0
     semantic_repair_count = 0
-    semantic_revision_required = not semantic_reviewed and requires_semantic_revision(
-        plan,
-        context,
-        authorized_existing_paths=authorized_existing_paths,
+    graph_shape_failed = graph_shape is not None and not semantic_reviewed
+    semantic_revision_required = graph_shape_failed or (
+        not semantic_reviewed
+        and requires_semantic_revision(
+            plan,
+            context,
+            authorized_existing_paths=authorized_existing_paths,
+        )
     )
     semantic_revision_attempted = False
     semantic_revision_applied = False
@@ -171,7 +176,10 @@ def apply_with_production_repair(
     repair_mutation_shape = []
     recorded_repair_plan = None
     active_plan = plan
-    if semantic_revision_required:
+    if graph_shape_failed:
+        plan_invalid = True
+        plan_rejection = "graph-shape-compliance-failed"
+    elif semantic_revision_required:
         remaining_requests = max(0, int(max_turns) - int(planning_model_requests))
         if remaining_requests < 1:
             plan_invalid = True

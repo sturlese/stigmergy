@@ -13,17 +13,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from planner_eval import load_case, score
+    from planner_eval import load_case, score, score_graph_shape
     from worktree import apply_with_production_repair, effective_plan, prepared
 except ModuleNotFoundError:
-    from evals.filing.planner_eval import load_case, score
+    from evals.filing.planner_eval import load_case, score, score_graph_shape
     from evals.filing.worktree import apply_with_production_repair, effective_plan, prepared
 
 from stigmergy.kernel.llm import LIBRARIAN_MAX_TOKENS, LIBRARIAN_REASONING_LEVEL
 from stigmergy.knowledge.context import authorized_derived_page_paths, filing_context
 from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
-from stigmergy.knowledge.plan import FilingPlan, RepairPlan
-from stigmergy.knowledge.planner import PlanRun
+from stigmergy.knowledge.plan import FilingPlan, GraphShape, GraphTopology, RepairPlan
+from stigmergy.knowledge.planner import (
+    PlanRun,
+    graph_shape_violations,
+    graph_topology_violations,
+)
 from stigmergy.knowledge.write_guard import WriteContext
 from stigmergy.knowledge.writer import GateRefused, requires_semantic_revision
 
@@ -58,6 +62,7 @@ REQUIRED_SEMANTIC_GATES = frozenset(
         "entity_relationships",
         "entity_wikilinks",
         "anti_fragmentation",
+        "graph_shape",
         "writer",
     }
 )
@@ -66,7 +71,7 @@ STIGMERGY_RUNTIME = {
     "provider": "cerebras",
     "max_tokens": LIBRARIAN_MAX_TOKENS,
 }
-ARTIFACT_SCHEMA_VERSION = 4
+ARTIFACT_SCHEMA_VERSION = 5
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_REF = re.compile(r"^[0-9a-f]{40}$")
 _CONTENT_ADDRESS = re.compile(r"^sha256:([0-9a-f]{64})$")
@@ -157,7 +162,13 @@ def evaluate(
         _failure(
             failures,
             "artifact",
-            "schema-v3-obsolete" if artifact.get("schema_version") == 3 else "schema-version",
+            (
+                "schema-v4-obsolete"
+                if artifact.get("schema_version") == 4
+                else "schema-v3-obsolete"
+                if artifact.get("schema_version") == 3
+                else "schema-version"
+            ),
         )
     corpus = _sha(artifact.get("corpus_sha256"), "corpus_sha256", failures)
     initial = _ref(artifact.get("initial_graph_ref"), "initial_graph_ref", failures)
@@ -488,6 +499,11 @@ def _case_observability(
         "planning_model_requests",
         "semantic_revision_model_requests",
         "repair_model_requests",
+        "graph_shape_model_requests",
+        "graph_shape_review_model_requests",
+        "graph_shape_enrichment_model_requests",
+        "compilation_model_requests",
+        "graph_semantic_review_model_requests",
         "schema_retry_count",
         "semantic_repair_count",
         "elapsed_ms",
@@ -495,6 +511,7 @@ def _case_observability(
         if not _nonnegative_int(item.get(field)):
             _failure(failures, implementation, "case-observability", case_id=case_id, field=field)
     for field in (
+        "graph_semantic_reviewed",
         "semantic_revision_required",
         "semantic_revision_attempted",
         "semantic_revision_applied",
@@ -528,6 +545,24 @@ def _case_observability(
             )
         ):
             _failure(failures, implementation, "case-observability", case_id=case_id, field="model_requests")
+        if implementation == "stigmergy":
+            phase_fields = (
+                "graph_shape_model_requests",
+                "graph_shape_review_model_requests",
+                "graph_shape_enrichment_model_requests",
+                "compilation_model_requests",
+                "graph_semantic_review_model_requests",
+            )
+            if any(item.get(field, 0) < 1 for field in phase_fields[:4]) or sum(
+                item.get(field, 0) for field in phase_fields
+            ) != item.get("planning_model_requests"):
+                _failure(
+                    failures,
+                    implementation,
+                    "case-observability",
+                    case_id=case_id,
+                    field="graph_phase_requests",
+                )
         if (
             _nonnegative_int((execution or {}).get("configured_max_turns"))
             and model_requests > execution["configured_max_turns"]
@@ -594,6 +629,16 @@ def _verify_case_payload(
         "case_sha256": item.get("case_sha256"),
         "fixture_sha256": item.get("fixture_sha256"),
         "plan": None if not isinstance(payload, dict) else payload.get("plan"),
+        "graph_shape": None if not isinstance(payload, dict) else payload.get("graph_shape"),
+        "graph_shape_draft": (
+            None if not isinstance(payload, dict) else payload.get("graph_shape_draft")
+        ),
+        "graph_shape_review": (
+            None if not isinstance(payload, dict) else payload.get("graph_shape_review")
+        ),
+        "graph_shape_violations": (
+            None if not isinstance(payload, dict) else payload.get("graph_shape_violations")
+        ),
         "reviewed_plan": None if not isinstance(payload, dict) else payload.get("reviewed_plan"),
         "semantic_revision": _semantic_revision_telemetry(item),
         "repair_plan": None if not isinstance(payload, dict) else payload.get("repair_plan"),
@@ -625,6 +670,50 @@ def _verify_case_payload(
         )
         recorded_effective = FilingPlan.model_validate(payload["effective_plan"])
         case = load_case(expected.case_paths[case_id])
+        recorded_shape = (
+            GraphShape.model_validate(payload["graph_shape"])
+            if payload["graph_shape"] is not None
+            else None
+        )
+        recorded_shape_draft = (
+            GraphTopology.model_validate(payload["graph_shape_draft"])
+            if payload["graph_shape_draft"] is not None
+            else None
+        )
+        recorded_shape_review = (
+            GraphTopology.model_validate(payload["graph_shape_review"])
+            if payload["graph_shape_review"] is not None
+            else None
+        )
+        recorded_shape_violations = payload["graph_shape_violations"]
+        if not isinstance(recorded_shape_violations, list) or any(
+            not isinstance(value, str) for value in recorded_shape_violations
+        ):
+            raise ValueError("graph shape violations must be a string list")
+        if implementation == "stigmergy":
+            if (
+                recorded_shape is None
+                or recorded_shape_draft is None
+                or recorded_shape_review is None
+            ):
+                _failure(failures, implementation, "case-graph-shape", case_id=case_id)
+                return
+            computed_shape_violations = list(
+                graph_topology_violations(recorded_shape_review, recorded_shape)
+                + graph_shape_violations(
+                    recorded_shape,
+                    draft,
+                    source_path=case["source_path"],
+                )
+            )
+            if computed_shape_violations != recorded_shape_violations or item.get(
+                "graph_semantic_reviewed"
+            ) != (not computed_shape_violations):
+                _failure(failures, implementation, "case-graph-shape", case_id=case_id)
+            if require_passing and (
+                computed_shape_violations or not item.get("graph_semantic_reviewed")
+            ):
+                _failure(failures, implementation, "case-graph-shape", case_id=case_id)
         source_text = expected.fixture_paths[case_id].read_text(encoding="utf-8")
         with prepared(
             case,
@@ -645,10 +734,16 @@ def _verify_case_payload(
                     unrestricted=True,
                 ),
             )
-            revision_required = requires_semantic_revision(
-                draft,
-                safe_context,
-                authorized_existing_paths=authorized_existing_paths,
+            graph_shape_failed = recorded_shape is not None and not item.get(
+                "graph_semantic_reviewed"
+            )
+            revision_required = graph_shape_failed or (
+                not item.get("graph_semantic_reviewed")
+                and requires_semantic_revision(
+                    draft,
+                    safe_context,
+                    authorized_existing_paths=authorized_existing_paths,
+                )
             )
             telemetry = _semantic_revision_telemetry(item)
             if telemetry["required"] != revision_required:
@@ -683,6 +778,8 @@ def _verify_case_payload(
                 replay_planner,
                 planning_model_requests=item["planning_model_requests"],
                 max_turns=item["configured_max_turns"],
+                graph_shape=recorded_shape,
+                semantic_reviewed=item["graph_semantic_reviewed"],
                 return_plan=True,
                 return_repair_plan=True,
             )
@@ -715,11 +812,14 @@ def _verify_case_payload(
     if run_id is not None:
         replayed_effective[(implementation, run_id, case_id)] = replayed_effective_payload
     semantic = score(replayed_effective_plan, case, source_text=source_text)
+    graph_shape_score = score_graph_shape(recorded_shape, case)
+    semantic["graph_shape"] = graph_shape_score
+    semantic["passed"] = bool(semantic["passed"] and graph_shape_score["passed"])
     expected_raw_gates = {
         **{gate: semantic[gate]["passed"] for gate in sorted(semantic) if gate != "passed"},
         "writer": writer["passed"],
     }
-    if item.get("score") != semantic:
+    if _canonical_json(item.get("score")) != _canonical_json(semantic):
         _failure(failures, implementation, "case-semantic-score", case_id=case_id)
     if item.get("gates") not in (_recorded_writer_gates(writer), writer):
         _failure(failures, implementation, "case-writer-gate", case_id=case_id)

@@ -21,6 +21,25 @@
       {"action": "create", "role": "concept", "title": "Harness Engineering Trust Framework"}
     ]
   },
+  "graph_shape": {
+    "closed": true,
+    "required_subjects": [
+      {"title": "Harness Engineering", "role": "concept", "abstraction": "practice"},
+      {"title": "Agent Harness", "role": "concept", "abstraction": "system"}
+    ],
+    "required_terms": [
+      "Skills",
+      "MCP",
+      "subagents",
+      "long-term memory",
+      "one million lines",
+      "1,500 pull requests",
+      "rank 30",
+      "top 5",
+      "polished but broken",
+      "working app"
+    ]
+  },
   "identities": {
     "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
     "allowed": ["Claude Code", "Codex"],

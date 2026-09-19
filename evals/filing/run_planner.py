@@ -34,7 +34,7 @@ try:
         PRODUCTION_REASONING_LEVEL,
         REASONING_LEVELS,
     )
-    from planner_eval import load_case, score
+    from planner_eval import load_case, score, score_graph_shape
     from worktree import apply_and_gate, apply_with_production_repair, effective_plan, prepared
 except ModuleNotFoundError:
     from evals.filing.constants import (
@@ -44,7 +44,7 @@ except ModuleNotFoundError:
         PRODUCTION_REASONING_LEVEL,
         REASONING_LEVELS,
     )
-    from evals.filing.planner_eval import load_case, score
+    from evals.filing.planner_eval import load_case, score, score_graph_shape
     from evals.filing.worktree import (
         apply_and_gate,
         apply_with_production_repair,
@@ -185,7 +185,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.reasoning_level is not None
             else {}
         )
-        planner = PydanticPlanner(settings, **planner_kwargs)
+        planner = PydanticPlanner(
+            settings,
+            reasoning_level_override=args.reasoning_level,
+            **planner_kwargs,
+        )
         run = planner.plan(
             worktree=evaluation.root,
             envelope=evaluation.envelope,
@@ -200,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
                 planner,
                 planning_model_requests=run.model_requests,
                 max_turns=args.max_turns,
+                graph_shape=run.graph_shape,
                 semantic_reviewed=run.semantic_reviewed,
                 return_plan=True,
                 return_repair_plan=True,
@@ -218,6 +223,9 @@ def main(argv: list[str] | None = None) -> int:
             recorded_repair_plan = None
         scored_plan = effective_plan(evaluation, plan_for_score) if gates["passed"] else plan_for_score
         semantic = score(scored_plan, case, source_text=source_text)
+        graph_shape_score = score_graph_shape(run.graph_shape, case)
+        semantic["graph_shape"] = graph_shape_score
+        semantic["passed"] = bool(semantic["passed"] and graph_shape_score["passed"])
         planning_model_requests = int(run.model_requests)
         semantic_revision_model_requests = int(gates["semantic_revision_model_requests"])
         repair_model_requests = int(gates["repair_model_requests"])
@@ -261,11 +269,20 @@ def main(argv: list[str] | None = None) -> int:
             "case_sha256": case_sha256,
             "fixture_sha256": fixture_sha256,
             "plan": run.plan.model_dump(mode="json"),
-            "editorial_intent": (
-                run.editorial_intent.model_dump(mode="json")
-                if run.editorial_intent is not None
+            "graph_shape": (
+                run.graph_shape.model_dump(mode="json") if run.graph_shape is not None else None
+            ),
+            "graph_shape_draft": (
+                run.graph_shape_draft.model_dump(mode="json")
+                if run.graph_shape_draft is not None
                 else None
             ),
+            "graph_shape_review": (
+                run.graph_shape_review.model_dump(mode="json")
+                if run.graph_shape_review is not None
+                else None
+            ),
+            "graph_shape_violations": list(run.graph_shape_violations),
             "reviewed_plan": (
                 plan_for_score.model_dump(mode="json")
                 if gates["semantic_revision_applied"]
@@ -286,6 +303,9 @@ def main(argv: list[str] | None = None) -> int:
         runtime = {
             "model": LIBRARIAN_MODEL.removeprefix("openrouter:"),
             "reasoning_level": reasoning_level,
+            "graph_shape_reasoning_level": reasoning_level,
+            "compilation_reasoning_level": reasoning_level,
+            "graph_shape_max_tokens": LIBRARIAN_MAX_TOKENS,
             "provider": LIBRARIAN_PROVIDER_ROUTING["only"][0],
             "max_tokens": LIBRARIAN_MAX_TOKENS,
         }
@@ -300,10 +320,12 @@ def main(argv: list[str] | None = None) -> int:
             "configured_max_turns": args.max_turns,
             "model_requests": model_requests,
             "planning_model_requests": planning_model_requests,
-            "editorial_semantic_reviewed": run.semantic_reviewed,
-            "editorial_intent_model_requests": run.editorial_intent_model_requests,
-            "editorial_compilation_model_requests": run.editorial_compilation_model_requests,
-            "editorial_compliance_model_requests": run.editorial_compliance_model_requests,
+            "graph_shape_model_requests": run.graph_shape_model_requests,
+            "graph_shape_review_model_requests": run.graph_shape_review_model_requests,
+            "graph_shape_enrichment_model_requests": run.graph_shape_enrichment_model_requests,
+            "compilation_model_requests": run.compilation_model_requests,
+            "graph_semantic_review_model_requests": run.semantic_review_model_requests,
+            "graph_semantic_reviewed": run.semantic_reviewed,
             "semantic_revision_required": gates["semantic_revision_required"],
             "semantic_revision_attempted": gates["semantic_revision_attempted"],
             "semantic_revision_applied": gates["semantic_revision_applied"],

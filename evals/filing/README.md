@@ -6,26 +6,29 @@ every versioned filing case and fixture, and the exact checked-out brain prompt.
 self-attest those inputs. This is a release gate, not a fake-backend test or a score-only benchmark.
 
 The artifact contains one complete result for every current case inside every recorded repeat. It
-does not accept a summary score standing in for individual case results. Schema v4 binds every result
+does not accept a summary score standing in for individual case results. Schema v5 binds every result
 to the SHA-256 of its versioned case and readable fixture, plus the commit and SHA-256 of the exact
 knowledge-repository librarian prompt that executed it. Each case result records the full raw semantic
 gate map: mutation and identity quality, links and reference resolution, readable bodies, local
-provenance, entity relationships, anti-fragmentation, writer gates, actual model requests, derived
-schema retries, semantic-revision trigger/attempt/application and request metrics, semantic-repair
+provenance, entity relationships, anti-fragmentation, graph-shape quality, writer gates, actual model
+requests split across topology draft, topology review, evidence enrichment, compilation, and editorial
+review, derived schema retries, semantic-revision trigger/attempt/application and request metrics, semantic-repair
 count, elapsed time, and a content-addressed output reference. Its
-canonical payload retains the original draft, any reviewed replacement, nullable canonical `RepairPlan`
+canonical payload retains the reviewed `GraphTopology`, enriched `GraphShape`, graph-contract violations,
+the original filing draft, any post-planning reviewed replacement, nullable canonical `RepairPlan`
 and its SHA-256, and the effective derived plan, never source text. A repair plan is recorded only when
 the pure-create structural-repair request actually runs; otherwise both fields are null. The gate rebuilds pristine ACL-safe context and the complete internal authorized-page
-set, replays the draft/review through the production writer once, and requires its canonical effective
+set, recomputes topology and graph-shape compliance, replays the filing plan through the production writer once, and requires its canonical effective
 plan to equal the recorded plan before deriving the revision telemetry, semantic score, writer gate,
 raw gate map, and blind-review effective-page hash against the current case and fixture. Token usage is recorded only when the runner
-exposes it; provider fields are never inferred. Schema v3 is obsolete because it cannot bind the original
-draft and reviewed-plan telemetry required for that replay. This is a v4 clean cut: an older v4 record
-without the nullable repair fields or the Stigmergy `max_tokens` ceiling is not replayable admission evidence and must be rerun.
+exposes it; provider fields are never inferred. Schema v4 is obsolete because it cannot bind the
+agent-authored topology, enriched graph shape, editorial review, or their phase telemetry. Schema v5 is
+a clean cut: older evidence is not replayable admission evidence and must be rerun.
 
 The selected Stigmergy level requires at least three independent, complete,
-`production-equivalent` repeats per case. Those runs use the production Cerebras route and the fixed
-three-request budget, exercise the temporary-worktree writer and bounded semantic-repair path, and must
+`production-equivalent` repeats per case. Those runs use the production Cerebras route, medium reasoning,
+and a bounded eight-request ceiling. A healthy graph-shaped capture uses five requests; the remaining
+budget is available only for schema or semantic correction. Runs exercise the temporary-worktree writer and bounded semantic-repair path, and must
 all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
 blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a
 material regression. Hippocampus is comparative baseline evidence, not an admission candidate: its
@@ -82,7 +85,7 @@ content hash only. Add `--include-payload` only when recording a local release a
 derived page bodies and an explicit stderr warning, but never the supplied source text. The emitted
 `case_result` with that flag is the exact object embedded under its repeat's `case_results` array.
 Use the same repeat ID for every case in one matrix repeat; record a new ID for each independent
-repeat. The top-level repeat records the shared runtime, execution mode, three-request budget, and
+repeat. The top-level repeat records the shared runtime, execution mode, eight-request ceiling, and
 candidate provenance. The validator requires the nested records to repeat that runtime and budget,
 so summaries cannot stand in for individual outcomes.
 

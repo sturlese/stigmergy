@@ -6,6 +6,7 @@ import contextlib
 import os
 
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
+
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:openai/gpt-oss-120b"
 LIBRARIAN_REASONING_LEVEL = "medium"

@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "example_only": true,
   "admission_status": "passed",
   "blind_review_packet": {
@@ -36,16 +36,16 @@
   "runs": [
     {
       "implementation": "stigmergy",
-      "run_id": "matrix-high-repeat-1",
+      "run_id": "matrix-medium-repeat-1",
       "runtime": {
         "model": "openai/gpt-oss-120b",
-        "reasoning_level": "high",
+        "reasoning_level": "medium",
         "provider": "cerebras",
         "max_tokens": 40960
       },
       "execution": {
         "mode": "production-equivalent",
-        "configured_max_turns": 3
+        "configured_max_turns": 8
       },
       "provenance": {
         "corpus_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -74,14 +74,20 @@
           },
           "runtime": {
             "model": "openai/gpt-oss-120b",
-            "reasoning_level": "high",
+          "reasoning_level": "medium",
             "provider": "cerebras",
             "max_tokens": 40960
           },
           "execution_mode": "production-equivalent",
-          "configured_max_turns": 3,
-          "model_requests": 1,
-          "planning_model_requests": 1,
+          "configured_max_turns": 8,
+          "model_requests": 5,
+          "planning_model_requests": 5,
+          "graph_shape_model_requests": 1,
+          "graph_shape_review_model_requests": 1,
+          "graph_shape_enrichment_model_requests": 1,
+          "compilation_model_requests": 1,
+          "graph_semantic_review_model_requests": 1,
+          "graph_semantic_reviewed": true,
           "semantic_revision_required": false,
           "semantic_revision_attempted": false,
           "semantic_revision_applied": false,
@@ -92,7 +98,7 @@
           "semantic_repair_count": 0,
           "elapsed_ms": 1234,
           "usage": {
-            "requests": 1
+            "requests": 5
           },
           "score": {
             "passed": true
@@ -113,6 +119,7 @@
             "entity_relationships": "passed",
             "entity_wikilinks": "passed",
             "anti_fragmentation": "passed",
+            "graph_shape": "passed",
             "writer": "passed"
           },
           "output": {
@@ -127,6 +134,10 @@
             "case_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
             "fixture_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
             "plan": "complete FilingPlan JSON",
+            "graph_shape": "complete GraphShape JSON",
+            "graph_shape_draft": "complete draft GraphTopology JSON",
+            "graph_shape_review": "complete reviewed GraphTopology JSON",
+            "graph_shape_violations": [],
             "reviewed_plan": null,
             "semantic_revision": {
               "required": false,
@@ -147,10 +158,10 @@
   ],
   "reasoning_matrix": [
     {
-      "reasoning_level": "high",
+      "reasoning_level": "medium",
       "runtime": {
         "model": "openai/gpt-oss-120b",
-        "reasoning_level": "high",
+        "reasoning_level": "medium",
         "provider": "cerebras",
         "max_tokens": 40960
       },

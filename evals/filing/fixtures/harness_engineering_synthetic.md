@@ -1,7 +1,8 @@
 # Harness Engineering: explained from zero
 
-This synthetic fixture describes harness engineering: the operational layer that gives an AI
-agent instructions, tools, feedback, and durable memory so it can complete a task reliably.
+This synthetic fixture distinguishes two durable subjects. Harness Engineering is the practice of
+designing and improving an Agent Harness. An Agent Harness is the operational system that gives an
+AI agent instructions, tools, feedback, and durable memory so it can complete a task reliably.
 
 Santi (@santtiagom_) authored this explanation. A model alone is not an agentic system: the model
 only takes text as input and supplies reasoning, while the harness turns those choices into work.

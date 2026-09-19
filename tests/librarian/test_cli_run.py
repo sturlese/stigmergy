@@ -157,15 +157,15 @@ def test_worker_limits_fail_closed(field, value):
         settings.check_domains()
 
 
-@pytest.mark.parametrize("max_turns", (1, 2, 4))
+@pytest.mark.parametrize("max_turns", (1, 2, 3, 4, 5, 6, 7))
 def test_librarian_rejects_a_nonproduction_request_budget(max_turns):
     with pytest.raises(LibrarianConfigError, match="request budget"):
         config.Settings(max_turns=max_turns).check_domains()
 
 
-def test_librarian_request_budget_defaults_to_three_requests():
-    assert config.DEFAULT_MAX_TURNS == 3
-    config.Settings(max_turns=3).check_domains()
+def test_librarian_request_budget_defaults_to_eight_requests():
+    assert config.DEFAULT_MAX_TURNS == 8
+    config.Settings(max_turns=8).check_domains()
 
 
 def test_visibility_budget_covers_extraction_model_and_gates():
