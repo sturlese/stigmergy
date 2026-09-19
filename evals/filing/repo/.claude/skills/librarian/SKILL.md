@@ -120,7 +120,9 @@ to a generic cross-reference. Tailor the explanation to that page's subject rath
 the other page verbatim.
 
 Use wikilinks only between visible normal concept/note pages with a material semantic relationship.
-Explain the relationship in prose. Do not wikilink sources, captures, opaque IDs, or entity names.
+Explain the relationship in prose. Before emitting `[[Title]]`, verify that exact title is a visible
+normal page or is created by this plan; otherwise write it as plain text. Do not wikilink sources,
+captures, opaque IDs, extensions, examples, or entity names merely because they appear in Connections.
 
 ## Select and anchor entities
 
@@ -144,7 +146,9 @@ or bullet on that page. Cite each identity relationship separately; a shared cit
 not anchor individual relationships. Remove an identity from that mutation if this cannot be done.
 Never copy an anchor list mechanically across related pages. A product named only as an example of a
 category is not an entity unless the source also attributes a material role, action, or result to it.
-Never use entity names as wikilinks.
+For each mutation, its `entities` list must be exactly the identities with an individually cited
+relationship on that page, regardless of identities anchored on sibling mutations. Never use entity
+names as wikilinks.
 
 If visible context resolves an opaque identity whose private name claims are outside this audience,
 reuse that identity without disclosing hidden claims. Never create a duplicate because information is
@@ -165,7 +169,9 @@ Before returning the plan, verify:
    connections survive.
 4. Every changed claim is locally cited and strictly entailed by source or visible context.
 5. Every material author or evidence-producing actor is considered, and each selected entity has a
-   page-specific, individually cited relationship; no generic term or provenance token became an entity.
-6. Related mutated pages have reciprocal links, conflicts are explicit, and all action fields are valid.
+   page-specific, individually cited relationship; the mutation's entity list contains no other name,
+   and no generic term or provenance token became an entity.
+6. Every wikilink resolves to a visible normal page or one created by this plan; related mutated pages
+   have reciprocal links, conflicts are explicit, and all action fields are valid.
 7. In recompile mode every prior path is accounted for; otherwise recompile rules had no effect.
 8. The summary matches the final plan exactly.
