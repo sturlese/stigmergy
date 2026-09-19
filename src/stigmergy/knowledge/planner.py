@@ -559,7 +559,7 @@ class PydanticPlanner:
                 ),
                 max_requests=remaining,
                 reasoning_level=self.reasoning_level_override or "medium",
-                recovery_model=remaining == 1,
+                recovery_model=review_requests == 0,
             )
             if not isinstance(review_run.plan, FilingPlan):
                 raise TypeError("graph compliance returned the wrong output type")

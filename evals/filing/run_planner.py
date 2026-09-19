@@ -57,7 +57,6 @@ from stigmergy.kernel.llm import (  # noqa: E402
     LIBRARIAN_MODEL,
     LIBRARIAN_PROVIDER_ROUTING,
     LIBRARIAN_TEMPERATURE,
-    build_model,
 )
 from stigmergy.knowledge.contract import (  # noqa: E402
     KnowledgeContractError,
@@ -69,22 +68,6 @@ from stigmergy.librarian.config import Settings  # noqa: E402
 
 DEFAULT_CASE = ROOT / "evals" / "filing" / "cases" / "harness_engineering.json"
 DEFAULT_WORKTREE = ROOT / "evals" / "filing" / "repo"
-
-
-def _diagnostic_model_factory(reasoning_level: str):
-    """Build the production librarian model with one evaluation-only reasoning override."""
-
-    def factory():
-        model, model_settings = build_model(LIBRARIAN_MODEL)
-        if model_settings is None:
-            raise RuntimeError("diagnostic reasoning requires OpenRouter model settings")
-        reasoning = model_settings.get("openrouter_reasoning")
-        if not isinstance(reasoning, dict):
-            raise RuntimeError("librarian model has no configured reasoning policy")
-        model_settings["openrouter_reasoning"] = {**reasoning, "effort": reasoning_level}
-        return model
-
-    return factory
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -181,15 +164,9 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=args.timeout_s,
             max_turns=args.max_turns,
         )
-        planner_kwargs = (
-            {"model_factory": _diagnostic_model_factory(args.reasoning_level)}
-            if args.reasoning_level is not None
-            else {}
-        )
         planner = PydanticPlanner(
             settings,
             reasoning_level_override=args.reasoning_level,
-            **planner_kwargs,
         )
         run = planner.plan(
             worktree=evaluation.root,
