@@ -884,9 +884,9 @@ def test_harness_score_requires_santi_as_the_canonical_name_not_only_an_alias():
         "include_payload",
     ),
     (
-        ((), 12, (), "medium", "production-equivalent", False),
+        ((), 14, (), "medium", "production-equivalent", False),
         (("--max-turns", "6", "--execution-mode", "planner-only"), 6, (), "medium", "planner-only", True),
-        ((), 12, ("--reasoning-level", "low"), "low", "production-equivalent", False),
+        ((), 14, ("--reasoning-level", "low"), "low", "production-equivalent", False),
     ),
 )
 def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_override(
@@ -1467,4 +1467,4 @@ def test_cli_rejects_a_nonproduction_budget_labeled_production_equivalent(capsys
         )
 
     assert error.value.code == 2
-    assert "production-equivalent requires --max-turns 12" in capsys.readouterr().err
+    assert "production-equivalent requires --max-turns 14" in capsys.readouterr().err
