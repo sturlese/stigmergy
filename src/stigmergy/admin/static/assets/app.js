@@ -508,11 +508,17 @@ async function entitiesView() {
     const externalIds = entity.external_ids.length
       ? h("p", { class: "muted" }, `External IDs: ${entity.external_ids.map((item) => `${item.namespace}:${item.value}`).join(", ")}`)
       : null;
+    const dossier = h("pre", { class: "json", hidden: true });
+    const showDossier = h("button", { class: "button", type: "button", onclick: async () => {
+      const value = await api.get(`entities/${encodeURIComponent(entity.id)}/dossier`);
+      dossier.hidden = false;
+      dossier.textContent = JSON.stringify(value, null, 2);
+    } }, "View knowledge dossier");
     return card(entity.id,
       h("div", { class: "entity-head" }, h("label", { class: "check" }, check, "Select"), badge(entity.entity_type)),
       h("div", { class: "table-wrap" }, h("table", {},
         h("thead", {}, h("tr", {}, ...["Name", "Kind", "Audience", "Source", "Actor", "Introduced"].map((name) => h("th", {}, name)))),
-        h("tbody", {}, ...claimRows))), externalIds, deletion);
+        h("tbody", {}, ...claimRows))), externalIds, deletion, showDossier, dossier);
   });
   merge.disabled = true;
   return h("div", { class: "stack" }, card("Merge identities",

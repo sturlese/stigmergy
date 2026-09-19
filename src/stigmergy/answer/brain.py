@@ -67,11 +67,20 @@ class AnswerBrain:
                  f"type: {ent['type'] or '(none)'}",
                  f"aliases: {', '.join(ent['aliases']) or '(none)'}"]
         lines.append(f"knowledge: {result['knowledge_note']}")
+        lines.append(f"knowledge state: {result.get('knowledge_state', 'available')}")
         for item in result["knowledge"]:
             if ctx is not None:
                 ctx.note_page(item["path"])
             lines.append(f"  - {item['updated'] or '(undated)'} · {item['path']} — "
                          f"{item['title']} ({item['type']}, {item['status']})")
+            if item.get("excerpt"):
+                lines.append(f"    evidence: {item['excerpt']}")
+            for relationship in item.get("relationships", ()):
+                lines.append(f"    connection: {relationship['statement']} "
+                             f"[{relationship['path']}]")
+            for source in item.get("sources", ()):
+                if ctx is not None:
+                    ctx.note_page(source["path"])
         lines.append("sources:")
         for item in result["sources"]:
             if ctx is not None:

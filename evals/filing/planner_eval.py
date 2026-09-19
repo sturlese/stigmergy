@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from pathlib import Path
 
 from stigmergy.entities.service import _tokens as entity_tokens
 from stigmergy.kernel.normalize import resolution_key
-from stigmergy.knowledge.plan import FilingPlan, PageMutation
+from stigmergy.knowledge.plan import FilingPlan, GraphShape, PageMutation
+from stigmergy.knowledge.relationships import has_entity_relationship_evidence
+
+_DASH_VARIANTS = str.maketrans({character: "-" for character in "‐‑‒–—―−"})
 
 
 def load_case(path: str | Path) -> dict:
     """Load one versioned filing case without interpreting source material."""
     case = json.loads(Path(path).read_text(encoding="utf-8"))
-    if case.get("version") != 1:
-        raise ValueError("filing case must declare version 1")
+    if case.get("version") not in {1, 2}:
+        raise ValueError("filing case must declare version 1 or 2")
     for key in (
         "name",
         "source_title",
@@ -47,6 +52,15 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
         },
     )
     alias_score = _alias_evidence(plan, source_text)
+    body_score = _bodies(case, mutations)
+    connection_score = _connections(case, mutations)
+    entity_relationship_score = _entity_relationships(
+        mutations, resolutions, candidates, source_path=case["source_path"]
+    )
+    entity_wikilink_score = _entity_wikilinks(case, mutations, candidates)
+    anti_fragmentation_score = _anti_fragmentation(case, mutations)
+    editorial_quality_score = _editorial_quality(case, plan)
+    seeded_update_score = _seeded_update(case, mutations)
     coverage_score = _link_coverage(
         _proposal_names(plan),
         {
@@ -69,6 +83,13 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
             external_id_score,
             link_score,
             alias_score,
+            body_score,
+            connection_score,
+            entity_relationship_score,
+            entity_wikilink_score,
+            anti_fragmentation_score,
+            editorial_quality_score,
+            seeded_update_score,
             coverage_score,
             resolution_score,
         )
@@ -82,10 +103,121 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
         "link_coverage": coverage_score,
         "reference_resolution": resolution_score,
         "alias_evidence": alias_score,
+        "bodies": body_score,
+        "connections": connection_score,
+        "entity_relationships": entity_relationship_score,
+        "entity_wikilinks": entity_wikilink_score,
+        "anti_fragmentation": anti_fragmentation_score,
+        "editorial_quality": editorial_quality_score,
+        "seeded_update": seeded_update_score,
+    }
+
+
+def score_graph_shape(
+    shape: GraphShape | None,
+    case: dict,
+    plan: FilingPlan | None = None,
+) -> dict:
+    """Score the agent-authored semantic topology separately from compiled mutations."""
+    expectation = case.get("graph_shape")
+    if not expectation:
+        return {
+            "recorded": shape is not None,
+            "required": [],
+            "actual": [],
+            "missing": [],
+            "unexpected": [],
+            "passed": True,
+        }
+    required = {
+        (resolution_key(item["title"]), item["abstraction"])
+        for item in expectation.get("required_subjects", ())
+    }
+    if shape is None:
+        return {
+            "recorded": False,
+            "required": sorted(required),
+            "actual": [],
+            "missing": [],
+            "unexpected": [],
+            "passed": True,
+        }
+    actual = {
+        (resolution_key(subject.title), subject.abstraction)
+        for subject in (() if shape is None else shape.subjects)
+    }
+    missing = required - actual
+    unexpected = actual - required if expectation.get("closed", True) else set()
+    actual_roles = {resolution_key(subject.title): subject.role for subject in shape.subjects}
+    role_mismatches = [
+        {
+            "title": item["title"],
+            "required": item["role"],
+            "actual": actual_roles.get(resolution_key(item["title"])),
+        }
+        for item in expectation.get("required_subjects", ())
+        if item.get("role")
+        and actual_roles.get(resolution_key(item["title"])) != item["role"]
+    ]
+    required_terms = tuple(expectation.get("required_terms", ()))
+    actual_terms = {
+        _normalized_text(term)
+        for subject in shape.subjects
+        for term in subject.required_terms
+    }
+    shape_missing_terms = [
+        term
+        for term in required_terms
+        if not any(_normalized_text(term) in actual_term for actual_term in actual_terms)
+    ]
+    published_text = _normalized_text(
+        "\n".join(mutation.body or "" for mutation in (() if plan is None else plan.mutations))
+    )
+    recovered_terms = [
+        term for term in shape_missing_terms if _normalized_text(term) in published_text
+    ]
+    missing_terms = [term for term in shape_missing_terms if term not in recovered_terms]
+    return {
+        "recorded": True,
+        "required": sorted(required),
+        "actual": sorted(actual),
+        "missing": sorted(missing),
+        "unexpected": sorted(unexpected),
+        "role_mismatches": role_mismatches,
+        "recovered_required_terms": recovered_terms,
+        "missing_required_terms": missing_terms,
+        "passed": not missing and not unexpected and not role_mismatches and not missing_terms,
     }
 
 
 def _mutations(expectation: dict, mutations: tuple[PageMutation, ...]) -> dict:
+    if "min_count" in expectation:
+        required = {_case_signature(item) for item in expectation.get("required", ())}
+        allowed = required | {_case_signature(item) for item in expectation.get("allowed", ())}
+        forbidden = {_case_signature(item) for item in expectation.get("forbidden", ())}
+        actual = tuple(_mutation_signature(mutation) for mutation in mutations)
+        found = set(actual)
+        duplicates = {item for item in found if actual.count(item) > 1}
+        missing = required - found
+        unexpected = found - allowed if expectation.get("closed", True) else set()
+        present_forbidden = forbidden & found
+        minimum = int(expectation["min_count"])
+        maximum = int(expectation["max_count"])
+        expected_indexes = tuple(index for index, signature in enumerate(actual) if signature in allowed)
+        return {
+            "minimum_count": minimum,
+            "maximum_count": maximum,
+            "actual_count": len(mutations),
+            "required": required,
+            "allowed": allowed,
+            "missing": missing,
+            "unexpected": unexpected,
+            "forbidden_present": present_forbidden,
+            "duplicates": duplicates,
+            "expected_indexes": expected_indexes,
+            "passed": minimum <= len(mutations) <= maximum and not missing and not unexpected
+            and not present_forbidden and not duplicates,
+        }
     allowed = {_case_signature(item) for item in expectation["allowed"]}
     actual = tuple(_mutation_signature(mutation) for mutation in mutations)
     expected_indexes = tuple(index for index, signature in enumerate(actual) if signature in allowed)
@@ -105,6 +237,16 @@ def _mutations(expectation: dict, mutations: tuple[PageMutation, ...]) -> dict:
 
 
 def _public_mutation_score(score: dict) -> dict:
+    if "minimum_count" in score:
+        return {
+            key: (
+                [_render_signature(item) for item in sorted(score[key])]
+                if key in {"required", "allowed", "missing", "unexpected", "forbidden_present", "duplicates"}
+                else score[key]
+            )
+            for key in ("minimum_count", "maximum_count", "actual_count", "required", "allowed",
+                        "missing", "unexpected", "forbidden_present", "duplicates", "passed")
+        }
     return {
         key: (
             [_render_signature(item) for item in sorted(score[key])]
@@ -126,9 +268,17 @@ def _case_signature(item: dict) -> tuple[str, str, str]:
 def _mutation_signature(mutation: PageMutation) -> tuple[str, str, str]:
     return (
         mutation.action,
-        mutation.role or "",
-        resolution_key(mutation.title or mutation.path or ""),
+        "" if mutation.action == "update" else mutation.role or "",
+        resolution_key(_mutation_label(mutation)),
     )
+
+
+def _mutation_label(mutation: PageMutation) -> str:
+    if mutation.action == "update" and mutation.path:
+        return Path(mutation.path).stem
+    if mutation.title:
+        return mutation.title
+    return mutation.path or ""
 
 
 def _render_signature(value: tuple[str, str, str]) -> dict:
@@ -209,6 +359,250 @@ def _alias_evidence(plan: FilingPlan, source_text: str) -> dict:
             ):
                 missing.append({"proposal": proposal.name, "alias": alias})
     return {"missing": missing, "passed": not missing}
+
+
+def _bodies(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
+    expectation = case.get("bodies", {})
+    relevant = tuple(mutation for mutation in mutations if mutation.action != "delete")
+    combined = _normalized_text("\n".join(mutation.body or "" for mutation in relevant))
+    required = [str(value) for value in expectation.get("required", ())]
+    required_any = tuple(expectation.get("required_any", ()))
+    forbidden = [str(value) for value in expectation.get("forbidden", ())]
+    missing = [value for value in required if _normalized_text(value) not in combined]
+    missing_any = [
+        str(group.get("label") or "required semantic coverage")
+        for group in required_any
+        if not _body_requirement_met(combined, group)
+    ]
+    present_forbidden = [value for value in forbidden if _normalized_text(value) in combined]
+    heading_mismatch = [
+        mutation.title or mutation.path or ""
+        for mutation in relevant
+        if mutation.action == "create" and mutation.title
+        and not (mutation.body or "").lstrip().startswith(f"# {mutation.title}")
+    ]
+    placeholders = [
+        mutation.title or mutation.path or ""
+        for mutation in relevant
+        if _placeholder_body(mutation.body or "")
+    ]
+    source_path = str(case.get("source_path") or "")
+    missing_citations = [
+        mutation.title or mutation.path or ""
+        for mutation in relevant
+        if expectation.get("require_local_source") and source_path not in (mutation.body or "")
+    ]
+    return {
+        "missing_required": missing,
+        "missing_required_any": missing_any,
+        "forbidden_present": present_forbidden,
+        "heading_mismatch": heading_mismatch,
+        "placeholders": placeholders,
+        "missing_local_source_attribution": missing_citations,
+        "passed": not missing and not missing_any and not present_forbidden and not heading_mismatch
+        and not placeholders and not missing_citations,
+    }
+
+
+def _anti_fragmentation(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
+    """Reject only declared redundant conceptual splits; it is not a page-count quota."""
+    expectation = case.get("anti_fragmentation", {})
+    groups = tuple(expectation.get("redundant_title_groups", ()))
+    created = {
+        resolution_key(mutation.title or mutation.path or "")
+        for mutation in mutations
+        if mutation.action == "create" and mutation.role in {"note", "concept"}
+    }
+    fragmented = []
+    for group in groups:
+        members = {resolution_key(title) for title in group}
+        overlap = sorted(created & members)
+        if len(overlap) > 1:
+            fragmented.append(overlap)
+    return {"fragmented_groups": fragmented, "passed": not fragmented}
+
+
+def _placeholder_body(body: str) -> bool:
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    prose = " ".join(lines[1:]) if lines and lines[0].startswith("# ") else ""
+    alphanumeric = re.sub(r"[^A-Za-z0-9]", "", prose)
+    return not prose or len(alphanumeric) < 32 or bool(
+        re.search(r"\b(?:todo|tbd|placeholder|to be written|coming soon)\b", prose, re.I)
+    )
+
+
+def _editorial_quality(case: dict, plan: FilingPlan) -> dict:
+    expectation = case.get("editorial_quality", {})
+    mutations = tuple(mutation for mutation in plan.mutations if mutation.action != "delete")
+    minimum = int(expectation.get("min_explanatory_paragraphs", 0))
+    paragraph_counts = {
+        _mutation_label(mutation): _explanatory_paragraph_count(mutation.body or "")
+        for mutation in mutations
+    }
+    thin_pages = sorted(title for title, count in paragraph_counts.items() if count < minimum)
+    combined = "\n".join(mutation.body or "" for mutation in mutations)
+    missing_caveat = bool(expectation.get("require_epistemic_caveat")) and not re.search(
+        r"\b(?:does\s+not\s+(?:report|provide|specify)|no\s+(?:score|scores|result|results|"
+        r"threshold|thresholds|procedure|methodology)\s+(?:is|are|was|were)?\s*(?:reported|provided|"
+        r"specified)|not\s+independently\s+verified|source[- ]reported|source\s+(?:omits|gives\s+no|"
+        r"provides\s+no))\b",
+        combined,
+        flags=re.IGNORECASE,
+    )
+    inventory_pages = []
+    if expectation.get("reject_evidence_inventory_mirroring"):
+        inventory_pages = sorted(
+            _mutation_label(mutation)
+            for mutation in mutations
+            if _looks_like_evidence_inventory(mutation.body or "")
+        )
+    duplicate_prefixes = []
+    if expectation.get("reject_duplicate_entity_prefixes"):
+        for mutation in mutations:
+            for proposal in plan.entities:
+                if _duplicated_name(mutation.body or "", proposal.name):
+                    duplicate_prefixes.append(
+                        {"mutation": _mutation_label(mutation), "entity": proposal.name}
+                    )
+    return {
+        "explanatory_paragraphs": paragraph_counts,
+        "thin_pages": thin_pages,
+        "missing_epistemic_caveat": missing_caveat,
+        "inventory_pages": inventory_pages,
+        "duplicate_entity_prefixes": duplicate_prefixes,
+        "passed": not thin_pages
+        and not missing_caveat
+        and not inventory_pages
+        and not duplicate_prefixes,
+    }
+
+
+def _seeded_update(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
+    expectation = case.get("seeded_update")
+    if not expectation:
+        return {"required": False, "missing_terms": [], "passed": True}
+    path = str(expectation["path"])
+    mutation = next(
+        (item for item in mutations if item.action == "update" and item.path == path),
+        None,
+    )
+    body = _normalized_text("" if mutation is None else mutation.body or "")
+    missing = [
+        str(term)
+        for term in expectation.get("preserve_terms", ())
+        if _normalized_text(term) not in body
+    ]
+    return {
+        "required": True,
+        "path": path,
+        "missing_terms": missing,
+        "passed": mutation is not None and not missing,
+    }
+
+
+def _explanatory_paragraph_count(body: str) -> int:
+    count = 0
+    for block in re.split(r"\n\s*\n", body):
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines or all(line.startswith("#") for line in lines):
+            continue
+        if all(re.match(r"^(?:[-*+]|\d+[.)])\s+", line) for line in lines):
+            continue
+        prose = re.sub(r"\(Source:\s*`[^`]+`\)", "", " ".join(lines), flags=re.I)
+        prose = re.sub(r"[#*_`]", "", prose)
+        if len(re.findall(r"\b\w+\b", prose, flags=re.UNICODE)) >= 12:
+            count += 1
+    return count
+
+
+def _looks_like_evidence_inventory(body: str) -> bool:
+    listed = sum(
+        1
+        for line in body.splitlines()
+        if re.match(r"^\s*(?:[-*+]|\d+[.)])\s+", line)
+    )
+    return listed >= 4 and _explanatory_paragraph_count(body) < 2
+
+
+def _duplicated_name(body: str, name: str) -> bool:
+    escaped = re.escape(name)
+    return bool(
+        re.search(
+            rf"(?<!\w){escaped}(?!\w)(?:\s*\([^\n)]*\))?\s+{escaped}(?!\w)",
+            body,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _connections(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
+    by_title = {resolution_key(_mutation_label(mutation)): mutation for mutation in mutations}
+    missing = []
+    for item in case.get("connections", ()):
+        source = resolution_key(item["from"])
+        target = str(item["to"])
+        source_mutation = by_title.get(source)
+        if source_mutation is None or f"[[{target}".casefold() not in (source_mutation.body or "").casefold():
+            missing.append({"from": item["from"], "to": target})
+            continue
+        if item.get("reciprocal"):
+            target_mutation = by_title.get(resolution_key(target))
+            if target_mutation is None or f"[[{item['from']}".casefold() not in (target_mutation.body or "").casefold():
+                missing.append({"from": target, "to": item["from"]})
+    return {"missing": missing, "passed": not missing}
+
+
+def _entity_relationships(mutations, resolutions, candidates, *, source_path: str) -> dict:
+    missing = []
+    for index, mutation in enumerate(mutations):
+        body = mutation.body or ""
+        for canonical in resolutions["resolved"].get(index, ()):
+            names = [
+                value for value, entries in candidates.items()
+                if any(candidate == canonical for _proposal, candidate in entries)
+            ]
+            if not any(
+                has_entity_relationship_evidence(body, name, (source_path,))
+                for name in names
+            ):
+                missing.append({"mutation": mutation.title or mutation.path, "entity": canonical})
+    return {"missing": missing, "passed": not missing}
+
+
+def _entity_wikilinks(case, mutations, candidates) -> dict:
+    """Reject links that pretend an internal entity anchor is a normal wiki page."""
+    normal_targets = {
+        resolution_key(value)
+        for value in (
+            *case.get("normal_page_targets", ()),
+            *(
+                _mutation_label(mutation)
+                for mutation in mutations
+                if mutation.role in {"note", "concept"} or mutation.action == "update"
+            ),
+        )
+        if value
+    }
+    violations = []
+    for mutation in mutations:
+        for target in re.findall(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]", mutation.body or ""):
+            key = resolution_key(target)
+            if key in candidates and key not in normal_targets:
+                violations.append({"mutation": _mutation_label(mutation), "target": target})
+    return {"violations": violations, "passed": not violations}
+
+
+def _body_requirement_met(body: str, requirement: dict) -> bool:
+    if any(_normalized_text(phrase) in body for phrase in requirement.get("phrases", ())):
+        return True
+    return any(
+        all(_normalized_text(term) in body for term in terms)
+        for terms in requirement.get("co_occurrence", ())
+    )
+
+
+def _normalized_text(value: object) -> str:
+    return unicodedata.normalize("NFKC", str(value)).translate(_DASH_VARIANTS).casefold()
 
 
 def _membership(expectation: dict, found: set[str]) -> dict:

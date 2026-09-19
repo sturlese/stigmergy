@@ -63,7 +63,9 @@ binary evidence, Slack, audit. Stigmergy adds exactly that and nothing that dupl
 2. **Queue.** Every adapter produces the same kind-free `CaptureEnvelope`. The Postgres queue is
    durable, leased, and idempotent per actor and client key.
 3. **Write.** One serialized writer extracts text, renders the immutable source page, asks the
-   librarian for a `FilingPlan`, and advances the branch only when every gate passes.
+   librarian for a `FilingPlan`, and advances the branch only when every gate passes. A source may
+   produce zero or more knowledge mutations: the graph unit is a reusable idea, not the document
+   that happened to contain it.
 4. **Remember.** The knowledge repository is plain Git and Markdown. Postgres is operational state
    and a rebuildable index, never a second wiki.
 5. **Read.** Five MCP tools for agents, `@brain` for people, one visibility policy. A webhook
@@ -84,6 +86,14 @@ The librarian may create or rewrite a note or concept, consolidate and delete a 
 propose an entity claim, add or resolve a contradiction, or file nothing — the source still lands.
 It never rewrites `sources/` and never broadens an ACL. Deletion is a separate explicit operation
 (`brain_delete`) through the same writer and gates.
+
+Each accepted knowledge mutation must be readable without reopening the source: it states the
+supported conclusion, gives local source attribution, and explains every material page or entity
+relationship in prose. A draft that changes a visible existing page receives one bounded semantic
+revision using the same source and safe context; the revision replaces the complete plan or nothing.
+Pure-create drafts retain the bounded repair path for structural writer violations. If either path
+fails, the writer commits only the immutable source and reports the plan as rejected; it never
+leaves a partial derived graph.
 
 ## The knowledge model
 
@@ -124,7 +134,10 @@ on 15 September 2026.
 ```
 
 Entities are opaque IDs with scoped, sourced name claims; facts live in notes and concepts and
-`describe_entity` composes them at read time. Merging needs a shared external ID or an exact
+`describe_entity` composes a bounded reader-scoped dossier with excerpts, local sources, and authored
+relationships at read time. The raw identity record is intentionally not a human dossier; one
+`describe_entity` call supplies the visible material a client needs to render `What / Who`, `Facts`,
+and `Connections`, with explicit truncation when the ACL-visible result is capped. Merging needs a shared external ID or an exact
 assertion in a source — resemblance does nothing.
 
 When credible sources disagree, the librarian keeps both claims in a strict marker on the narrowest
@@ -197,6 +210,9 @@ The same tools and the same token rules apply whether a person is driving the se
 agent runs on its own after a task. Private Drive needs
 `STIGMERGY_GOOGLE_CLIENT_SECRETS=/absolute/path/google-oauth-client.json`.
 
+The bridge is transport and local acquisition, not a second knowledge compiler. It forwards the
+same `describe_entity` projection and filing contract as the cloud MCP server.
+
 ### From Slack
 
 - **Ask:** `@brain what is the status of the Borealis rollout?` in a mapped channel. If you can
@@ -231,7 +247,7 @@ The cloud server and the local bridge expose the same surface:
 | `read_page(path)` | one visible page with links and citations |
 | `ask(question)` | a cited, verified answer — or an honest refusal |
 | `list_entities()` | identities with a name you may see |
-| `describe_entity(entity)` | knowledge composed from visible pages |
+| `describe_entity(entity)` | bounded evidence-rich dossier composed from visible pages |
 | `brain_submit(text \| path \| url, title?, occurred_at?, audience?, resolution_of?)` | capture one input; the optional contradiction ID is master-only |
 | `brain_submissions(limit?, status?)` | capture progress |
 | `brain_delete(paths, why)` | explicit deletion with reference sweep |
@@ -265,9 +281,28 @@ alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenA
 credentials are rejected. The librarian's strict provider-native JSON Schema plans are pinned to
 Cerebras, with no provider fallback; requests require supported parameters, deny data collection,
 and require zero-data-retention processing. Librarian reasoning is `high` and excluded from output.
-Each writer attempt makes at most two model requests, including one schema repair. Retryable
-failures use the existing bounded queue-attempt policy; answer and OCR requests retain same-model
-provider failover.
+Its output ceiling is `40960` tokens and is sent to OpenRouter as `max_tokens`. Each
+writer attempt makes at most three model requests across filing, schema retries, semantic draft
+revision, and any bounded repair. A graph-splitting or visible-page draft revision consumes the remaining budget; if
+it is unavailable or fails writer gates, the unreviewed draft is never applied. Retryable failures
+use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider
+failover.
+
+`POST /admin/api/knowledge/recompile` is a separate master-only control: it rebuilds only derived
+notes, concepts, links, and entity anchors from immutable sources in one isolated worktree. It
+reports source count, page mutations, retained identities, link health, request count, and final
+commit; valid source-backed identities are never auto-pruned, and any failed source or gate abandons
+the complete rebuild. A recompile is a `GardenRequest` in `recompile` mode and records its commit
+under the existing `garden` ledger trigger, so the ledger contract remains one coherent mutation
+history rather than adding a second change type.
+
+Before release or deployment, the real-model parity artifact MUST pass
+`python evals/filing/parity.py --artifact <result.json>`; a non-zero result blocks rollout. It
+requires identical corpus, initial graph, source-case hashes, Stigmergy commit and librarian-skill
+hashes across runs; replay-verified draft/revision telemetry and raw gates; a provenance-bearing blind
+review; and a reasoning matrix that proves the selected Stigmergy level is the lowest passing level.
+Schema v3 parity evidence is obsolete because it cannot prove the revision trigger. Hippocampus is retained
+as comparative, replay-verified baseline evidence and is not a Stigmergy admission candidate.
 
 | Purpose | Model |
 |---|---|
@@ -391,7 +426,8 @@ Only the writer's GitHub App identity commits to `wiki/`, `sources/`, and the re
 3. Original bytes and source pages are immutable except through explicit deletion.
 4. One serialized writer: one commit and one change record per operation.
 5. Visibility is a write constraint.
-6. The librarian owns notes and concepts; entity pages hold identity only.
+6. The librarian owns notes and concepts; each source can produce zero or more reusable, connected
+   ideas, while entity pages hold identity only.
 7. No write waits for a human. Uncertainty is represented honestly.
 8. A health finding is preventable or autonomously repairable, or it is not a finding.
 9. Every capability is reachable through Slack, MCP, or the backoffice.

@@ -34,6 +34,22 @@ def _commit(repo: pathlib.Path, message: str) -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
+def _clean_platform_checkout(root: pathlib.Path) -> None:
+    deploy = root / "deploy"
+    deploy.mkdir(parents=True, exist_ok=True)
+    defaults = {
+        "identities.json": b"{}\n",
+        "entity-registry.json": b'{"version": 1, "entities": {}, "redirects": {}}\n',
+        "slack-channels.json": b"{}\n",
+    }
+    for name, content in defaults.items():
+        (deploy / name).write_bytes(content)
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "Test User")
+    _commit(root, "platform deploy fixture")
+
+
 def _staging_checkout(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(origin)], check=True)
@@ -282,9 +298,12 @@ def test_deploy_bakes_only_committed_runtime_controls_from_refresh_root_and_sha(
         encoding="utf-8",
     )
     refresh.chmod(0o755)
+    _clean_platform_checkout(worktree)
     fake_python = tmp_path / "python"
     fake_python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     fake_python.chmod(0o755)
+    parity_artifact = tmp_path / "parity-result.json"
+    parity_artifact.write_text("{}\n", encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     seen = tmp_path / "seen"
@@ -303,8 +322,9 @@ def test_deploy_bakes_only_committed_runtime_controls_from_refresh_root_and_sha(
             **os.environ,
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "STIGMERGY_REPO": str(checkout),
-            "STIGMERGY_PYTHON": str(fake_python),
-            "STAGING_SHA": commit,
+                "STIGMERGY_PYTHON": str(fake_python),
+                "STIGMERGY_PARITY_ARTIFACT": str(parity_artifact),
+                "STAGING_SHA": commit,
             "MUTATED": str(mutated),
             "SEEN": str(seen),
         },
@@ -345,6 +365,7 @@ def test_overlapping_staging_deploy_fails_closed_and_releases_its_lock(tmp_path)
         encoding="utf-8",
     )
     refresh.chmod(0o755)
+    _clean_platform_checkout(worktree)
     calls = tmp_path / "fly.calls"
     validation_calls = tmp_path / "validation.calls"
     refresh_calls = tmp_path / "refresh.calls"
@@ -363,6 +384,8 @@ def test_overlapping_staging_deploy_fails_closed_and_releases_its_lock(tmp_path)
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
+    parity_artifact = tmp_path / "parity-result.json"
+    parity_artifact.write_text("{}\n", encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     real_git = shutil.which("git")
@@ -397,8 +420,9 @@ def test_overlapping_staging_deploy_fails_closed_and_releases_its_lock(tmp_path)
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "STIGMERGY_REPO": str(checkout),
-        "STIGMERGY_PYTHON": str(fake_python),
-        "STAGING_SHA": commit,
+            "STIGMERGY_PYTHON": str(fake_python),
+            "STIGMERGY_PARITY_ARTIFACT": str(parity_artifact),
+            "STAGING_SHA": commit,
         "FLY_CALLS": str(calls),
         "VALIDATION_CALLS": str(validation_calls),
         "REFRESH_CALLS": str(refresh_calls),

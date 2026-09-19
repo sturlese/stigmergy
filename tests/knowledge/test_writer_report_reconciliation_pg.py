@@ -2,6 +2,7 @@
 from stigmergy.capture import evidence, schema
 from stigmergy.capture.schema import Actor
 from stigmergy.capture.service import CaptureService
+from stigmergy.capture.source import source_path
 from stigmergy.knowledge.plan import FilingPlan, PageMutation
 from stigmergy.knowledge.planner import ScriptedPlanner
 from stigmergy.knowledge.writer import WriterDeps
@@ -42,9 +43,8 @@ def test_report_falls_back_when_every_claimed_wiki_change_is_skipped(clean_queue
 
     assert outcome.status == schema.LANDED
     assert item["report"]["wiki_changes"] == 0
-    assert item["report"]["plan_skipped"] == [
-        "mutation[0] update: planned page does not exist",
-    ]
+    assert item["report"]["plan_skipped"] == []
+    assert item["report"]["plan_rejected"] is True
     assert item["report"]["summary"] == "Archived source without wiki changes"
 
 
@@ -68,6 +68,7 @@ def test_report_reconciles_partial_plans_without_repeating_the_model_summary(
                 role="note",
                 title="Weekly policy",
                 body="# Weekly policy\n\nThe approved policy is now weekly.",
+                entities=(),
                 reason="The supplied evidence records the approved weekly policy",
             ),
             PageMutation(
@@ -90,24 +91,24 @@ def test_report_reconciles_partial_plans_without_repeating_the_model_summary(
     )
 
     assert outcome.status == schema.LANDED
-    assert item["report"]["wiki_changes"] == 1
-    assert item["report"]["plan_skipped"] == [
-        "mutation[1] update: planned page does not exist",
-    ]
-    assert item["report"]["summary"] == "Applied 1 wiki change(s); skipped 1 plan operation(s)"
+    assert item["report"]["wiki_changes"] == 0
+    assert item["report"]["plan_skipped"] == []
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["summary"] == "Archived source without wiki changes"
 
 
 def test_report_reconciles_fully_accepted_plans_without_repeating_model_prose(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
-    CaptureService(clean_queue, store).capture_text(
+    receipt = CaptureService(clean_queue, store).capture_text(
         actor=Actor(subject="marc", display_name="Marc"),
         audience=None,
         adapter="mcp",
         text="The approved policy is now monthly.",
         idempotency_key="report-reconciles-full-plan",
     )
+    source = source_path(schema.parse_capture(receipt["request"]))
     plan = FilingPlan(
         summary="Completed unrelated worldwide organizational restructuring",
         mutations=(
@@ -115,7 +116,13 @@ def test_report_reconciles_fully_accepted_plans_without_repeating_model_prose(
                 action="create",
                 role="note",
                 title="Monthly policy",
-                body="# Monthly policy\n\nThe approved policy is now monthly.",
+                body=(
+                    "# Monthly policy\n\n"
+                    "The approved policy is now monthly, replacing the weekly review cadence "
+                    "for this operating process. "
+                    f"(Source: `{source}`)"
+                ),
+                entities=(),
                 reason="The supplied evidence records the approved monthly policy",
             ),
         ),

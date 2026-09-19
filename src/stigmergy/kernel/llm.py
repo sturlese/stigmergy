@@ -9,9 +9,13 @@ from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettin
 
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:openai/gpt-oss-120b"
+LIBRARIAN_RECOVERY_MODEL = "openrouter:openai/gpt-5.4"
+LIBRARIAN_REASONING_LEVEL = "medium"
+LIBRARIAN_MAX_TOKENS = 40960
+LIBRARIAN_TEMPERATURE = 0
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
 APPROVED_MODELS = frozenset(
-    {ANSWER_MODEL, LIBRARIAN_MODEL, OCR_MODEL}
+    {ANSWER_MODEL, LIBRARIAN_MODEL, LIBRARIAN_RECOVERY_MODEL, OCR_MODEL}
 )
 
 OPENROUTER_PROVIDER_POLICY = {
@@ -27,6 +31,10 @@ LIBRARIAN_PROVIDER_ROUTING = {
     "allow_fallbacks": False,
     "only": ["cerebras"],
 }
+LIBRARIAN_RECOVERY_PROVIDER_ROUTING = {
+    "allow_fallbacks": False,
+    "only": ["azure"],
+}
 
 
 def provider_policy(model_name: str) -> dict:
@@ -35,6 +43,9 @@ def provider_policy(model_name: str) -> dict:
     if model_name == LIBRARIAN_MODEL:
         policy.update(LIBRARIAN_PROVIDER_ROUTING)
         policy["only"] = list(LIBRARIAN_PROVIDER_ROUTING["only"])
+    elif model_name == LIBRARIAN_RECOVERY_MODEL:
+        policy.update(LIBRARIAN_RECOVERY_PROVIDER_ROUTING)
+        policy["only"] = list(LIBRARIAN_RECOVERY_PROVIDER_ROUTING["only"])
     return policy
 
 _MODEL_OVERRIDE = None
@@ -70,11 +81,14 @@ def build_model(model_name: str = ANSWER_MODEL):
     model_settings = OpenRouterModelSettings(
         openrouter_provider=provider_policy(model_name)
     )
-    if model_name == LIBRARIAN_MODEL:
+    if model_name in {LIBRARIAN_MODEL, LIBRARIAN_RECOVERY_MODEL}:
+        model_settings["max_tokens"] = LIBRARIAN_MAX_TOKENS
         model_settings["openrouter_reasoning"] = {
-            "effort": "high",
+            "effort": LIBRARIAN_REASONING_LEVEL,
             "exclude": True,
         }
+    if model_name == LIBRARIAN_MODEL:
+        model_settings["temperature"] = LIBRARIAN_TEMPERATURE
     model = OpenRouterModel(
         model_name.removeprefix("openrouter:"),
         provider=OpenRouterProvider(api_key=key),

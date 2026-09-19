@@ -102,6 +102,75 @@ def fetch_pages(conn, paths: list[str]) -> dict[str, dict]:
         return {row[0]: dict(zip(cols, row, strict=True)) for row in cur.fetchall()}
 
 
+def bounded_unique_paths(paths, *, limit: int) -> tuple[list[str], bool]:
+    """Deduplicate and cap caller-supplied paths before they can become a SQL array."""
+    selected = []
+    seen = set()
+    for path in paths:
+        if not isinstance(path, str) or path in seen:
+            continue
+        seen.add(path)
+        if len(selected) >= limit:
+            return selected, True
+        selected.append(path)
+    return selected, False
+
+
+def entity_timeline(conn, entity_id: str, *, audiences: set[str] | None, limit: int) -> tuple[list[dict], bool]:
+    """Fetch only the ACL-visible, bounded entity evidence rows.
+
+    ACL filtering happens before the cap. Fetching one extra row makes truncation truthful without
+    scanning every matching row through an unbounded window count.
+    """
+    audience_clause, audience_params = _positional_audience_clause(audiences)
+    cols = ("path", "title", "type", "status", "updated", "sources", "body", "links", "acl")
+    sql = (
+        f"SELECT {', '.join(cols)} FROM pages_index"
+        " WHERE %s = ANY(entity) AND type IN ('note', 'concept')"
+        f"{audience_clause}"
+        " ORDER BY (updated = ''), updated DESC, path ASC LIMIT %s"
+    )
+    with conn.cursor() as cur:
+        cur.execute(sql, (entity_id, *audience_params, limit + 1))
+        rows = cur.fetchall()
+    return [dict(zip(cols, row, strict=True)) for row in rows[:limit]], len(rows) > limit
+
+
+def fetch_visible_pages_limited(
+    conn,
+    paths: list[str],
+    *,
+    audiences: set[str] | None,
+    limit: int,
+) -> tuple[dict[str, dict], bool]:
+    """Return at most ``limit`` ACL-visible rows in caller order and a bounded has-more flag."""
+    if not paths or limit < 1:
+        return {}, False
+    paths, candidates_truncated = bounded_unique_paths(paths, limit=limit + 1)
+    audience_clause, audience_params = _positional_audience_clause(audiences)
+    cols = PAGE_COLUMNS
+    sql = (
+        f"SELECT {', '.join(cols)} FROM pages_index"
+        " WHERE path = ANY(%s)"
+        f"{audience_clause}"
+        " ORDER BY array_position(%s::text[], path) LIMIT %s"
+    )
+    with conn.cursor() as cur:
+        cur.execute(sql, (paths, *audience_params, paths, limit + 1))
+        rows = cur.fetchall()
+    has_more = candidates_truncated or len(rows) > limit
+    return {
+        row[0]: dict(zip(cols, row, strict=True))
+        for row in rows[:limit]
+    }, has_more
+
+
+def _positional_audience_clause(audiences: set[str] | None) -> tuple[str, tuple[list[str], ...]]:
+    if audiences is None:
+        return "", ()
+    return " AND (acl IS NULL OR acl && %s::text[])", (sorted(audiences),)
+
+
 def search_arms(conn, query: str, *, embedder=None, k: int = rank.TOP_K,
                 filters: dict | None = None,
                 today: date | None = None, entity_hint: str | None = None,

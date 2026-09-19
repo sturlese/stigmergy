@@ -1,22 +1,49 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "harness-engineering",
   "source_title": "Harness Engineering: explained from zero",
   "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000001.md",
+  "fixture_path": "../fixtures/harness_engineering_synthetic.md",
   "mutations": {
-    "count": 1,
+    "min_count": 1,
+    "max_count": 4,
+    "closed": true,
+    "required": [
+      {"action": "create", "role": "concept", "title": "Harness Engineering"}
+    ],
     "allowed": [
-      {
-        "action": "create",
-        "role": "concept",
-        "title": "Harness Engineering"
-      }
+      {"action": "create", "role": "concept", "title": "Agent Harness"},
+      {"action": "update", "role": "concept", "title": "Agent Harness"}
+    ],
+    "forbidden": [
+      {"action": "create", "role": "note", "title": "2098782814837543075"},
+      {"action": "create", "role": "concept", "title": "Harness Engineering Capability Framework"},
+      {"action": "create", "role": "concept", "title": "Harness Engineering Trust Framework"}
+    ]
+  },
+  "graph_shape": {
+    "closed": true,
+    "required_subjects": [
+      {"title": "Harness Engineering", "role": "concept", "abstraction": "practice"},
+      {"title": "Agent Harness", "role": "concept", "abstraction": "system"}
+    ],
+    "required_terms": [
+      "Skills",
+      "MCP",
+      "subagents",
+      "long-term memory",
+      "one million lines",
+      "1,500 pull requests",
+      "rank 30",
+      "top 5",
+      "polished but broken",
+      "working app"
     ]
   },
   "identities": {
     "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
     "allowed": ["Claude Code", "Codex"],
-    "forbidden": ["ReAct"]
+    "forbidden": ["ReAct", "2098782814837543075"]
   },
   "external_ids": {
     "required": [],
@@ -25,9 +52,42 @@
   "links": {
     "required": ["Santi", "OpenAI", "Anthropic", "LangChain"],
     "allowed": ["Claude Code", "Codex"],
-    "forbidden": ["ReAct"]
+    "forbidden": ["ReAct", "2098782814837543075"]
   },
   "link_coverage": {
     "allow_unlinked": []
+  },
+  "normal_page_targets": ["Agent Harness"],
+  "anti_fragmentation": {
+    "redundant_title_groups": [["Harness Engineering", "Harness Engineering Explained"]]
+  },
+  "bodies": {
+    "required_any": [
+      {"label": "model, harness, and agent", "phrases": ["model alone is not an agentic system"], "co_occurrence": [["model", "harness", "agent"]]},
+      {"label": "capability: tools", "phrases": ["tools", "tool use", "tools let the model", "tools: named actions", "tools, for the model"], "co_occurrence": [["tool", "action"]]},
+      {"label": "capability: loop", "phrases": ["loop", "loop: repeated", "a loop", "the loop"], "co_occurrence": [["decide", "act", "observe"]]},
+      {"label": "capability: memory/state", "phrases": ["memory/state", "memory and state", "memory stores"], "co_occurrence": [["memory", "stateless"], ["memory", "across turns"]]},
+      {"label": "capability: context selection", "phrases": ["context selection", "context management", "context window", "selects what the model sees", "chooses what the model sees"], "co_occurrence": [["context", "each call"], ["context", "progressive disclosure"]]},
+      {"label": "capability: working environment", "phrases": ["working environment", "isolated workspace", "sandbox"], "co_occurrence": [["environment", "execution"]]},
+      {"label": "capability: objective and verification", "phrases": ["clear objective and verification", "goal and verification", "acceptance criteria and verify", "objective and external verification"], "co_occurrence": [["objective", "verification"], ["acceptance criteria", "verify"], ["goal", "verification"]]},
+      {"label": "trust: permissions and limits", "phrases": ["permissions and limits", "permissions, limits", "permission system"], "co_occurrence": [["permissions", "approval"]]},
+      {"label": "trust: observability", "phrases": ["observability", "traces of context"], "co_occurrence": [["traces", "tool"]]},
+      {"label": "trust: evals", "phrases": ["evals", "evaluation tasks", "evaluations"], "co_occurrence": [["evaluation", "regressions"]]},
+      {"label": "extension: skills", "phrases": ["skills"]},
+      {"label": "extension: MCP", "phrases": ["mcp"]},
+      {"label": "extension: subagents", "phrases": ["subagents", "sub-agents"]},
+      {"label": "extension: long-term memory", "phrases": ["long-term memory", "long term memory"]},
+      {"label": "OpenAI example", "phrases": ["one million lines", "1,500 pull requests"], "co_occurrence": [["openai", "million"], ["openai", "pull requests"]]},
+      {"label": "LangChain example", "phrases": ["rank 30 to the top 5", "thirtieth place to the top five", "top 5 on terminal bench"], "co_occurrence": [["langchain", "terminal bench"], ["langchain", "top 5"], ["langchain", "rank 30"]]},
+      {"label": "Anthropic example", "phrases": ["polished but non-working", "polished but broken", "working app"], "co_occurrence": [["anthropic", "same model"], ["anthropic", "working app"]]},
+      {"label": "author attribution", "phrases": ["santi (@santtiagom_)", "santi, publishing as @santtiagom_", "santi (@santtiagom_) authored"], "co_occurrence": [["santi", "@santtiagom_"]]}
+    ],
+    "forbidden": ["ReAct is an entity"],
+    "require_local_source": true
+  },
+  "editorial_quality": {
+    "min_explanatory_paragraphs": 2,
+    "reject_evidence_inventory_mirroring": true,
+    "reject_duplicate_entity_prefixes": true
   }
 }

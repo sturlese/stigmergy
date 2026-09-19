@@ -125,3 +125,4 @@ def test_describe_entity_neutralizes_page_derived_timeline_text(hostile_entity_i
     assert item["status"] == "developing"
     assert item["updated"] == "2026-08-24"
     _assert_neutralized(item["title"])
+    assert item["excerpt"] == "A timeline member whose own frontmatter carries the fence token."

@@ -23,6 +23,7 @@ from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.index.corpus import split_frontmatter_checked
 from stigmergy.knowledge import contradictions
+from stigmergy.knowledge.contract import expected_librarian_skill
 from stigmergy.knowledge.contradictions import Contradiction
 from stigmergy.knowledge.pages import render_page
 from stigmergy.knowledge.plan import ContradictionClaim, FilingPlan
@@ -72,6 +73,9 @@ def admin_rig(tmp_path):
         '"groups":["finance"],"default_audience":["finance"]}}\n'
     )
     (repo / "ops" / "entity-registry.json").write_bytes(registry_bytes({}))
+    skill = repo / ".claude" / "skills" / "librarian" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_bytes(expected_librarian_skill())
     write_controls(repo)
     (repo / "wiki" / "notes" / "Welcome.md").write_text(
         render_page(
@@ -150,6 +154,30 @@ def test_admin_is_master_only_and_serves_a_secured_login_shell(admin_rig):
     assert "<title>Stigmergy Ops</title>" in shell.text
     assert 'type="module" src="./assets/app.js"' in shell.text
     assert "no-cache" in shell.headers["cache-control"]
+
+
+def test_admin_entity_dossier_uses_the_shared_bounded_descriptor(admin_rig):
+    unauthenticated = admin_rig.client.get("/admin/api/entities/unknown/dossier")
+    response = admin_rig.client.get(
+        "/admin/api/entities/unknown/dossier", headers=admin_rig.auth
+    )
+
+    assert unauthenticated.status_code == 401
+    assert response.status_code == 200
+    assert response.json() == {
+        "found": False,
+        "entity": None,
+        "knowledge": [],
+        "knowledge_note": "No visible entity was found.",
+        "knowledge_state": "not_found",
+        "knowledge_truncated": False,
+        "knowledge_returned": 0,
+        "knowledge_cap": 20,
+        "sources": [],
+        "sources_truncated": False,
+        "sources_returned": 0,
+        "sources_cap": 40,
+    }
 
 
 def test_admin_refuses_a_configured_actor_without_unrestricted_access(admin_rig):
@@ -589,6 +617,11 @@ def test_entity_delete_garden_and_failed_retry_are_queue_operations(admin_rig):
         headers=admin_rig.auth,
         json={"rationale": "Verify corpus health"},
     )
+    recompile = admin_rig.client.post(
+        "/admin/api/knowledge/recompile",
+        headers=admin_rig.auth,
+        json={"rationale": "Rebuild derived knowledge from immutable sources"},
+    )
     capture = admin_rig.client.post(
         "/admin/api/captures/text",
         headers=admin_rig.auth,
@@ -605,9 +638,10 @@ def test_entity_delete_garden_and_failed_retry_are_queue_operations(admin_rig):
         headers=admin_rig.auth,
     )
 
-    assert deletion.status_code == garden.status_code == retried.status_code == 200
+    assert deletion.status_code == garden.status_code == recompile.status_code == retried.status_code == 200
     assert queue.get_submission_trace(admin_rig.conn, deletion.json()["id"])["operation"] == schema.ENTITY
     assert queue.get_submission_trace(admin_rig.conn, garden.json()["id"])["operation"] == schema.GARDEN
+    assert queue.get_submission_trace(admin_rig.conn, recompile.json()["id"])["request"]["mode"] == "recompile"
     assert retried.json()["status"] == schema.QUEUED
 
 

@@ -418,7 +418,15 @@ def test_the_knowledge_planner_installs_the_repair(spy, tmp_path):
                                      "max_turns": 1})()
     planner = PydanticPlanner(settings, model_factory=lambda: TestModel())
     try:
-        planner.repair(worktree=str(tmp_path), violations=())
+        planner.repair(
+            worktree=str(tmp_path),
+            violations=(),
+            files={},
+            source_path="sources/2026/08/capture.md",
+            source_text="Decision: renew for one year.",
+            context='{"candidates": []}',
+            max_requests=1,
+        )
     except Exception:  # noqa: BLE001
         pass
 

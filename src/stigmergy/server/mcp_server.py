@@ -95,7 +95,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
 
     @mcp.tool()
     async def describe_entity(entity: str) -> str:
-        """Compose visible knowledge for one entity ID, name, or alias."""
+        """Compose a bounded, reader-scoped dossier for one entity ID, name, or alias."""
         try:
             return json.dumps(await run_blocking(service.describe_entity, entity), **_DUMP)
         except (ArgumentLengthError, RateLimitError) as ex:

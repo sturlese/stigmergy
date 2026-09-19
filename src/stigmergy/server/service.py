@@ -3,9 +3,11 @@ import asyncio
 import datetime as dt
 import hashlib
 import logging
+import re
 import time
 import uuid
 from datetime import date
+from pathlib import Path
 
 from stigmergy import text as textutil
 from stigmergy.capture import evidence as evidence_plane
@@ -49,6 +51,11 @@ DEFAULT_MAX_RESULTS = 5
 PAGE_EXCERPT = 6000
 
 NAV_CAP = 20
+ENTITY_EVIDENCE_EXCERPT = 1_200
+ENTITY_RELATIONSHIP_EXCERPT = 700
+ENTITY_RELATIONSHIP_CAP = 6
+ENTITY_ITEM_SOURCE_CAP = 6
+ENTITY_SOURCE_CAP = 40
 
 MAX_ARG_CHARS = 8192
 
@@ -148,13 +155,56 @@ ENTITY_ABSENCE = {
     "entity": None,
     "knowledge": [],
     "knowledge_note": "No visible entity was found.",
+    "knowledge_state": "not_found",
+    "knowledge_truncated": False,
+    "knowledge_returned": 0,
+    "knowledge_cap": NAV_CAP,
     "sources": [],
+    "sources_truncated": False,
+    "sources_returned": 0,
+    "sources_cap": ENTITY_SOURCE_CAP,
 }
 
 
 def _display_title(title: str) -> str:
     """Untrusted title -> a safe display string; never empty, never the raw path."""
     return neutralize_fence(title) if title else "(untitled)"
+
+
+def _bounded_entity_paths(paths, *, limit: int) -> list[str]:
+    """Keep a reader projection bounded before page metadata can expand in Python."""
+    selected = []
+    seen = set()
+    for path in paths:
+        if not isinstance(path, str) or path in seen:
+            continue
+        seen.add(path)
+        selected.append(path)
+        if len(selected) == limit:
+            return selected
+    return selected
+
+
+def _bounded_entity_text(value: str, limit: int) -> tuple[str, bool]:
+    """Sanitize untrusted Markdown and bound an evidence field without inventing a summary."""
+    clean = textutil.sanitize(value or "").strip()
+    if len(clean) <= limit:
+        return clean, False
+    boundary = clean.rfind(" ", 0, limit)
+    return clean[:boundary if boundary > 0 else limit].rstrip() + "...", True
+
+
+def _relationship_statement(body: str, target_path: str, target_title: str) -> tuple[str, bool] | None:
+    """Return the authored line or paragraph that explains a visible page relationship."""
+    needles = (Path(target_path).stem.casefold(), target_title.casefold())
+    for part in re.split(r"\n\s*\n|\n", textutil.sanitize(body or "")):
+        candidate = part.strip()
+        if candidate.startswith("#"):
+            continue
+        lowered = candidate.casefold()
+        if any(needle and needle in lowered for needle in needles):
+            return _bounded_entity_text(candidate, ENTITY_RELATIONSHIP_EXCERPT)
+    return None
 
 
 class BrainService:
@@ -400,7 +450,7 @@ class BrainService:
         if total == 0:
             return empty
         if total > shown:
-            return f"{total} page(s) {subject} — showing the first {shown}, {total - shown} more not shown."
+            return f"More than {shown} page(s) {subject} — showing the first {shown}."
         return f"{total} page(s) {subject} — showing all {total}."
 
     def _nav_section(self, rows: list[tuple[str, str, list | None]], *,
@@ -453,48 +503,148 @@ class BrainService:
         if projection is None:
             return dict(ENTITY_ABSENCE)
         record = _neutralize_entity_record(projection, include_claims=True)
-        timeline_items, timeline_note, source_paths = self._timeline_section(
-            self._entity_timeline_rows(entity_id))
-        source_rows = search.fetch_pages(self.conn, source_paths)
-        sources = [
-            {"path": path, "title": _display_title(source_rows[path].get("title", ""))}
-            for path in source_paths
-            if path in source_rows and visible(source_rows[path].get("acl"), self.audiences)
-        ]
+        (
+            timeline_items,
+            timeline_note,
+            source_paths,
+            knowledge_truncated,
+            source_paths_truncated,
+        ) = self._timeline_section(entity_id)
+        sources, sources_truncated = self._entity_sources(
+            source_paths, candidates_truncated=source_paths_truncated
+        )
+        knowledge_returned = len(timeline_items)
+        sources_returned = len(sources)
 
         return {
             "found": True,
             "entity": record,
             "knowledge": timeline_items,
             "knowledge_note": timeline_note,
+            "knowledge_state": (
+                "no_visible_knowledge" if knowledge_returned == 0
+                else "capped" if knowledge_truncated
+                else "available"
+            ),
+            "knowledge_truncated": knowledge_truncated,
+            "knowledge_returned": knowledge_returned,
+            "knowledge_cap": NAV_CAP,
             "sources": sources,
+            "sources_truncated": sources_truncated,
+            "sources_returned": sources_returned,
+            "sources_cap": ENTITY_SOURCE_CAP,
         }
 
-    def _entity_timeline_rows(self, entity_id: str) -> list[tuple]:
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "SELECT path, title, type, status, updated, sources, acl FROM pages_index"
-                " WHERE %s = ANY(entity) AND type IN ('note', 'concept')"
-                " ORDER BY (updated = ''), updated DESC, path ASC",
-                (entity_id,))
-            return cur.fetchall()
-
-    def _timeline_section(self, rows: list[tuple]) -> tuple[list[dict], str, list[str]]:
-        shown, total = self._capped(rows)
-        items = [{"path": p, "title": _display_title(t), "type": neutralize_fence(ty),
-                 "status": neutralize_fence(st), "updated": neutralize_fence(updated)}
-                for p, t, ty, st, updated, _sources, _acl in shown]
-        source_paths = list(dict.fromkeys(
-            source
-            for _p, _t, _ty, _st, _updated, sources, _acl in shown
-            for source in sources
-        ))
+    def _timeline_section(self, entity_id: str) -> tuple[list[dict], str, list[str], bool, bool]:
+        shown, has_more = search.entity_timeline(
+            self.conn, entity_id, audiences=self.audiences, limit=NAV_CAP
+        )
+        source_paths = _bounded_entity_paths(
+            (source for page in shown for source in page.get("sources") or ()),
+            limit=ENTITY_SOURCE_CAP + 1,
+        )
+        source_paths_truncated = len(source_paths) == ENTITY_SOURCE_CAP + 1
+        items = []
+        for page in shown:
+            path = page["path"]
+            title = page["title"]
+            page_type = page["type"]
+            status = page["status"]
+            updated = page["updated"]
+            page_sources = page.get("sources") or ()
+            excerpt, excerpt_truncated = _bounded_entity_text(
+                page.get("body", ""), ENTITY_EVIDENCE_EXCERPT
+            )
+            relationship_candidates = _bounded_entity_paths(
+                (
+                    linked
+                    for linked in page.get("links") or ()
+                    if linked.startswith(("wiki/notes/", "wiki/concepts/"))
+                ),
+                limit=ENTITY_RELATIONSHIP_CAP + 1,
+            )
+            relationship_candidates_truncated = (
+                len(relationship_candidates) == ENTITY_RELATIONSHIP_CAP + 1
+            )
+            linked_rows, relationship_has_more = search.fetch_visible_pages_limited(
+                self.conn,
+                relationship_candidates,
+                audiences=self.audiences,
+                limit=ENTITY_RELATIONSHIP_CAP,
+            )
+            relationships = []
+            for linked_path in relationship_candidates:
+                linked = linked_rows.get(linked_path)
+                if linked is None:
+                    continue
+                statement = _relationship_statement(
+                    page.get("body", ""), linked_path, linked.get("title", "")
+                )
+                if statement is None:
+                    continue
+                text, statement_truncated = statement
+                relationships.append({
+                    "path": linked_path,
+                    "title": _display_title(linked.get("title", "")),
+                    "statement": text,
+                    "statement_truncated": statement_truncated,
+                })
+            source_candidates, source_candidates_truncated = search.bounded_unique_paths(
+                page_sources, limit=ENTITY_ITEM_SOURCE_CAP + 1
+            )
+            source_rows, local_source_has_more = search.fetch_visible_pages_limited(
+                self.conn,
+                source_candidates,
+                audiences=self.audiences,
+                limit=ENTITY_ITEM_SOURCE_CAP,
+            )
+            local_sources = [
+                {"path": source, "title": _display_title(source_rows[source].get("title", ""))}
+                for source in source_candidates if source in source_rows and source_rows[source].get("type") == "source"
+            ]
+            items.append({
+                "path": path,
+                "title": _display_title(title),
+                "type": neutralize_fence(page_type),
+                "status": neutralize_fence(status),
+                "updated": neutralize_fence(updated),
+                "excerpt": excerpt,
+                "excerpt_truncated": excerpt_truncated,
+                "sources": local_sources,
+                "sources_truncated": local_source_has_more or source_candidates_truncated,
+                "sources_returned": len(local_sources),
+                "sources_cap": ENTITY_ITEM_SOURCE_CAP,
+                "relationships": relationships,
+                "relationships_truncated": relationship_has_more or relationship_candidates_truncated,
+                "relationships_returned": len(relationships),
+                "relationships_cap": ENTITY_RELATIONSHIP_CAP,
+            })
         return (
             items,
-            self._cap_note(total, len(items), subject="anchored to this entity",
+            self._cap_note(len(items) + int(has_more), len(items), subject="anchored to this entity",
                            empty="No anchored pages."),
             source_paths,
+            has_more,
+            source_paths_truncated,
         )
+
+    def _entity_sources(
+        self, paths: list[str], *, candidates_truncated: bool = False
+    ) -> tuple[list[dict], bool]:
+        """Return only visible source records for already visible, capped knowledge evidence."""
+        candidates, locally_truncated = search.bounded_unique_paths(
+            paths, limit=ENTITY_SOURCE_CAP + 1
+        )
+        rows, has_more = search.fetch_visible_pages_limited(
+            self.conn, candidates, audiences=self.audiences, limit=ENTITY_SOURCE_CAP
+        )
+        visible_sources = [
+            {"path": path, "title": _display_title(rows[path].get("title", ""))}
+            for path in candidates
+            if path in rows
+            and rows[path].get("type") == "source"
+        ]
+        return visible_sources, has_more or candidates_truncated or locally_truncated
 
     def submit_artifacts(
         self,

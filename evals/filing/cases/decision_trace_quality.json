@@ -1,16 +1,35 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "decision-trace-quality",
   "source_title": "Decision Trace Quality",
   "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000002.md",
+  "fixture_path": "../fixtures/decision_trace_quality.md",
+  "seed_pages": [
+    {
+      "id": "page_eval_agent_harness",
+      "role": "concept",
+      "title": "Agent Harness",
+      "body": "# Agent Harness\n\nAn agent harness supplies the task loop, tools, feedback, and memory around a model. Its loop produces automated decisions and outcomes that can be audited. (Source: `{source_path}`)"
+    }
+  ],
   "mutations": {
-    "count": 1,
-    "allowed": [
+    "min_count": 1,
+    "max_count": 4,
+    "closed": true,
+    "required": [
       {
         "action": "create",
         "role": "concept",
         "title": "Decision Trace Quality"
       }
+    ],
+    "allowed": [],
+    "forbidden": []
+  },
+  "graph_shape": {
+    "closed": true,
+    "required_subjects": [
+      {"title": "Decision Trace Quality", "role": "concept", "abstraction": "method"}
     ]
   },
   "identities": {
@@ -32,5 +51,22 @@
   },
   "link_coverage": {
     "allow_unlinked": []
-  }
+  },
+  "bodies": {
+    "required": ["decision trace quality"],
+    "forbidden": [
+      "efficient retrieval",
+      "facilitates debugging",
+      "high-stakes or regulated environments",
+      "integrated with existing infrastructure"
+    ],
+    "require_local_source": true
+  },
+  "editorial_quality": {
+    "require_epistemic_caveat": true,
+    "min_explanatory_paragraphs": 2
+  },
+  "connections": [
+    {"from": "Decision Trace Quality", "to": "Agent Harness", "reciprocal": false}
+  ]
 }

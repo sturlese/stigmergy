@@ -6,10 +6,12 @@ import datetime as dt
 import os
 import re
 import stat
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from stigmergy.capture import schema
+from stigmergy.capture.source import MAX_CAPTURE_RENDERED_SOURCE_BYTES
 from stigmergy.index.corpus import split_frontmatter_checked
 from stigmergy.knowledge.pages import PageContractError
 
@@ -144,6 +146,20 @@ def source_file_size(root: str, relative: str) -> int:
     return path.stat(follow_symlinks=False).st_size
 
 
+def recompile_source_preflight(root: str, paths: tuple[str, ...]) -> None:
+    """Validate every source before a rebuild without retaining the complete corpus."""
+    for relative in paths:
+        try:
+            read_recompile_source(root, relative)
+        except (OSError, UnicodeError, SourceContractError) as error:
+            raise SourceContractError(f"source is not recompilable: {relative}") from error
+
+
+def read_recompile_source(root: str, relative: str) -> SourceDocument:
+    """Read one immutable source within the exact rendered source capacity."""
+    return read_source(root, relative, max_bytes=MAX_CAPTURE_RENDERED_SOURCE_BYTES)
+
+
 def read_source(root: str, relative: str, *, max_bytes: int) -> SourceDocument:
     path = _safe_source_path(root, relative)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -165,6 +181,55 @@ def read_source(root: str, relative: str, *, max_bytes: int) -> SourceDocument:
     except UnicodeDecodeError as error:
         raise SourceContractError("source is not valid UTF-8") from error
     return parse_source(relative, text, byte_size=len(data))
+
+
+def source_envelope(source: SourceDocument) -> schema.CaptureEnvelope:
+    """Reconstruct the filing input from immutable source provenance only.
+
+    A recompilation never reads an operational queue row or evidence blob. The immutable source
+    is the durable filing input. Source pages deliberately retain the submitted subject, but not
+    the original display label, so the stable subject is used as the reconstructed display name.
+    """
+    metadata, _body, malformed = split_frontmatter_checked(source.text)
+    if malformed:
+        raise SourceContractError("source frontmatter is invalid")
+    try:
+        artifacts = tuple(
+            schema.ArtifactRef(
+                blob_ref=schema.content_ref(str(item["sha256"])),
+                sha256=str(item["sha256"]),
+                bytes=item["bytes"],
+                media_type=item["media_type"],
+                original_name=item.get("original_name"),
+                source_url=item.get("source_url"),
+            )
+            for item in metadata["artifacts"]
+        )
+        subject = str(metadata["submitted_by"])
+        return schema.CaptureEnvelope(
+            capture_id=uuid.UUID(str(metadata["id"])),
+            idempotency_key=f"recompile:{metadata['id']}",
+            actor=schema.Actor(subject=subject, display_name=subject),
+            audience=source.acl,
+            origin=schema.Origin.model_validate(
+                {
+                    "adapter": metadata["origin"],
+                    "captured_at": metadata["captured_at"],
+                    "occurred_at": metadata.get("occurred_at"),
+                    "title": metadata.get("title"),
+                    "locator": metadata.get("locator"),
+                    "participants": metadata["participants"],
+                    "acquisition": metadata.get("acquisition"),
+                }
+            ),
+            artifacts=artifacts,
+            intent=schema.CaptureIntent(
+                resolution_of=metadata.get("resolution_of"),
+                rationale=metadata.get("resolution_rationale"),
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise SourceContractError("source provenance cannot be reconstructed") from error
 
 
 def _safe_source_path(root: str, relative: str) -> Path:

@@ -170,10 +170,10 @@ def test_deployed_librarian_uses_the_supported_default_model(surface, configured
     assert configured == expected, surface
 
 
-def test_deployed_librarian_allows_only_one_schema_repair():
-    assert librarian_config.DEFAULT_MAX_TURNS == 2
-    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MAX_TURNS"] == "2"
-    assert _env_example_value("STIGMERGY_LIBRARIAN_MAX_TURNS") == "2"
+def test_deployed_librarian_uses_the_bounded_recovery_budget():
+    assert librarian_config.DEFAULT_MAX_TURNS == 14
+    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MAX_TURNS"] == "14"
+    assert _env_example_value("STIGMERGY_LIBRARIAN_MAX_TURNS") == "14"
 
 
 def test_specification_names_the_exact_librarian_model():
@@ -256,9 +256,7 @@ def test_deploy_script_pins_each_staging_process_group_to_one_machine():
 
 def test_deploy_script_restores_exact_tracked_defaults():
     script = (ROOT / "scripts" / "deploy_staging.sh").read_text(encoding="utf-8")
-    defaults = dict(
-        re.findall(r"^\s+'([^:]+):(.*)'$", script, re.MULTILINE)
-    )
+    defaults = dict(re.findall(r"^\s+'([^:]+):(.*)'$", script, re.MULTILINE))
 
     assert set(defaults) == {"identities.json", "entity-registry.json", "slack-channels.json"}
     for name, default in defaults.items():
@@ -284,10 +282,7 @@ def test_no_supported_user_capability_exists_only_as_a_remote_cli():
     remote = set(SUPPORTED_SCRIPTS) - local
 
     assert local == {"stigmergy-bridge"}
-    assert all(
-        SUPPORTED_SCRIPTS[name] in {"service", "bootstrap", "operations"}
-        for name in remote
-    )
+    assert all(SUPPORTED_SCRIPTS[name] in {"service", "bootstrap", "operations"} for name in remote)
 
 
 def test_all_directly_executable_runtime_modules_are_classified():
@@ -297,9 +292,7 @@ def test_all_directly_executable_runtime_modules_are_classified():
         if 'if __name__ == "__main__"' in path.read_text(encoding="utf-8")
     }
     assert discovered == set(EXECUTABLE_MODULES)
-    assert set(EXECUTABLE_MODULES.values()) <= {
-        "service", "bootstrap", "operations", "local bridge"
-    }
+    assert set(EXECUTABLE_MODULES.values()) <= {"service", "bootstrap", "operations", "local bridge"}
 
 
 def test_retired_runtime_modules_are_absent():
@@ -337,10 +330,7 @@ def test_ci_uses_a_commit_pinned_checksum_verified_uv_installer():
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     assert "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in workflow
     assert 'version: "0.11.16"' in workflow
-    assert (
-        'checksum: "74947fe2c03315cf07e82ab3acc703eddef01aba4d5232a98e4c6825ec116131"'
-        in workflow
-    )
+    assert 'checksum: "74947fe2c03315cf07e82ab3acc703eddef01aba4d5232a98e4c6825ec116131"' in workflow
     assert "pip install uv" not in workflow
 
 

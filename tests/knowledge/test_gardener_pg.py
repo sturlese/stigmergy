@@ -117,22 +117,47 @@ def test_clean_garden_run_records_no_change_and_no_commit(clean_queue, target_re
 def test_model_repair_lands_one_commit_and_reruns_linter(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     path = _broken_page(target_repo)
-    fixed = render_page(
-        path="wiki/notes/Broken links.md",
-        role="note",
-        title="Broken links",
-        body="# Broken links\n\nThe page is self-contained.",
-        acl=None,
-        created=dt.date(2026, 8, 24),
-        updated=dt.date(2026, 8, 24),
-    )
-    planner = ScriptedPlanner(
+    fixed = "# Broken links\n\nThe page is self-contained."
+    class RecordingPlanner(ScriptedPlanner):
+        repair_kwargs = None
+
+        def repair(
+            self,
+            *,
+            worktree,
+            violations,
+            files,
+            source_path,
+            source_text,
+            context,
+            max_requests,
+        ):
+            self.repair_kwargs = {
+                "worktree": worktree,
+                "violations": violations,
+                "files": files,
+                "source_path": source_path,
+                "source_text": source_text,
+                "context": context,
+                "max_requests": max_requests,
+            }
+            return super().repair(
+                worktree=worktree,
+                violations=violations,
+                files=files,
+                source_path=source_path,
+                source_text=source_text,
+                context=context,
+                max_requests=max_requests,
+            )
+
+    planner = RecordingPlanner(
         repair_plan=RepairPlan(
             summary="Removed the dead link",
             mutations=(
                 RepairMutation(
                     path="wiki/notes/Broken links.md",
-                    text=fixed,
+                    body=fixed,
                     reason="Removed a link with no target",
                 ),
             ),
@@ -169,6 +194,17 @@ def test_model_repair_lands_one_commit_and_reruns_linter(clean_queue, target_rep
     assert item["report"]["final_violations"] == 0
     assert item["report"]["detected"] == 1
     assert item["report"]["fixed"] == 1
+    assert planner.repair_kwargs is not None
+    assert planner.repair_kwargs["source_path"] == ""
+    assert planner.repair_kwargs["source_text"] == ""
+    assert planner.repair_kwargs["max_requests"] == 2
+    assert planner.repair_kwargs["files"] == {
+        "wiki/notes/Broken links.md": (
+            "# Broken links\n\nSee [[Missing page]]."
+        )
+    }
+    assert '"maintenance": true' in planner.repair_kwargs["context"]
+    assert '"allowed_sources_by_path"' in planner.repair_kwargs["context"]
     change = list_changes(clean_queue)[0]
     assert change.trigger == "garden"
     assert change.commit_sha == item["commit_sha"]
@@ -181,22 +217,14 @@ def test_garden_runs_every_lint_gate_before_advancing_the_branch(
 ):
     store = evidence.MemoryEvidenceStore()
     _broken_page(target_repo)
-    fixed = render_page(
-        path="wiki/notes/Broken links.md",
-        role="note",
-        title="Broken links",
-        body="# Broken links\n\nThe page is self-contained.",
-        acl=None,
-        created=dt.date(2026, 8, 24),
-        updated=dt.date(2026, 8, 24),
-    )
+    fixed = "# Broken links\n\nThe page is self-contained."
     planner = ScriptedPlanner(
         repair_plan=RepairPlan(
             summary="Removed the dead link",
             mutations=(
                 RepairMutation(
                     path="wiki/notes/Broken links.md",
-                    text=fixed,
+                    body=fixed,
                     reason="Removed a link with no target",
                 ),
             ),
@@ -234,22 +262,14 @@ def test_garden_recovers_commit_after_change_record_failure(
 ):
     store = evidence.MemoryEvidenceStore()
     _broken_page(target_repo)
-    fixed = render_page(
-        path="wiki/notes/Broken links.md",
-        role="note",
-        title="Broken links",
-        body="# Broken links\n\nThe page is self-contained.",
-        acl=None,
-        created=dt.date(2026, 8, 24),
-        updated=dt.date(2026, 8, 24),
-    )
+    fixed = "# Broken links\n\nThe page is self-contained."
     planner = ScriptedPlanner(
         repair_plan=RepairPlan(
             summary="Removed the dead link",
             mutations=(
                 RepairMutation(
                     path="wiki/notes/Broken links.md",
-                    text=fixed,
+                    body=fixed,
                     reason="Removed a link with no target",
                 ),
             ),
@@ -318,46 +338,48 @@ def test_failed_repair_candidate_lands_nothing_and_records_safe_failure(
     assert "Missing page" not in json.dumps(run)
 
 
-def test_model_repair_cannot_change_visibility(clean_queue, target_repo):
+def test_model_repair_preserves_visibility(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
-    _broken_page(target_repo, acl=("finance",))
-    broadened = render_page(
-        path="wiki/notes/Broken links.md",
-        role="note",
-        title="Broken links",
-        body="# Broken links\n\nThe page is self-contained.",
-        acl=None,
-        created=dt.date(2026, 8, 24),
-        updated=dt.date(2026, 8, 24),
+    path = _broken_page(target_repo, acl=("finance",))
+    before = parse_page(
+        "wiki/notes/Broken links.md", path.read_text(encoding="utf-8")
     )
     planner = ScriptedPlanner(
         repair_plan=RepairPlan(
-            summary="Unsafe repair",
+            summary="Repaired the broken link",
             mutations=(
                 RepairMutation(
                     path="wiki/notes/Broken links.md",
-                    text=broadened,
-                    reason="Unsafe visibility change",
+                    body="# Broken links\n\nThe page is self-contained.",
+                    reason="Removed the dead link without changing visibility",
                 ),
             ),
         )
     )
     _enqueue_garden(clean_queue, "garden-acl-refusal")
-    before = subprocess.check_output(
-        ["git", "rev-parse", "main"], cwd=target_repo, text=True
-    ).strip()
-
     item, outcome = worker.process_next(
         clean_queue,
         _deps(target_repo, store, planner),
     )
 
-    assert outcome.status == schema.FAILED
-    assert item["error_category"] == "GateRefused"
-    assert subprocess.check_output(
-        ["git", "rev-parse", "main"], cwd=target_repo, text=True
-    ).strip() == before
-    assert list_changes(clean_queue) == []
+    assert outcome.status == schema.LANDED
+    page = parse_page(
+        "wiki/notes/Broken links.md",
+        subprocess.check_output(
+            ["git", "show", "main:wiki/notes/Broken links.md"],
+            cwd=target_repo,
+            text=True,
+        ),
+    )
+    assert page.acl == ("finance",)
+    assert page.role == before.role
+    assert page.title == before.title
+    assert page.entities == before.entities
+    assert page.sources == before.sources
+    assert page.status == before.status
+    assert page.page_id == before.page_id
+    assert page.created == before.created
+    assert page.updated == before.updated
 
 
 def test_registry_and_absorbed_anchor_are_repaired_deterministically(

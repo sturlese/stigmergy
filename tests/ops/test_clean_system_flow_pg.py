@@ -177,7 +177,12 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                     action="create",
                     role="note",
                     title="Northstar renewal",
-                    body="# Northstar renewal\n\nThe signed renewal states an annual cadence.",
+                    body=(
+                        "# Northstar renewal\n\n"
+                            "Northstar Labs is the CRM identity for the signed annual renewal. "
+                            "Northstar Research is its duplicate CRM identity for the same renewal. "
+                        f"(Source: `{first_source}`)"
+                    ),
                     entities=("Northstar Labs", "Northstar Research"),
                     reason="The source establishes the initial renewal cadence",
                 ),
@@ -213,7 +218,12 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                     path="wiki/notes/Northstar renewal.md",
                     body=(
                         "# Northstar renewal\n\n"
-                        "The signed renewal and the current schedule disagree on cadence."
+                        "Northstar Labs and Northstar Research retain the same renewal identity. "
+                        "The signed renewal records an annual cadence "
+                        f"(Source: `{first_source}`). "
+                        "The current signed schedule records a monthly cadence that conflicts "
+                        "with the previously recorded annual renewal; the evidence remains "
+                        f"unresolved (Source: `{second_source}`)."
                     ),
                     reason="The current signed schedule conflicts with the renewal",
                 ),
@@ -359,7 +369,7 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
             ),
         )
     )
-    capture.capture_bytes(
+    slack_capture = capture.capture_bytes(
         actor=actor,
         audience=None,
         adapter="slack",
@@ -369,6 +379,7 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
         idempotency_key="system-slack",
         captured_at=captured_at + dt.timedelta(minutes=4),
     )
+    slack_source = source_path(schema.parse_capture(slack_capture["request"]))
     slack_item, slack_outcome = _process(
         clean_queue,
         target_repo,
@@ -380,7 +391,13 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                     action="create",
                     role="note",
                     title="Channel scratch",
-                    body="# Channel scratch\n\nThis note can be removed after filing.",
+                    body=(
+                        "# Channel scratch\n\n"
+                        "The Slack thread records a temporary channel note that can be removed "
+                        "after the filing decision is complete. "
+                        f"(Source: `{slack_source}`)"
+                    ),
+                    entities=(),
                     reason="The Slack thread requests a temporary note",
                 ),
             ),
@@ -398,7 +415,7 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
         _main_text(target_repo, "wiki/notes/Northstar renewal.md"),
     )
     contradiction_id = contradictions.parse_all(current_page.body)[0].record.contradiction_id
-    capture.capture_text(
+    resolution_capture = capture.capture_text(
         actor=actor,
         audience=None,
         adapter="admin",
@@ -410,6 +427,7 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
             rationale="The countersigned amendment has controlling authority.",
         ),
     )
+    resolution_source = source_path(schema.parse_capture(resolution_capture["request"]))
     resolution_item, resolution_outcome = _process(
         clean_queue,
         target_repo,
@@ -422,7 +440,14 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                     path="wiki/notes/Northstar renewal.md",
                     body=(
                         "# Northstar renewal\n\n"
-                        "The annual cadence controls under the countersigned amendment."
+                        "Northstar Labs and Northstar Research retain the same renewal identity. "
+                        "The signed renewal records an annual cadence "
+                        f"(Source: `{first_source}`). "
+                        "The later signed schedule records a conflicting monthly cadence "
+                        f"(Source: `{second_source}`). "
+                        "The countersigned amendment makes the annual cadence controlling and "
+                        "supersedes the monthly schedule for this renewal "
+                        f"(Source: `{resolution_source}`)."
                     ),
                     reason="The amendment resolves the conflicting schedules",
                 ),
@@ -594,13 +619,14 @@ def test_mcp_delete_lands_one_commit_sweeps_references_and_leaves_search(
     evidence_store = evidence.MemoryEvidenceStore()
     actor = schema.Actor(subject="marc", display_name="Marc")
     capture = CaptureService(clean_queue, evidence_store)
-    capture.capture_text(
+    delete_capture = capture.capture_text(
         actor=actor,
         audience=None,
         adapter="mcp",
         text="A temporary operating note and its reference holder.",
         idempotency_key="delete-fixture",
     )
+    delete_source = source_path(schema.parse_capture(delete_capture["request"]))
     _item, outcome = _process(
         clean_queue,
         target_repo,
@@ -612,14 +638,26 @@ def test_mcp_delete_lands_one_commit_sweeps_references_and_leaves_search(
                     action="create",
                     role="note",
                     title="Temporary operating note",
-                    body="# Temporary operating note\n\nEphemeral procedure delta.",
+                    body=(
+                        "# Temporary operating note\n\n"
+                        "An ephemeral procedure delta is retained only until the operating process "
+                        "is reconciled. "
+                        f"(Source: `{delete_source}`)"
+                    ),
+                    entities=(),
                     reason="Recorded the temporary procedure",
                 ),
                 PageMutation(
                     action="create",
                     role="note",
                     title="Reference holder",
-                    body="# Reference holder\n\nSee [[Temporary operating note]].",
+                    body=(
+                        "# Reference holder\n\n"
+                        "The operating reference preserves the relationship to "
+                        "[[Temporary operating note]] while the temporary procedure remains active. "
+                        f"(Source: `{delete_source}`)"
+                    ),
+                    entities=(),
                     reason="Recorded the related reference",
                 ),
             ),

@@ -1,6 +1,6 @@
 # Decision Trace Quality
 
-Mira Chen, a researcher at Northstar Signal Lab, introduces Decision Trace Quality for reviewing
+Mira Chen, a researcher at Northstar Signal Lab, introduces Decision Trace Quality, a method for reviewing
 whether an automated decision leaves enough evidence for a colleague to reproduce its judgment.
 The concept combines a concise rationale, the inputs considered, and the observed outcome into one
 auditable trace.

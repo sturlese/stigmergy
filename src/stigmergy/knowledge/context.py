@@ -13,6 +13,7 @@ from stigmergy.knowledge.sources import (
     read_source,
     source_file_size,
 )
+from stigmergy.knowledge.write_guard import WriteContext, WriteRefused, allow_existing
 from stigmergy.server.acl import visible
 from stigmergy.server.identity import principal_from_text
 
@@ -169,6 +170,28 @@ def filing_context(
         else:
             raise ValueError("filing context exceeds its byte limit")
     return context
+
+
+def authorized_derived_page_paths(
+    root: str,
+    *,
+    write_context: WriteContext,
+) -> frozenset[str]:
+    """Return derived paths admitted by the writer without extending model context."""
+    paths = set()
+    for folder in ("wiki/notes", "wiki/concepts"):
+        base = Path(root, *folder.split("/"))
+        if not base.is_dir():
+            continue
+        for path in base.glob("*.md"):
+            relative = path.relative_to(root).as_posix()
+            page = parse_page(relative, path.read_text(encoding="utf-8"))
+            try:
+                allow_existing(write_context, page.acl)
+            except WriteRefused:
+                continue
+            paths.add(page.path)
+    return frozenset(paths)
 
 
 def render_context(context: dict) -> str:

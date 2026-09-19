@@ -214,12 +214,9 @@ def test_read_page_links_and_backlinks_cap_at_nav_cap_with_truncation_stated(gra
     conn, fx = graph_indexed
     svc = make_service(fx, conn, fx.STEWARD)
     target = svc.read_page(MANY_TARGET)
-    over = fx.overflow - NAV_CAP
     assert len(target["links"]) == NAV_CAP
     assert len(target["backlinks"]) == NAV_CAP
     assert target["links_note"] == (
-        f"{fx.overflow} page(s) linked from this page — showing the first {NAV_CAP}, "
-        f"{over} more not shown.")
+        f"More than {NAV_CAP} page(s) linked from this page — showing the first {NAV_CAP}.")
     assert target["backlinks_note"] == (
-        f"{fx.overflow} page(s) link to this page — showing the first {NAV_CAP}, "
-        f"{over} more not shown.")
+        f"More than {NAV_CAP} page(s) link to this page — showing the first {NAV_CAP}.")

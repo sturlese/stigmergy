@@ -18,10 +18,12 @@ from stigmergy.index import store as index_store
 from stigmergy.knowledge import contradictions
 from stigmergy.server import entity_aliases, ops_files
 from stigmergy.server.identity import UNRESTRICTED_GROUP, check_group_names
+from stigmergy.server.service import BrainService
 
 DEFAULT_METRICS_DAYS = 30
 MAX_LIST_LIMIT = 200
 GARDEN_JOB = "garden"
+RECOMPILE_JOB = "recompile"
 
 
 class AdminBadRequest(Exception):
@@ -59,6 +61,7 @@ class AdminService:
                 "capture",
                 "contradiction_resolution",
                 "garden",
+                "recompile",
                 "entity",
                 "delete",
             ],
@@ -382,6 +385,20 @@ class AdminService:
             "redirects": payload["redirects"],
         }
 
+    def entity_dossier(self, entity: str) -> dict:
+        """Expose the same bounded reader descriptor to the unrestricted operator console."""
+        # `_principal` is the master-only administrative authorization boundary. The descriptor
+        # still receives that principal so its response stays exactly aligned with the public tool.
+        principal = self._principal()
+        return BrainService(
+            self._server,
+            self._conn,
+            None,
+            None,
+            identity=principal.subject,
+            principal=principal,
+        ).describe_entity(entity)
+
     def entity_operation(
         self,
         *,
@@ -432,7 +449,10 @@ class AdminService:
         )
 
     def gardener(self) -> dict:
-        return {"runs": ops.list_runs(self._conn, GARDEN_JOB, limit=100)}
+        return {
+            "runs": ops.list_runs(self._conn, GARDEN_JOB, limit=100),
+            "recompilations": ops.list_runs(self._conn, RECOMPILE_JOB, limit=100),
+        }
 
     def trigger_garden(self, *, rationale: str) -> dict:
         principal = self._principal()
@@ -449,6 +469,27 @@ class AdminService:
             raise AdminBadRequest(str(error)) from error
         return self._mutation(
             "garden.trigger",
+            {},
+            lambda: self._capture_receipt(queue.enqueue_garden(self._conn, request)),
+        )
+
+    def trigger_recompile(self, *, rationale: str) -> dict:
+        """Queue the explicit master-only rebuild from immutable sources."""
+        principal = self._principal()
+        try:
+            request = schema.GardenRequest(
+                idempotency_key=f"admin:recompile:{uuid.uuid4()}",
+                actor=schema.Actor(
+                    subject=principal.subject,
+                    display_name=principal.display_name,
+                ),
+                rationale=rationale or "Master-triggered derived knowledge recompilation",
+                mode="recompile",
+            )
+        except ValueError as error:
+            raise AdminBadRequest(str(error)) from error
+        return self._mutation(
+            "knowledge.recompile",
             {},
             lambda: self._capture_receipt(queue.enqueue_garden(self._conn, request)),
         )

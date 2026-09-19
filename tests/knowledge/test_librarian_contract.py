@@ -149,6 +149,7 @@ def test_every_promised_librarian_operation_exists_in_the_structured_contract():
                 role="note",
                 title="Renewal term",
                 body="# Renewal term\n\nThe term is annual.",
+                entities=("Acme",),
                 reason="Created the durable conclusion",
             ),
             PageMutation(
@@ -243,23 +244,73 @@ def test_librarian_groups_explicit_names_and_identifiers_into_one_entity_proposa
     assert "include the paired `external_namespace` and `external_id`" in text
 
 
-def test_librarian_keeps_identity_evidence_when_no_page_mutation_is_due():
+def test_librarian_prevents_new_identity_proposals_without_a_page_anchor():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "entity proposals are independent of page mutations" in text
-    assert "even when `mutations` is empty" in text
-    assert "archiving a source is not a reason to discard identity evidence" in text
+    assert "every new identity proposal must be referenced" in text
+    assert "so the plan cannot create an orphan" in text
+    assert "if no durable page has a material relationship to an identity, do not propose it" in text
+
+
+def test_librarian_preserves_related_pages_at_distinct_conceptual_levels():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "related pages at different conceptual levels" in text
+    assert "are not duplicates" in text
+    assert "update its distinct definition, and link both pages reciprocally when both need substantive changes" in text
+    assert "delete only a true semantic duplicate" in text
+    assert "never delete merely because pages overlap or because a new page is broader" in text
+
+
+def test_librarian_requires_explicit_disposition_for_every_prior_recompile_page():
+    text = " ".join(FROZEN.read_text().casefold().split())
+
+    assert "## recompile-only preservation protocol" in text
+    assert "contains a top-level `recompile` object" in text
+    assert "ignore it entirely for ordinary capture" in text
+    assert "`delete` is an accounting tombstone, not the ordinary deletion above" in text
+    assert "account for every exact `recompile.prior_pages` path" in text
+    assert "a tombstone authorizes absence and does not delete a second time" in text
+    assert "never tombstone and recreate the same path" in text
+    assert "an empty mutation list is valid only when `recompile.prior_pages` is empty" in text
+
+
+def test_librarian_distinguishes_evidentiary_identities_from_incidental_examples():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    assert "stated action, measurement, decision, report, or result" in text
+    assert "used as cited evidence for a conclusion" in text
+    assert "even when the page is not primarily about that identity" in text
+    assert "catalog entry, name-drop, or example with no stated action or result remains prose" in text
+    assert "confirm no material author or actor was dropped" in text
+
+
+def test_librarian_requires_locally_cited_preferred_identity_and_aliases():
+    text = " ".join(FROZEN.read_text().casefold().split())
+
+    assert "every material evidence-producing actor must appear in a locally cited sentence" in text
+    assert "preferred human or organization name" in text
+    assert "source-provided handle or alias together" in text
+    assert "human or organization name canonical" in text
+    assert "handles only as aliases" in text
+
+
+def test_librarian_declares_entity_anchor_shape_for_every_mutation_action():
+    text = " ".join(FROZEN.read_text().casefold().split())
+
+    assert "create has no path and must explicitly emit `entities: [...]`" in text
+    assert "use `entities: []` when there are no deliberate entity anchors" in text
+    assert "`entities: null` to preserve current anchors" in text
+    assert "complete `entities: [...]` list to replace them" in text
+    assert "emit `entities: null`" in text
 
 
 def test_librarian_requires_reusable_identities_and_deliberate_entity_links():
     text = " ".join(FROZEN.read_text().casefold().split())
     required = {
-        "likely to be referenced again",
-        "passing mentions remain plain text",
+        "expected future reuse",
+        "passing mentions remain prose",
         "only explicit `entities` references are anchored",
-        "make that decision from the source evidence, not from which examples the draft happened to retain",
-        "drafting and entity extraction are independent outputs from the same evidence",
-        "compare the plan against the source-first identity inventory, not only against the draft",
-        "never erase material attribution merely to simplify the draft",
+        "inventory named people, organizations, products, and projects",
+        "source supplies an entity-specific action",
+        "every selected identity has a visible relationship and local source citation",
     }
     forbidden = {
         "automatic unambiguous same-plan anchoring",
@@ -273,11 +324,30 @@ def test_librarian_requires_reusable_identities_and_deliberate_entity_links():
 def test_librarian_links_named_content_authors_without_inferring_submitter_authorship():
     text = " ".join(FROZEN.read_text().casefold().split())
     required = {
-        "named human author or originator with a stable name or handle is never a passing mention",
-        "must propose or reuse that author",
-        "deliberately link every materially derived mutation to them",
-        "a content author is not the submitter or provenance actor",
-        "do nothing when the author identity is absent or anonymous",
+        "source author qualifies when their authorship is itself useful provenance",
+        "not merely because every source has an author",
+    }
+
+    assert not (missing := {rule for rule in required if rule not in text}), missing
+
+
+def test_librarian_requires_full_frameworks_and_keeps_entity_anchors_out_of_wikilinks():
+    text = " ".join(FROZEN.read_text().casefold().split())
+    required = {
+        "complete named or enumerated framework",
+        "do not reduce a six-part mechanism to generic bullets",
+        "a source-named central concept belongs in one central page",
+        "split a child page only when it independently has a stable name, mechanism, significance",
+        "treat a source-defined reusable discipline, framework, or method as a first-class page candidate",
+        "differs in abstraction from an existing lower-level artifact, system, or component",
+        (
+            "preserve both: create or update each as needed and link them reciprocally when both are changed "
+            "for their own knowledge"
+        ),
+        "never collapse one into the other merely to reuse an existing page",
+        "use wikilinks only for visible normal note/concept pages",
+        "never use entity names as wikilinks",
+        "no provenance token became a page or entity",
     }
 
     assert not (missing := {rule for rule in required if rule not in text}), missing
@@ -286,12 +356,9 @@ def test_librarian_links_named_content_authors_without_inferring_submitter_autho
 def test_librarian_keeps_named_non_identity_material_as_prose_or_concepts():
     text = " ".join(FROZEN.read_text().casefold().split())
     required = {
-        "never propose a benchmark, metric, method, pattern, technology, topic, or concept "
-        "merely because it has a proper name",
-        "retain that material in prose or create a concept only when it is independently durable",
-        "a named benchmark such as `benchmark alpha 2.0` is not an entity",
-        "a named ai model or model family is a technology name, not an identity node",
-        "named models such as `model alpha` and `model beta` remain prose",
+        "do not create entities for generic methods, technical terms, models, protocols",
+        "a named model or model family is a technology, not an identity node",
+        "a distinct page needs a name, mechanism, significance, and plausible future reuse",
     }
 
     assert not (missing := {rule for rule in required if rule not in text}), missing
@@ -299,44 +366,36 @@ def test_librarian_keeps_named_non_identity_material_as_prose_or_concepts():
 
 def test_librarian_reuses_a_stable_identifier_across_scopes_without_disclosing_hidden_claims():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "reuse that existing opaque identity even when its name claims are outside this audience" in text
-    assert "never create a second identity merely because the existing claims are hidden" in text
+    assert "stable opaque identity whose name claims are outside this audience" in text
+    assert "never create a second identity because they are hidden" in text
 
 
 def test_librarian_requires_exact_available_paths_for_contradiction_claims():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "exact source path supplied in provenance or source evidence" in text
+    assert "exact visible paths" in text
 
 
 def test_librarian_treats_a_non_authoritative_later_value_as_a_contradiction():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "never derive one" in text
-    assert "only when it is itself the authority for that fact" in text
-    assert "a conflicting claim, not a correction" in text
-    assert "unless the new evidence corrects or supersedes them" not in text
+    assert "do not overwrite a visible claim merely because a new source differs" in text
+    assert "authority, scope, and basis" in text
 
 
 def test_librarian_files_contradictions_only_as_structured_proposals():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "exists in the wiki only as a `contradictionproposal`" in text
-    assert "whatever its prose says" in text
-    assert "never file a second proposal for claims a marker already covers" in text
-    assert "never call one claim authoritative" in text
+    assert "emit a `contradictionproposal`" in text
+    assert "preserve both" in text
 
 
 def test_librarian_updates_resolution_prose_without_rewriting_marker_blocks():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "omit every marker block from that mutation body" in text
-    assert "ordinary page prose so it states the controlling sourced conclusion" in text
-    assert "no longer says the matter is unresolved" in text
-    assert "removes only the explicitly targeted marker" in text
+    assert "never put speculative contradiction markers in a page body" in text
 
 
 def test_librarian_reuses_registry_spellings_from_the_context():
     text = " ".join(FROZEN.read_text().casefold().split())
-    assert "never names a counterparty, project, deal, or the identifier value" in text
-    assert "reuse the exact spelling" in text
-    assert "copy the identifier value exactly as the source writes it" in text
+    assert "reuse visible registry spelling and identifier values exactly" in text
+    assert "rather than filling in unseen names" in text
 
 
 @pytest.mark.parametrize(
@@ -351,3 +410,18 @@ def test_entity_proposal_bounds_its_external_identifier(namespace, identifier):
             external_namespace=namespace,
             external_id=identifier,
         )
+
+
+def test_librarian_contract_tolerates_create_fields_on_path_targeted_updates():
+    mutation = PageMutation(
+        action="update",
+        path="wiki/concepts/Existing.md",
+        role="note",
+        title="Ignored model title",
+        body="# Existing\n\nCurrent knowledge.",
+        reason="Updated the existing page.",
+    )
+
+    assert mutation.path == "wiki/concepts/Existing.md"
+    assert mutation.role == "note"
+    assert mutation.title == "Ignored model title"

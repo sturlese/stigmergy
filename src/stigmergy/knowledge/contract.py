@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
+import subprocess
 from importlib.resources import files
 from pathlib import Path
 
@@ -22,6 +24,8 @@ UV_VERSION = 'version: "0.11.16"'
 UV_CHECKSUM = (
     'checksum: "74947fe2c03315cf07e82ab3acc703eddef01aba4d5232a98e4c6825ec116131"'
 )
+LIBRARIAN_SKILL_PATH = Path(".claude/skills/librarian/SKILL.md")
+_GIT_COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
 def expected_librarian_skill() -> bytes:
@@ -29,13 +33,51 @@ def expected_librarian_skill() -> bytes:
 
 
 def validate_librarian_skill(repository: str | Path) -> None:
-    path = Path(repository) / ".claude" / "skills" / "librarian" / "SKILL.md"
+    path = Path(repository) / LIBRARIAN_SKILL_PATH
     try:
         actual = path.read_bytes()
     except OSError as error:
         raise KnowledgeContractError("librarian skill is missing or unreadable") from error
     if actual != expected_librarian_skill():
         raise KnowledgeContractError("librarian skill does not match the platform contract")
+
+
+def validate_librarian_skill_at_ref(repository: str | Path, ref: str) -> None:
+    """Validate the skill bytes in one selected Git snapshot.
+
+    The ref provides commit provenance only. A later ordinary data commit is acceptable when its
+    skill bytes still equal the packaged contract; no deployment-time commit pin is required.
+    """
+    try:
+        actual = subprocess.check_output(
+            ["git", "-C", str(repository), "show", f"{ref}:{LIBRARIAN_SKILL_PATH.as_posix()}"],
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise KnowledgeContractError("librarian skill is missing or unreadable at the selected base") from error
+    if actual != expected_librarian_skill():
+        raise KnowledgeContractError("librarian skill does not match the platform contract")
+
+
+def librarian_skill_provenance(
+    repository: str | Path, *, expected_commit: str | None = None
+) -> dict[str, str]:
+    """Return the exact packaged prompt bytes and checked-out brain commit."""
+    root = Path(repository)
+    validate_librarian_skill(root)
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise KnowledgeContractError("librarian skill repository commit is unavailable") from error
+    if _GIT_COMMIT.fullmatch(commit) is None:
+        raise KnowledgeContractError("librarian skill repository commit is invalid")
+    if expected_commit is not None and commit != expected_commit:
+        raise KnowledgeContractError("librarian skill repository commit does not match the verified checkout")
+    return {
+        "commit": commit,
+        "sha256": hashlib.sha256((root / LIBRARIAN_SKILL_PATH).read_bytes()).hexdigest(),
+    }
 
 
 def validate_workflows(repository: str | Path) -> None:

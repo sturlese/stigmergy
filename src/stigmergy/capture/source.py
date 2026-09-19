@@ -7,7 +7,12 @@ import datetime as dt
 import yaml
 
 from stigmergy.capture import schema
-from stigmergy.capture.extraction import ExtractedArtifact
+from stigmergy.capture.extraction import MAX_CAPTURE_EXTRACTED_BYTES, ExtractedArtifact
+
+# The readable payload has a strict capture-wide limit; source provenance and Markdown framing are
+# bounded separately so a legitimate maximum payload remains recompilable.
+MAX_CAPTURE_SOURCE_FRAMING_BYTES = 256 * 1024
+MAX_CAPTURE_RENDERED_SOURCE_BYTES = MAX_CAPTURE_EXTRACTED_BYTES + MAX_CAPTURE_SOURCE_FRAMING_BYTES
 
 
 def source_path(envelope: schema.CaptureEnvelope) -> str:
@@ -86,4 +91,7 @@ def render_source(
         sort_keys=False,
         width=1000,
     ).rstrip()
-    return f"---\n{yaml_text}\n---\n\n{''.join(body)}"
+    rendered = f"---\n{yaml_text}\n---\n\n{''.join(body)}"
+    if len(rendered.encode("utf-8")) > MAX_CAPTURE_RENDERED_SOURCE_BYTES:
+        raise ValueError("rendered source exceeds capture source capacity")
+    return rendered

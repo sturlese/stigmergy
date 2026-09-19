@@ -280,3 +280,72 @@ def test_entity_body_cannot_become_a_dossier(tmp_path):
     )
 
     assert any(item.code == "page-contract" for item in check(str(tmp_path)))
+
+
+def test_editorial_gate_rejects_a_heading_only_candidate_page(tmp_path):
+    source = _write_source(tmp_path, "11111111-1111-4111-8111-111111111111")
+    path = "wiki/concepts/Decision trace.md"
+    target = tmp_path.joinpath(*path.split("/"))
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        render_page(
+            path=path,
+            role="concept",
+            title="Decision trace",
+            body="# Decision trace",
+            acl=None,
+            sources=(source,),
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "ops").mkdir()
+    (tmp_path / "ops" / "entity-registry.json").write_bytes(registry_bytes({}))
+
+    violations = check(str(tmp_path), editorial_paths=frozenset({path}))
+
+    assert {item.code for item in violations} == {
+        "empty-knowledge-body",
+        "missing-local-source-attribution",
+    }
+
+
+def test_editorial_gate_requires_declared_local_source_and_relationship_prose(tmp_path):
+    source = _write_source(tmp_path, "11111111-1111-4111-8111-111111111111")
+    related = "wiki/concepts/Agent harness.md"
+    related_target = tmp_path.joinpath(*related.split("/"))
+    related_target.parent.mkdir(parents=True)
+    related_target.write_text(
+        render_page(
+            path=related,
+            role="concept",
+            title="Agent harness",
+            body="# Agent harness\n\nAn agent harness is the operating system around a model.",
+            acl=None,
+        ),
+        encoding="utf-8",
+    )
+    path = "wiki/concepts/Harness engineering.md"
+    target = tmp_path.joinpath(*path.split("/"))
+    target.write_text(
+        render_page(
+            path=path,
+            role="concept",
+            title="Harness engineering",
+            body=("# Harness engineering\n\n[[Agent harness]]\n\n"
+                  "This page cites an undeclared source: "
+                  "`sources/2026/08/ffffffff-ffff-4fff-8fff-ffffffffffff.md`."),
+            acl=None,
+            sources=(source,),
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "ops").mkdir()
+    (tmp_path / "ops" / "entity-registry.json").write_bytes(registry_bytes({}))
+
+    violations = check(str(tmp_path), editorial_paths=frozenset({path}))
+
+    assert {item.code for item in violations} == {
+        "invalid-local-source-reference",
+        "link-without-relationship",
+        "missing-local-source-attribution",
+    }

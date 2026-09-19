@@ -34,3 +34,19 @@ Real runs append one row to `history.ndjson`. Fake backends exercise plumbing an
 The evaluation librarian skill remains at
 `filing/repo/.claude/skills/librarian/SKILL.md` as the required contract copy; write-path behavior
 is covered deterministically by the real Postgres/Git integration suite.
+
+## Knowledge-graph parity
+
+Filing quality has a separate real-model, fail-closed release gate in
+[`filing/README.md`](./filing/README.md). It compares Hippocampus and Stigmergy over the same frozen
+source corpus and initial graph, including cold-readable bodies, local citations, meaningful page
+connections, entity precision and relationships, anti-fragmentation, writer gates, ACL safety, and
+a provenance-bearing blind editorial review. Evidence is per case and per repeat: the selected
+Stigmergy level needs three independent production-equivalent repeats of every case under the bounded
+ten-request ceiling. A healthy graph-shaped capture uses six requests for topology, topology review,
+enrichment, enrichment review, compilation, and editorial review; extra requests are reserved for
+correction. The artifact
+records phase requests, retries, repairs, elapsed time, available usage metadata, case and fixture hashes,
+and the exact brain-prompt commit/hash. The release gate recomputes the recorded topology and graph-shape
+contract, then replays the source-free filing plan and effective output before permitting deployment only
+at the lowest passing level.

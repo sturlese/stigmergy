@@ -1,0 +1,190 @@
+{
+  "schema_version": 5,
+  "example_only": true,
+  "admission_status": "passed",
+  "blind_review_packet": {
+    "status": "completed",
+    "raw_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    "canonical_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  },
+  "baseline_contract": {
+    "implementation": "hippocampus",
+    "role": "comparative-only",
+    "hard_gates_may_fail": true,
+    "integrity_and_replay_are_required": true
+  },
+  "corpus_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "initial_graph_ref": "0123456789abcdef0123456789abcdef01234567",
+  "stigmergy_commit": "0123456789abcdef0123456789abcdef01234567",
+  "librarian_skill_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "brain_prompt": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "source_cases": [
+    {
+      "id": "harness_engineering",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
+  "source_fixtures": [
+    {
+      "id": "harness_engineering",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "runs": [
+    {
+      "implementation": "stigmergy",
+      "run_id": "matrix-medium-repeat-1",
+      "runtime": {
+        "model": "openai/gpt-oss-120b",
+        "reasoning_level": "medium",
+        "provider": "cerebras",
+        "max_tokens": 40960
+      },
+      "execution": {
+        "mode": "production-equivalent",
+        "configured_max_turns": 10
+      },
+      "provenance": {
+        "corpus_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "initial_graph_ref": "0123456789abcdef0123456789abcdef01234567",
+        "source_cases": {
+          "harness_engineering": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "source_fixtures": {
+          "harness_engineering": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "librarian_skill_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "brain_prompt": {
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      },
+      "case_results": [
+        {
+          "case_id": "harness_engineering",
+          "case_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "fixture_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "brain_prompt": {
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          },
+          "runtime": {
+            "model": "openai/gpt-oss-120b",
+          "reasoning_level": "medium",
+            "provider": "cerebras",
+            "max_tokens": 40960
+          },
+          "execution_mode": "production-equivalent",
+          "configured_max_turns": 10,
+          "model_requests": 5,
+          "planning_model_requests": 5,
+          "graph_shape_model_requests": 1,
+          "graph_shape_review_model_requests": 1,
+          "graph_shape_enrichment_model_requests": 1,
+          "compilation_model_requests": 1,
+          "graph_semantic_review_model_requests": 1,
+          "graph_semantic_reviewed": true,
+          "semantic_revision_required": false,
+          "semantic_revision_attempted": false,
+          "semantic_revision_applied": false,
+          "semantic_revision_model_requests": 0,
+          "repair_model_requests": 0,
+          "repair_plan_sha256": null,
+          "schema_retry_count": 0,
+          "semantic_repair_count": 0,
+          "elapsed_ms": 1234,
+          "usage": {
+            "requests": 5
+          },
+          "score": {
+            "passed": true
+          },
+          "gates": {
+            "passed": true
+          },
+          "raw_gates": {
+            "mutations": "passed",
+            "identity_proposals": "passed",
+            "external_ids": "passed",
+            "entity_links": "passed",
+            "link_coverage": "passed",
+            "reference_resolution": "passed",
+            "alias_evidence": "passed",
+            "bodies": "passed",
+            "connections": "passed",
+            "entity_relationships": "passed",
+            "entity_wikilinks": "passed",
+            "anti_fragmentation": "passed",
+            "graph_shape": "passed",
+            "writer": "passed"
+          },
+          "output": {
+            "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            "artifact_ref": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+          },
+          "payload": {
+            "brain_prompt": {
+              "commit": "0123456789abcdef0123456789abcdef01234567",
+              "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            },
+            "case_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "fixture_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "plan": "complete FilingPlan JSON",
+            "graph_shape": "complete GraphShape JSON",
+            "graph_shape_draft": "complete draft GraphTopology JSON",
+            "graph_shape_review": "complete reviewed GraphTopology JSON",
+            "graph_shape_violations": [],
+            "reviewed_plan": null,
+            "semantic_revision": {
+              "required": false,
+              "attempted": false,
+              "applied": false,
+              "model_requests": 0
+            },
+            "repair_plan": null,
+            "repair_plan_sha256": null,
+            "effective_plan": "complete post-repair FilingPlan JSON",
+            "score": "the exact score object repeated above",
+            "gates": "the exact writer-gate object repeated above",
+            "raw_gates": "the exact raw-gate map repeated above"
+          }
+        }
+      ]
+    }
+  ],
+  "reasoning_matrix": [
+    {
+      "reasoning_level": "medium",
+      "runtime": {
+        "model": "openai/gpt-oss-120b",
+        "reasoning_level": "medium",
+        "provider": "cerebras",
+        "max_tokens": 40960
+      },
+      "runs": [
+        "The complete selected-run objects are repeated here, once for every independent repeat."
+      ],
+      "passed": true
+    }
+  ],
+  "blind_editorial_review": {
+    "verdict": "no_material_stigmergy_regression",
+    "provenance": {
+      "reviewer": "recorded reviewer identity",
+      "method": "blind-pairwise",
+      "artifact_ref": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "runs": {
+        "hippocampus": [
+          "reference repeat IDs"
+        ],
+        "stigmergy": [
+          "selected repeat IDs"
+        ]
+      }
+    }
+  }
+}

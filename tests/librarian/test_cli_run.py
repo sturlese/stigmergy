@@ -73,9 +73,7 @@ def test_cli_bounds_database_statements_before_schema_startup(monkeypatch):
 def test_cli_maps_a_scrubbed_git_startup_error_to_a_bounded_safe_exit(monkeypatch, capsys):
     """The worker command never turns a credential-scrubbed Git failure into a traceback."""
     connection = object()
-    error = GitError(
-        "`git fetch https://***@github.invalid/team/wiki.git` rc=128: " + "remote failed " * 45
-    )
+    error = GitError("`git fetch https://***@github.invalid/team/wiki.git` rc=128: " + "remote failed " * 45)
     settings = SimpleNamespace(dsn="postgresql://fixture")
 
     monkeypatch.setattr(cli.config.Settings, "from_args", lambda _args: settings)
@@ -157,15 +155,15 @@ def test_worker_limits_fail_closed(field, value):
         settings.check_domains()
 
 
-@pytest.mark.parametrize("max_turns", (1, 3))
-def test_librarian_request_budget_allows_only_one_schema_repair(max_turns):
+@pytest.mark.parametrize("max_turns", range(1, 14))
+def test_librarian_rejects_a_nonproduction_request_budget(max_turns):
     with pytest.raises(LibrarianConfigError, match="request budget"):
         config.Settings(max_turns=max_turns).check_domains()
 
 
-def test_librarian_request_budget_defaults_to_two_requests():
-    assert config.DEFAULT_MAX_TURNS == 2
-    config.Settings(max_turns=2).check_domains()
+def test_librarian_request_budget_defaults_to_fourteen_requests():
+    assert config.DEFAULT_MAX_TURNS == 14
+    config.Settings(max_turns=14).check_domains()
 
 
 def test_visibility_budget_covers_extraction_model_and_gates():
