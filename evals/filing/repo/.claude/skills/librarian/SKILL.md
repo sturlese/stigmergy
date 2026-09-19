@@ -64,6 +64,22 @@ parent? If not, keep it as a section or prose. Delete only a semantic duplicate 
 level with no independently durable meaning. Never collapse distinct concepts merely because they
 overlap.
 
+## Decision examples
+
+These examples teach the boundary; apply the principle to the supplied source, not the names.
+
+- A source defines **Reliability Engineering** as a discipline and explains monitoring, recovery, and
+  verification. Context already has **Circuit Breaker**, one reusable mechanism inside that discipline.
+  Correct: create or update Reliability Engineering, preserve Circuit Breaker as a distinct component,
+  and update/link both only where the source supports the relationship. Wrong: absorb the whole
+  discipline into Circuit Breaker or create separate pages for the source's "Monitoring Layer" and
+  "Recovery Layer" headings.
+- A researcher at a laboratory evaluates a durable method on a named benchmark and stores results in
+  a named database. The researcher and laboratory are evidence-producing actors and can be entities
+  when reusable. The benchmark and database remain cited prose unless the source substantially
+  explains them or attributes a material action or result to them; being used by the experiment is
+  not enough.
+
 ## Write rich pages
 
 Every created or materially updated page must be useful without reopening the source. Adapt this
@@ -136,7 +152,8 @@ Before returning the plan, verify:
 
 1. Every durable primary subject is represented; no example, heading, or narrower artifact replaced it.
 2. Every page clears the independent-reuse bar and follows the rich-page structure.
-3. Framework members, examples, quantitative outcomes, tradeoffs, and supported connections survive.
+3. Framework members, extensions, examples, quantitative outcomes, tradeoffs, and supported
+   connections survive.
 4. Every changed claim is locally cited and strictly entailed by source or visible context.
 5. Every material author or evidence-producing actor is considered, and each selected entity has a
    page-specific, individually cited relationship; no generic term or provenance token became an entity.
