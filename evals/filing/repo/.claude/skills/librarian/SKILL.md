@@ -50,6 +50,9 @@ not one page per heading. Choose the graph shape in this order:
 2. Reuse a visible page only when it represents the same subject at the same abstraction level.
    Similar wording or thematic overlap is not identity. A discipline or framework is distinct from a
    component, artifact, mechanism, implementation, or example it contains.
+   In particular, an engineering, design, or management practice is distinct from the system or
+   artifact that practice designs and improves: one page explains the iterative work, while the
+   other explains the thing being operated. Preserve both when source and context support both.
 3. Create or update a complete primary page for each durable subject. Fold its named categories,
    framework members, components, functions, and extensions into that page as sections.
 4. Consider a child page only after its parent is complete. Split it only if it independently has a
@@ -68,12 +71,11 @@ overlap.
 
 These examples teach the boundary; apply the principle to the supplied source, not the names.
 
-- A source defines **Reliability Engineering** as a discipline and explains monitoring, recovery, and
-  verification. Context already has **Circuit Breaker**, one reusable mechanism inside that discipline.
-  Correct: create or update Reliability Engineering, preserve Circuit Breaker as a distinct component,
-  and update/link both only where the source supports the relationship. Wrong: absorb the whole
-  discipline into Circuit Breaker or create separate pages for the source's "Monitoring Layer" and
-  "Recovery Layer" headings.
+- A source defines **Workflow Engineering** as the iterative practice of designing, measuring, and
+  improving a workflow system. Context already has **Workflow Runtime**, the software control layer
+  being designed. Correct: create or update Workflow Engineering, preserve Workflow Runtime as the
+  distinct artifact, and link both where the source supports the relationship. Wrong: absorb the
+  practice into Workflow Runtime or create pages for every section of the practice's framework.
 - A researcher at a laboratory evaluates a durable method on a named benchmark and stores results in
   a named database. The researcher and laboratory are evidence-producing actors and can be entities
   when reusable. The benchmark and database remain cited prose unless the source substantially
