@@ -33,7 +33,7 @@ while the anonymous comparison remains the release authority for overall cold-re
 
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use the production Cerebras route, medium reasoning,
-and a bounded ten-request ceiling. A healthy graph-shaped capture uses six requests; the remaining
+deterministic temperature zero, and a bounded ten-request ceiling. A healthy graph-shaped capture uses six requests; the remaining
 budget is available only for schema or semantic correction. Runs exercise the temporary-worktree writer and bounded semantic-repair path, and must
 all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
 blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a

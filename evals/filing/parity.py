@@ -19,7 +19,11 @@ except ModuleNotFoundError:
     from evals.filing.planner_eval import load_case, score, score_graph_shape
     from evals.filing.worktree import apply_with_production_repair, effective_plan, prepared
 
-from stigmergy.kernel.llm import LIBRARIAN_MAX_TOKENS, LIBRARIAN_REASONING_LEVEL
+from stigmergy.kernel.llm import (
+    LIBRARIAN_MAX_TOKENS,
+    LIBRARIAN_REASONING_LEVEL,
+    LIBRARIAN_TEMPERATURE,
+)
 from stigmergy.knowledge.context import authorized_derived_page_paths, filing_context
 from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
 from stigmergy.knowledge.plan import FilingPlan, GraphShape, GraphTopology, RepairPlan
@@ -72,6 +76,7 @@ STIGMERGY_RUNTIME = {
     "model": "openai/gpt-oss-120b",
     "provider": "cerebras",
     "max_tokens": LIBRARIAN_MAX_TOKENS,
+    "temperature": LIBRARIAN_TEMPERATURE,
 }
 ARTIFACT_SCHEMA_VERSION = 5
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -373,6 +378,7 @@ def _validate_run(
         if (
             runtime.get("model") != STIGMERGY_RUNTIME["model"]
             or runtime.get("provider") != STIGMERGY_RUNTIME["provider"]
+            or runtime.get("temperature") != LIBRARIAN_TEMPERATURE
             or runtime.get("reasoning_level") not in REASONING_LEVELS
         ):
             _failure(failures, implementation, "runtime-route")

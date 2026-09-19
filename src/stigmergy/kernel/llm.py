@@ -11,6 +11,7 @@ ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:openai/gpt-oss-120b"
 LIBRARIAN_REASONING_LEVEL = "medium"
 LIBRARIAN_MAX_TOKENS = 40960
+LIBRARIAN_TEMPERATURE = 0
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
 APPROVED_MODELS = frozenset(
     {ANSWER_MODEL, LIBRARIAN_MODEL, OCR_MODEL}
@@ -74,6 +75,7 @@ def build_model(model_name: str = ANSWER_MODEL):
     )
     if model_name == LIBRARIAN_MODEL:
         model_settings["max_tokens"] = LIBRARIAN_MAX_TOKENS
+        model_settings["temperature"] = LIBRARIAN_TEMPERATURE
         model_settings["openrouter_reasoning"] = {
             "effort": LIBRARIAN_REASONING_LEVEL,
             "exclude": True,

@@ -94,10 +94,7 @@ def _plan(case_id: str, *, passing: bool) -> FilingPlan:
             entity_type="person",
             aliases=("@santtiagom_",),
         ),
-        *tuple(
-            EntityProposal(name=name, entity_type="organization")
-            for name in ("OpenAI", "Anthropic", "LangChain")
-        ),
+        *tuple(EntityProposal(name=name, entity_type="organization") for name in ("OpenAI", "Anthropic", "LangChain")),
     )
     if case_id == "decision_trace_quality":
         return FilingPlan(
@@ -143,11 +140,7 @@ def _plan(case_id: str, *, passing: bool) -> FilingPlan:
             summary="Filed Harness Engineering and Agent Harness separately.",
             entities=entities,
             mutations=(
-                mutation.model_copy(
-                    update={
-                        "body": mutation.body.replace("agent harness", "[[Agent Harness]]", 1)
-                    }
-                ),
+                mutation.model_copy(update={"body": mutation.body.replace("agent harness", "[[Agent Harness]]", 1)}),
                 PageMutation(
                     action="create",
                     role="concept",
@@ -315,13 +308,8 @@ def _graph_shape(case_id: str, *, implementation: str):
     topology = GraphTopology.model_validate(
         {
             "summary": shape.summary,
-            "subjects": [
-                subject.model_dump(exclude={"required_terms", "entities"})
-                for subject in shape.subjects
-            ],
-            "existing_relations": [
-                relation.model_dump(mode="json") for relation in shape.existing_relations
-            ],
+            "subjects": [subject.model_dump(exclude={"required_terms", "entities"}) for subject in shape.subjects],
+            "existing_relations": [relation.model_dump(mode="json") for relation in shape.existing_relations],
         }
     )
     return shape, topology, topology
@@ -394,11 +382,7 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
                 "applied": gates["semantic_revision_applied"],
                 "model_requests": gates["semantic_revision_model_requests"],
             }
-        effective = (
-            eval_worktree.effective_plan(worktree, active_plan)
-            if gates["passed"]
-            else active_plan
-        )
+        effective = eval_worktree.effective_plan(worktree, active_plan) if gates["passed"] else active_plan
     semantic = planner_eval.score(effective, case, source_text=source_text)
     graph_shape_score = planner_eval.score_graph_shape(graph_shape, case, effective)
     semantic["graph_shape"] = graph_shape_score
@@ -412,19 +396,9 @@ def _payload(case_id: str, *, implementation: str, passing: bool) -> dict:
         "case_sha256": EXPECTED.source_cases[case_id],
         "fixture_sha256": EXPECTED.source_fixtures[case_id],
         "plan": plan.model_dump(mode="json"),
-        "graph_shape": (
-            graph_shape.model_dump(mode="json") if graph_shape is not None else None
-        ),
-        "graph_shape_draft": (
-            graph_shape_draft.model_dump(mode="json")
-            if graph_shape_draft is not None
-            else None
-        ),
-        "graph_shape_review": (
-            graph_shape_review.model_dump(mode="json")
-            if graph_shape_review is not None
-            else None
-        ),
+        "graph_shape": (graph_shape.model_dump(mode="json") if graph_shape is not None else None),
+        "graph_shape_draft": (graph_shape_draft.model_dump(mode="json") if graph_shape_draft is not None else None),
+        "graph_shape_review": (graph_shape_review.model_dump(mode="json") if graph_shape_review is not None else None),
         "graph_shape_violations": graph_shape_failures,
         "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
         "semantic_revision": revision,
@@ -469,9 +443,7 @@ def _case_result(case_id: str, repeat: int, *, implementation: str, passed: bool
         "graph_shape_enrichment_model_requests": 1 if implementation == "stigmergy" else 0,
         "compilation_model_requests": 1 if implementation == "stigmergy" else 0,
         "graph_semantic_review_model_requests": 1 if implementation == "stigmergy" else 0,
-        "graph_semantic_reviewed": bool(
-            implementation == "stigmergy" and not payload["graph_shape_violations"]
-        ),
+        "graph_semantic_reviewed": bool(implementation == "stigmergy" and not payload["graph_shape_violations"]),
         "semantic_revision_required": payload["semantic_revision"]["required"],
         "semantic_revision_attempted": payload["semantic_revision"]["attempted"],
         "semantic_revision_applied": payload["semantic_revision"]["applied"],
@@ -504,7 +476,13 @@ def _run(implementation: str, run_id: str, level: str, repeat: int, *, passed: b
             brain_prompt=copy.deepcopy(BRAIN_PROMPT),
         )
     runtime = (
-        {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 40960}
+        {
+            "model": "openai/gpt-oss-120b",
+            "reasoning_level": level,
+            "provider": "cerebras",
+            "max_tokens": 40960,
+            "temperature": 0,
+        }
         if implementation == "stigmergy"
         else {"model": "fixture", "reasoning_level": level, "provider": "fixture"}
     )
@@ -532,6 +510,7 @@ def _matrix_item(level: str, *, passed: bool, repeats: int = 1) -> dict:
             "reasoning_level": level,
             "provider": "cerebras",
             "max_tokens": 40960,
+            "temperature": 0,
         },
         "runs": [
             _run("stigmergy", f"matrix-{level}-{repeat}", level, repeat, passed=passed)
@@ -553,6 +532,7 @@ def _unstable_matrix_item(level: str) -> dict:
             "reasoning_level": level,
             "provider": "cerebras",
             "max_tokens": 40960,
+            "temperature": 0,
         },
         "runs": runs,
         "passed": False,
@@ -581,18 +561,14 @@ def _write_review_bundle(root: Path, artifact: dict) -> None:
                 ("hippocampus", baseline, baseline_cases[case["case_id"]]),
                 ("stigmergy", run, case),
             ):
-                label = "candidate-" + hashlib.sha256(
-                    f"{comparison_id}:{implementation}".encode()
-                ).hexdigest()[:16]
+                label = "candidate-" + hashlib.sha256(f"{comparison_id}:{implementation}".encode()).hexdigest()[:16]
                 entry = {
                     "label": label,
                     "case_output_sha256": candidate_case["output"]["sha256"],
                     "effective_pages_sha256": hashlib.sha256(
                         _canonical(candidate_case["payload"]["effective_plan"])
                     ).hexdigest(),
-                    "draft_plan_sha256": hashlib.sha256(
-                        _canonical(candidate_case["payload"]["plan"])
-                    ).hexdigest(),
+                    "draft_plan_sha256": hashlib.sha256(_canonical(candidate_case["payload"]["plan"])).hexdigest(),
                     "reviewed_plan_sha256": (
                         hashlib.sha256(_canonical(candidate_case["payload"]["reviewed_plan"])).hexdigest()
                         if candidate_case["payload"]["reviewed_plan"] is not None
@@ -692,10 +668,7 @@ def _write_review_bundle(root: Path, artifact: dict) -> None:
 
 
 def _artifact(review_root: Path) -> dict:
-    selected = [
-        _run("stigmergy", f"matrix-medium-{repeat}", "medium", repeat, passed=True)
-        for repeat in range(1, 4)
-    ]
+    selected = [_run("stigmergy", f"matrix-medium-{repeat}", "medium", repeat, passed=True) for repeat in range(1, 4)]
     artifact = {
         "schema_version": 5,
         "corpus_sha256": CORPUS,
@@ -719,6 +692,7 @@ def _artifact(review_root: Path) -> dict:
                     "reasoning_level": "medium",
                     "provider": "cerebras",
                     "max_tokens": 40960,
+                    "temperature": 0,
                 },
                 "runs": copy.deepcopy(selected),
                 "passed": True,
@@ -879,6 +853,7 @@ def test_parity_rejects_extra_or_tampered_structural_repair_evidence(tmp_path):
     _write_review_bundle(tmp_path, artifact)
     assert "case-repair-evidence" in _reasons(artifact, tmp_path)
 
+
 def test_parity_rejects_a_valid_but_different_recorded_effective_plan(tmp_path):
     artifact = _artifact(tmp_path)
     case = artifact["runs"][1]["case_results"][0]
@@ -912,11 +887,7 @@ def test_parity_worktree_revises_an_authorized_page_omitted_from_model_context(a
         path="wiki/concepts/Engineering Target.md",
         reason="The capture changes the existing engineering target.",
         **(
-            {
-                "body": "# Engineering Target\n\nRevised engineering-only body. (Source: `"
-                + SOURCE
-                + "`)"
-            }
+            {"body": "# Engineering Target\n\nRevised engineering-only body. (Source: `" + SOURCE + "`)"}
             if action == "update"
             else {}
         ),
@@ -969,8 +940,7 @@ def test_parity_gate_rejects_unaccounted_semantic_revision_requests(tmp_path):
 def test_parity_replays_graph_review_and_the_bounded_request_budget(tmp_path):
     artifact = _artifact(tmp_path)
     seeded = next(
-        item for item in artifact["runs"][1]["case_results"]
-        if item["case_id"] == "harness_engineering_seeded"
+        item for item in artifact["runs"][1]["case_results"] if item["case_id"] == "harness_engineering_seeded"
     )
     seeded["graph_semantic_reviewed"] = False
     seeded["output"]["sha256"] = hashlib.sha256(_canonical(seeded["payload"])).hexdigest()
@@ -986,9 +956,7 @@ def test_parity_replays_graph_review_and_the_bounded_request_budget(tmp_path):
 
     artifact = _artifact(tmp_path)
     seeded = next(
-        item
-        for item in artifact["runs"][1]["case_results"]
-        if item["case_id"] == "harness_engineering_seeded"
+        item for item in artifact["runs"][1]["case_results"] if item["case_id"] == "harness_engineering_seeded"
     )
     forbidden_repair = RepairPlan(summary="A repair after revision must not be admitted.").model_dump(mode="json")
     forbidden_hash = hashlib.sha256(_canonical(forbidden_repair)).hexdigest()

@@ -56,6 +56,7 @@ from stigmergy.kernel.llm import (  # noqa: E402
     LIBRARIAN_MAX_TOKENS,
     LIBRARIAN_MODEL,
     LIBRARIAN_PROVIDER_ROUTING,
+    LIBRARIAN_TEMPERATURE,
     build_model,
 )
 from stigmergy.knowledge.contract import (  # noqa: E402
@@ -308,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
             "graph_shape_max_tokens": LIBRARIAN_MAX_TOKENS,
             "provider": LIBRARIAN_PROVIDER_ROUTING["only"][0],
             "max_tokens": LIBRARIAN_MAX_TOKENS,
+            "temperature": LIBRARIAN_TEMPERATURE,
         }
         case_result = {
             "brain_prompt": brain_prompt,

@@ -936,6 +936,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
         settings = {
             "openrouter_provider": {"only": ["cerebras"], "allow_fallbacks": False},
             "max_tokens": 40960,
+            "temperature": 0,
                 "openrouter_reasoning": {"effort": "medium", "exclude": True},
         }
         return Model(settings), settings
@@ -1012,6 +1013,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
         "graph_shape_max_tokens": 40960,
         "provider": "cerebras",
         "max_tokens": 40960,
+        "temperature": 0,
     }
     assert payload["score"]["passed"] is True
     assert payload["gates"]["passed"] is True

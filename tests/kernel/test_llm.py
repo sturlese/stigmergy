@@ -81,7 +81,9 @@ def test_librarian_requests_medium_reasoning_without_returning_reasoning(monkeyp
     assert settings is model.settings
     assert llm.LIBRARIAN_REASONING_LEVEL == "medium"
     assert llm.LIBRARIAN_MAX_TOKENS == 40960
+    assert llm.LIBRARIAN_TEMPERATURE == 0
     assert model.settings["max_tokens"] == llm.LIBRARIAN_MAX_TOKENS
+    assert model.settings["temperature"] == llm.LIBRARIAN_TEMPERATURE
     assert model.settings["openrouter_reasoning"] == {
         "effort": llm.LIBRARIAN_REASONING_LEVEL,
         "exclude": True,

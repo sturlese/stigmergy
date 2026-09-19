@@ -103,9 +103,7 @@ def _run_deploy(
     shutil.copy2(DEPLOY_SCRIPT, scripts / DEPLOY_SCRIPT.name)
     refresh_script = scripts / "refresh_staging_checkout.sh"
     refresh_script.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        'printf "staging-refresh: root=%s head=%s\\n" "$1" "$STAGING_SHA"\n',
+        '#!/usr/bin/env bash\nset -euo pipefail\nprintf "staging-refresh: root=%s head=%s\\n" "$1" "$STAGING_SHA"\n',
         encoding="utf-8",
     )
     refresh_script.chmod(0o755)
@@ -152,9 +150,7 @@ def _run_deploy(
     bin_dir.mkdir()
     fly = bin_dir / "fly"
     fly.write_text(
-        "#!/usr/bin/env bash\n"
-        'if [ "$1" = "deploy" ]; then mkdir -p "$SEEN"; cp deploy/*.json "$SEEN"/; fi\n'
-        "exit 0\n",
+        '#!/usr/bin/env bash\nif [ "$1" = "deploy" ]; then mkdir -p "$SEEN"; cp deploy/*.json "$SEEN"/; fi\nexit 0\n',
         encoding="utf-8",
     )
     fly.chmod(0o755)
@@ -218,9 +214,7 @@ def _write_review_bundle(root: pathlib.Path, artifact: dict) -> None:
                 ("hippocampus", baseline, baseline_cases[case["case_id"]]),
                 ("stigmergy", run, case),
             ):
-                label = "candidate-" + hashlib.sha256(
-                    f"{comparison_id}:{implementation}".encode()
-                ).hexdigest()[:16]
+                label = "candidate-" + hashlib.sha256(f"{comparison_id}:{implementation}".encode()).hexdigest()[:16]
                 labels.append(
                     {
                         "label": label,
@@ -228,9 +222,7 @@ def _write_review_bundle(root: pathlib.Path, artifact: dict) -> None:
                         "effective_pages_sha256": hashlib.sha256(
                             _canonical(candidate_case["payload"]["effective_plan"])
                         ).hexdigest(),
-                        "draft_plan_sha256": hashlib.sha256(
-                            _canonical(candidate_case["payload"]["plan"])
-                        ).hexdigest(),
+                        "draft_plan_sha256": hashlib.sha256(_canonical(candidate_case["payload"]["plan"])).hexdigest(),
                         "reviewed_plan_sha256": (
                             hashlib.sha256(_canonical(candidate_case["payload"]["reviewed_plan"])).hexdigest()
                             if candidate_case["payload"]["reviewed_plan"] is not None
@@ -365,14 +357,21 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
 
     def run(implementation: str, run_id: str, level: str, repeat: int, passed: bool) -> dict:
         runtime = (
-            {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 40960}
+            {
+                "model": "openai/gpt-oss-120b",
+                "reasoning_level": level,
+                "provider": "cerebras",
+                "max_tokens": 40960,
+                "temperature": 0,
+            }
             if implementation == "stigmergy"
             else {"model": "fixture", "reasoning_level": level, "provider": "fixture"}
         )
-        run_provenance = provenance if implementation == "stigmergy" else {
-            key: value for key, value in provenance.items()
-            if key not in {"commit", "librarian_skill_sha256"}
-        }
+        run_provenance = (
+            provenance
+            if implementation == "stigmergy"
+            else {key: value for key, value in provenance.items() if key not in {"commit", "librarian_skill_sha256"}}
+        )
         return {
             "implementation": implementation,
             "run_id": run_id,
@@ -380,8 +379,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
             "execution": {"mode": "production-equivalent", "configured_max_turns": 3},
             "provenance": run_provenance,
             "case_results": [
-                case_result(case_id, repeat, passed, runtime)
-                for case_id in sorted(expected.source_cases)
+                case_result(case_id, repeat, passed, runtime) for case_id in sorted(expected.source_cases)
             ],
         }
 
@@ -393,18 +391,15 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
                 "reasoning_level": level,
                 "provider": "cerebras",
                 "max_tokens": 40960,
+                "temperature": 0,
             },
             "runs": [
-                run("stigmergy", f"matrix-{level}-{repeat}", level, repeat, passed)
-                for repeat in range(1, repeats + 1)
+                run("stigmergy", f"matrix-{level}-{repeat}", level, repeat, passed) for repeat in range(1, repeats + 1)
             ],
             "passed": passed,
         }
 
-    selected = [
-        run("stigmergy", f"matrix-high-{repeat}", "high", repeat, True)
-        for repeat in range(1, 4)
-    ]
+    selected = [run("stigmergy", f"matrix-high-{repeat}", "high", repeat, True) for repeat in range(1, 4)]
 
     return {
         "schema_version": 2,
@@ -412,9 +407,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
         "initial_graph_ref": initial,
         "stigmergy_commit": expected.commit,
         "librarian_skill_sha256": expected.librarian_skill_sha256,
-        "source_cases": [
-            {"id": key, "sha256": value} for key, value in expected.source_cases.items()
-        ],
+        "source_cases": [{"id": key, "sha256": value} for key, value in expected.source_cases.items()],
         "runs": [
             run("hippocampus", "hippocampus-recorded-run", "medium", 1, True),
             *selected,
@@ -430,6 +423,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
                     "reasoning_level": "high",
                     "provider": "cerebras",
                     "max_tokens": 40960,
+                    "temperature": 0,
                 },
                 "runs": selected,
                 "passed": True,
@@ -446,7 +440,7 @@ def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
                 "source_cases": expected.source_cases,
                 "runs": {
                     "hippocampus": ["hippocampus-recorded-run"],
-                "stigmergy": ["matrix-high-1", "matrix-high-2", "matrix-high-3"],
+                    "stigmergy": ["matrix-high-1", "matrix-high-2", "matrix-high-3"],
                 },
             },
         },
@@ -485,6 +479,10 @@ def _plan_for_case(case_id: str) -> FilingPlan:
                         "# Decision Trace Quality\n\nDecision trace quality records the evidence behind a "
                         "decision with a concise rationale so later readers can inspect the result. "
                         "Mira Chen introduced the method and Northstar Signal Lab measured Recall at Five. (Source: "
+                        "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)\n\n"
+                        "Within an [[Agent Harness]], the method makes automated choices reviewable by "
+                        "preserving why an action was selected alongside its evidence. The source does not "
+                        "report an acceptance threshold or independent verification for Recall at Five. (Source: "
                         "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)"
                     ),
                     entities=("Mira Chen", "Northstar Signal Lab"),
@@ -498,18 +496,14 @@ def _plan_for_case(case_id: str) -> FilingPlan:
             entity_type="person",
             aliases=("@santtiagom_",),
         ),
-        *tuple(
-            EntityProposal(name=name, entity_type="organization")
-            for name in ("OpenAI", "Anthropic", "LangChain")
-        ),
+        *tuple(EntityProposal(name=name, entity_type="organization") for name in ("OpenAI", "Anthropic", "LangChain")),
     )
     mutation = PageMutation(
         action="create",
         role="concept",
         title="Harness Engineering",
         body=(
-            harness_body
-            + "\n\nClaude Code and Codex are coding-agent environments named by the source. "
+            harness_body + "\n\nClaude Code and Codex are coding-agent environments named by the source. "
             f"(Source: `{source}`)"
         ),
         entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
@@ -520,9 +514,7 @@ def _plan_for_case(case_id: str) -> FilingPlan:
             summary="Filed Harness Engineering and Agent Harness separately.",
             entities=entities,
             mutations=(
-                mutation.model_copy(
-                    update={"body": mutation.body.replace("agent harness", "[[Agent Harness]]", 1)}
-                ),
+                mutation.model_copy(update={"body": mutation.body.replace("agent harness", "[[Agent Harness]]", 1)}),
                 PageMutation(
                     action="create",
                     role="concept",
@@ -530,7 +522,10 @@ def _plan_for_case(case_id: str) -> FilingPlan:
                     body=(
                         "# Agent Harness\n\nAn agent harness is the operational system around a model. "
                         "It is designed and improved through [[Harness Engineering]]. "
-                        f"(Source: `{source}`)"
+                        f"(Source: `{source}`)\n\n"
+                        "It supplies the execution loop, state, environment, objectives, and verification that "
+                        "turn model output into observable work rather than treating the model as the whole "
+                        f"system. (Source: `{source}`)"
                     ),
                     entities=(),
                     reason="The source independently defines the target system.",
@@ -547,8 +542,11 @@ def _plan_for_case(case_id: str) -> FilingPlan:
                 path="wiki/concepts/Agent Harness.md",
                 body=(
                     "# Agent Harness\n\nAn [[Agent Harness]] is the operating layer enriched by "
-                    "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain illustrate its "
-                    f"leverage. (Source: `{source}`)"
+                    "[[Harness Engineering]]. Its task loop coordinates tools and feedback while memory and "
+                    f"context assembly preserve the state needed for continued work. (Source: `{source}`)\n\n"
+                    "The harness handles errors and exposes telemetry so operators can inspect outcomes rather "
+                    "than assuming that the prompt is the policy. Santi, OpenAI, Anthropic, and LangChain "
+                    f"illustrate its leverage. (Source: `{source}`)"
                 ),
                 entities=(),
                 reason="Existing concept gains evidence.",
@@ -683,13 +681,8 @@ def _graph_shape_for_case(case_id: str, *, stigmergy: bool):
     topology = GraphTopology.model_validate(
         {
             "summary": shape.summary,
-            "subjects": [
-                subject.model_dump(exclude={"required_terms", "entities"})
-                for subject in shape.subjects
-            ],
-            "existing_relations": [
-                relation.model_dump(mode="json") for relation in shape.existing_relations
-            ],
+            "subjects": [subject.model_dump(exclude={"required_terms", "entities"}) for subject in shape.subjects],
+            "existing_relations": [relation.model_dump(mode="json") for relation in shape.existing_relations],
         }
     )
     return shape, topology, topology
@@ -754,11 +747,7 @@ def _parity_artifact(
                 "applied": gates["semantic_revision_applied"],
                 "model_requests": gates["semantic_revision_model_requests"],
             }
-            effective = (
-                eval_worktree.effective_plan(worktree, active_plan)
-                if gates["passed"]
-                else active_plan
-            )
+            effective = eval_worktree.effective_plan(worktree, active_plan) if gates["passed"] else active_plan
         score = planner_eval.score(effective, case, source_text=source_text)
         graph_shape_score = planner_eval.score_graph_shape(graph_shape, case)
         score["graph_shape"] = graph_shape_score
@@ -772,18 +761,10 @@ def _parity_artifact(
             "case_sha256": expected.source_cases[case_id],
             "fixture_sha256": expected.source_fixtures[case_id],
             "plan": plan.model_dump(mode="json"),
-            "graph_shape": (
-                graph_shape.model_dump(mode="json") if graph_shape is not None else None
-            ),
-            "graph_shape_draft": (
-                graph_shape_draft.model_dump(mode="json")
-                if graph_shape_draft is not None
-                else None
-            ),
+            "graph_shape": (graph_shape.model_dump(mode="json") if graph_shape is not None else None),
+            "graph_shape_draft": (graph_shape_draft.model_dump(mode="json") if graph_shape_draft is not None else None),
             "graph_shape_review": (
-                graph_shape_review.model_dump(mode="json")
-                if graph_shape_review is not None
-                else None
+                graph_shape_review.model_dump(mode="json") if graph_shape_review is not None else None
             ),
             "graph_shape_violations": graph_shape_failures,
             "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
@@ -834,7 +815,13 @@ def _parity_artifact(
 
     def run(implementation: str, run_id: str, level: str, *, passing: bool = True) -> dict:
         runtime = (
-            {"model": "openai/gpt-oss-120b", "reasoning_level": level, "provider": "cerebras", "max_tokens": 40960}
+            {
+                "model": "openai/gpt-oss-120b",
+                "reasoning_level": level,
+                "provider": "cerebras",
+                "max_tokens": 40960,
+                "temperature": 0,
+            }
             if implementation == "stigmergy"
             else {"model": "fixture", "reasoning_level": level, "provider": "fixture"}
         )
@@ -870,10 +857,7 @@ def _parity_artifact(
             ],
         }
 
-    selected = [
-        run("stigmergy", f"matrix-medium-{repeat}", "medium")
-        for repeat in range(1, 4)
-    ]
+    selected = [run("stigmergy", f"matrix-medium-{repeat}", "medium") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
         "schema_version": 5,
@@ -883,9 +867,7 @@ def _parity_artifact(
         "librarian_skill_sha256": expected.librarian_skill_sha256,
         "brain_prompt": expected.brain_prompt,
         "source_cases": [{"id": key, "sha256": value} for key, value in expected.source_cases.items()],
-        "source_fixtures": [
-            {"id": key, "sha256": value} for key, value in expected.source_fixtures.items()
-        ],
+        "source_fixtures": [{"id": key, "sha256": value} for key, value in expected.source_fixtures.items()],
         "runs": [hippocampus, *selected],
         "reasoning_matrix": [
             {
@@ -895,12 +877,14 @@ def _parity_artifact(
                     "reasoning_level": level,
                     "provider": "cerebras",
                     "max_tokens": 40960,
+                    "temperature": 0,
                 },
                 "runs": [run("stigmergy", f"matrix-{level}-1", level, passing=False)],
                 "passed": False,
             }
             for level in ("minimal", "low")
-        ] + [
+        ]
+        + [
             {
                 "reasoning_level": "medium",
                 "runtime": {
@@ -908,6 +892,7 @@ def _parity_artifact(
                     "reasoning_level": "medium",
                     "provider": "cerebras",
                     "max_tokens": 40960,
+                    "temperature": 0,
                 },
                 "runs": selected,
                 "passed": True,
@@ -939,9 +924,7 @@ def test_deploy_bakes_all_controls_then_restores_defaults(tmp_path):
     assert json.loads((seen / "identities.json").read_text()) == ROSTER
     assert json.loads((seen / "entity-registry.json").read_text()) == REGISTRY
     assert json.loads((seen / "slack-channels.json").read_text()) == CHANNELS
-    assert {
-        name: json.loads((deploy / name).read_text()) for name in EMPTY_DEFAULTS
-    } == EMPTY_DEFAULTS
+    assert {name: json.loads((deploy / name).read_text()) for name in EMPTY_DEFAULTS} == EMPTY_DEFAULTS
     assert (deploy / "unmanaged" / "tracked.txt").read_text() == "keep\n"
 
 
@@ -960,9 +943,7 @@ def test_missing_preflight_runtime_stops_deploy(tmp_path):
 
 
 def test_dirty_platform_checkout_stops_deploy_before_parity_or_fly(tmp_path):
-    result, _deploy, seen = _run_deploy(
-        tmp_path, parity_artifact="stale", dirty_platform=True
-    )
+    result, _deploy, seen = _run_deploy(tmp_path, parity_artifact="stale", dirty_platform=True)
 
     assert result.returncode == 2
     assert "platform checkout has tracked or untracked changes" in result.stderr
@@ -1004,11 +985,11 @@ def test_missing_control_file_stops_deploy(tmp_path, name):
         **os.environ,
         "PATH": f"{_sidecar_path(tmp_path, 'bin')}{os.pathsep}{os.environ['PATH']}",
         "STIGMERGY_REPO": str(knowledge),
-            "STAGING_SHA": staging_sha,
-            "SEEN": str(seen),
-            "STIGMERGY_PYTHON": sys.executable,
-            "STIGMERGY_PARITY_ARTIFACT": str(_artifact_path(tmp_path)),
-        }
+        "STAGING_SHA": staging_sha,
+        "SEEN": str(seen),
+        "STIGMERGY_PYTHON": sys.executable,
+        "STIGMERGY_PARITY_ARTIFACT": str(_artifact_path(tmp_path)),
+    }
     second = subprocess.run(
         ["bash", str(tmp_path / "scripts" / DEPLOY_SCRIPT.name)],
         cwd=tmp_path,
