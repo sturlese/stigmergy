@@ -543,7 +543,9 @@ def _canonical(value) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _write_review_bundle(root: Path, artifact: dict) -> None:
+def _write_review_bundle(
+    root: Path, artifact: dict, *, no_material_difference: bool = False
+) -> None:
     """Build external, content-addressed review evidence for the validator contract."""
     root.mkdir(parents=True, exist_ok=True)
     baseline = next(run for run in artifact["runs"] if run["implementation"] == "hippocampus")
@@ -599,15 +601,20 @@ def _write_review_bundle(root: Path, artifact: dict) -> None:
                 "effective_pages_sha256": labels[0]["effective_pages_sha256"],
                 "reason": "Fixture baseline regression.",
             }
-            regressions.append(regression)
+            if not no_material_difference:
+                regressions.append(regression)
             reviewer_pairs.append(
                 {
                     "pair_id": comparison_id,
                     "judgments": {"fixture": {"winner": "tie", "reason": "Fixture."}},
                     "overall": {"winner": "tie", "reason": "Fixture."},
                     "material_regression": {
-                        "side": labels[0]["label"],
-                        "reason": regression["reason"],
+                        "side": "none" if no_material_difference else labels[0]["label"],
+                        "reason": (
+                            "No material difference."
+                            if no_material_difference
+                            else regression["reason"]
+                        ),
                     },
                 }
             )
@@ -732,6 +739,13 @@ def _reasons(artifact: dict, review_root: Path) -> set[str]:
 
 def test_parity_gate_accepts_complete_case_level_evidence_and_three_selected_repeats(tmp_path):
     assert evaluate(_artifact(tmp_path), expected=EXPECTED, review_root=tmp_path)["passed"] is True
+
+
+def test_parity_gate_accepts_an_explicit_no_material_difference_review(tmp_path):
+    artifact = _artifact(tmp_path)
+    _write_review_bundle(tmp_path, artifact, no_material_difference=True)
+
+    assert evaluate(artifact, expected=EXPECTED, review_root=tmp_path)["passed"] is True
 
 
 def test_parity_admits_graph_reviewed_plans_without_a_post_planning_repair(tmp_path):

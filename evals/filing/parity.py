@@ -1203,7 +1203,15 @@ def _verify_unblind_review(
             _failure(failures, "review", "blind-review-evidence")
             return
         regression = response_pair.get("material_regression")
-        if not isinstance(regression, dict) or regression.get("side") not in labels:
+        if not isinstance(regression, dict):
+            _failure(failures, "review", "blind-review-evidence")
+            return
+        if regression.get("side") == "none":
+            if not _recorded_text(regression.get("reason")):
+                _failure(failures, "review", "blind-review-evidence")
+                return
+            continue
+        if regression.get("side") not in labels:
             _failure(failures, "review", "blind-review-evidence")
             return
         selected = labels[regression["side"]]
