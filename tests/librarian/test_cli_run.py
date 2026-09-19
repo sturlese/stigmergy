@@ -163,7 +163,7 @@ def test_librarian_rejects_a_nonproduction_request_budget(max_turns):
         config.Settings(max_turns=max_turns).check_domains()
 
 
-def test_librarian_request_budget_defaults_to_eight_requests():
+def test_librarian_request_budget_defaults_to_ten_requests():
     assert config.DEFAULT_MAX_TURNS == 10
     config.Settings(max_turns=10).check_domains()
 

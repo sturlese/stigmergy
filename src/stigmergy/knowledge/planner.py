@@ -760,10 +760,14 @@ def _graph_enrichment_correction_prompt(
         "the subject whose definition, mechanism, or significance it directly supports. A related page can be "
         "linked later; it does not need a copy of the other subject's architecture or evidence. A benchmark, "
         "before/after comparison, or result caused by designing, configuring, evaluating, or improving the "
-        "target belongs to the practice; components and runtime capabilities belong to the target system.\n\n"
+        "target belongs to the practice; components and runtime capabilities belong to the target system. "
+        "When a violation reports a non-contiguous required term, discard the paraphrase and copy the shortest "
+        "complete source span character-for-character; never shorten an enumeration or omit one of its members.\n\n"
         f"TOPOLOGY CONTRACT VIOLATIONS\n{fence(json.dumps(violations, ensure_ascii=False))}\n\n"
         "INVALID ENRICHMENT DRAFT\n"
-        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
+        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
+        "READABLE SOURCE TO CORRECT AGAIN\n"
+        f"{fence(source_text)}"
     )
     _guard_prompt(prompt)
     return prompt
