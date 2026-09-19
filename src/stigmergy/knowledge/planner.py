@@ -13,7 +13,9 @@ from stigmergy.capture.schema import CaptureEnvelope
 from stigmergy.kernel.normalize import resolution_key
 from stigmergy.knowledge.plan import (
     FilingPlan,
+    GraphEntity,
     GraphShape,
+    GraphSubject,
     GraphTopology,
     RepairPlan,
     expected_graph_mutations,
@@ -382,6 +384,7 @@ class PydanticPlanner:
         shape = enrichment_review_run.plan
         if not isinstance(shape, GraphShape):
             raise TypeError("graph enrichment review returned the wrong output type")
+        shape = _project_graph_enrichment(shape_review, shape, source_text=source_text)
         step_requests = int(enrichment_review_run.model_requests)
         enrichment_requests += step_requests
         enrichment_schema_retries += max(0, step_requests - 1)
@@ -411,6 +414,7 @@ class PydanticPlanner:
             shape = shape_run.plan
             if not isinstance(shape, GraphShape):
                 raise TypeError("graph enrichment correction returned the wrong output type")
+            shape = _project_graph_enrichment(shape_review, shape, source_text=source_text)
             step_requests = int(shape_run.model_requests)
             enrichment_requests += step_requests
             enrichment_schema_retries += max(0, step_requests - 1)
@@ -659,9 +663,15 @@ def _graph_topology_review_prompt(
         "and a materially described target system. Reject activity nouns classified as systems, reusable "
         "subjects classified as notes, invented qualifiers, generic titles, and descriptive predicates used "
         "as names when the source provides a specific compound noun. Do not preserve a draft choice merely "
-        "because it already exists.\n\n"
+        "because it already exists. Build a private cold-page table for every candidate: retain it only when "
+        "the source independently provides a stable name, its own mechanism or operating model, significance, "
+        "and evidence beyond a phrase inside another subject's definition. A desired output, trace, record, or "
+        "component remains a section when the source explains only the primary method that creates or evaluates "
+        "it; a noun phrase alone does not earn a page. Never output the table.\n\n"
         "FALLIBLE TOPOLOGY DRAFT\n"
-        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
+        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
+        "READABLE SOURCE TO AUDIT AGAIN\n"
+        f"{fence(source_text)}"
     )
     _guard_prompt(prompt)
     return prompt
@@ -1036,6 +1046,67 @@ def graph_topology_violations(
                     f"{left.title} <> {right.title}; shared={sorted(shared)!r}"
                 )
     return tuple(violations)
+
+
+def _project_graph_enrichment(
+    topology: GraphTopology,
+    shape: GraphShape,
+    *,
+    source_text: str,
+) -> GraphShape:
+    """Project agent enrichment onto its immutable reviewed topology."""
+    source_key = " ".join(resolution_key(source_text).split())
+    candidates: dict[str, list[GraphSubject]] = {}
+    for subject in shape.subjects:
+        candidates.setdefault(resolution_key(subject.title), []).append(subject)
+
+    projected = []
+    for topology_subject in topology.subjects:
+        terms: list[str] = []
+        term_keys = set()
+        entities: dict[str, GraphEntity] = {}
+        for candidate in candidates.get(resolution_key(topology_subject.title), ()):
+            for term in candidate.required_terms:
+                key = " ".join(resolution_key(term).split())
+                if key in source_key and key not in term_keys:
+                    terms.append(term)
+                    term_keys.add(key)
+            for entity in candidate.entities:
+                key = resolution_key(entity.name)
+                if key in entities:
+                    continue
+                evidence_terms = tuple(
+                    term
+                    for term in entity.evidence_terms
+                    if " ".join(resolution_key(term).split()) in source_key
+                )
+                if entity.relationship_kind == "produced_evidence" and not evidence_terms:
+                    continue
+                projected_entity = GraphEntity.model_validate(
+                    {**entity.model_dump(mode="json"), "evidence_terms": evidence_terms}
+                )
+                entities[key] = projected_entity
+                for term in evidence_terms:
+                    term_key = " ".join(resolution_key(term).split())
+                    if term_key not in term_keys:
+                        terms.append(term)
+                        term_keys.add(term_key)
+        if not terms:
+            terms.append(topology_subject.title_evidence)
+        projected.append(
+            GraphSubject.model_validate(
+                {
+                    **topology_subject.model_dump(mode="json"),
+                    "required_terms": terms,
+                    "entities": [entity.model_dump(mode="json") for entity in entities.values()],
+                }
+            )
+        )
+    return GraphShape(
+        summary=shape.summary,
+        subjects=tuple(projected),
+        existing_relations=topology.existing_relations,
+    )
 
 
 def graph_shape_violations(

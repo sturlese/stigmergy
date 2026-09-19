@@ -468,6 +468,72 @@ def test_graph_enrichment_rejects_terms_not_copied_contiguously_from_source():
     )
 
 
+def test_graph_enrichment_projection_restores_topology_and_preserves_valid_evidence():
+    shape = _graph_shape()
+    topology = GraphTopology.model_validate(
+        {
+            "summary": shape.summary,
+            "subjects": [
+                subject.model_dump(exclude={"required_terms", "entities"})
+                for subject in shape.subjects
+            ],
+            "existing_relations": [
+                relation.model_dump(mode="json") for relation in shape.existing_relations
+            ],
+        }
+    )
+    harness, agent_harness = shape.subjects
+    evidence = GraphEntity(
+        name="LangChain",
+        entity_type="organization",
+        aliases=(),
+        relationship_kind="produced_evidence",
+        relationship="Reported a benchmark rise from rank 30.",
+        evidence_terms=("rank 30",),
+    )
+    invalid = GraphShape(
+        summary="Fallible enrichment.",
+        subjects=(
+            harness.model_copy(
+                update={
+                    "significance": "Changed immutable field.",
+                    "required_terms": ("six capabilities", "invented span"),
+                }
+            ),
+            agent_harness,
+            agent_harness.model_copy(
+                update={"required_terms": ("not copied",), "entities": (evidence,)}
+            ),
+        ),
+        existing_relations=(),
+    )
+    source_text = (
+        "Harness Engineering defines six capabilities. The Agent Harness runtime improved from "
+        "rank 30."
+    )
+
+    projected = planner._project_graph_enrichment(
+        topology,
+        invalid,
+        source_text=source_text,
+    )
+
+    assert [subject.title for subject in projected.subjects] == [
+        "Harness Engineering",
+        "Agent Harness",
+    ]
+    assert projected.subjects[0].significance == topology.subjects[0].significance
+    assert projected.subjects[0].required_terms == ("six capabilities",)
+    assert projected.subjects[1].required_terms == ("runtime", "rank 30")
+    assert [entity.name for entity in projected.subjects[1].entities] == ["LangChain"]
+    assert projected.existing_relations == topology.existing_relations
+    assert planner.graph_topology_violations(
+        topology,
+        projected,
+        source_text=source_text,
+    ) == ()
+
+
 def test_graph_shape_gate_requires_local_citations_for_each_factual_block():
     source_path = "sources/2026/08/capture.md"
     body = (
