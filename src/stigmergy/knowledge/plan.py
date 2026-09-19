@@ -338,6 +338,35 @@ class GraphCoverageGap(BaseModel):
     ]
 
 
+class GraphRelationGap(BaseModel):
+    """A visible relation incorrectly classified as unrelated."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_subject: EntityName
+    path: Annotated[str, Field(min_length=1, max_length=500)]
+    reason: Annotated[str, Field(min_length=1, max_length=500)]
+
+
+class GraphEvidenceLimit(BaseModel):
+    """A material absence the compiled page must state explicitly."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    subject: EntityName
+    statement: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=500,
+            description=(
+                "One concise natural sentence stating a material result, score, threshold, procedure, "
+                "or verification detail that the source does not report."
+            ),
+        ),
+    ]
+
+
 class GraphCoverageAudit(BaseModel):
     """Independent loss audit over a reviewed source-to-graph assignment."""
 
@@ -345,6 +374,8 @@ class GraphCoverageAudit(BaseModel):
 
     summary: Annotated[str, Field(min_length=1, max_length=1000)]
     gaps: Annotated[tuple[GraphCoverageGap, ...], Field(max_length=12)]
+    relation_corrections: Annotated[tuple[GraphRelationGap, ...], Field(max_length=24)]
+    evidence_limits: Annotated[tuple[GraphEvidenceLimit, ...], Field(max_length=24)]
 
 
 def expected_graph_mutations(shape: GraphShape) -> tuple[dict[str, str | None], ...]:

@@ -18,6 +18,8 @@ from stigmergy.knowledge.plan import (
     GraphCoverageAudit,
     GraphCoverageGap,
     GraphEntity,
+    GraphEvidenceLimit,
+    GraphRelationGap,
     GraphShape,
     GraphSubject,
     GraphTopology,
@@ -93,7 +95,12 @@ def _filing_model(summary: str) -> FunctionModel:
                 "subjects": [],
                 "existing_relations": [],
             },
-            {"summary": "No source evidence was omitted.", "gaps": []},
+            {
+                "summary": "No source evidence was omitted.",
+                "gaps": [],
+                "relation_corrections": [],
+                "evidence_limits": [],
+            },
             {"summary": summary},
         )
     )
@@ -404,7 +411,13 @@ def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
 
 
 def test_graph_coverage_audit_adds_only_valid_unrepresented_source_spans():
-    shape = _graph_shape()
+    shape = _graph_shape().model_copy(
+        update={
+            "existing_relations": tuple(
+                relation.model_copy(update={"relation": "unrelated"}) for relation in _graph_shape().existing_relations
+            )
+        }
+    )
     audit = GraphCoverageAudit(
         summary="Recovered one omitted trust capability.",
         gaps=(
@@ -415,6 +428,19 @@ def test_graph_coverage_audit_adds_only_valid_unrepresented_source_spans():
                     "runtime",
                     "unsupported missing phrase",
                 ),
+            ),
+        ),
+        relation_corrections=(
+            GraphRelationGap(
+                source_subject="Harness Engineering",
+                path="wiki/concepts/Agent Harness.md",
+                reason="The practice improves the system.",
+            ),
+        ),
+        evidence_limits=(
+            GraphEvidenceLimit(
+                subject="Agent Harness",
+                statement="The source does not report independent verification.",
             ),
         ),
     )
@@ -428,6 +454,66 @@ def test_graph_coverage_audit_adds_only_valid_unrepresented_source_spans():
     assert enriched.subjects[1].required_terms == (
         "runtime",
         "observability preserves traces",
+    )
+    assert enriched.existing_relations[0].relation == "distinct_related"
+
+
+def test_graph_shape_gate_requires_audited_evidence_limit_statement():
+    shape = _graph_shape()
+    audit = GraphCoverageAudit(
+        summary="The reported result lacks independent verification.",
+        gaps=(),
+        relation_corrections=(),
+        evidence_limits=(
+            GraphEvidenceLimit(
+                subject="Agent Harness",
+                statement="The source does not report independent verification.",
+            ),
+        ),
+    )
+    plan = FilingPlan(
+        summary="Created both related pages.",
+        entities=(EntityProposal(name="Santi", entity_type="person", aliases=("@santi",)),),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Harness Engineering",
+                body=(
+                    "# Harness Engineering\n\nThe six capabilities and extensions improve "
+                    "the [[Agent Harness]]. Santi (@santi) authored the explanation."
+                ),
+                entities=("Santi",),
+                reason="Created the practice.",
+            ),
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=(
+                    "# Agent Harness\n\nThe runtime is improved through [[Harness Engineering]]. "
+                    "The source does not report independent verification."
+                ),
+                entities=(),
+                reason="Created the system.",
+            ),
+        ),
+    )
+
+    assert planner.graph_shape_violations(shape, plan, coverage_audit=audit) == ()
+    missing = plan.model_copy(
+        update={
+            "mutations": (
+                plan.mutations[0],
+                plan.mutations[1].model_copy(
+                    update={"body": "# Agent Harness\n\nThe runtime is improved through [[Harness Engineering]]."}
+                ),
+            )
+        }
+    )
+
+    assert any(
+        violation.startswith("evidence-limit:Agent Harness")
+        for violation in planner.graph_shape_violations(shape, missing, coverage_audit=audit)
     )
 
 

@@ -35,6 +35,7 @@ class PlanRun:
     plan: FilingPlan | RepairPlan | GraphCoverageAudit | GraphShape | GraphTopology
     model_requests: int = 0
     graph_shape: GraphShape | None = None
+    graph_coverage_audit: GraphCoverageAudit | None = None
     graph_shape_draft: GraphTopology | None = None
     graph_shape_review: GraphTopology | None = None
     graph_shape_model_requests: int = 0
@@ -465,6 +466,7 @@ class PydanticPlanner:
                 source_text=source_text,
                 context=context,
                 graph_shape=shape,
+                coverage_audit=audit,
             ),
             max_requests=compilation_budget,
             reasoning_level=self.reasoning_level_override or "medium",
@@ -487,6 +489,7 @@ class PydanticPlanner:
                     context=context,
                     graph_shape=shape,
                     draft=plan,
+                    coverage_audit=audit,
                 ),
                 max_requests=remaining,
                 reasoning_level=self.reasoning_level_override or "medium",
@@ -505,7 +508,12 @@ class PydanticPlanner:
             shape,
             source_text=source_text,
         )
-        plan_violations = graph_shape_violations(shape, plan, source_path=source_path)
+        plan_violations = graph_shape_violations(
+            shape,
+            plan,
+            source_path=source_path,
+            coverage_audit=audit,
+        )
         while not topology_violations and plan_violations and remaining > 0:
             review_run = await self._run_structured(
                 output_type=FilingPlan,
@@ -518,6 +526,7 @@ class PydanticPlanner:
                     graph_shape=shape,
                     draft=plan,
                     violations=plan_violations,
+                    coverage_audit=audit,
                 ),
                 max_requests=remaining,
                 reasoning_level=self.reasoning_level_override or "medium",
@@ -529,7 +538,12 @@ class PydanticPlanner:
             review_requests += step_requests
             review_schema_retries += max(0, step_requests - 1)
             used += step_requests
-            plan_violations = graph_shape_violations(shape, plan, source_path=source_path)
+            plan_violations = graph_shape_violations(
+                shape,
+                plan,
+                source_path=source_path,
+                coverage_audit=audit,
+            )
             remaining = max_turns - used
         violations = topology_violations + plan_violations
 
@@ -544,6 +558,7 @@ class PydanticPlanner:
             plan=plan,
             model_requests=used,
             graph_shape=shape,
+            graph_coverage_audit=audit,
             graph_shape_draft=shape_draft,
             graph_shape_review=shape_review,
             graph_shape_model_requests=phase_requests[0],
@@ -898,7 +913,13 @@ def _graph_coverage_audit_prompt(
         "needed to preserve the source's durable conclusions. For each gap, choose one existing subject by "
         "primary aboutness and copy the shortest complete one-to-eight-word contiguous source span. Improvement "
         "and configuration evidence belongs to the practice; intrinsic components and operation belong to the "
-        "system. Return no gaps only after reconciling each source-declared count against its individual members.\n\n"
+        "system. Re-audit every existing relation classified unrelated and emit a relation_correction when the "
+        "source subject can materially evaluate, audit, design, operate, consume, or produce the visible page's "
+        "decisions or outputs; compatible evidenced roles are enough without a title cross-mention. Finally emit "
+        "an evidence_limit whenever the source names an evaluation, metric, benchmark, or claimed result but "
+        "omits a material result value, score, threshold, procedure, or independent verification. State only "
+        "what is absent, never invent the missing evidence. Return no gaps, corrections, or limits only after "
+        "reconciling each source-declared count and reviewing every empirical claim.\n\n"
         "REVIEWED GRAPH SHAPE\n"
         f"{fence(json.dumps(shape.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
         f"PROVENANCE\n{fence(json.dumps(provenance, ensure_ascii=False, sort_keys=True))}\n\n"
@@ -940,7 +961,19 @@ def _apply_graph_coverage_audit(
         )
         for subject in shape.subjects
     )
-    return shape.model_copy(update={"subjects": enriched})
+    relations = list(shape.existing_relations)
+    relation_indexes = {
+        (resolution_key(relation.source_subject), relation.path): index for index, relation in enumerate(relations)
+    }
+    for correction in audit.relation_corrections:
+        key = (resolution_key(correction.source_subject), correction.path)
+        index = relation_indexes.get(key)
+        if index is None or relations[index].relation != "unrelated":
+            continue
+        relations[index] = relations[index].model_copy(
+            update={"relation": "distinct_related", "reason": correction.reason}
+        )
+    return shape.model_copy(update={"subjects": enriched, "existing_relations": tuple(relations)})
 
 
 def _prompt(
@@ -950,15 +983,24 @@ def _prompt(
     source_text: str,
     context: str,
     graph_shape: GraphShape | None = None,
+    coverage_audit: GraphCoverageAudit | None = None,
 ) -> str:
     provenance = _provenance(envelope, source_path)
     shape_section = ""
     if graph_shape is not None:
+        evidence_limits = () if coverage_audit is None else coverage_audit.evidence_limits
+        evidence_limits_payload = json.dumps(
+            [item.model_dump(mode="json") for item in evidence_limits],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         shape_section = (
             "AUTHORITATIVE GRAPH SHAPE\n"
             f"{fence(json.dumps(graph_shape.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
             "DERIVED MUTATION CONTRACT\n"
             f"{fence(json.dumps(expected_graph_mutations(graph_shape), ensure_ascii=False, sort_keys=True))}\n\n"
+            "AUDITED EVIDENCE LIMITS\n"
+            f"{fence(evidence_limits_payload)}\n\n"
             "Compile exactly those page subjects and targets into complete, cold-readable Markdown. Treat "
             "required_terms as coverage anchors, never as an outline: preserve each string verbatim inside a "
             "coherent explanation, grouped framework, or evidence narrative, and never mirror their order as "
@@ -996,6 +1038,8 @@ def _prompt(
             "State material evidence limits. Source-reported examples remain explicitly source-reported rather "
             "than independently verified, and a source that names an evaluation without scores, thresholds, or "
             "procedure detail must say what it does not report. Do not invent the missing detail.\n\n"
+            "Every audited evidence-limit statement is mandatory on its named subject page. Integrate it as "
+            "natural prose rather than metadata or a checklist.\n\n"
             "For every assigned entity, express its assigned relationship once in idiomatic prose containing "
             "the preferred name, every assigned alias, and the exact local source attribution. Treat the "
             "relationship string as a semantic fact, not text to concatenate: if it already starts with the "
@@ -1028,6 +1072,7 @@ def _graph_compliance_prompt(
     graph_shape: GraphShape,
     draft: FilingPlan,
     violations: tuple[str, ...],
+    coverage_audit: GraphCoverageAudit,
 ) -> str:
     base = _prompt(
         envelope=envelope,
@@ -1035,6 +1080,7 @@ def _graph_compliance_prompt(
         source_text=source_text,
         context=context,
         graph_shape=graph_shape,
+        coverage_audit=coverage_audit,
     )
     prompt = (
         f"{base}\n\n"
@@ -1069,6 +1115,7 @@ def _graph_editorial_review_prompt(
     context: str,
     graph_shape: GraphShape,
     draft: FilingPlan,
+    coverage_audit: GraphCoverageAudit,
 ) -> str:
     base = _prompt(
         envelope=envelope,
@@ -1076,6 +1123,7 @@ def _graph_editorial_review_prompt(
         source_text=source_text,
         context=context,
         graph_shape=graph_shape,
+        coverage_audit=coverage_audit,
     )
     prompt = (
         f"{base}\n\n"
@@ -1253,6 +1301,7 @@ def graph_shape_violations(
     plan: FilingPlan,
     *,
     source_path: str | None = None,
+    coverage_audit: GraphCoverageAudit | None = None,
 ) -> tuple[str, ...]:
     """Return concrete ways a compiled plan diverges from its agent-authored shape."""
     operations = expected_graph_mutations(shape)
@@ -1416,6 +1465,11 @@ def graph_shape_violations(
         target_body = bodies.get(target_key, "")
         if target_body and f"[[{relation.source_subject}".casefold() not in target_body.casefold():
             violations.append(f"missing-link:{target_title}->{relation.source_subject}")
+    if coverage_audit is not None:
+        for limit in coverage_audit.evidence_limits:
+            body = subject_bodies.get(limit.subject, "")
+            if not _required_term_present(_normalized_lexical_text(body), limit.statement):
+                violations.append(f"evidence-limit:{limit.subject}: missing={limit.statement!r}")
     return tuple(violations)
 
 
