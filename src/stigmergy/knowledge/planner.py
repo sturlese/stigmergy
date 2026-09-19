@@ -1178,6 +1178,19 @@ def _graph_compliance_prompt(
         graph_shape=graph_shape,
         coverage_audit=coverage_audit,
     )
+    preservation_override = (
+        "\n\nPRESERVATION OVERRIDE\n"
+        "At least one violation begins with `preserved-context:`. This rule overrides every editorial or "
+        "integration preference above. For each named update path, locate the matching candidate body in SAFE "
+        "EXISTING CONTEXT and copy that entire Markdown body character-for-character as an immutable contiguous "
+        "block in the replacement body. Do not edit, reorder, paraphrase, or delete any character from that "
+        "prior body. Add current-source knowledge only after the complete prior body in new, naturally titled, "
+        "locally cited sections. Put all missing required terms for that subject in those additions and keep "
+        "sibling-owned entities, measurements, and examples out. Before returning, verify that the full prior "
+        "body is an exact substring of the update body.\n"
+        if any(violation.startswith("preserved-context:") for violation in violations)
+        else ""
+    )
     prompt = (
         f"{base}\n\n"
         "Return one complete replacement FilingPlan. The previous draft failed the mechanical "
@@ -1207,6 +1220,7 @@ def _graph_compliance_prompt(
         f"GRAPH-SHAPE VIOLATIONS\n{fence(json.dumps(violations, ensure_ascii=False))}\n\n"
         "PREVIOUS DRAFT\n"
         f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
+        f"{preservation_override}"
     )
     _guard_prompt(prompt)
     return prompt
