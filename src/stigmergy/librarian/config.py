@@ -9,7 +9,7 @@ from stigmergy.kernel.llm import LIBRARIAN_MODEL, OCR_MODEL
 from stigmergy.librarian.errors import LibrarianConfigError
 
 DEFAULT_MODEL = LIBRARIAN_MODEL
-DEFAULT_MAX_TURNS = 10
+DEFAULT_MAX_TURNS = 12
 DEFAULT_TIMEOUT_S = 300
 DEFAULT_POLL_INTERVAL_S = 3.0
 GATE_BUDGET_S = 120
@@ -88,9 +88,7 @@ class Settings:
             max_turns=int(os.environ.get("STIGMERGY_LIBRARIAN_MAX_TURNS", cls.max_turns)),
             timeout_s=timeout_s,
             poll_interval_s=float(option("poll_interval", cls.poll_interval_s)),
-            visibility_timeout_s=int(
-                option("visibility_timeout", resolved_visibility_timeout_s(timeout_s=timeout_s))
-            ),
+            visibility_timeout_s=int(option("visibility_timeout", resolved_visibility_timeout_s(timeout_s=timeout_s))),
             max_attempts=int(option("max_attempts", cls.max_attempts)),
             garden_at=os.environ.get(GARDEN_AT_ENV, cls.garden_at),
             worktree_root=os.environ.get("STIGMERGY_LIBRARIAN_WORKTREE_ROOT", ""),
@@ -103,13 +101,9 @@ class Settings:
         if self.backend not in {"scripted", "pydantic"}:
             raise LibrarianConfigError("backend must be scripted or pydantic")
         if self.backend == "pydantic" and self.model != DEFAULT_MODEL:
-            raise LibrarianConfigError(
-                f"the librarian model must be {DEFAULT_MODEL}"
-            )
+            raise LibrarianConfigError(f"the librarian model must be {DEFAULT_MODEL}")
         if self.max_turns != DEFAULT_MAX_TURNS:
-            raise LibrarianConfigError(
-                f"the librarian request budget must be {DEFAULT_MAX_TURNS}"
-            )
+            raise LibrarianConfigError(f"the librarian request budget must be {DEFAULT_MAX_TURNS}")
         if self.timeout_s < 1:
             raise LibrarianConfigError("model limits must be positive")
         if self.poll_interval_s <= 0 or self.max_attempts < 1:

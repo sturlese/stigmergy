@@ -69,10 +69,7 @@ def _decision_trace_plan(*, entities=(), links=()):
     types = {"Mira Chen": "person", "Northstar Signal Lab": "organization"}
     return FilingPlan(
         summary="Filed synthetic Decision Trace Quality knowledge",
-        entities=tuple(
-            EntityProposal(name=name, entity_type=types.get(name, "organization"))
-            for name in entities
-        ),
+        entities=tuple(EntityProposal(name=name, entity_type=types.get(name, "organization")) for name in entities),
         mutations=(
             PageMutation(
                 action="create",
@@ -205,9 +202,7 @@ def test_harness_score_rejects_duplicate_pages_without_imposing_a_one_page_quota
 
 def test_empty_graph_case_rejects_a_redundant_split_without_using_page_count_as_a_proxy():
     case = planner_eval.load_case(CASE)
-    case["anti_fragmentation"] = {
-        "redundant_title_groups": [["Harness Engineering", "Harness Engineering Explained"]]
-    }
+    case["anti_fragmentation"] = {"redundant_title_groups": [["Harness Engineering", "Harness Engineering Explained"]]}
     plan = _plan(
         entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
         links=("Santi", "OpenAI", "Anthropic", "LangChain"),
@@ -238,28 +233,35 @@ def test_seeded_harness_case_requires_two_reciprocally_connected_reusable_pages(
     case = planner_eval.load_case(SEEDED_CASE)
     source = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
     entities = tuple(
-        EntityProposal(name=name, entity_type="organization")
-        for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
+        EntityProposal(name=name, entity_type="organization") for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
     )
     plan = FilingPlan(
         summary="Enriched the existing harness graph with a new reusable concept.",
         entities=entities,
         mutations=(
             PageMutation(
-                action="create", role="concept", title="Harness Engineering",
+                action="create",
+                role="concept",
+                title="Harness Engineering",
                 body=HARNESS_BODY,
-                entities=("Santi", "OpenAI", "Anthropic", "LangChain"), reason="New reusable concept.",
+                entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                reason="New reusable concept.",
             ),
             PageMutation(
-                action="update", path="wiki/concepts/Agent Harness.md", title="Ignored model label",
-                body=("# Agent Harness\n\nAn agent harness preserves the task loop, tools, feedback, and "
-                      "memory around a model, including context assembly, error handling, and telemetry. "
-                      "The prompt is the policy; the harness is the environment. [[Harness Engineering]] "
-                      f"is the practice that improves that operating layer. (Source: `{source}`)\n\n"
-                      "The harness handles errors and retries rather than delegating execution reliability "
-                      f"to the model. (Source: `{source}`)\n\nSanti, OpenAI, Anthropic, and LangChain "
-                      f"illustrate the leverage of changing the harness rather than the model. (Source: `{source}`)"),
-                entities=("Santi", "OpenAI", "Anthropic", "LangChain"), reason="Existing concept gains evidence.",
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                title="Ignored model label",
+                body=(
+                    "# Agent Harness\n\nAn agent harness preserves the task loop, tools, feedback, and "
+                    "memory around a model, including context assembly, error handling, and telemetry. "
+                    "The prompt is the policy; the harness is the environment. [[Harness Engineering]] "
+                    f"is the practice that improves that operating layer. (Source: `{source}`)\n\n"
+                    "The harness handles errors and retries rather than delegating execution reliability "
+                    f"to the model. (Source: `{source}`)\n\nSanti, OpenAI, Anthropic, and LangChain "
+                    f"illustrate the leverage of changing the harness rather than the model. (Source: `{source}`)"
+                ),
+                entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                reason="Existing concept gains evidence.",
             ),
         ),
     )
@@ -276,8 +278,7 @@ def test_seeded_harness_score_rejects_an_update_that_forgets_the_safe_existing_c
     case = planner_eval.load_case(SEEDED_CASE)
     source = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
     identities = tuple(
-        EntityProposal(name=name, entity_type="organization")
-        for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
+        EntityProposal(name=name, entity_type="organization") for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
     )
     plan = FilingPlan(
         summary="Created the central discipline while thinning the existing system page.",
@@ -294,8 +295,10 @@ def test_seeded_harness_score_rejects_an_update_that_forgets_the_safe_existing_c
             PageMutation(
                 action="update",
                 path="wiki/concepts/Agent Harness.md",
-                body=("# Agent Harness\n\n[[Harness Engineering]] improves the operating layer around a "
-                      f"model. (Source: `{source}`)"),
+                body=(
+                    "# Agent Harness\n\n[[Harness Engineering]] improves the operating layer around a "
+                    f"model. (Source: `{source}`)"
+                ),
                 reason="Added the reciprocal relationship while replacing the existing explanation.",
             ),
         ),
@@ -338,9 +341,9 @@ def test_harness_score_rejects_heading_only_body_even_with_expected_entities():
         entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
         links=("Santi", "OpenAI", "Anthropic", "LangChain"),
     )
-    empty = plan.model_copy(update={"mutations": (plan.mutations[0].model_copy(
-        update={"body": "# Harness Engineering"}
-    ),)})
+    empty = plan.model_copy(
+        update={"mutations": (plan.mutations[0].model_copy(update={"body": "# Harness Engineering"}),)}
+    )
 
     result = planner_eval.score(empty, case)
 
@@ -354,10 +357,17 @@ def test_harness_score_requires_the_complete_framework_not_a_generic_summary():
         entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
         links=("Santi", "OpenAI", "Anthropic", "LangChain"),
     )
-    incomplete = plan.model_copy(update={"mutations": (plan.mutations[0].model_copy(
-        update={"body": "# Harness Engineering\n\nA model alone is not an agentic system. "
-               f"(Source: `{SOURCE}`)"}
-    ),)})
+    incomplete = plan.model_copy(
+        update={
+            "mutations": (
+                plan.mutations[0].model_copy(
+                    update={
+                        "body": f"# Harness Engineering\n\nA model alone is not an agentic system. (Source: `{SOURCE}`)"
+                    }
+                ),
+            )
+        }
+    )
 
     result = planner_eval.score(incomplete, case)
 
@@ -411,9 +421,15 @@ def test_harness_score_accepts_unicode_dash_variants_in_semantic_requirements():
         entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
         links=("Santi", "OpenAI", "Anthropic", "LangChain"),
     )
-    nonbreaking_hyphen = plan.model_copy(update={"mutations": (plan.mutations[0].model_copy(
-        update={"body": plan.mutations[0].body.replace("long-term memory", "long‑term memory")}
-    ),)})
+    nonbreaking_hyphen = plan.model_copy(
+        update={
+            "mutations": (
+                plan.mutations[0].model_copy(
+                    update={"body": plan.mutations[0].body.replace("long-term memory", "long‑term memory")}
+                ),
+            )
+        }
+    )
 
     result = planner_eval.score(nonbreaking_hyphen, case)
 
@@ -472,15 +488,19 @@ def test_harness_score_rejects_entity_name_wikilinks_without_normal_pages():
         entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
         links=("Santi", "OpenAI", "Anthropic", "LangChain"),
     )
-    linked_entity = plan.model_copy(update={"mutations": (plan.mutations[0].model_copy(
-        update={"body": plan.mutations[0].body.replace("OpenAI built", "[[OpenAI]] built")}
-    ),)})
+    linked_entity = plan.model_copy(
+        update={
+            "mutations": (
+                plan.mutations[0].model_copy(
+                    update={"body": plan.mutations[0].body.replace("OpenAI built", "[[OpenAI]] built")}
+                ),
+            )
+        }
+    )
 
     result = planner_eval.score(linked_entity, case)
 
-    assert result["entity_wikilinks"]["violations"] == [
-        {"mutation": "Harness Engineering", "target": "OpenAI"}
-    ]
+    assert result["entity_wikilinks"]["violations"] == [{"mutation": "Harness Engineering", "target": "OpenAI"}]
     assert result["passed"] is False
 
 
@@ -517,8 +537,9 @@ def test_harness_score_rejects_framework_categories_as_synthetic_child_concepts(
         action="create",
         role="concept",
         title="Harness Engineering Capability Framework",
-        body=("# Harness Engineering Capability Framework\n\nA category from the parent framework. "
-              f"(Source: `{SOURCE}`)"),
+        body=(
+            f"# Harness Engineering Capability Framework\n\nA category from the parent framework. (Source: `{SOURCE}`)"
+        ),
         entities=(),
         reason="Incorrectly split a parent-framework category into a child concept.",
     )
@@ -526,8 +547,7 @@ def test_harness_score_rejects_framework_categories_as_synthetic_child_concepts(
     result = planner_eval.score(plan.model_copy(update={"mutations": (*plan.mutations, category_page)}), case)
 
     assert any(
-        item["title"] == "harness engineering capability framework"
-        for item in result["mutations"]["forbidden_present"]
+        item["title"] == "harness engineering capability framework" for item in result["mutations"]["forbidden_present"]
     )
     assert result["passed"] is False
 
@@ -558,31 +578,39 @@ def test_entity_relationship_rejects_a_following_collective_attribution():
     )
 
     assert has_entity_relationship_evidence(body, "OpenAI", (SOURCE,)) is False
-    assert has_entity_relationship_evidence(
-        body.replace(
-            "agent harness.\n\nThese examples support the conclusion.",
-            f"agent harness. (Source: `{SOURCE}`)\n\nThese examples support the conclusion.",
-        ),
-        "OpenAI",
-        (SOURCE,),
-    ) is True
-    assert has_entity_relationship_evidence(
-        body.replace("\n\nThese examples", "\n\nUnrelated analysis.\n\nThese examples"),
-        "OpenAI",
-        (SOURCE,),
-    ) is False
-    assert has_entity_relationship_evidence(
-        f"**Claude\u202fCode** is a coding-agent environment. (Source: `{SOURCE}`)",
-        "Claude Code",
-        (SOURCE,),
-    ) is True
+    assert (
+        has_entity_relationship_evidence(
+            body.replace(
+                "agent harness.\n\nThese examples support the conclusion.",
+                f"agent harness. (Source: `{SOURCE}`)\n\nThese examples support the conclusion.",
+            ),
+            "OpenAI",
+            (SOURCE,),
+        )
+        is True
+    )
+    assert (
+        has_entity_relationship_evidence(
+            body.replace("\n\nThese examples", "\n\nUnrelated analysis.\n\nThese examples"),
+            "OpenAI",
+            (SOURCE,),
+        )
+        is False
+    )
+    assert (
+        has_entity_relationship_evidence(
+            f"**Claude\u202fCode** is a coding-agent environment. (Source: `{SOURCE}`)",
+            "Claude Code",
+            (SOURCE,),
+        )
+        is True
+    )
 
 
 def test_seeded_harness_score_uses_the_update_path_not_model_create_fields():
     case = planner_eval.load_case(SEEDED_CASE)
     identities = tuple(
-        EntityProposal(name=name, entity_type="organization")
-        for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
+        EntityProposal(name=name, entity_type="organization") for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
     )
     plan = FilingPlan(
         summary="Created the central discipline and connected its adjacent artifact.",
@@ -599,17 +627,17 @@ def test_seeded_harness_score_uses_the_update_path_not_model_create_fields():
             PageMutation(
                 action="update",
                 path="wiki/concepts/Agent Harness.md",
-                    role="note",
-                    title="Incorrect model title",
-                    body=(
-                        "# Agent Harness\n\n## Definition\n\nAn agent harness preserves the task loop, "
-                        "tools, feedback, memory, and context assembly around a model. "
-                        f"(Source: `{SOURCE}`)\n\n## How It Works\n\nThe harness handles errors and "
-                        "retries and records telemetry. The prompt is the policy for execution. "
-                        "[[Harness Engineering]] is the practice that improves this environment. "
-                        f"(Source: `{SOURCE}`)\n\n## Evidence and Examples\n\nSanti, OpenAI, "
-                        "Anthropic, and LangChain provide source evidence for the relationship. "
-                        f"(Source: `{SOURCE}`)"
+                role="note",
+                title="Incorrect model title",
+                body=(
+                    "# Agent Harness\n\n## Definition\n\nAn agent harness preserves the task loop, "
+                    "tools, feedback, memory, and context assembly around a model. "
+                    f"(Source: `{SOURCE}`)\n\n## How It Works\n\nThe harness handles errors and "
+                    "retries and records telemetry. The prompt is the policy for execution. "
+                    "[[Harness Engineering]] is the practice that improves this environment. "
+                    f"(Source: `{SOURCE}`)\n\n## Evidence and Examples\n\nSanti, OpenAI, "
+                    "Anthropic, and LangChain provide source evidence for the relationship. "
+                    f"(Source: `{SOURCE}`)"
                 ),
                 entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
                 reason="Added the reciprocal relationship to the central discipline.",
@@ -665,9 +693,7 @@ def test_harness_score_rejects_an_allowed_optional_identity_without_a_link():
         entities=("Santi", "OpenAI", "Anthropic", "LangChain", "Codex"),
         links=("Santi", "OpenAI", "Anthropic", "LangChain", "Codex"),
     )
-    unlinked = plan.mutations[0].model_copy(
-        update={"entities": ("Santi", "OpenAI", "Anthropic", "LangChain")}
-    )
+    unlinked = plan.mutations[0].model_copy(update={"entities": ("Santi", "OpenAI", "Anthropic", "LangChain")})
     plan = plan.model_copy(update={"mutations": (unlinked,)})
 
     result = planner_eval.score(plan, case)
@@ -718,9 +744,7 @@ def test_harness_score_rejects_an_unrelated_delete_mutation():
     result = planner_eval.score(plan, case)
 
     assert result["mutations"]["actual_count"] == 2
-    assert result["mutations"]["unexpected"] == [
-        {"action": "delete", "role": None, "title": "wiki notes unrelated md"}
-    ]
+    assert result["mutations"]["unexpected"] == [{"action": "delete", "role": None, "title": "wiki notes unrelated md"}]
     assert result["passed"] is False
 
 
@@ -860,9 +884,9 @@ def test_harness_score_requires_santi_as_the_canonical_name_not_only_an_alias():
         "include_payload",
     ),
     (
-            ((), 10, (), "medium", "production-equivalent", False),
-            (("--max-turns", "6", "--execution-mode", "planner-only"), 6, (), "medium", "planner-only", True),
-            ((), 10, ("--reasoning-level", "low"), "low", "production-equivalent", False),
+        ((), 12, (), "medium", "production-equivalent", False),
+        (("--max-turns", "6", "--execution-mode", "planner-only"), 6, (), "medium", "planner-only", True),
+        ((), 12, ("--reasoning-level", "low"), "low", "production-equivalent", False),
     ),
 )
 def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_override(
@@ -914,9 +938,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
                         "mutations": (
                             base.mutations[0].model_copy(
                                 update={
-                                    "body": base.mutations[0].body.replace(
-                                        "[[Agent Harness]]", "the agent harness"
-                                    )
+                                    "body": base.mutations[0].body.replace("[[Agent Harness]]", "the agent harness")
                                 }
                             ),
                         )
@@ -937,7 +959,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
             "openrouter_provider": {"only": ["cerebras"], "allow_fallbacks": False},
             "max_tokens": 40960,
             "temperature": 0,
-                "openrouter_reasoning": {"effort": "medium", "exclude": True},
+            "openrouter_reasoning": {"effort": "medium", "exclude": True},
         }
         return Model(settings), settings
 
@@ -1032,14 +1054,17 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
             "applied": False,
             "model_requests": 0,
         }
-        assert payload["output"]["sha256"] == hashlib.sha256(
-            json.dumps(
-                payload["case_result"]["payload"],
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        assert (
+            payload["output"]["sha256"]
+            == hashlib.sha256(
+                json.dumps(
+                    payload["case_result"]["payload"],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        )
     else:
         assert "payload" not in payload["case_result"]
         assert not captured.err
@@ -1047,17 +1072,35 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
     expected_case_result = {
         key: payload[key]
         for key in (
-            "brain_prompt", "case_id", "case_sha256", "fixture_sha256", "runtime",
-            "execution_mode", "configured_max_turns", "model_requests",
-            "planning_model_requests", "semantic_revision_required",
-            "graph_shape_model_requests", "compilation_model_requests",
+            "brain_prompt",
+            "case_id",
+            "case_sha256",
+            "fixture_sha256",
+            "runtime",
+            "execution_mode",
+            "configured_max_turns",
+            "model_requests",
+            "planning_model_requests",
+            "semantic_revision_required",
+            "graph_shape_model_requests",
+            "compilation_model_requests",
             "graph_shape_review_model_requests",
             "graph_shape_enrichment_model_requests",
-            "graph_semantic_review_model_requests", "graph_semantic_reviewed",
-            "semantic_revision_attempted", "semantic_revision_applied",
-            "semantic_revision_model_requests", "repair_model_requests", "schema_retry_count",
-            "repair_plan_sha256", "semantic_repair_count", "elapsed_ms", "usage", "score",
-            "gates", "raw_gates", "output",
+            "graph_semantic_review_model_requests",
+            "graph_semantic_reviewed",
+            "semantic_revision_attempted",
+            "semantic_revision_applied",
+            "semantic_revision_model_requests",
+            "repair_model_requests",
+            "schema_retry_count",
+            "repair_plan_sha256",
+            "semantic_repair_count",
+            "elapsed_ms",
+            "usage",
+            "score",
+            "gates",
+            "raw_gates",
+            "output",
         )
     }
     if include_payload:
@@ -1075,9 +1118,7 @@ def test_cli_uses_the_production_request_budget_and_preserves_an_explicit_turn_o
         assert factory is None
 
 
-def test_cli_rejects_a_template_skill_that_does_not_match_the_packaged_skill(
-    tmp_path, monkeypatch, capsys
-):
+def test_cli_rejects_a_template_skill_that_does_not_match_the_packaged_skill(tmp_path, monkeypatch, capsys):
     template = tmp_path / "template"
     skill = template / ".claude" / "skills" / "librarian" / "SKILL.md"
     skill.parent.mkdir(parents=True)
@@ -1126,9 +1167,7 @@ def test_cli_records_the_actual_pure_create_repair_plan(tmp_path, monkeypatch, c
         update={
             "mutations": (
                 base.mutations[0].model_copy(
-                    update={
-                        "body": base.mutations[0].body.replace(f"(Source: `{SOURCE}`)", "")
-                    }
+                    update={"body": base.mutations[0].body.replace(f"(Source: `{SOURCE}`)", "")}
                 ),
             )
         }
@@ -1274,9 +1313,7 @@ def test_production_equivalent_worktree_exposes_safe_repair_rejection_shape():
         )
 
     assert result["repair_rejection"] == "model repair targeted a path outside its violations"
-    assert result["repair_mutation_shape"] == [
-        {"target_kind": "entity", "body_bytes": 11, "reason_bytes": 22}
-    ]
+    assert result["repair_mutation_shape"] == [{"target_kind": "entity", "body_bytes": 11, "reason_bytes": 22}]
 
 
 def test_production_equivalent_worktree_scores_the_final_repaired_body():
@@ -1290,9 +1327,7 @@ def test_production_equivalent_worktree_scores_the_final_repaired_body():
     broken = base.model_copy(
         update={
             "mutations": (
-                base.mutations[0].model_copy(
-                    update={"body": valid_body.replace(f"(Source: `{SOURCE}`)", "")}
-                ),
+                base.mutations[0].model_copy(update={"body": valid_body.replace(f"(Source: `{SOURCE}`)", "")}),
             )
         }
     )
@@ -1393,9 +1428,7 @@ def test_production_equivalent_worktree_revises_a_visible_page_draft_before_scor
 
 def test_cli_requires_live_acknowledgement_before_it_can_invoke_a_planner(capsys):
     with pytest.raises(SystemExit) as error:
-        run_planner.main(
-            ["--source", str(FIXTURE), "--brain-root", str(run_planner.DEFAULT_WORKTREE)]
-        )
+        run_planner.main(["--source", str(FIXTURE), "--brain-root", str(run_planner.DEFAULT_WORKTREE)])
 
     assert error.value.code == 2
     assert "sends source text to configured OpenRouter" in capsys.readouterr().err
@@ -1434,4 +1467,4 @@ def test_cli_rejects_a_nonproduction_budget_labeled_production_equivalent(capsys
         )
 
     assert error.value.code == 2
-    assert "production-equivalent requires --max-turns 10" in capsys.readouterr().err
+    assert "production-equivalent requires --max-turns 12" in capsys.readouterr().err
