@@ -448,9 +448,33 @@ class PydanticPlanner:
         if not isinstance(audit, GraphCoverageAudit):
             raise TypeError("graph coverage audit returned the wrong output type")
         audit = _normalize_graph_coverage_audit(shape, audit)
+        audit_requests = int(audit_run.model_requests)
+        explicit_absence_claims = _explicit_absence_claims(source_text)
+        if len(audit.evidence_limits) < len(explicit_absence_claims):
+            limit_repair_budget = max_turns - reviewed_requests - enrichment_requests - audit_requests - 2
+            if limit_repair_budget < 1:
+                raise ValueError("graph coverage audit exhausted the evidence-limit repair budget")
+            limit_repair_run = await self._run_structured(
+                output_type=GraphCoverageAudit,
+                instructions=_GRAPH_SHAPE_INSTRUCTIONS,
+                prompt=_graph_evidence_limit_repair_prompt(
+                    source_path=source_path,
+                    source_text=source_text,
+                    shape=shape,
+                    claims=explicit_absence_claims,
+                ),
+                max_requests=limit_repair_budget,
+                reasoning_level=self.reasoning_level_override or "medium",
+            )
+            limit_repair = limit_repair_run.plan
+            if not isinstance(limit_repair, GraphCoverageAudit):
+                raise TypeError("graph evidence-limit repair returned the wrong output type")
+            normalized_repair = _normalize_graph_coverage_audit(shape, limit_repair)
+            audit = audit.model_copy(update={"evidence_limits": normalized_repair.evidence_limits})
+            audit_requests += int(limit_repair_run.model_requests)
         shape = _apply_graph_coverage_audit(shape, audit, source_text=source_text)
         shape_review = shape_review.model_copy(update={"existing_relations": shape.existing_relations})
-        step_requests = int(audit_run.model_requests)
+        step_requests = audit_requests
         enrichment_requests += step_requests
         enrichment_schema_retries += max(0, step_requests - 1)
 
@@ -920,16 +944,35 @@ def _graph_coverage_audit_prompt(
         "decisions or outputs; compatible evidenced roles are enough without a title cross-mention. Finally emit "
         "an evidence_limit whenever the source names an evaluation, metric, benchmark, or claimed result but "
         "omits a material result value, score, threshold, procedure, or independent verification. State only "
-        "what is absent, never invent the missing evidence. Explicit source negations such as `does not "
-        "include`, `does not report`, `does not provide`, `does not specify`, `no score`, or `without "
-        "independent verification` must each produce one evidence_limit on the subject that owns the related "
-        "claim. Return no gaps, corrections, or limits only after "
+        "what is absent, never invent the missing evidence. Return no gaps, corrections, or limits only after "
         "reconciling each source-declared count and reviewing every empirical claim.\n\n"
         "REVIEWED GRAPH SHAPE\n"
         f"{fence(json.dumps(shape.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
         f"PROVENANCE\n{fence(json.dumps(provenance, ensure_ascii=False, sort_keys=True))}\n\n"
         f"READABLE SOURCE\n{fence(source_text)}\n\n"
         f"SAFE EXISTING CONTEXT\n{fence(context)}"
+    )
+    _guard_prompt(prompt)
+    return prompt
+
+
+def _graph_evidence_limit_repair_prompt(
+    *,
+    source_path: str,
+    source_text: str,
+    shape: GraphShape,
+    claims: tuple[str, ...],
+) -> str:
+    prompt = (
+        "Return only a GraphCoverageAudit for this bounded evidence-limit repair. Set gaps and "
+        "relation_corrections to empty. For every explicit absence claim below, emit exactly one "
+        "evidence_limit assigned to the existing subject whose empirical claim it limits. State only what the "
+        "source says is absent; never infer a different missing score, threshold, procedure, or verification. "
+        "Do not add subjects or unsupported limitations.\n\n"
+        f"GRAPH SHAPE\n{fence(json.dumps(shape.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
+        f"EXPLICIT ABSENCE CLAIMS\n{fence(json.dumps(claims, ensure_ascii=False))}\n\n"
+        f"SOURCE PATH\n{fence(source_path)}\n\n"
+        f"READABLE SOURCE\n{fence(source_text)}"
     )
     _guard_prompt(prompt)
     return prompt
@@ -1186,9 +1229,7 @@ def _graph_editorial_review_prompt(
         "for that page rather than mechanically duplicate prose. Do not duplicate a generic page under two "
         "titles. Integrate required terms naturally into explanatory "
         "sentences and evidence. Reject comma-separated term dumps, compliance inventories, thin labels, "
-        "metadata restatements, and paragraphs whose only purpose is to satisfy lexical checks. State each "
-        "source-backed fact once: consolidate authorship, evaluation, and evidence instead of repeating the "
-        "same claim in explanatory prose and again under Evidence and Examples. Build a private "
+        "metadata restatements, and paragraphs whose only purpose is to satisfy lexical checks. Build a private "
         "coverage table directly from the readable source before answering: include one row for every numbered, "
         "bulleted, colon-labelled, or count-introduced member, assign it to exactly one page by aboutness unless "
         "the source independently makes it material to more than one, and compare it with the compiled draft. "
@@ -1542,6 +1583,20 @@ def _normalized_lexical_text(value: str) -> str:
     """Compare model-selected lexical anchors across harmless typography differences."""
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return " ".join(re.findall(r"\w+", normalized, flags=re.UNICODE))
+
+
+def _explicit_absence_claims(source_text: str) -> tuple[str, ...]:
+    pattern = re.compile(
+        r"\b(?:does|do|did)\s+not\s+(?:include|report|provide|specify|state|give|disclose)\b"
+        r"|\b(?:no|without)\s+(?:numeric\s+)?(?:score|value|threshold|procedure|independent\s+verification)\b",
+        flags=re.IGNORECASE,
+    )
+    claims = []
+    for segment in re.split(r"(?<=[.!?])\s+|\n+", source_text):
+        claim = segment.strip()
+        if claim and pattern.search(claim):
+            claims.append(claim)
+    return tuple(dict.fromkeys(claims))
 
 
 def _enumerated_source_items(source_text: str) -> tuple[tuple[str, str], ...]:

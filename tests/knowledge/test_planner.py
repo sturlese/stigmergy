@@ -494,6 +494,19 @@ def test_graph_coverage_audit_expands_declared_system_member_lists():
     )
 
 
+def test_explicit_absence_claims_ignore_ordinary_negative_results():
+    source = (
+        "The report does not include the numeric score. "
+        "The team did not change the model. "
+        "The result was published without independent verification."
+    )
+
+    assert planner._explicit_absence_claims(source) == (
+        "The report does not include the numeric score.",
+        "The result was published without independent verification.",
+    )
+
+
 def test_graph_shape_gate_requires_audited_evidence_limit_statement():
     shape = _graph_shape()
     audit = GraphCoverageAudit(
