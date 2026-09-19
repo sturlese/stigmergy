@@ -517,6 +517,51 @@ def test_graph_shape_gate_requires_audited_evidence_limit_statement():
     )
 
 
+def test_coverage_audit_maps_metric_limits_to_their_evidence_owner():
+    harness, agent_harness = _graph_shape().subjects
+    evidence = GraphEntity(
+        name="OpenAI",
+        entity_type="organization",
+        aliases=(),
+        relationship_kind="produced_evidence",
+        relationship="Reported one million lines.",
+        evidence_terms=("one million lines",),
+    )
+    shape = GraphShape(
+        summary="Keep empirical limits with their evidence owner.",
+        subjects=(
+            harness.model_copy(
+                update={
+                    "required_terms": harness.required_terms + evidence.evidence_terms,
+                    "entities": harness.entities + (evidence,),
+                }
+            ),
+            agent_harness,
+        ),
+        existing_relations=(),
+    )
+    audit = GraphCoverageAudit(
+        summary="One result lacks a reported value.",
+        gaps=(),
+        relation_corrections=(),
+        evidence_limits=(
+            GraphEvidenceLimit(
+                subject="one million lines",
+                statement="The source does not report independent verification.",
+            ),
+            GraphEvidenceLimit(
+                subject="Agent Harness",
+                statement="The source does not report a benchmark score.",
+            ),
+        ),
+    )
+
+    normalized = planner._normalize_graph_coverage_audit(shape, audit)
+
+    assert len(normalized.evidence_limits) == 1
+    assert normalized.evidence_limits[0].subject == "Harness Engineering"
+
+
 def test_graph_shape_gate_rejects_entity_evidence_copied_to_a_sibling_page():
     harness, agent_harness = _graph_shape().subjects
     openai = GraphEntity(
@@ -646,6 +691,30 @@ def test_graph_enrichment_corrects_entity_evidence_missing_from_page_inventory()
         "graph-enrichment entity evidence is not required page evidence: "
         "Agent Harness <> LangChain; missing=['rank 30', 'top 5']",
     )
+
+
+def test_graph_enrichment_rejects_an_uncovered_enumerated_source_item():
+    system = _graph_shape().subjects[1]
+    topology = GraphTopology.model_validate(
+        {
+            "summary": "One system subject.",
+            "subjects": [system.model_dump(exclude={"required_terms", "entities"})],
+            "existing_relations": [],
+        }
+    )
+    shape = GraphShape(
+        summary=topology.summary,
+        subjects=(system.model_copy(update={"required_terms": ("tools request actions",)}),),
+        existing_relations=(),
+    )
+
+    violations = planner.graph_topology_violations(
+        topology,
+        shape,
+        source_text="The framework is: (1) tools request actions; (2) observability records outcomes.",
+    )
+
+    assert any("omitted enumerated source item (2)" in violation for violation in violations)
 
 
 def test_graph_enrichment_rejects_terms_not_copied_contiguously_from_source():

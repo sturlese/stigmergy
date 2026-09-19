@@ -447,7 +447,9 @@ class PydanticPlanner:
         audit = audit_run.plan
         if not isinstance(audit, GraphCoverageAudit):
             raise TypeError("graph coverage audit returned the wrong output type")
+        audit = _normalize_graph_coverage_audit(shape, audit)
         shape = _apply_graph_coverage_audit(shape, audit, source_text=source_text)
+        shape_review = shape_review.model_copy(update={"existing_relations": shape.existing_relations})
         step_requests = int(audit_run.model_requests)
         enrichment_requests += step_requests
         enrichment_schema_retries += max(0, step_requests - 1)
@@ -976,6 +978,32 @@ def _apply_graph_coverage_audit(
     return shape.model_copy(update={"subjects": enriched, "existing_relations": tuple(relations)})
 
 
+def _normalize_graph_coverage_audit(
+    shape: GraphShape,
+    audit: GraphCoverageAudit,
+) -> GraphCoverageAudit:
+    evidence_subjects = {
+        resolution_key(subject.title): subject
+        for subject in shape.subjects
+        if any(entity.relationship_kind == "produced_evidence" for entity in subject.entities)
+    }
+    limits = []
+    for limit in audit.evidence_limits:
+        subject_key = resolution_key(limit.subject)
+        subject = evidence_subjects.get(subject_key)
+        if subject is None:
+            candidates = [
+                candidate
+                for candidate in evidence_subjects.values()
+                if any(subject_key == _normalized_lexical_text(term) for term in candidate.required_terms)
+            ]
+            if len(candidates) != 1:
+                continue
+            subject = candidates[0]
+        limits.append(limit.model_copy(update={"subject": subject.title}))
+    return audit.model_copy(update={"evidence_limits": tuple(limits)})
+
+
 def _prompt(
     *,
     envelope,
@@ -1225,6 +1253,11 @@ def graph_topology_violations(
                     "graph-enrichment required terms are not contiguous source spans: "
                     f"{subject.title}; missing={missing!r}"
                 )
+        represented = {_normalized_lexical_text(term) for subject in shape.subjects for term in subject.required_terms}
+        for label, item in _enumerated_source_items(source_text):
+            item_key = _normalized_lexical_text(item)
+            if not any(term and term in item_key for term in represented):
+                violations.append(f"graph-enrichment omitted enumerated source item {label}: {item.strip()[:160]!r}")
     for subject in shape.subjects:
         required_terms = {resolution_key(term) for term in subject.required_terms}
         for entity in subject.entities:
@@ -1466,8 +1499,9 @@ def graph_shape_violations(
         if target_body and f"[[{relation.source_subject}".casefold() not in target_body.casefold():
             violations.append(f"missing-link:{target_title}->{relation.source_subject}")
     if coverage_audit is not None:
+        bodies_by_key = {resolution_key(title): body for title, body in subject_bodies.items()}
         for limit in coverage_audit.evidence_limits:
-            body = subject_bodies.get(limit.subject, "")
+            body = bodies_by_key.get(resolution_key(limit.subject), "")
             if not _required_term_present(_normalized_lexical_text(body), limit.statement):
                 violations.append(f"evidence-limit:{limit.subject}: missing={limit.statement!r}")
     return tuple(violations)
@@ -1477,6 +1511,14 @@ def _normalized_lexical_text(value: str) -> str:
     """Compare model-selected lexical anchors across harmless typography differences."""
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return " ".join(re.findall(r"\w+", normalized, flags=re.UNICODE))
+
+
+def _enumerated_source_items(source_text: str) -> tuple[tuple[str, str], ...]:
+    parenthesized = re.compile(r"(?s)\((\d{1,3})\)\s+(.+?)(?=(?:\s*;\s*|\s+)\(\d{1,3}\)\s+|\n\s*\n|$)")
+    items = [(f"({number})", body.strip()) for number, body in parenthesized.findall(source_text)]
+    numbered_lines = re.compile(r"(?m)^\s*(\d{1,3})[.)]\s+(.+?)\s*$")
+    items.extend((f"{number}.", body.strip()) for number, body in numbered_lines.findall(source_text))
+    return tuple(items)
 
 
 def _required_term_present(normalized_body: str, term: str) -> bool:

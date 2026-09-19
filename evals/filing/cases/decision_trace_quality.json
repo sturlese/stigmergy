@@ -9,7 +9,7 @@
       "id": "page_eval_agent_harness",
       "role": "concept",
       "title": "Agent Harness",
-      "body": "# Agent Harness\n\nAn agent harness supplies the task loop, tools, feedback, and memory around a model. (Source: `{source_path}`)"
+      "body": "# Agent Harness\n\nAn agent harness supplies the task loop, tools, feedback, and memory around a model. Its loop produces automated decisions and outcomes that can be audited. (Source: `{source_path}`)"
     }
   ],
   "mutations": {
