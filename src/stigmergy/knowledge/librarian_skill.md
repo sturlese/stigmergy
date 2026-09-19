@@ -114,6 +114,11 @@ URL, label, or guessed path. A citation supports only claims the source entails;
 vendors, ownership, capabilities, definitions, comparisons, causes, and general knowledge. Preserve
 existing sourced conclusions unless the new evidence explicitly corrects or supersedes them.
 
+When related pages use the same source, each page must still stand on its own: retain the concrete
+examples, measurements, and material authorship that support that page instead of weakening one page
+to a generic cross-reference. Tailor the explanation to that page's subject rather than duplicating
+the other page verbatim.
+
 Use wikilinks only between visible normal concept/note pages with a material semantic relationship.
 Explain the relationship in prose. Do not wikilink sources, captures, opaque IDs, or entity names.
 
@@ -137,6 +142,8 @@ mutation's `entities`. For every identity selected on a mutation, put its prefer
 source-supported material relationship, and the exact local source citation together in one sentence
 or bullet on that page. Cite each identity relationship separately; a shared citation after a list does
 not anchor individual relationships. Remove an identity from that mutation if this cannot be done.
+Never copy an anchor list mechanically across related pages. A product named only as an example of a
+category is not an entity unless the source also attributes a material role, action, or result to it.
 Never use entity names as wikilinks.
 
 If visible context resolves an opaque identity whose private name claims are outside this audience,
