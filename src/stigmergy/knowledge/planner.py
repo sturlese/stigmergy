@@ -297,8 +297,8 @@ class PydanticPlanner:
             instructions = handle.read()
 
         max_turns = int(self.settings.max_turns)
-        if max_turns < 5:
-            raise ValueError("editorially reviewed graph-shaped filing requires at least five model requests")
+        if max_turns < 6:
+            raise ValueError("fully reviewed graph-shaped filing requires at least six model requests")
         shape_draft_run = await self._run_structured(
             output_type=GraphTopology,
             instructions=_GRAPH_SHAPE_INSTRUCTIONS,
@@ -308,13 +308,13 @@ class PydanticPlanner:
                 source_text=source_text,
                 context=context,
             ),
-            max_requests=max_turns - 4,
+            max_requests=max_turns - 5,
             reasoning_level=self.reasoning_level_override or "medium",
         )
         shape_draft = shape_draft_run.plan
         if not isinstance(shape_draft, GraphTopology):
             raise TypeError("graph-topology draft phase returned the wrong output type")
-        review_budget = max_turns - int(shape_draft_run.model_requests) - 3
+        review_budget = max_turns - int(shape_draft_run.model_requests) - 4
         if review_budget < 1:
             raise ValueError("graph-shape draft exhausted the review request budget")
         shape_review_run = await self._run_structured(
@@ -336,7 +336,7 @@ class PydanticPlanner:
         reviewed_requests = int(shape_draft_run.model_requests) + int(
             shape_review_run.model_requests
         )
-        enrichment_budget = max_turns - reviewed_requests - 2
+        enrichment_budget = max_turns - reviewed_requests - 3
         if enrichment_budget < 1:
             raise ValueError("graph-topology review exhausted the enrichment request budget")
         enrichment_requests = 0
@@ -348,17 +348,69 @@ class PydanticPlanner:
             context=context,
             topology=shape_review,
         )
-        while True:
+        shape_run = await self._run_structured(
+            output_type=GraphShape,
+            instructions=_GRAPH_SHAPE_INSTRUCTIONS,
+            prompt=enrichment_prompt,
+            max_requests=enrichment_budget,
+            reasoning_level=self.reasoning_level_override or "medium",
+        )
+        shape = shape_run.plan
+        if not isinstance(shape, GraphShape):
+            raise TypeError("graph enrichment phase returned the wrong output type")
+        step_requests = int(shape_run.model_requests)
+        enrichment_requests += step_requests
+        enrichment_schema_retries += max(0, step_requests - 1)
+
+        enrichment_review_budget = max_turns - reviewed_requests - enrichment_requests - 2
+        if enrichment_review_budget < 1:
+            raise ValueError("graph enrichment exhausted the inventory-review request budget")
+        enrichment_review_run = await self._run_structured(
+            output_type=GraphShape,
+            instructions=_GRAPH_SHAPE_INSTRUCTIONS,
+            prompt=_graph_enrichment_review_prompt(
+                envelope=envelope,
+                source_path=source_path,
+                source_text=source_text,
+                context=context,
+                topology=shape_review,
+                draft=shape,
+            ),
+            max_requests=enrichment_review_budget,
+            reasoning_level=self.reasoning_level_override or "medium",
+        )
+        shape = enrichment_review_run.plan
+        if not isinstance(shape, GraphShape):
+            raise TypeError("graph enrichment review returned the wrong output type")
+        step_requests = int(enrichment_review_run.model_requests)
+        enrichment_requests += step_requests
+        enrichment_schema_retries += max(0, step_requests - 1)
+
+        topology_violations = graph_topology_violations(
+            shape_review,
+            shape,
+            source_text=source_text,
+        )
+        enrichment_budget = max_turns - reviewed_requests - enrichment_requests - 2
+        while topology_violations and enrichment_budget >= 1:
             shape_run = await self._run_structured(
                 output_type=GraphShape,
                 instructions=_GRAPH_SHAPE_INSTRUCTIONS,
-                prompt=enrichment_prompt,
+                prompt=_graph_enrichment_correction_prompt(
+                    envelope=envelope,
+                    source_path=source_path,
+                    source_text=source_text,
+                    context=context,
+                    topology=shape_review,
+                    draft=shape,
+                    violations=topology_violations,
+                ),
                 max_requests=enrichment_budget,
                 reasoning_level=self.reasoning_level_override or "medium",
             )
             shape = shape_run.plan
             if not isinstance(shape, GraphShape):
-                raise TypeError("graph enrichment phase returned the wrong output type")
+                raise TypeError("graph enrichment correction returned the wrong output type")
             step_requests = int(shape_run.model_requests)
             enrichment_requests += step_requests
             enrichment_schema_retries += max(0, step_requests - 1)
@@ -368,17 +420,6 @@ class PydanticPlanner:
                 source_text=source_text,
             )
             enrichment_budget = max_turns - reviewed_requests - enrichment_requests - 2
-            if not topology_violations or enrichment_budget < 1:
-                break
-            enrichment_prompt = _graph_enrichment_correction_prompt(
-                envelope=envelope,
-                source_path=source_path,
-                source_text=source_text,
-                context=context,
-                topology=shape_review,
-                draft=shape,
-                violations=topology_violations,
-            )
 
         shape_requests = reviewed_requests + enrichment_requests
         compilation_budget = max_turns - shape_requests - 1
@@ -722,6 +763,39 @@ def _graph_enrichment_correction_prompt(
         "target belongs to the practice; components and runtime capabilities belong to the target system.\n\n"
         f"TOPOLOGY CONTRACT VIOLATIONS\n{fence(json.dumps(violations, ensure_ascii=False))}\n\n"
         "INVALID ENRICHMENT DRAFT\n"
+        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
+    )
+    _guard_prompt(prompt)
+    return prompt
+
+
+def _graph_enrichment_review_prompt(
+    *,
+    envelope,
+    source_path: str,
+    source_text: str,
+    context: str,
+    topology: GraphTopology,
+    draft: GraphShape,
+) -> str:
+    base = _graph_enrichment_prompt(
+        envelope=envelope,
+        source_path=source_path,
+        source_text=source_text,
+        context=context,
+        topology=topology,
+    )
+    prompt = (
+        f"{base}\n\n"
+        "Return one complete replacement GraphShape after independently auditing the fallible enrichment "
+        "draft against the readable source. Do not rubber-stamp it. First recover every omitted enumerated "
+        "member, named extension, distinguishing result, complete quantity, source author, and identity that "
+        "performed or produced material evidence. Then remove passive technologies, benchmarks, metrics, "
+        "methods, and examples incorrectly promoted to identities. Finally recheck that evidence is allocated "
+        "by aboutness across distinct subjects, every required term is a contiguous source span, every entity "
+        "relationship is source-supported, and the authoritative topology is unchanged. The reviewed output, "
+        "not the draft, becomes the compilation contract.\n\n"
+        "FALLIBLE ENRICHMENT DRAFT\n"
         f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
     )
     _guard_prompt(prompt)

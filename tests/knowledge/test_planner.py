@@ -56,7 +56,7 @@ def _worktree(tmp_path):
     return str(tmp_path)
 
 
-def _settings(*, max_turns=5):
+def _settings(*, max_turns=6):
     return SimpleNamespace(
         model="openrouter:openai/gpt-oss-120b",
         timeout_s=5,
@@ -90,6 +90,11 @@ def _filing_model(summary: str) -> FunctionModel:
                 "subjects": [],
                 "existing_relations": [],
             },
+            {
+                "summary": "No durable graph subject remained after inventory review.",
+                "subjects": [],
+                "existing_relations": [],
+            },
             {"summary": summary},
         )
     )
@@ -114,12 +119,12 @@ def test_pydantic_planner_returns_a_typed_filing_plan_without_a_network_call(tmp
 
     assert result.plan.summary == "Filed the supported decision"
     assert result.plan.mutations == ()
-    assert result.model_requests == 4
+    assert result.model_requests == 5
     assert result.graph_shape is not None
     assert result.graph_shape.subjects == ()
     assert result.graph_shape_model_requests == 1
     assert result.graph_shape_review_model_requests == 1
-    assert result.graph_shape_enrichment_model_requests == 1
+    assert result.graph_shape_enrichment_model_requests == 2
     assert result.compilation_model_requests == 1
     assert result.semantic_reviewed is True
 
