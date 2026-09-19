@@ -1443,6 +1443,12 @@ def _required_term_present(normalized_body: str, term: str) -> bool:
                 matched += 1
         if matched == len(tokens):
             return True
+    if len(tokens) >= 4:
+        required = set(tokens)
+        window_size = len(tokens) * 3
+        for start in range(len(body_tokens)):
+            if required <= set(body_tokens[start : start + window_size]):
+                return True
     return False
 
 
