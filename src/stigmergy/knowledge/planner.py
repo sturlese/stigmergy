@@ -1430,7 +1430,20 @@ def _required_term_present(normalized_body: str, term: str) -> bool:
     if normalized in normalized_body:
         return True
     tokens = normalized.split()
-    return bool(tokens and tokens[0] in {"a", "an", "the"} and " ".join(tokens[1:]) in normalized_body)
+    if bool(tokens and tokens[0] in {"a", "an", "the"} and " ".join(tokens[1:]) in normalized_body):
+        return True
+    body_tokens = normalized_body.split()
+    for start, token in enumerate(body_tokens):
+        if not tokens or token != tokens[0]:
+            continue
+        matched = 0
+        window = body_tokens[start : start + len(tokens) + 1]
+        for candidate in window:
+            if matched < len(tokens) and candidate == tokens[matched]:
+                matched += 1
+        if matched == len(tokens):
+            return True
+    return False
 
 
 def _has_required_term_inventory(body: str, required_terms: tuple[str, ...]) -> bool:

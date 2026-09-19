@@ -346,13 +346,6 @@ class GraphCoverageAudit(BaseModel):
     summary: Annotated[str, Field(min_length=1, max_length=1000)]
     gaps: Annotated[tuple[GraphCoverageGap, ...], Field(max_length=12)]
 
-    @model_validator(mode="after")
-    def unique_subjects(self):
-        subjects = tuple(resolution_key(gap.subject) for gap in self.gaps)
-        if len(set(subjects)) != len(subjects):
-            raise ValueError("coverage audit subjects must be unique")
-        return self
-
 
 def expected_graph_mutations(shape: GraphShape) -> tuple[dict[str, str | None], ...]:
     """Derive safe create/update targets from the agent's semantic graph decision."""

@@ -367,7 +367,14 @@ def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
     subject = (
         _graph_shape()
         .subjects[1]
-        .model_copy(update={"required_terms": ("a working environment or isolated workspace contains execution",)})
+        .model_copy(
+            update={
+                "required_terms": (
+                    "a working environment or isolated workspace contains execution",
+                    "model only takes text as input",
+                )
+            }
+        )
     )
     shape = GraphShape(
         summary="Preserve the system capability.",
@@ -381,7 +388,10 @@ def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
                 action="create",
                 role="concept",
                 title="Agent Harness",
-                body=("# Agent Harness\n\nA **working environment** or isolated workspace contains execution."),
+                body=(
+                    "# Agent Harness\n\nA **working environment** or isolated workspace "
+                    "contains execution. The model alone only takes text as input."
+                ),
                 entities=(),
                 reason="Created the reusable system.",
             ),
