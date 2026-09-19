@@ -510,6 +510,50 @@ def test_evidence_limit_candidates_include_unquantified_empirical_passages():
     )
 
 
+def test_prior_context_gate_preserves_every_cited_factual_block_in_updates():
+    prior_body = (
+        "# Agent Harness\n\n"
+        "The task loop handles errors. (Source: `sources/prior.md`)\n\n"
+        "Telemetry makes the run observable. (Source: `sources/prior.md`)\n\n"
+        "## Connections\n- [[Runtime]]"
+    )
+    context = planner.json.dumps({"candidates": [{"path": "wiki/concepts/Agent Harness.md", "body": prior_body}]})
+    plan = FilingPlan(
+        summary="Updated the system.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=(
+                    "# Agent Harness\n\n"
+                    "The task loop handles errors. (Source: `sources/prior.md`)\n\n"
+                    "New supported detail. (Source: `sources/current.md`)"
+                ),
+                reason="Added current evidence.",
+            ),
+        ),
+    )
+
+    assert planner._prior_context_violations(plan, context) == (
+        "preserved-context:wiki/concepts/Agent Harness.md: missing_blocks=[2]",
+    )
+    preserved = plan.model_copy(
+        update={
+            "mutations": (
+                plan.mutations[0].model_copy(
+                    update={
+                        "body": (
+                            f"{plan.mutations[0].body}\n\n"
+                            "Telemetry makes the run observable. (Source: `sources/prior.md`)"
+                        )
+                    }
+                ),
+            )
+        }
+    )
+    assert planner._prior_context_violations(preserved, context) == ()
+
+
 def test_graph_shape_gate_requires_audited_evidence_limit_statement():
     shape = _graph_shape()
     audit = GraphCoverageAudit(

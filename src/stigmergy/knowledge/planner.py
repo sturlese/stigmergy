@@ -539,6 +539,7 @@ class PydanticPlanner:
             plan,
             source_path=source_path,
             coverage_audit=audit,
+            context=context,
         )
         while not topology_violations and plan_violations and remaining > 0:
             review_run = await self._run_structured(
@@ -569,6 +570,7 @@ class PydanticPlanner:
                 plan,
                 source_path=source_path,
                 coverage_audit=audit,
+                context=context,
             )
             remaining = max_turns - used
         violations = topology_violations + plan_violations
@@ -1413,6 +1415,7 @@ def graph_shape_violations(
     *,
     source_path: str | None = None,
     coverage_audit: GraphCoverageAudit | None = None,
+    context: str | None = None,
 ) -> tuple[str, ...]:
     """Return concrete ways a compiled plan diverges from its agent-authored shape."""
     operations = expected_graph_mutations(shape)
@@ -1589,6 +1592,8 @@ def graph_shape_violations(
                 subject_title=limit.subject,
             ):
                 violations.append(f"evidence-limit:{limit.subject}: missing={limit.statement!r}")
+    if context:
+        violations.extend(_prior_context_violations(plan, context))
     return tuple(violations)
 
 
@@ -1596,6 +1601,35 @@ def _normalized_lexical_text(value: str) -> str:
     """Compare model-selected lexical anchors across harmless typography differences."""
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return " ".join(re.findall(r"\w+", normalized, flags=re.UNICODE))
+
+
+def _prior_context_violations(plan: FilingPlan, context: str) -> tuple[str, ...]:
+    try:
+        safe_context = json.loads(context)
+    except (TypeError, json.JSONDecodeError):
+        return ()
+    candidates = safe_context.get("candidates") if isinstance(safe_context, dict) else None
+    if not isinstance(candidates, list):
+        return ()
+    prior_bodies = {
+        str(candidate.get("path")): str(candidate.get("body"))
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("path") and candidate.get("body")
+    }
+    violations = []
+    for mutation in plan.mutations:
+        if mutation.action != "update" or not mutation.path or mutation.path not in prior_bodies:
+            continue
+        preserved = [
+            " ".join(block.split()).casefold()
+            for block in re.split(r"\n\s*\n", prior_bodies[mutation.path])
+            if "(source:" in block.casefold()
+        ]
+        updated = " ".join((mutation.body or "").split()).casefold()
+        missing = [index for index, block in enumerate(preserved, start=1) if block not in updated]
+        if missing:
+            violations.append(f"preserved-context:{mutation.path}: missing_blocks={missing!r}")
+    return tuple(violations)
 
 
 def _evidence_limit_candidates(source_text: str) -> tuple[str, ...]:
