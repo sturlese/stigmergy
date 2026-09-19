@@ -134,6 +134,10 @@ paragraph or bullet:
 URL, label, or guessed path. A citation supports only claims the source entails; omit unsupported
 vendors, ownership, capabilities, definitions, comparisons, causes, and general knowledge. Preserve
 existing sourced conclusions unless the new evidence explicitly corrects or supersedes them.
+Do not convert a source observation into an unstated mechanism or second-order benefit such as lower
+cost, faster delivery, reduced risk, greater safety, adoption, or scalability. Plausibility is not
+evidence. Before returning, privately map every factual claim to an entailing source or visible-context
+sentence and remove the claim when that entailment is absent; never output the map.
 
 For an update, treat the visible existing body as knowledge rather than a title-matching hint. Preserve
 or improve its useful definitions, mechanisms, examples, relationships, and exact local citations.
@@ -147,6 +151,9 @@ and add or reorganise material around it; an equivalent paraphrase is still a lo
 ledger and compare the final body with the prior page before returning. If a concise rewrite cannot retain
 a distinctive formulation, keep the original sentence. Never satisfy this rule with a generic summary or
 an orphaned citation, and never output the ledger.
+After preserving prior clauses, add only knowledge that the retained body does not already entail.
+Never repeat a definition, restate an existing fact under a new heading, or duplicate wording inside a
+framework item. Remove redundancy from newly added prose while leaving required preserved clauses intact.
 
 When related pages use the same source, each page must still stand on its own. They may repeat concise
 source-supported context needed for a cold reader, but give each detailed mechanism, inventory, entity

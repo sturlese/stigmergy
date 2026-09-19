@@ -518,8 +518,9 @@ class PydanticPlanner:
                     draft=plan,
                     coverage_audit=audit,
                 ),
-                max_requests=remaining,
+                max_requests=1,
                 reasoning_level=self.reasoning_level_override or "medium",
+                recovery_model=True,
             )
             if not isinstance(editorial_run.plan, FilingPlan):
                 raise TypeError("graph editorial review returned the wrong output type")
@@ -558,6 +559,7 @@ class PydanticPlanner:
                 ),
                 max_requests=remaining,
                 reasoning_level=self.reasoning_level_override or "medium",
+                recovery_model=remaining == 1,
             )
             if not isinstance(review_run.plan, FilingPlan):
                 raise TypeError("graph compliance returned the wrong output type")
@@ -616,6 +618,7 @@ class PydanticPlanner:
         max_requests: int | None = None,
         reasoning_level: str | None = None,
         max_tokens: int | None = None,
+        recovery_model: bool = False,
     ) -> PlanRun:
         from pydantic_ai import Agent, NativeOutput
         from pydantic_ai.usage import RunUsage, UsageLimits
@@ -626,9 +629,10 @@ class PydanticPlanner:
             model = self.model_factory()
             model_settings = getattr(model, "settings", None)
         else:
-            from stigmergy.kernel.llm import build_model
+            from stigmergy.kernel.llm import LIBRARIAN_RECOVERY_MODEL, build_model
 
-            model, model_settings = build_model(self.settings.model)
+            model_name = LIBRARIAN_RECOVERY_MODEL if recovery_model else self.settings.model
+            model, model_settings = build_model(model_name)
         if model_settings is not None:
             model_settings = dict(model_settings)
             if reasoning_level is not None:
@@ -917,7 +921,14 @@ def _graph_enrichment_review_prompt(
         "FALLIBLE ENRICHMENT DRAFT\n"
         f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
         "READABLE SOURCE TO AUDIT AGAIN\n"
-        f"{fence(source_text)}"
+        f"{fence(source_text)}\n\n"
+        "FINAL OWNERSHIP GATE\n"
+        "Audit every required term by asking what the term is directly about. A system owns all source spans "
+        "that define what it is, what it contains or supplies, and how it operates, including every member of "
+        "an enumerated component or capability framework. A practice owns only the work of designing, changing, "
+        "evaluating, or improving that system and results caused by that work. The source's central conclusion "
+        "does not transfer the target system's intrinsic capabilities to the practice. Reassign every misplaced "
+        "term before returning, while retaining one primary owner and complete global coverage."
     )
     _guard_prompt(prompt)
     return prompt
@@ -1184,8 +1195,10 @@ def _graph_compliance_prompt(
         "integration preference above. For each named update path, locate the matching candidate body in SAFE "
         "EXISTING CONTEXT and copy that entire Markdown body character-for-character as an immutable contiguous "
         "block in the replacement body. Do not edit, reorder, paraphrase, or delete any character from that "
-        "prior body. Add current-source knowledge only after the complete prior body in new, naturally titled, "
-        "locally cited sections. Put all missing required terms for that subject in those additions and keep "
+        "prior body. Add only genuinely new current-source knowledge after the complete prior body in new, "
+        "naturally titled, locally cited sections. Never restate a fact already entailed by the immutable block, "
+        "repeat a definition, or duplicate wording inside an addition. Put all missing required meaning for that "
+        "subject in those additions and keep "
         "sibling-owned entities, measurements, and examples out. Before returning, verify that the full prior "
         "body is an exact substring of the update body.\n"
         if any(violation.startswith("preserved-context:") for violation in violations)
@@ -1196,8 +1209,9 @@ def _graph_compliance_prompt(
         "Return one complete replacement FilingPlan. The previous draft failed the mechanical "
         "graph-shape contract below. Treat repair as a monotonic edit, not a fresh rewrite: copy the previous "
         "summary, mutations, entities, contradictions, and resolved contradictions unchanged except where a "
-        "listed violation requires a precise edit. For a required-terms violation, preserve every existing "
-        "character of every mutation body and add the missing source-backed meaning to the named subject in "
+        "listed violation, an unsupported inference, or redundant new wording requires a precise edit. For a "
+        "required-terms violation, preserve every source-backed, non-redundant part of every mutation body and "
+        "add the missing source-backed meaning to the named subject in "
         "natural, locally cited prose; do not remove, paraphrase, reorder, or shorten content that already "
         "passes. Correct the failures without losing supported detail, prior cited knowledge, or adding "
         "unsupported claims. For an overlapping-page-body violation, preserve every subject's own "
@@ -1216,11 +1230,18 @@ def _graph_compliance_prompt(
         "not compliance output. Never repair an "
         "update by importing a sibling subject's entities, examples, measurements, or detailed mechanism. "
         "For a misplaced-entity-evidence violation, remove the listed detailed evidence only from the "
-        "non-owner page and retain it on its authoritative owner.\n\n"
+        "non-owner page and retain it on its authoritative owner. Before returning, privately audit every factual "
+        "claim against an entailing source or preserved context sentence. Remove plausible but unstated mechanisms, "
+        "comparisons, consequences, and second-order benefits; a reasonable inference is not source evidence. Then "
+        "remove repeated definitions, tautologies, and paraphrases from new prose without altering the immutable "
+        "prior-context block.\n\n"
         f"GRAPH-SHAPE VIOLATIONS\n{fence(json.dumps(violations, ensure_ascii=False))}\n\n"
         "PREVIOUS DRAFT\n"
         f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
-        f"{preservation_override}"
+        f"{preservation_override}\n\n"
+        f"CURRENT SOURCE PATH LITERAL\n{fence(source_path)}\n"
+        "Copy that literal character-for-character in every new current-source citation. Never reconstruct, "
+        "abbreviate, or type the path from memory. Preserved citations keep their existing literal paths."
     )
     _guard_prompt(prompt)
     return prompt
@@ -1236,66 +1257,31 @@ def _graph_editorial_review_prompt(
     draft: FilingPlan,
     coverage_audit: GraphCoverageAudit,
 ) -> str:
-    base = _prompt(
-        envelope=envelope,
-        source_path=source_path,
-        source_text=source_text,
-        context=context,
-        graph_shape=graph_shape,
-        coverage_audit=coverage_audit,
-    )
     prompt = (
-        f"{base}\n\n"
-        "Return one complete replacement FilingPlan after an adversarial editorial review of the draft. "
-        "Preserve the authoritative graph shape exactly, but rewrite weak pages rather than rubber-stamping "
-        "them. Every page must stand alone for a cold reader with a precise definition, source-supported "
-        "mechanism or operating model, a memorable insight, significance, concrete evidence, material "
-        "limitations, and useful connections. Pages at distinct abstraction levels need distinct aboutness and "
-        "prose: a practice page explains the work and method, while a system page explains architecture and "
-        "behavior. They may share concise framework context needed to explain either page, but must frame it "
-        "for that page rather than mechanically duplicate prose. Do not duplicate a generic page under two "
-        "titles. Integrate required terms naturally into explanatory "
-        "sentences and evidence. Reject comma-separated term dumps, compliance inventories, thin labels, "
-        "metadata restatements, and paragraphs whose only purpose is to satisfy lexical checks. Build a private "
-        "coverage table directly from the readable source before answering: include one row for every numbered, "
-        "bulleted, colon-labelled, or count-introduced member, assign it to exactly one page by aboutness unless "
-        "the source independently makes it material to more than one, and compare it with the compiled draft. "
-        "The GraphShape is a minimum, not a ceiling: repair every source member omitted by both the shape and "
-        "draft, and never output the table. For every update, restart from its "
-        "SAFE EXISTING CONTEXT body and treat the draft as fallible. Build a private clause ledger: enumerate "
-        "every existing source-attributed claim, mark it preserved, explicitly corrected, or conflicting, and "
-        "retain every uncorrected clause verbatim in the final body. Equivalent paraphrase is not preservation. "
-        "For each update, work in this strict order: freeze the prior body; add only the authoritative shape "
-        "terms assigned to that updated subject in locally cited prose; add its required connections; and leave "
-        "sibling-owned entities, examples, measurements, and detailed mechanisms on the sibling. Do not trade "
-        "one of these checks for another. Then preserve or improve "
-        "every useful source-backed conclusion, "
-        "relationship, and local attribution. Never erase prior knowledge merely because the latest capture "
-        "does not repeat it. Copy restored new evidence from the source "
-        "without losing names, quantities, or substantive meaning; prefer grammatical synthesis over copying "
-        "anchor fragments character-for-character. Preserve every supported enumerated member, "
-        "extension, material result, exact entity relationship, alias, reciprocal "
-        "page link, and local source attribution. Use the new capture citation only for claims it supports; "
-        "preserved context keeps its own citation. Every factual prose paragraph and every individual numbered "
-        "or bulleted list item must contain its supporting local attribution. Keep entity-specific examples "
-        "explicitly attributed wherever they appear; never "
-        "generalize an organization's codebase, benchmark, result, or comparison into an intrinsic property of "
-        "the subject. Express each entity relationship once without repeating its preferred name. Do not add "
-        "unsupported claims or new page subjects. Do not infer benefits, performance properties, application "
-        "domains, or technical behavior from a named tool, benchmark, category, or general knowledge; a local "
-        "citation cannot legitimize a clause absent from the cited source. Explicitly distinguish "
-        "source-reported evidence from graph "
-        "interpretation and state missing scores, thresholds, verification, or procedure when material. Use "
-        "visible context for useful wikilinks; never emit `None currently`, and never update a context page only "
-        "to manufacture reciprocity. Mutated subjects with an explicit functional relationship in the source "
-        "must link each other reciprocally. Before returning, perform a literal coverage, preservation, citation, and "
-        "cold-reader audit. For every update, separately verify that all prior clauses remain verbatim, all of "
-        "that subject's required terms remain present, and no sibling-owned detail was copied. Fix every "
-        "omission in this response rather than leaving it for a later repair.\n\n"
+        "Return one complete replacement FilingPlan after a final editorial audit of a create-only draft. "
+        "Keep the summary, mutation actions, roles, titles, entity anchors, entity proposals, contradictions, "
+        "resolved contradictions, page set, and reciprocal relationships unchanged. Edit only page bodies.\n\n"
+        "For every factual sentence, privately identify the exact readable-source sentence that entails the whole "
+        "claim. If none does, delete it; a citation cannot legitimize an inference. Never turn an example into "
+        "scalability, reliability, reduced cost, faster adaptation, reduced brittleness or risk, real-world "
+        "validation, broad applicability, or another second-order benefit unless the source states that benefit. "
+        "A graph-derived connection is allowed only when labelled `graph interpretation`.\n\n"
+        "Compare all sentences and list items by meaning. Keep each proposition once; remove repeated definitions, "
+        "capabilities, provenance, and evidence. Keep every source-supported framework member, entity-specific "
+        "action, quantity, example, limitation, exact alias, and required local citation. Preserve distinct "
+        "aboutness: a practice page explains the work and evidence for improving a system; a system page explains "
+        "the system's own architecture and behavior. Detailed examples and measurements have one primary owner. "
+        "Every page must remain useful to a cold reader, with natural prose rather than a term inventory.\n\n"
+        f"LOCAL SOURCE PATH\n{fence(source_path)}\n\n"
+        "AUTHORITATIVE GRAPH SHAPE\n"
+        f"{fence(json.dumps(graph_shape.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
+        "AUTHORITATIVE COVERAGE AUDIT\n"
+        f"{fence(json.dumps(coverage_audit.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
         "FALLIBLE COMPILED DRAFT\n"
         f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
-        "READABLE SOURCE TO AUDIT AGAIN\n"
-        f"{fence(source_text)}"
+        "READABLE SOURCE\n"
+        f"{fence(source_text)}\n\n"
+        "Return only after the entailment and semantic-deduplication audits both pass."
     )
     _guard_prompt(prompt)
     return prompt

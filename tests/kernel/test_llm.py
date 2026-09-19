@@ -17,10 +17,12 @@ from stigmergy.knowledge.plan import FilingPlan
 def test_runtime_model_contract_is_exact():
     assert llm.ANSWER_MODEL == "openrouter:z-ai/glm-5.2"
     assert llm.LIBRARIAN_MODEL == "openrouter:openai/gpt-oss-120b"
+    assert llm.LIBRARIAN_RECOVERY_MODEL == "openrouter:openai/gpt-5.4"
     assert llm.OCR_MODEL == "openrouter:qwen/qwen3-vl-8b-instruct"
     assert {
         llm.ANSWER_MODEL,
         llm.LIBRARIAN_MODEL,
+        llm.LIBRARIAN_RECOVERY_MODEL,
         llm.OCR_MODEL,
     } == llm.APPROVED_MODELS
 
@@ -59,6 +61,16 @@ def test_librarian_is_pinned_to_cerebras_for_native_structured_output():
     }
 
 
+def test_librarian_recovery_is_pinned_to_azure_with_zdr():
+    assert llm.provider_policy(llm.LIBRARIAN_RECOVERY_MODEL) == {
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+        "only": ["azure"],
+    }
+
+
 def test_only_the_librarian_model_is_pinned_to_the_verified_host(monkeypatch):
     """Only the librarian needs a verified host for structured plans."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
@@ -85,6 +97,15 @@ def test_librarian_requests_medium_reasoning_without_returning_reasoning(monkeyp
     assert model.settings["max_tokens"] == llm.LIBRARIAN_MAX_TOKENS
     assert model.settings["temperature"] == llm.LIBRARIAN_TEMPERATURE
     assert model.settings["openrouter_reasoning"] == {
+        "effort": llm.LIBRARIAN_REASONING_LEVEL,
+        "exclude": True,
+    }
+
+    recovery, recovery_settings = llm.build_model(llm.LIBRARIAN_RECOVERY_MODEL)
+    assert recovery_settings is recovery.settings
+    assert recovery.settings["max_tokens"] == llm.LIBRARIAN_MAX_TOKENS
+    assert "temperature" not in recovery.settings
+    assert recovery.settings["openrouter_reasoning"] == {
         "effort": llm.LIBRARIAN_REASONING_LEVEL,
         "exclude": True,
     }
