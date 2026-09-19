@@ -256,7 +256,9 @@ def test_revision_reuses_the_exact_safe_context_and_returns_a_filing_plan(tmp_pa
     assert captured["prompt"].rfind("FINAL REVIEW CHECKLIST") > captured["prompt"].find(
         "DRAFT FILING PLAN"
     )
-    assert "durable primary subject" in captured["prompt"]
+    assert "every durable primary subject" in captured["prompt"]
+    assert "practice remains distinct from the system or artifact it designs" in captured["prompt"]
+    assert "framework members" in captured["prompt"]
     assert "stable name" in captured["prompt"]
     assert "every entity listed on a mutation" in captured["prompt"]
     assert "material quantitative outcomes" in captured["prompt"]
