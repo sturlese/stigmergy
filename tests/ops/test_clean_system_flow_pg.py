@@ -218,11 +218,12 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                     path="wiki/notes/Northstar renewal.md",
                     body=(
                         "# Northstar renewal\n\n"
-                            "Northstar Labs and Northstar Research retain the same renewal identity. "
-                            "The current signed schedule records a monthly cadence that conflicts "
-                            "with the previously recorded annual renewal; the evidence remains "
-                            "unresolved. "
-                            f"(Source: `{second_source}`)"
+                        "Northstar Labs and Northstar Research retain the same renewal identity. "
+                        "The signed renewal records an annual cadence "
+                        f"(Source: `{first_source}`). "
+                        "The current signed schedule records a monthly cadence that conflicts "
+                        "with the previously recorded annual renewal; the evidence remains "
+                        f"unresolved (Source: `{second_source}`)."
                     ),
                     reason="The current signed schedule conflicts with the renewal",
                 ),
@@ -234,7 +235,7 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                     claims=(
                         ContradictionClaim(
                             text="The renewal cadence is annual.",
-                                source=second_source,
+                            source=first_source,
                             date="2026-08-24",
                         ),
                         ContradictionClaim(
@@ -440,9 +441,13 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                     body=(
                         "# Northstar renewal\n\n"
                         "Northstar Labs and Northstar Research retain the same renewal identity. "
-                        "The countersigned amendment makes the annual cadence controlling; it "
-                        "supersedes the conflicting monthly schedule for this renewal. "
-                        f"(Source: `{resolution_source}`)"
+                        "The signed renewal records an annual cadence "
+                        f"(Source: `{first_source}`). "
+                        "The later signed schedule records a conflicting monthly cadence "
+                        f"(Source: `{second_source}`). "
+                        "The countersigned amendment makes the annual cadence controlling and "
+                        "supersedes the monthly schedule for this renewal "
+                        f"(Source: `{resolution_source}`)."
                     ),
                     reason="The amendment resolves the conflicting schedules",
                 ),

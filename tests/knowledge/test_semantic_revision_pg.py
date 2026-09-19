@@ -396,12 +396,12 @@ def test_visible_update_fails_closed_when_the_draft_consumes_the_request_budget(
         def revise(self, **_kwargs):
             raise AssertionError("no additional model request is permitted")
 
-    planner = ExhaustedPlanner(draft, draft, planning_requests=10)
+    planner = ExhaustedPlanner(draft, draft, planning_requests=14)
     item, outcome = _process(clean_queue, target_repo, store, planner)
 
     assert outcome.status == schema.LANDED
     assert planner.revision_calls == []
-    assert item["report"]["model_requests"] == 10
+    assert item["report"]["model_requests"] == 14
     assert item["report"]["plan_rejection"] == "semantic revision budget exhausted"
     assert _changed_paths(target_repo, item["commit_sha"]) == [source]
 
