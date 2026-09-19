@@ -942,6 +942,8 @@ def _apply_graph_coverage_audit(
     additions: dict[str, list[str]] = {key: [] for key in subjects}
     represented = {_normalized_lexical_text(term) for subject in shape.subjects for term in subject.required_terms}
     source_key = _normalized_lexical_text(source_text)
+    structural_lists = _structural_source_lists(source_text)
+    structural_kinds = {kind for kind, _members in structural_lists}
     for gap in audit.gaps:
         subject_key = resolution_key(gap.subject)
         if subject_key not in subjects:
@@ -953,10 +955,20 @@ def _apply_graph_coverage_audit(
                 or normalized in represented
                 or len(normalized.split()) > 8
                 or normalized not in source_key
+                or any(kind in normalized.split() for kind in structural_kinds)
             ):
                 continue
             represented.add(normalized)
             additions[subject_key].append(term)
+    system_subjects = [subject for subject in shape.subjects if subject.abstraction == "system"]
+    if len(system_subjects) == 1:
+        system_key = resolution_key(system_subjects[0].title)
+        for _kind, members in structural_lists:
+            for member in members:
+                normalized = _normalized_lexical_text(member)
+                if normalized and normalized not in represented and len(normalized.split()) <= 8:
+                    represented.add(normalized)
+                    additions[system_key].append(member)
     enriched = tuple(
         subject.model_copy(
             update={"required_terms": subject.required_terms + tuple(additions[resolution_key(subject.title)])}
@@ -1519,6 +1531,21 @@ def _enumerated_source_items(source_text: str) -> tuple[tuple[str, str], ...]:
     numbered_lines = re.compile(r"(?m)^\s*(\d{1,3})[.)]\s+(.+?)\s*$")
     items.extend((f"{number}.", body.strip()) for number, body in numbered_lines.findall(source_text))
     return tuple(items)
+
+
+def _structural_source_lists(source_text: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    declaration = re.compile(
+        r"(?im)^\s*([A-Z][^.\n]{1,240}?)\s+are\s+"
+        r"(extensions|components|capabilities)\b"
+    )
+    lists = []
+    for raw_members, kind in declaration.findall(source_text):
+        members = tuple(
+            member.strip(" ,") for member in re.split(r",\s*(?:and\s+)?|\s+and\s+", raw_members) if member.strip(" ,")
+        )
+        if len(members) >= 2 and all(1 <= len(_normalized_lexical_text(member).split()) <= 8 for member in members):
+            lists.append((kind, members))
+    return tuple(lists)
 
 
 def _required_term_present(normalized_body: str, term: str) -> bool:

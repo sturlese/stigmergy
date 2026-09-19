@@ -458,6 +458,36 @@ def test_graph_coverage_audit_adds_only_valid_unrepresented_source_spans():
     assert enriched.existing_relations[0].relation == "distinct_related"
 
 
+def test_graph_coverage_audit_expands_declared_system_member_lists():
+    shape = _graph_shape()
+    audit = GraphCoverageAudit(
+        summary="The draft compressed a declared extension list.",
+        gaps=(
+            GraphCoverageGap(
+                subject="Harness Engineering",
+                required_terms=("extensions of the runtime",),
+            ),
+        ),
+        relation_corrections=(),
+        evidence_limits=(),
+    )
+
+    enriched = planner._apply_graph_coverage_audit(
+        shape,
+        audit,
+        source_text=("Skills, MCP, subagents, and long-term memory are extensions of the runtime."),
+    )
+
+    assert "extensions of the runtime" not in enriched.subjects[0].required_terms
+    assert enriched.subjects[1].required_terms == (
+        "runtime",
+        "Skills",
+        "MCP",
+        "subagents",
+        "long-term memory",
+    )
+
+
 def test_graph_shape_gate_requires_audited_evidence_limit_statement():
     shape = _graph_shape()
     audit = GraphCoverageAudit(
