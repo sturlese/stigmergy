@@ -790,13 +790,19 @@ def _graph_enrichment_review_prompt(
         "Return one complete replacement GraphShape after independently auditing the fallible enrichment "
         "draft against the readable source. Do not rubber-stamp it. First recover every omitted enumerated "
         "member, named extension, distinguishing result, complete quantity, source author, and identity that "
-        "performed or produced material evidence. Then remove passive technologies, benchmarks, metrics, "
+        "performed or produced material evidence. Build a private named-candidate checklist before answering: "
+        "classify every proper name, multiword capitalized name, and @handle in the source as either a material "
+        "identity assigned to every page using its contribution or a non-identity implementation/evaluation "
+        "detail. Never leave a named candidate silently unclassified. Then remove passive technologies, benchmarks, "
+        "metrics, "
         "methods, and examples incorrectly promoted to identities. Finally recheck that evidence is allocated "
         "by aboutness across distinct subjects, every required term is a contiguous source span, every entity "
         "relationship is source-supported, and the authoritative topology is unchanged. The reviewed output, "
         "not the draft, becomes the compilation contract.\n\n"
         "FALLIBLE ENRICHMENT DRAFT\n"
-        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}"
+        f"{fence(json.dumps(draft.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
+        "READABLE SOURCE TO AUDIT AGAIN\n"
+        f"{fence(source_text)}"
     )
     _guard_prompt(prompt)
     return prompt
