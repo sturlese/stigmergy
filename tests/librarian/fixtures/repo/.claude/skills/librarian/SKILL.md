@@ -141,10 +141,13 @@ Silence in the latest capture never authorizes forgetting prior knowledge. If ne
 claim, retain the prior evidence as explicitly superseded or conflicting context rather than silently
 erasing its attribution.
 
-Before writing an update, build a private ledger of every existing source-attributed sentence or clause.
-Mark each one preserved, explicitly corrected, or conflicting. Silence and paraphrase are not correction:
-every preserved claim must remain recognisable with its distinctive terminology and original citation.
-Never satisfy this rule with a generic summary or an orphaned citation, and never output the ledger.
+Before writing an update, use two private passes. First copy every existing source-attributed claim into
+the draft before reorganising it. Then compare the final body with the prior page one clause at a time,
+marking each claim preserved, explicitly corrected, or conflicting. Silence and paraphrase are not
+correction: every preserved claim must retain its distinctive nouns, verbs, formulations, and original
+citation. A broader synonym does not preserve a narrower mechanism or memorable formulation; when a
+concise rewrite cannot retain one, keep the original sentence. Never satisfy this rule with a generic
+summary or an orphaned citation, and never output the ledger.
 
 When related pages use the same source, each page must still stand on its own. They may repeat concise
 source-supported context needed for a cold reader, but give each detailed mechanism, inventory, entity
@@ -153,10 +156,12 @@ explained link on its sibling. Repeat detailed evidence only when the source ind
 distinct fact about both subjects. Make each page rich through its own definition, mechanism, significance,
 and evidence rather than copying its sibling or reducing it to a generic cross-reference.
 
-State material evidence limits. Mark reported examples as source-reported when they are not independently
-verified. If a source names an evaluation but omits scores, thresholds, or procedure detail, say so rather
-than implying that the missing result exists. Distinguish source claims from relationships inferred from
-visible graph context. Never write `None currently`; omit an empty Connections section.
+State material evidence limits. After drafting, audit every benchmark, metric, comparison, number, and
+claimed result. Mark reported examples as source-reported when they are not independently verified. Naming
+a metric is not reporting its value: if a source omits the result, score, threshold, independent
+verification, or material procedure detail, add an explicit sentence saying what the source does not
+report rather than implying that the missing evidence exists. Distinguish source claims from relationships
+inferred from visible graph context. Never write `None currently`; omit an empty Connections section.
 
 Use wikilinks only for visible normal note/concept pages with a material semantic relationship.
 Explain the relationship in prose. Before emitting `[[Title]]`, verify that exact title is a visible
@@ -166,6 +171,8 @@ Never use entity names as wikilinks unless they independently have a visible nor
 A functional relationship is material: one subject may design, operate, control, supply, evaluate,
 audit, measure, consume, or produce decisions or outputs of another even when their mechanisms differ.
 Do not classify distinct abstraction levels as unrelated when that functional connection helps a cold reader.
+Every connection explanation must state a positive, useful relationship; never link a page while calling
+the subjects unrelated.
 
 ## Select and anchor entities
 
@@ -231,7 +238,9 @@ Before returning the plan, verify:
 2. Every page clears the independent-reuse bar and follows the rich-page structure.
 3. Framework members, extensions, examples, quantitative outcomes, tradeoffs, and supported
    connections survive. Reconcile every source-declared count against its individually preserved members.
-4. Every changed claim is locally cited and strictly entailed by source or visible context.
+4. Every changed claim is locally cited and strictly entailed by source or visible context; every update
+   preserves each prior source-backed claim and distinctive formulation, and every empirical claim whose
+   result or validation is absent states that limitation explicitly.
 5. Every material author or evidence-producing actor is considered, and each selected entity has a
 page-specific, individually cited relationship; the mutation's entity list contains no other name,
 and no generic term or provenance token became an entity. Confirm no material author or actor was
