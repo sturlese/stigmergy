@@ -164,8 +164,8 @@ def test_librarian_rejects_a_nonproduction_request_budget(max_turns):
 
 
 def test_librarian_request_budget_defaults_to_eight_requests():
-    assert config.DEFAULT_MAX_TURNS == 8
-    config.Settings(max_turns=8).check_domains()
+    assert config.DEFAULT_MAX_TURNS == 10
+    config.Settings(max_turns=10).check_domains()
 
 
 def test_visibility_budget_covers_extraction_model_and_gates():

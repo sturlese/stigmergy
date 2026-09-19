@@ -45,7 +45,7 @@
       },
       "execution": {
         "mode": "production-equivalent",
-        "configured_max_turns": 8
+        "configured_max_turns": 10
       },
       "provenance": {
         "corpus_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -79,7 +79,7 @@
             "max_tokens": 40960
           },
           "execution_mode": "production-equivalent",
-          "configured_max_turns": 8,
+          "configured_max_turns": 10,
           "model_requests": 5,
           "planning_model_requests": 5,
           "graph_shape_model_requests": 1,

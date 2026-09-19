@@ -43,8 +43,9 @@ source corpus and initial graph, including cold-readable bodies, local citations
 connections, entity precision and relationships, anti-fragmentation, writer gates, ACL safety, and
 a provenance-bearing blind editorial review. Evidence is per case and per repeat: the selected
 Stigmergy level needs three independent production-equivalent repeats of every case under the bounded
-eight-request ceiling. A healthy graph-shaped capture uses five requests for topology, review,
-enrichment, compilation, and editorial review; extra requests are reserved for correction. The artifact
+ten-request ceiling. A healthy graph-shaped capture uses six requests for topology, topology review,
+enrichment, enrichment review, compilation, and editorial review; extra requests are reserved for
+correction. The artifact
 records phase requests, retries, repairs, elapsed time, available usage metadata, case and fixture hashes,
 and the exact brain-prompt commit/hash. The release gate recomputes the recorded topology and graph-shape
 contract, then replays the source-free filing plan and effective output before permitting deployment only

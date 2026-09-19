@@ -27,7 +27,7 @@ a clean cut: older evidence is not replayable admission evidence and must be rer
 
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use the production Cerebras route, medium reasoning,
-and a bounded eight-request ceiling. A healthy graph-shaped capture uses five requests; the remaining
+and a bounded ten-request ceiling. A healthy graph-shaped capture uses six requests; the remaining
 budget is available only for schema or semantic correction. Runs exercise the temporary-worktree writer and bounded semantic-repair path, and must
 all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
 blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a
@@ -85,7 +85,7 @@ content hash only. Add `--include-payload` only when recording a local release a
 derived page bodies and an explicit stderr warning, but never the supplied source text. The emitted
 `case_result` with that flag is the exact object embedded under its repeat's `case_results` array.
 Use the same repeat ID for every case in one matrix repeat; record a new ID for each independent
-repeat. The top-level repeat records the shared runtime, execution mode, eight-request ceiling, and
+repeat. The top-level repeat records the shared runtime, execution mode, ten-request ceiling, and
 candidate provenance. The validator requires the nested records to repeat that runtime and budget,
 so summaries cannot stand in for individual outcomes.
 
