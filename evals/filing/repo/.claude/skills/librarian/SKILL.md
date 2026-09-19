@@ -141,6 +141,11 @@ Silence in the latest capture never authorizes forgetting prior knowledge. If ne
 claim, retain the prior evidence as explicitly superseded or conflicting context rather than silently
 erasing its attribution.
 
+Before writing an update, build a private ledger of every existing source-attributed sentence or clause.
+Mark each one preserved, explicitly corrected, or conflicting. Silence and paraphrase are not correction:
+every preserved claim must remain recognisable with its distinctive terminology and original citation.
+Never satisfy this rule with a generic summary or an orphaned citation, and never output the ledger.
+
 When related pages use the same source, each page must still stand on its own. They may repeat concise
 source-supported context needed for a cold reader, but give each detailed mechanism, inventory, entity
 relationship, example, and measurement one primary page by aboutness. Prefer a concise paraphrase and an
@@ -158,6 +163,9 @@ Explain the relationship in prose. Before emitting `[[Title]]`, verify that exac
 normal page or is created by this plan; otherwise write it as plain text. Do not wikilink sources,
 captures, opaque IDs, extensions, examples, or entity names merely because they appear in Connections.
 Never use entity names as wikilinks unless they independently have a visible normal note/concept page.
+A functional relationship is material: one subject may design, operate, control, supply, evaluate,
+audit, measure, consume, or produce decisions or outputs of another even when their mechanisms differ.
+Do not classify distinct abstraction levels as unrelated when that functional connection helps a cold reader.
 
 ## Select and anchor entities
 
@@ -222,7 +230,7 @@ Before returning the plan, verify:
 1. Every durable primary subject is represented; no example, heading, or narrower artifact replaced it.
 2. Every page clears the independent-reuse bar and follows the rich-page structure.
 3. Framework members, extensions, examples, quantitative outcomes, tradeoffs, and supported
-   connections survive.
+   connections survive. Reconcile every source-declared count against its individually preserved members.
 4. Every changed claim is locally cited and strictly entailed by source or visible context.
 5. Every material author or evidence-producing actor is considered, and each selected entity has a
 page-specific, individually cited relationship; the mutation's entity list contains no other name,
