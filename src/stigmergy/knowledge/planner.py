@@ -1402,7 +1402,11 @@ def graph_shape_violations(
         bodies[resolution_key(subject.title)] = body
         subject_bodies[subject.title] = body
         normalized_body = _normalized_lexical_text(body)
-        missing_terms = [term for term in subject.required_terms if not _required_term_present(normalized_body, term)]
+        missing_terms = [
+            term
+            for term in subject.required_terms
+            if not _required_term_present(normalized_body, term, subject_title=subject.title)
+        ]
         if missing_terms:
             violations.append(f"required-terms:{subject.title}: missing={sorted(missing_terms)!r}")
         if _has_required_term_inventory(body, subject.required_terms):
@@ -1521,7 +1525,11 @@ def graph_shape_violations(
         bodies_by_key = {resolution_key(title): body for title, body in subject_bodies.items()}
         for limit in coverage_audit.evidence_limits:
             body = bodies_by_key.get(resolution_key(limit.subject), "")
-            if not _required_term_present(_normalized_lexical_text(body), limit.statement):
+            if not _required_term_present(
+                _normalized_lexical_text(body),
+                limit.statement,
+                subject_title=limit.subject,
+            ):
                 violations.append(f"evidence-limit:{limit.subject}: missing={limit.statement!r}")
     return tuple(violations)
 
@@ -1555,7 +1563,7 @@ def _structural_source_lists(source_text: str) -> tuple[tuple[str, tuple[str, ..
     return tuple(lists)
 
 
-def _required_term_present(normalized_body: str, term: str) -> bool:
+def _required_term_present(normalized_body: str, term: str, *, subject_title: str | None = None) -> bool:
     normalized = _normalized_lexical_text(term)
     if normalized in normalized_body:
         return True
@@ -1585,6 +1593,10 @@ def _required_term_present(normalized_body: str, term: str) -> bool:
                 "again",
                 "as",
                 "at",
+                "that",
+                "these",
+                "this",
+                "those",
                 "in",
                 "into",
                 "of",
@@ -1594,6 +1606,8 @@ def _required_term_present(normalized_body: str, term: str) -> bool:
                 "to",
             }
         }
+        if subject_title:
+            required.difference_update(_normalized_lexical_text(subject_title).split())
         window_size = len(tokens) * 3
         for start in range(len(body_tokens)):
             if len(required) >= 3 and required <= set(body_tokens[start : start + window_size]):
