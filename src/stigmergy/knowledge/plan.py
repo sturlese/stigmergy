@@ -26,9 +26,7 @@ class GraphEntity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: EntityName
-    entity_type: Literal[
-        "person", "organization", "product", "tool", "repository", "project", "place"
-    ]
+    entity_type: Literal["person", "organization", "product", "tool", "repository", "project", "place"]
     aliases: Annotated[
         tuple[EntityName, ...],
         Field(
@@ -39,9 +37,7 @@ class GraphEntity(BaseModel):
             ),
         ),
     ]
-    relationship_kind: Literal[
-        "authored", "responsible", "participated", "produced_evidence"
-    ]
+    relationship_kind: Literal["authored", "responsible", "participated", "produced_evidence"]
     relationship: Annotated[
         str,
         Field(
@@ -77,15 +73,11 @@ class GraphEntity(BaseModel):
             raise ValueError("a produced_evidence entity requires exact evidence_terms")
         if self.relationship_kind == "produced_evidence":
             name_key = resolution_key(self.name)
-            substantive = [
-                term for term in self.evidence_terms if name_key not in resolution_key(term)
-            ]
+            substantive = [term for term in self.evidence_terms if name_key not in resolution_key(term)]
             if not substantive:
                 raise ValueError("produced_evidence requires a result term beyond the entity name")
         relationship_key = resolution_key(self.relationship)
-        missing = [
-            term for term in self.evidence_terms if resolution_key(term) not in relationship_key
-        ]
+        missing = [term for term in self.evidence_terms if resolution_key(term) not in relationship_key]
         if missing:
             raise ValueError("entity relationship must contain every evidence_term")
         return self
@@ -139,9 +131,7 @@ class GraphTopologySubject(BaseModel):
         ),
     ]
     abstraction: Annotated[
-        Literal[
-            "practice", "system", "artifact", "method", "organization", "person", "other"
-        ],
+        Literal["practice", "system", "artifact", "method", "organization", "person", "other"],
         Field(
             description=(
                 "Ontological kind. A system is an operational assembly with interacting components, "
@@ -184,17 +174,18 @@ class GraphTopologySubject(BaseModel):
         if resolution_key(self.title_evidence) not in variants:
             raise ValueError("title_evidence must be present in name_variants")
         activity_head = title_key.split()[-1]
-        if (
-            activity_head in {"engineering", "design", "management", "governance", "operations"}
-            and self.abstraction not in {"practice", "method"}
-        ):
+        if activity_head in {
+            "engineering",
+            "design",
+            "management",
+            "governance",
+            "operations",
+        } and self.abstraction not in {"practice", "method"}:
             raise ValueError("an activity-noun subject must be a practice or method")
         if self.abstraction in {"practice", "method", "system", "artifact"} and self.role != "concept":
             raise ValueError("a reusable practice, method, system, or artifact must be a concept")
         if self.abstraction in {"person", "organization"}:
-            raise ValueError(
-                "person and organization identities belong to entity enrichment, not wiki topology"
-            )
+            raise ValueError("person and organization identities belong to entity enrichment, not wiki topology")
         return self
 
 
@@ -252,9 +243,7 @@ class ExistingPageRelation(BaseModel):
 
     @model_validator(mode="after")
     def valid_page_path(self):
-        if not self.path.endswith(".md") or not self.path.startswith(
-            ("wiki/notes/", "wiki/concepts/")
-        ):
+        if not self.path.endswith(".md") or not self.path.startswith(("wiki/notes/", "wiki/concepts/")):
             raise ValueError("existing graph relations must target a note or concept Markdown path")
         return self
 
@@ -327,6 +316,41 @@ class GraphShape(GraphTopology):
                 if key in entity_specs and entity_specs[key] != spec:
                     raise ValueError("graph entity type and aliases must be consistent across subjects")
                 entity_specs[key] = spec
+        return self
+
+
+class GraphCoverageGap(BaseModel):
+    """Source evidence omitted from an otherwise reviewed graph shape."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    subject: EntityName
+    required_terms: Annotated[
+        tuple[RequiredTerm, ...],
+        Field(
+            min_length=1,
+            max_length=30,
+            description=(
+                "Previously uncovered one-to-eight-word contiguous source spans assigned to this "
+                "existing graph subject by primary aboutness."
+            ),
+        ),
+    ]
+
+
+class GraphCoverageAudit(BaseModel):
+    """Independent loss audit over a reviewed source-to-graph assignment."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    summary: Annotated[str, Field(min_length=1, max_length=1000)]
+    gaps: Annotated[tuple[GraphCoverageGap, ...], Field(max_length=12)]
+
+    @model_validator(mode="after")
+    def unique_subjects(self):
+        subjects = tuple(resolution_key(gap.subject) for gap in self.gaps)
+        if len(set(subjects)) != len(subjects):
+            raise ValueError("coverage audit subjects must be unique")
         return self
 
 
@@ -424,9 +448,7 @@ class PageMutation(BaseModel):
             raise ValueError("create requires role, title, and body")
         if self.action == "create" and self.path:
             raise ValueError("create paths are derived from role and title")
-        if self.action == "create" and (
-            "entities" not in self.model_fields_set or self.entities is None
-        ):
+        if self.action == "create" and ("entities" not in self.model_fields_set or self.entities is None):
             raise ValueError("create requires explicit entities; use [] when no entity links are intended")
         if self.action == "update" and (not self.path or not self.body):
             raise ValueError("update requires path and body")
@@ -455,10 +477,7 @@ class EntityProposal(BaseModel):
             raise ValueError("external namespace and id must be provided together")
         preferred = resolution_key(self.name)
         aliases = tuple(resolution_key(value) for value in self.aliases)
-        if any(
-            not any(character.isalnum() for character in value)
-            for value in (preferred, *aliases)
-        ):
+        if any(not any(character.isalnum() for character in value) for value in (preferred, *aliases)):
             raise ValueError("entity names must contain searchable text")
         if preferred in aliases or len(set(aliases)) != len(aliases):
             raise ValueError("entity aliases must be unique and differ from the preferred name")
@@ -516,14 +535,11 @@ class FilingPlan(BaseModel):
         unlinked = [
             proposal.name
             for proposal in self.entities
-            if not linked_references.intersection(
-                resolution_key(value) for value in (proposal.name, *proposal.aliases)
-            )
+            if not linked_references.intersection(resolution_key(value) for value in (proposal.name, *proposal.aliases))
         ]
         if unlinked:
             raise ValueError(
-                "each entity proposal must be linked by a create or update mutation: "
-                + ", ".join(unlinked)
+                "each entity proposal must be linked by a create or update mutation: " + ", ".join(unlinked)
             )
         return self
 

@@ -13,6 +13,7 @@ from stigmergy.capture.schema import CaptureEnvelope
 from stigmergy.kernel.normalize import resolution_key
 from stigmergy.knowledge.plan import (
     FilingPlan,
+    GraphCoverageAudit,
     GraphEntity,
     GraphShape,
     GraphSubject,
@@ -31,7 +32,7 @@ MAX_PLANNER_PROMPT_BYTES = 4 * 1024 * 1024
 
 @dataclass(frozen=True)
 class PlanRun:
-    plan: FilingPlan | RepairPlan | GraphShape | GraphTopology
+    plan: FilingPlan | RepairPlan | GraphCoverageAudit | GraphShape | GraphTopology
     model_requests: int = 0
     graph_shape: GraphShape | None = None
     graph_shape_draft: GraphTopology | None = None
@@ -302,8 +303,8 @@ class PydanticPlanner:
             instructions = handle.read()
 
         max_turns = int(self.settings.max_turns)
-        if max_turns < 6:
-            raise ValueError("fully reviewed graph-shaped filing requires at least six model requests")
+        if max_turns < 7:
+            raise ValueError("fully reviewed graph-shaped filing requires at least seven model requests")
         shape_draft_run = await self._run_structured(
             output_type=GraphTopology,
             instructions=_GRAPH_SHAPE_INSTRUCTIONS,
@@ -313,13 +314,13 @@ class PydanticPlanner:
                 source_text=source_text,
                 context=context,
             ),
-            max_requests=max_turns - 5,
+            max_requests=max_turns - 6,
             reasoning_level=self.reasoning_level_override or "medium",
         )
         shape_draft = shape_draft_run.plan
         if not isinstance(shape_draft, GraphTopology):
             raise TypeError("graph-topology draft phase returned the wrong output type")
-        review_budget = max_turns - int(shape_draft_run.model_requests) - 4
+        review_budget = max_turns - int(shape_draft_run.model_requests) - 5
         if review_budget < 1:
             raise ValueError("graph-shape draft exhausted the review request budget")
         shape_review_run = await self._run_structured(
@@ -339,7 +340,7 @@ class PydanticPlanner:
         if not isinstance(shape_review, GraphTopology):
             raise TypeError("graph-topology review phase returned the wrong output type")
         reviewed_requests = int(shape_draft_run.model_requests) + int(shape_review_run.model_requests)
-        enrichment_budget = max_turns - reviewed_requests - 3
+        enrichment_budget = max_turns - reviewed_requests - 4
         if enrichment_budget < 1:
             raise ValueError("graph-topology review exhausted the enrichment request budget")
         enrichment_requests = 0
@@ -365,7 +366,7 @@ class PydanticPlanner:
         enrichment_requests += step_requests
         enrichment_schema_retries += max(0, step_requests - 1)
 
-        enrichment_review_budget = max_turns - reviewed_requests - enrichment_requests - 2
+        enrichment_review_budget = max_turns - reviewed_requests - enrichment_requests - 3
         if enrichment_review_budget < 1:
             raise ValueError("graph enrichment exhausted the inventory-review request budget")
         enrichment_review_run = await self._run_structured(
@@ -395,7 +396,7 @@ class PydanticPlanner:
             shape,
             source_text=source_text,
         )
-        enrichment_budget = max_turns - reviewed_requests - enrichment_requests - 2
+        enrichment_budget = max_turns - reviewed_requests - enrichment_requests - 3
         while topology_violations and enrichment_budget >= 1:
             shape_run = await self._run_structured(
                 output_type=GraphShape,
@@ -424,7 +425,31 @@ class PydanticPlanner:
                 shape,
                 source_text=source_text,
             )
-            enrichment_budget = max_turns - reviewed_requests - enrichment_requests - 2
+            enrichment_budget = max_turns - reviewed_requests - enrichment_requests - 3
+
+        audit_budget = max_turns - reviewed_requests - enrichment_requests - 2
+        if audit_budget < 1:
+            raise ValueError("graph enrichment exhausted the coverage-audit request budget")
+        audit_run = await self._run_structured(
+            output_type=GraphCoverageAudit,
+            instructions=_GRAPH_SHAPE_INSTRUCTIONS,
+            prompt=_graph_coverage_audit_prompt(
+                envelope=envelope,
+                source_path=source_path,
+                source_text=source_text,
+                context=context,
+                shape=shape,
+            ),
+            max_requests=audit_budget,
+            reasoning_level=self.reasoning_level_override or "medium",
+        )
+        audit = audit_run.plan
+        if not isinstance(audit, GraphCoverageAudit):
+            raise TypeError("graph coverage audit returned the wrong output type")
+        shape = _apply_graph_coverage_audit(shape, audit, source_text=source_text)
+        step_requests = int(audit_run.model_requests)
+        enrichment_requests += step_requests
+        enrichment_schema_retries += max(0, step_requests - 1)
 
         shape_requests = reviewed_requests + enrichment_requests
         compilation_budget = max_turns - shape_requests - 1
@@ -540,7 +565,7 @@ class PydanticPlanner:
     async def _run_structured(
         self,
         *,
-        output_type: type[FilingPlan] | type[RepairPlan] | type[GraphShape],
+        output_type: type[FilingPlan] | type[RepairPlan] | type[GraphCoverageAudit] | type[GraphShape],
         instructions: str,
         prompt: str,
         usage=None,
@@ -852,6 +877,70 @@ def _graph_enrichment_review_prompt(
     )
     _guard_prompt(prompt)
     return prompt
+
+
+def _graph_coverage_audit_prompt(
+    *,
+    envelope,
+    source_path: str,
+    source_text: str,
+    context: str,
+    shape: GraphShape,
+) -> str:
+    provenance = _provenance(envelope, source_path)
+    prompt = (
+        "Return only a GraphCoverageAudit. The reviewed GraphShape is authoritative for subjects, "
+        "relations, entities, and existing evidence ownership, but its required_terms may still omit source "
+        "evidence. Do not rewrite the shape, add subjects, or repeat a term already represented anywhere in "
+        "it. Independently compare the complete readable source with the union of every required_term and "
+        "entity relationship. Report only uncovered material spans: every member of an explicit enumeration "
+        "or declared count, named extension, benchmark or metric detail, distinguishing result, and mechanism "
+        "needed to preserve the source's durable conclusions. For each gap, choose one existing subject by "
+        "primary aboutness and copy the shortest complete one-to-eight-word contiguous source span. Improvement "
+        "and configuration evidence belongs to the practice; intrinsic components and operation belong to the "
+        "system. Return no gaps only after reconciling each source-declared count against its individual members.\n\n"
+        "REVIEWED GRAPH SHAPE\n"
+        f"{fence(json.dumps(shape.model_dump(mode='json'), ensure_ascii=False, sort_keys=True))}\n\n"
+        f"PROVENANCE\n{fence(json.dumps(provenance, ensure_ascii=False, sort_keys=True))}\n\n"
+        f"READABLE SOURCE\n{fence(source_text)}\n\n"
+        f"SAFE EXISTING CONTEXT\n{fence(context)}"
+    )
+    _guard_prompt(prompt)
+    return prompt
+
+
+def _apply_graph_coverage_audit(
+    shape: GraphShape,
+    audit: GraphCoverageAudit,
+    *,
+    source_text: str,
+) -> GraphShape:
+    subjects = {resolution_key(subject.title): subject for subject in shape.subjects}
+    additions: dict[str, list[str]] = {key: [] for key in subjects}
+    represented = {_normalized_lexical_text(term) for subject in shape.subjects for term in subject.required_terms}
+    source_key = _normalized_lexical_text(source_text)
+    for gap in audit.gaps:
+        subject_key = resolution_key(gap.subject)
+        if subject_key not in subjects:
+            continue
+        for term in gap.required_terms:
+            normalized = _normalized_lexical_text(term)
+            if (
+                not normalized
+                or normalized in represented
+                or len(normalized.split()) > 8
+                or normalized not in source_key
+            ):
+                continue
+            represented.add(normalized)
+            additions[subject_key].append(term)
+    enriched = tuple(
+        subject.model_copy(
+            update={"required_terms": subject.required_terms + tuple(additions[resolution_key(subject.title)])}
+        )
+        for subject in shape.subjects
+    )
+    return shape.model_copy(update={"subjects": enriched})
 
 
 def _prompt(

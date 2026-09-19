@@ -15,6 +15,8 @@ from stigmergy.knowledge.plan import (
     EntityProposal,
     ExistingPageRelation,
     FilingPlan,
+    GraphCoverageAudit,
+    GraphCoverageGap,
     GraphEntity,
     GraphShape,
     GraphSubject,
@@ -56,7 +58,7 @@ def _worktree(tmp_path):
     return str(tmp_path)
 
 
-def _settings(*, max_turns=6):
+def _settings(*, max_turns=7):
     return SimpleNamespace(
         model="openrouter:openai/gpt-oss-120b",
         timeout_s=5,
@@ -91,6 +93,7 @@ def _filing_model(summary: str) -> FunctionModel:
                 "subjects": [],
                 "existing_relations": [],
             },
+            {"summary": "No source evidence was omitted.", "gaps": []},
             {"summary": summary},
         )
     )
@@ -111,12 +114,12 @@ def test_pydantic_planner_returns_a_typed_filing_plan_without_a_network_call(tmp
 
     assert result.plan.summary == "Filed the supported decision"
     assert result.plan.mutations == ()
-    assert result.model_requests == 5
+    assert result.model_requests == 6
     assert result.graph_shape is not None
     assert result.graph_shape.subjects == ()
     assert result.graph_shape_model_requests == 1
     assert result.graph_shape_review_model_requests == 1
-    assert result.graph_shape_enrichment_model_requests == 2
+    assert result.graph_shape_enrichment_model_requests == 3
     assert result.compilation_model_requests == 1
     assert result.semantic_reviewed is True
 
@@ -386,6 +389,34 @@ def test_graph_shape_gate_allows_an_omitted_leading_article_in_prose():
     )
 
     assert planner.graph_shape_violations(shape, plan) == ()
+
+
+def test_graph_coverage_audit_adds_only_valid_unrepresented_source_spans():
+    shape = _graph_shape()
+    audit = GraphCoverageAudit(
+        summary="Recovered one omitted trust capability.",
+        gaps=(
+            GraphCoverageGap(
+                subject="Agent Harness",
+                required_terms=(
+                    "observability preserves traces",
+                    "runtime",
+                    "unsupported missing phrase",
+                ),
+            ),
+        ),
+    )
+
+    enriched = planner._apply_graph_coverage_audit(
+        shape,
+        audit,
+        source_text="The runtime uses observability preserves traces for operators.",
+    )
+
+    assert enriched.subjects[1].required_terms == (
+        "runtime",
+        "observability preserves traces",
+    )
 
 
 def test_graph_shape_gate_rejects_entity_evidence_copied_to_a_sibling_page():
