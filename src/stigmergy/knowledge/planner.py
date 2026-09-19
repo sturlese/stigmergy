@@ -504,7 +504,8 @@ class PydanticPlanner:
         review_requests = 0
         review_schema_retries = 0
         remaining = max_turns - used
-        if (shape.subjects or plan.mutations) and remaining > 0:
+        has_updates = any(mutation.action == "update" for mutation in plan.mutations)
+        if (shape.subjects or plan.mutations) and remaining > 0 and not has_updates:
             editorial_run = await self._run_structured(
                 output_type=FilingPlan,
                 instructions=instructions,
@@ -542,51 +543,25 @@ class PydanticPlanner:
             context=context,
         )
         while not topology_violations and plan_violations and remaining > 0:
-            preservation_paths = _preservation_paths(plan_violations)
-            if preservation_paths:
-                current_files = {
-                    str(mutation.path): str(mutation.body)
-                    for mutation in plan.mutations
-                    if mutation.action == "update" and mutation.path in preservation_paths
-                }
-                review_run = await self._run_structured(
-                    output_type=RepairPlan,
-                    instructions=instructions,
-                    prompt=_graph_preservation_repair_prompt(
-                        source_path=source_path,
-                        source_text=source_text,
-                        context=context,
-                        files=current_files,
-                        violations=tuple(
-                            violation for violation in plan_violations if violation.startswith("preserved-context:")
-                        ),
-                    ),
-                    max_requests=remaining,
-                    reasoning_level=self.reasoning_level_override or "medium",
-                )
-                if not isinstance(review_run.plan, RepairPlan):
-                    raise TypeError("graph preservation repair returned the wrong output type")
-                plan = _apply_preservation_repair(plan, review_run.plan, preservation_paths)
-            else:
-                review_run = await self._run_structured(
-                    output_type=FilingPlan,
-                    instructions=instructions,
-                    prompt=_graph_compliance_prompt(
-                        envelope=envelope,
-                        source_path=source_path,
-                        source_text=source_text,
-                        context=context,
-                        graph_shape=shape,
-                        draft=plan,
-                        violations=plan_violations,
-                        coverage_audit=audit,
-                    ),
-                    max_requests=remaining,
-                    reasoning_level=self.reasoning_level_override or "medium",
-                )
-                if not isinstance(review_run.plan, FilingPlan):
-                    raise TypeError("graph compliance returned the wrong output type")
-                plan = review_run.plan
+            review_run = await self._run_structured(
+                output_type=FilingPlan,
+                instructions=instructions,
+                prompt=_graph_compliance_prompt(
+                    envelope=envelope,
+                    source_path=source_path,
+                    source_text=source_text,
+                    context=context,
+                    graph_shape=shape,
+                    draft=plan,
+                    violations=plan_violations,
+                    coverage_audit=audit,
+                ),
+                max_requests=remaining,
+                reasoning_level=self.reasoning_level_override or "medium",
+            )
+            if not isinstance(review_run.plan, FilingPlan):
+                raise TypeError("graph compliance returned the wrong output type")
+            plan = review_run.plan
             step_requests = int(review_run.model_requests)
             review_requests += step_requests
             review_schema_retries += max(0, step_requests - 1)
@@ -1237,31 +1212,6 @@ def _graph_compliance_prompt(
     return prompt
 
 
-def _graph_preservation_repair_prompt(
-    *,
-    source_path: str,
-    source_text: str,
-    context: str,
-    files: dict[str, str],
-    violations: tuple[str, ...],
-) -> str:
-    prompt = (
-        "Return one RepairPlan that repairs only the listed update paths. Each RepairMutation body is the "
-        "complete replacement Markdown body for that same path. Copy every missing numbered factual block "
-        "from SAFE EXISTING CONTEXT character-for-character, including its local source attribution, into the "
-        "most relevant existing section. Preserve every character of CURRENT FILES and make only additive "
-        "insertions; do not paraphrase, reorder, delete, or duplicate their content. Do not create catch-all "
-        "compliance sections or edit any unlisted path.\n\n"
-        f"PRESERVATION VIOLATIONS\n{fence(json.dumps(violations, ensure_ascii=False))}\n\n"
-        f"CURRENT FILES\n{fence(json.dumps(files, ensure_ascii=False, sort_keys=True))}\n\n"
-        f"SAFE EXISTING CONTEXT\n{fence(context)}\n\n"
-        f"CURRENT SOURCE PATH\n{fence(source_path)}\n\n"
-        f"CURRENT READABLE SOURCE\n{fence(source_text)}"
-    )
-    _guard_prompt(prompt)
-    return prompt
-
-
 def _graph_editorial_review_prompt(
     *,
     envelope,
@@ -1681,35 +1631,6 @@ def _prior_context_violations(plan: FilingPlan, context: str) -> tuple[str, ...]
         if missing:
             violations.append(f"preserved-context:{mutation.path}: missing_blocks={missing!r}")
     return tuple(violations)
-
-
-def _preservation_paths(violations: tuple[str, ...]) -> tuple[str, ...]:
-    prefix = "preserved-context:"
-    delimiter = ": missing_blocks="
-    return tuple(
-        dict.fromkeys(
-            violation.removeprefix(prefix).split(delimiter, maxsplit=1)[0]
-            for violation in violations
-            if violation.startswith(prefix) and delimiter in violation
-        )
-    )
-
-
-def _apply_preservation_repair(
-    plan: FilingPlan,
-    repair: RepairPlan,
-    target_paths: tuple[str, ...],
-) -> FilingPlan:
-    repairs = {mutation.path: mutation.body for mutation in repair.mutations}
-    if len(repairs) != len(repair.mutations) or set(repairs) != set(target_paths):
-        return plan
-    mutations = tuple(
-        mutation.model_copy(update={"body": repairs[str(mutation.path)]})
-        if mutation.action == "update" and mutation.path in repairs
-        else mutation
-        for mutation in plan.mutations
-    )
-    return plan.model_copy(update={"mutations": mutations})
 
 
 def _evidence_limit_candidates(source_text: str) -> tuple[str, ...]:

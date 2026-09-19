@@ -554,48 +554,6 @@ def test_prior_context_gate_preserves_every_cited_factual_block_in_updates():
     assert planner._prior_context_violations(preserved, context) == ()
 
 
-def test_preservation_repair_changes_only_the_targeted_update_body():
-    plan = FilingPlan(
-        summary="Created one page and updated another.",
-        mutations=(
-            PageMutation(
-                action="create",
-                role="concept",
-                title="Harness Engineering",
-                body="# Harness Engineering\n\nCreated body.",
-                entities=(),
-                reason="Created the practice.",
-            ),
-            PageMutation(
-                action="update",
-                path="wiki/concepts/Agent Harness.md",
-                body="# Agent Harness\n\nCurrent body.",
-                reason="Updated the system.",
-            ),
-        ),
-    )
-    repair = RepairPlan(
-        summary="Restored prior evidence.",
-        mutations=(
-            RepairMutation(
-                path="wiki/concepts/Agent Harness.md",
-                body="# Agent Harness\n\nCurrent body.\n\nRestored cited block.",
-                reason="Restored the missing block.",
-            ),
-        ),
-    )
-
-    repaired = planner._apply_preservation_repair(
-        plan,
-        repair,
-        ("wiki/concepts/Agent Harness.md",),
-    )
-
-    assert repaired.mutations[0] == plan.mutations[0]
-    assert repaired.mutations[1].body.endswith("Restored cited block.")
-    assert repaired.entities == plan.entities
-
-
 def test_graph_shape_gate_requires_audited_evidence_limit_statement():
     shape = _graph_shape()
     audit = GraphCoverageAudit(
