@@ -54,7 +54,12 @@
   },
   "bodies": {
     "required": ["decision trace quality"],
-    "forbidden": [],
+    "forbidden": [
+      "efficient retrieval",
+      "facilitates debugging",
+      "high-stakes or regulated environments",
+      "integrated with existing infrastructure"
+    ],
     "require_local_source": true
   },
   "editorial_quality": {

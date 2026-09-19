@@ -494,16 +494,19 @@ def test_graph_coverage_audit_expands_declared_system_member_lists():
     )
 
 
-def test_explicit_absence_claims_ignore_ordinary_negative_results():
+def test_evidence_limit_candidates_include_unquantified_empirical_passages():
     source = (
-        "The report does not include the numeric score. "
-        "The team did not change the model. "
-        "The result was published without independent verification."
+        "The report does not include the numeric score.\n\n"
+        "The team did not change the model.\n\n"
+        "The result was published without independent verification.\n\n"
+        "The benchmark rank improved from 30 to 5.\n\n"
+        "The lab reported a Recall at Five metric after evaluating OrbitBench."
     )
 
-    assert planner._explicit_absence_claims(source) == (
+    assert planner._evidence_limit_candidates(source) == (
         "The report does not include the numeric score.",
         "The result was published without independent verification.",
+        "The lab reported a Recall at Five metric after evaluating OrbitBench.",
     )
 
 
