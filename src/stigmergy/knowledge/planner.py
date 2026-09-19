@@ -362,7 +362,11 @@ class PydanticPlanner:
             step_requests = int(shape_run.model_requests)
             enrichment_requests += step_requests
             enrichment_schema_retries += max(0, step_requests - 1)
-            topology_violations = graph_topology_violations(shape_review, shape)
+            topology_violations = graph_topology_violations(
+                shape_review,
+                shape,
+                source_text=source_text,
+            )
             enrichment_budget = max_turns - reviewed_requests - enrichment_requests - 2
             if not topology_violations or enrichment_budget < 1:
                 break
@@ -425,7 +429,11 @@ class PydanticPlanner:
             used += step_requests
             remaining = max_turns - used
 
-        topology_violations = graph_topology_violations(shape_review, shape)
+        topology_violations = graph_topology_violations(
+            shape_review,
+            shape,
+            source_text=source_text,
+        )
         plan_violations = graph_shape_violations(shape, plan, source_path=source_path)
         while not topology_violations and plan_violations and remaining > 0:
             review_run = await self._run_structured(
@@ -663,6 +671,8 @@ def _graph_enrichment_prompt(
         "Run a separate loss audit before comparing subjects: scan every explicit source enumeration and "
         "confirm that each named framework member, capability, extension, result, benchmark, metric, and "
         "implementation detail assigned to a durable subject appears verbatim in that subject's required_terms. "
+        "Record every enumerated member as its own source span; never replace a list of named members with only "
+        "an umbrella term such as `extensions`, `components`, `examples`, or `capabilities`. "
         "Being an extension, example, passive technology, or non-entity means it should not become a separate "
         "page or entity; it does not permit dropping the term from the owning page.\n\n"
         "Before returning, compare every pair of subject inventories. If five or more required terms are "
@@ -861,6 +871,8 @@ def _graph_editorial_review_prompt(
 def graph_topology_violations(
     topology: GraphTopology,
     shape: GraphShape,
+    *,
+    source_text: str | None = None,
 ) -> tuple[str, ...]:
     """Reject enrichment that changes the reviewed editorial topology."""
     violations = []
@@ -895,6 +907,19 @@ def graph_topology_violations(
     }
     if actual_relations != expected_relations:
         violations.append("graph-enrichment changed reviewed existing-page relations")
+    if source_text is not None:
+        source_key = " ".join(resolution_key(source_text).split())
+        for subject in shape.subjects:
+            missing = sorted(
+                term
+                for term in subject.required_terms
+                if " ".join(resolution_key(term).split()) not in source_key
+            )
+            if missing:
+                violations.append(
+                    "graph-enrichment required terms are not contiguous source spans: "
+                    f"{subject.title}; missing={missing!r}"
+                )
     for subject in shape.subjects:
         required_terms = {resolution_key(term) for term in subject.required_terms}
         for entity in subject.entities:

@@ -436,6 +436,33 @@ def test_graph_enrichment_corrects_entity_evidence_missing_from_page_inventory()
     )
 
 
+def test_graph_enrichment_rejects_terms_not_copied_contiguously_from_source():
+    shape = _graph_shape()
+    topology = GraphTopology.model_validate(
+        {
+            "summary": shape.summary,
+            "subjects": [
+                subject.model_dump(exclude={"required_terms", "entities"})
+                for subject in shape.subjects
+            ],
+            "existing_relations": [
+                relation.model_dump(mode="json") for relation in shape.existing_relations
+            ],
+        }
+    )
+
+    violations = planner.graph_topology_violations(
+        topology,
+        shape,
+        source_text="The source names six capabilities and the runtime system.",
+    )
+
+    assert violations == (
+        "graph-enrichment required terms are not contiguous source spans: "
+        "Harness Engineering; missing=['extensions']",
+    )
+
+
 def test_graph_shape_gate_requires_local_citations_for_each_factual_block():
     source_path = "sources/2026/08/capture.md"
     body = (
