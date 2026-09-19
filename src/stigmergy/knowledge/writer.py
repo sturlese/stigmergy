@@ -36,6 +36,7 @@ from stigmergy.knowledge.lint import Violation, check
 from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
 from stigmergy.knowledge.plan import FilingPlan, PageMutation
 from stigmergy.knowledge.planner import Planner
+from stigmergy.knowledge.relationships import source_attributions
 from stigmergy.knowledge.repair import repair_deterministic
 from stigmergy.knowledge.sources import (
     SourceContractError,
@@ -1176,6 +1177,9 @@ def _apply_page_mutation(
         )
     )
     body = _preserve_contradictions(page.body, mutation.body or "")
+    missing_attributions = source_attributions(page.body) - source_attributions(body)
+    if missing_attributions:
+        raise KnowledgeWriteError("planned update drops existing local source attribution")
     rendered = render_page(
         path=destination,
         role=page.role,

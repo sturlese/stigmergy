@@ -48,8 +48,10 @@ class GraphEntity(BaseModel):
             min_length=1,
             max_length=500,
             description=(
-                "Source-grounded relationship sentence. For produced_evidence it must state the "
-                "concrete distinguishing result, not a generic attribution."
+                "Source-grounded relationship fact to express once in natural prose. For "
+                "produced_evidence it must state the concrete distinguishing result, not a generic "
+                "attribution. It may already contain the preferred name and must never be concatenated "
+                "with a second copy of that name."
             ),
         ),
     ]
@@ -205,10 +207,12 @@ class GraphSubject(GraphTopologySubject):
             min_length=1,
             max_length=30,
             description=(
-                "Exhaustive verbatim lexical inventory that the compiled page must preserve exactly, "
-                "including every explicitly enumerated framework member, named extension, and "
-                "distinguishing result assigned to the subject. For every produced_evidence entity, "
-                "include the source spans that distinguish what that identity demonstrated."
+                "Verbatim loss-prevention anchors that the compiled page must preserve naturally, not "
+                "an outline or output order. Include every explicitly enumerated framework member, "
+                "named extension, and distinguishing result material to the subject. The same anchor "
+                "may support related abstraction levels when each page needs it for a cold reader. For "
+                "every produced_evidence entity, include the source spans that distinguish what that "
+                "identity demonstrated."
             ),
         ),
     ]
@@ -357,19 +361,6 @@ def expected_graph_mutations(shape: GraphShape) -> tuple[dict[str, str | None], 
                 "title": None if path else subject.title,
             }
         )
-    for relation in shape.existing_relations:
-        if relation.relation != "distinct_related" or relation.path in covered_paths:
-            continue
-        operations.append(
-            {
-                "subject": PurePosixPath(relation.path).stem,
-                "action": "update",
-                "role": None,
-                "path": relation.path,
-                "title": None,
-            }
-        )
-        covered_paths.add(relation.path)
     return tuple(operations)
 
 

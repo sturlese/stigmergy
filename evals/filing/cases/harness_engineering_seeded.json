@@ -9,7 +9,7 @@
       "id": "page_eval_agent_harness",
       "role": "concept",
       "title": "Agent Harness",
-      "body": "# Agent Harness\n\nAn agent harness supplies the task loop, tools, feedback, and memory around a model. (Source: `{source_path}`)"
+      "body": "# Agent Harness\n\n## Definition\n\nAn agent harness is the control layer around a model. It supplies the task loop, tools, feedback, memory, context assembly, and execution environment needed to turn model output into reliable work. (Source: `{source_path}`)\n\n## How It Works\n\nThe harness routes tool calls, repeats act-observe cycles, manages context, applies permissions, handles errors and retries, and records telemetry. The prompt is the policy; the harness is the environment that enforces it. (Source: `{source_path}`)\n\n## Why It Matters\n\nMost failures that look like weak model reasoning can instead come from poor context, vague tools, weak feedback, or missing verification. Those are harness problems that can be changed without replacing the model. (Source: `{source_path}`)"
     }
   ],
   "mutations": {
@@ -65,6 +65,15 @@
     ],
     "forbidden": [],
     "require_local_source": true
+  },
+  "seeded_update": {
+    "path": "wiki/concepts/Agent Harness.md",
+    "preserve_terms": ["task loop", "tools", "feedback", "memory", "context assembly", "handles errors", "telemetry", "prompt is the policy"]
+  },
+  "editorial_quality": {
+    "min_explanatory_paragraphs": 2,
+    "reject_evidence_inventory_mirroring": true,
+    "reject_duplicate_entity_prefixes": true
   },
   "connections": [
     {"from": "Harness Engineering", "to": "Agent Harness", "reciprocal": true}

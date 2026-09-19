@@ -195,6 +195,20 @@ def test_graph_shape_derives_an_exact_title_update_without_collapsing_the_relate
     )
 
 
+def test_graph_shape_does_not_rewrite_a_context_page_only_to_make_a_link_reciprocal():
+    shape = _graph_shape().model_copy(update={"subjects": (_graph_shape().subjects[0],)})
+
+    assert expected_graph_mutations(shape) == (
+        {
+            "subject": "Harness Engineering",
+            "action": "create",
+            "role": "concept",
+            "path": None,
+            "title": "Harness Engineering",
+        },
+    )
+
+
 def test_graph_shape_rejects_same_subject_without_exact_title_identity():
     with pytest.raises(ValueError, match="exact normalized title match"):
         GraphShape(
@@ -360,7 +374,7 @@ def test_graph_shape_gate_rejects_term_dumps_and_duplicate_page_bodies():
     assert "duplicate-page-body:Harness Engineering:Agent Harness" in violations
 
 
-def test_graph_enrichment_rejects_evidence_copied_across_distinct_subjects():
+def test_graph_enrichment_allows_shared_evidence_across_distinct_abstraction_levels():
     harness, agent_harness = _graph_shape().subjects
     shared_terms = (
         "tools",
@@ -393,10 +407,7 @@ def test_graph_enrichment_rejects_evidence_copied_across_distinct_subjects():
 
     violations = planner.graph_topology_violations(topology, shape)
 
-    assert any(
-        violation.startswith("graph-enrichment duplicated evidence")
-        for violation in violations
-    )
+    assert violations == ()
 
 
 def test_graph_enrichment_corrects_entity_evidence_missing_from_page_inventory():
@@ -549,6 +560,56 @@ def test_graph_shape_gate_requires_local_citations_for_each_factual_block():
     assert planner._uncited_factual_blocks(body, source_path) == (
         "An uncited source-grounded definition.",
     )
+
+
+def test_graph_shape_gate_rejects_a_duplicated_entity_name_prefix():
+    plan = FilingPlan(
+        summary="Filed the practice and its related system.",
+        entities=(EntityProposal(name="Santi", entity_type="person", aliases=("@santi",)),),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Harness Engineering",
+                body=("# Harness Engineering\n\nThe six capabilities and extensions improve "
+                      "the [[Agent Harness]]. Santi (@santi) Santi authored the explanation."),
+                entities=("Santi",),
+                reason="Created the reusable practice.",
+            ),
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body="# Agent Harness\n\nThe runtime is improved through [[Harness Engineering]].",
+                reason="Added the reciprocal relationship.",
+            ),
+        ),
+    )
+
+    violations = planner.graph_shape_violations(_graph_shape(), plan)
+
+    assert "duplicate-entity-name:Harness Engineering:Santi" in violations
+
+
+def test_graph_compilation_prompt_allows_concise_shared_context_for_cold_readers():
+    prompt = planner._prompt(
+        envelope=_envelope(),
+        source_path="sources/2026/08/capture.md",
+        source_text="Harness Engineering improves an Agent Harness.",
+        context='{"candidates": []}',
+        graph_shape=_graph_shape(),
+    )
+
+    assert "may repeat concise source-supported context needed for a cold reader" in prompt
+
+
+def test_update_graph_gate_accepts_a_preserved_distinct_local_source_citation():
+    prior_source = "sources/2026/07/prior.md"
+
+    assert planner._uncited_factual_blocks(
+        f"Prior supported context. (Source: `{prior_source}`)",
+        "sources/2026/08/current.md",
+        allow_any_source=True,
+    ) == ()
 
 
 def test_cited_list_supports_its_lead_in_but_not_an_uncited_sibling_item():

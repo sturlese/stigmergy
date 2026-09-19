@@ -4,6 +4,14 @@
   "source_title": "Decision Trace Quality",
   "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000002.md",
   "fixture_path": "../fixtures/decision_trace_quality.md",
+  "seed_pages": [
+    {
+      "id": "page_eval_agent_harness",
+      "role": "concept",
+      "title": "Agent Harness",
+      "body": "# Agent Harness\n\nAn agent harness supplies the task loop, tools, feedback, and memory around a model. (Source: `{source_path}`)"
+    }
+  ],
   "mutations": {
     "min_count": 1,
     "max_count": 4,
@@ -48,5 +56,12 @@
     "required": ["decision trace quality"],
     "forbidden": [],
     "require_local_source": true
-  }
+  },
+  "editorial_quality": {
+    "require_epistemic_caveat": true,
+    "min_explanatory_paragraphs": 2
+  },
+  "connections": [
+    {"from": "Decision Trace Quality", "to": "Agent Harness", "reciprocal": false}
+  ]
 }

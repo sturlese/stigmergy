@@ -51,6 +51,11 @@ class EditorialFixturePlanner(ScriptedPlanner):
         if not isinstance(plan, FilingPlan):
             return run
         source = str(kwargs["source_path"])
+        context = json.loads(str(kwargs["context"]))
+        prior_sources = {
+            candidate["path"]: tuple(candidate.get("sources", ()))
+            for candidate in context.get("candidates", ())
+        }
         names_by_reference = {
             reference: proposal.name
             for proposal in plan.entities
@@ -65,6 +70,7 @@ class EditorialFixturePlanner(ScriptedPlanner):
                     for reference in mutation.entities or ()
                     if not reference.startswith("ent_")
                 ),
+                prior_sources=prior_sources.get(mutation.path or "", ()),
             )
             for mutation in plan.mutations
         )
@@ -72,7 +78,11 @@ class EditorialFixturePlanner(ScriptedPlanner):
 
 
 def _editorial_fixture_mutation(
-    mutation: PageMutation, *, source: str, entity_names: tuple[str, ...]
+    mutation: PageMutation,
+    *,
+    source: str,
+    entity_names: tuple[str, ...],
+    prior_sources: tuple[str, ...],
 ) -> PageMutation:
     if mutation.action not in {"create", "update"} or not mutation.body:
         return mutation
@@ -105,6 +115,9 @@ def _editorial_fixture_mutation(
         body += f"\n\n{relationships} (Source: `{source}`)"
     elif source not in body:
         body += f"\n\n(Source: `{source}`)"
+    for prior_source in prior_sources:
+        if prior_source not in body:
+            body += f"\n\n(Source: `{prior_source}`)"
     return mutation.model_copy(update={"body": body})
 
 

@@ -84,5 +84,10 @@
     ],
     "forbidden": ["ReAct is an entity"],
     "require_local_source": true
+  },
+  "editorial_quality": {
+    "min_explanatory_paragraphs": 2,
+    "reject_evidence_inventory_mirroring": true,
+    "reject_duplicate_entity_prefixes": true
   }
 }

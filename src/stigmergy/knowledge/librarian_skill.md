@@ -65,8 +65,9 @@ reuse. Choose the graph shape in this order:
    stable name, mechanism, significance, concrete evidence or examples, and likely future reuse. A
    grouping heading, one-off benchmark, provenance label, or category inferred from examples remains
    in the parent page.
-5. Preserve useful pages at other abstraction levels. If this plan mutates two related pages, explain
-   the relationship in both and link them reciprocally.
+5. Preserve useful pages at other abstraction levels. If this plan independently needs to mutate two
+   related pages, explain the relationship in both and link them reciprocally. Link a visible related
+   context page from the changed page without updating it solely to manufacture a reverse link.
 
 Ask of every proposed page: would it remain useful if its supporting paragraph disappeared from the
 parent? If not, keep it as a section or prose. Delete only a semantic duplicate at the same abstraction
@@ -74,11 +75,13 @@ level with no independently durable meaning. Never collapse distinct concepts me
 overlap.
 
 Related pages at different conceptual levels are not duplicates. Preserve the lower-level page, update
-its distinct definition, and link both pages reciprocally. Delete only a true semantic duplicate, and
+its distinct definition, and link both pages reciprocally when both need substantive changes. Delete
+only a true semantic duplicate, and
 never delete merely because pages overlap or because a new page is broader. Treat a source-defined
 reusable discipline, framework, or method as a first-class page candidate. When it differs in abstraction
 from an existing lower-level artifact, system, or component, preserve both: create or update each as
-needed and link them reciprocally. Never collapse one into the other merely to reuse an existing page.
+needed and link them reciprocally when both are changed for their own knowledge. Never collapse one
+into the other merely to reuse an existing page.
 A source-named central concept belongs in one central page. Split a child page only when it independently
 has a stable name, mechanism, significance, concrete evidence, and plausible future reuse.
 
@@ -123,6 +126,8 @@ Hippocampus-style structure to the subject rather than writing a label or synops
 
 Preserve each complete named or enumerated framework and every example's distinguishing material detail;
 do not reduce a six-part mechanism to generic bullets or turn a measured result into generic prose.
+Treat any supplied lexical inventory as loss-prevention evidence, never as the page outline or output
+order. Synthesize it into an explanation that gives a cold reader a useful mental model.
 Every newly added or changed factual conclusion needs the exact supplied local source path in the same
 paragraph or bullet:
 `(Source: `sources/YYYY/MM/<capture-id>.md`)`. Copy `source_path` exactly. Never substitute a title,
@@ -130,10 +135,21 @@ URL, label, or guessed path. A citation supports only claims the source entails;
 vendors, ownership, capabilities, definitions, comparisons, causes, and general knowledge. Preserve
 existing sourced conclusions unless the new evidence explicitly corrects or supersedes them.
 
-When related pages use the same source, each page must still stand on its own: retain the concrete
-examples, measurements, and material authorship that support that page instead of weakening one page
-to a generic cross-reference. Tailor the explanation to that page's subject rather than duplicating
-the other page verbatim.
+For an update, treat the visible existing body as knowledge rather than a title-matching hint. Preserve
+or improve its useful definitions, mechanisms, examples, relationships, and exact local citations.
+Silence in the latest capture never authorizes forgetting prior knowledge. If new evidence corrects a
+claim, retain the prior evidence as explicitly superseded or conflicting context rather than silently
+erasing its attribution.
+
+When related pages use the same source, each page must still stand on its own. They may repeat concise
+source-supported context needed for a cold reader, while framing detailed mechanisms, examples, and
+measurements for the abstraction that page explains. Evidence ownership must not starve one page into a
+generic cross-reference, and shared context must not become duplicated prose.
+
+State material evidence limits. Mark reported examples as source-reported when they are not independently
+verified. If a source names an evaluation but omits scores, thresholds, or procedure detail, say so rather
+than implying that the missing result exists. Distinguish source claims from relationships inferred from
+visible graph context. Never write `None currently`; omit an empty Connections section.
 
 Use wikilinks only for visible normal note/concept pages with a material semantic relationship.
 Explain the relationship in prose. Before emitting `[[Title]]`, verify that exact title is a visible
@@ -207,7 +223,8 @@ Before returning the plan, verify:
    page-specific, individually cited relationship; the mutation's entity list contains no other name,
    and no generic term or provenance token became an entity. Confirm no material author or actor was
    dropped, and no provenance token became a page or entity.
-6. Every wikilink resolves to a visible normal page or one created by this plan; related mutated pages
-   have reciprocal links, conflicts are explicit, and all action fields are valid.
+6. Every wikilink resolves to a visible normal page or one created by this plan; pages independently
+   mutated by the plan have reciprocal links, context-only links do not force unrelated rewrites,
+   conflicts are explicit, and all action fields are valid.
 7. In recompile mode every prior path is accounted for; otherwise recompile rules had no effect.
 8. The summary matches the final plan exactly.

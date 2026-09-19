@@ -82,6 +82,11 @@ def _decision_trace_plan(*, entities=(), links=()):
                     "# Decision Trace Quality\n\nDecision trace quality records the evidence behind "
                     "a decision so later readers can inspect the result. Mira Chen authored the method "
                     "and Northstar Signal Lab measured its use. (Source: "
+                    "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)\n\n"
+                    "The source identifies rationale, considered inputs, and observed outcome as the trace, "
+                    "but does not report a score or a review procedure for deciding whether one is sufficient. "
+                    "It is therefore useful as a review lens for an [[Agent Harness]], not a reported quality "
+                    "threshold. (Source: "
                     "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)"
                 ),
                 entities=tuple(links),
@@ -110,6 +115,37 @@ def test_decision_trace_quality_requires_the_author_and_attributed_organization(
     assert result["external_ids"]["found"] == []
     assert result["link_coverage"]["unlinked_proposals"] == []
     assert result["passed"] is True, result
+
+
+def test_decision_trace_quality_rejects_an_uncaveated_source_claim():
+    case = planner_eval.load_case(DECISION_TRACE_CASE)
+    plan = _decision_trace_plan(
+        entities=("Mira Chen", "Northstar Signal Lab"),
+        links=("Mira Chen", "Northstar Signal Lab"),
+    )
+    uncaveated = plan.model_copy(
+        update={
+            "mutations": (
+                plan.mutations[0].model_copy(
+                    update={
+                        "body": plan.mutations[0].body.replace(
+                            "but does not report a score or a review procedure for deciding whether one is sufficient. "
+                            "It is therefore useful as a review lens for an ",
+                            "and provides a general quality score for an ",
+                        )
+                    }
+                ),
+            )
+        }
+    )
+
+    result = planner_eval.score(
+        uncaveated,
+        case,
+        source_text=DECISION_TRACE_FIXTURE.read_text(encoding="utf-8"),
+    )
+
+    assert result["passed"] is False
 
 
 @pytest.mark.parametrize(
@@ -216,9 +252,13 @@ def test_seeded_harness_case_requires_two_reciprocally_connected_reusable_pages(
             ),
             PageMutation(
                 action="update", path="wiki/concepts/Agent Harness.md", title="Ignored model label",
-                body=("# Agent Harness\n\nAn agent harness is the operating layer enriched by "
-                      "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain illustrate its "
-                      f"leverage. (Source: `{source}`)"),
+                body=("# Agent Harness\n\nAn agent harness preserves the task loop, tools, feedback, and "
+                      "memory around a model, including context assembly, error handling, and telemetry. "
+                      "The prompt is the policy; the harness is the environment. [[Harness Engineering]] "
+                      f"is the practice that improves that operating layer. (Source: `{source}`)\n\n"
+                      "The harness handles errors and retries rather than delegating execution reliability "
+                      f"to the model. (Source: `{source}`)\n\nSanti, OpenAI, Anthropic, and LangChain "
+                      f"illustrate the leverage of changing the harness rather than the model. (Source: `{source}`)"),
                 entities=("Santi", "OpenAI", "Anthropic", "LangChain"), reason="Existing concept gains evidence.",
             ),
         ),
@@ -230,6 +270,40 @@ def test_seeded_harness_case_requires_two_reciprocally_connected_reusable_pages(
     assert result["bodies"]["passed"] is True
     assert result["entity_relationships"]["passed"] is True
     assert result["passed"] is True
+
+
+def test_seeded_harness_score_rejects_an_update_that_forgets_the_safe_existing_context():
+    case = planner_eval.load_case(SEEDED_CASE)
+    source = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
+    identities = tuple(
+        EntityProposal(name=name, entity_type="organization")
+        for name in ("Santi", "OpenAI", "Anthropic", "LangChain")
+    )
+    plan = FilingPlan(
+        summary="Created the central discipline while thinning the existing system page.",
+        entities=identities,
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Harness Engineering",
+                body=HARNESS_BODY,
+                entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
+                reason="Created the source-named central discipline.",
+            ),
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=("# Agent Harness\n\n[[Harness Engineering]] improves the operating layer around a "
+                      f"model. (Source: `{source}`)"),
+                reason="Added the reciprocal relationship while replacing the existing explanation.",
+            ),
+        ),
+    )
+
+    result = planner_eval.score(plan, case)
+
+    assert result["passed"] is False
 
 
 def test_seeded_evaluation_worktree_exposes_the_real_candidate_and_runs_writer_gates():
@@ -290,6 +364,44 @@ def test_harness_score_requires_the_complete_framework_not_a_generic_summary():
     assert "capability: tools" in result["bodies"]["missing_required_any"]
     assert "trust: evals" in result["bodies"]["missing_required_any"]
     assert "author attribution" in result["bodies"]["missing_required_any"]
+    assert result["passed"] is False
+
+
+def test_harness_score_rejects_a_required_evidence_inventory_without_explanatory_synthesis():
+    case = planner_eval.load_case(CASE)
+    identities = ("Santi", "OpenAI", "Anthropic", "LangChain")
+    raw_inventory = (
+        "# Harness Engineering\n\n"
+        "- A model alone is not an agentic system; the model and [[Agent Harness]] "
+        f"are distinct. (Source: `{SOURCE}`)\n"
+        "- Tools request actions; a loop repeats decide, act, observe; memory/state preserves work; "
+        "context selection chooses what the model sees; a working environment is an isolated workspace; "
+        "and a clear objective and verification establish acceptance criteria. "
+        f"(Source: `{SOURCE}`)\n"
+        f"- Permissions and limits, observability, and evals are trust capabilities. (Source: `{SOURCE}`)\n"
+        f"- Skills, MCP, subagents, and long-term memory are extensions. (Source: `{SOURCE}`)\n"
+        f"- Santi (@santtiagom_) authored the explanation. (Source: `{SOURCE}`)\n"
+        f"- OpenAI built one million lines and 1,500 pull requests. (Source: `{SOURCE}`)\n"
+        f"- LangChain rose from rank 30 to the top 5 on Terminal Bench. (Source: `{SOURCE}`)\n"
+        f"- Anthropic showed a polished but broken application and a working app. (Source: `{SOURCE}`)"
+    )
+    plan = FilingPlan(
+        summary="Copied the source inventory into a page.",
+        entities=tuple(EntityProposal(name=name, entity_type="organization") for name in identities),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="concept",
+                title="Harness Engineering",
+                body=raw_inventory,
+                entities=identities,
+                reason="Filed every required term without synthesizing it.",
+            ),
+        ),
+    )
+
+    result = planner_eval.score(plan, case)
+
     assert result["passed"] is False
 
 
@@ -487,12 +599,17 @@ def test_seeded_harness_score_uses_the_update_path_not_model_create_fields():
             PageMutation(
                 action="update",
                 path="wiki/concepts/Agent Harness.md",
-                role="note",
-                title="Incorrect model title",
-                body=(
-                    "# Agent Harness\n\nAn agent harness is the artifact designed and improved by "
-                    "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain provide the "
-                    f"source evidence for that relationship. (Source: `{SOURCE}`)"
+                    role="note",
+                    title="Incorrect model title",
+                    body=(
+                        "# Agent Harness\n\n## Definition\n\nAn agent harness preserves the task loop, "
+                        "tools, feedback, memory, and context assembly around a model. "
+                        f"(Source: `{SOURCE}`)\n\n## How It Works\n\nThe harness handles errors and "
+                        "retries and records telemetry. The prompt is the policy for execution. "
+                        "[[Harness Engineering]] is the practice that improves this environment. "
+                        f"(Source: `{SOURCE}`)\n\n## Evidence and Examples\n\nSanti, OpenAI, "
+                        "Anthropic, and LangChain provide source evidence for the relationship. "
+                        f"(Source: `{SOURCE}`)"
                 ),
                 entities=("Santi", "OpenAI", "Anthropic", "LangChain"),
                 reason="Added the reciprocal relationship to the central discipline.",
@@ -1226,9 +1343,14 @@ def test_production_equivalent_worktree_revises_a_visible_page_draft_before_scor
         action="update",
         path="wiki/concepts/Agent Harness.md",
         body=(
-            "# Agent Harness\n\nThe [[Agent Harness]] implements the broader "
-            "[[Harness Engineering]] discipline. Santi, OpenAI, LangChain, and Anthropic "
-            f"provide the source-backed evidence. (Source: `{SOURCE}`)"
+            "# Agent Harness\n\n## Definition\n\nAn agent harness preserves the task loop, "
+            "tools, feedback, memory, and context assembly around a model. "
+            f"(Source: `{SOURCE}`)\n\n## How It Works\n\nThe harness handles errors and retries, "
+            "records telemetry, and enforces an execution environment where the prompt is the policy. "
+            "[[Harness Engineering]] is the practice that improves this system. "
+            f"(Source: `{SOURCE}`)\n\n## Evidence and Examples\n\nSanti, OpenAI, "
+            "LangChain, and Anthropic provide the source-backed evidence. "
+            f"(Source: `{SOURCE}`)"
         ),
         entities=entities,
         reason="Preserved the lower-level operational concept.",

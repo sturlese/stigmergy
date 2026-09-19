@@ -86,7 +86,7 @@ def _changed_paths(repo, commit_sha):
 def test_visible_update_uses_full_semantic_revision_before_application(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     actor = Actor(subject="marc", display_name="Marc")
-    _seed_page(
+    prior_source = _seed_page(
         clean_queue,
         target_repo,
         store,
@@ -130,14 +130,18 @@ def test_visible_update_uses_full_semantic_revision_before_application(clean_que
                 entities=(),
                 reason="The source defines a broader reusable discipline.",
             ),
-            PageMutation(
-                action="update",
-                path="wiki/concepts/Agent Harness.md",
-                body=_body(
-                    "Agent Harness",
-                    "The [[Agent Harness]] implements the broader [[Harness Engineering]] discipline.",
-                    source,
-                ),
+                PageMutation(
+                    action="update",
+                    path="wiki/concepts/Agent Harness.md",
+                    body=(
+                        _body(
+                            "Agent Harness",
+                            "The [[Agent Harness]] implements the broader [[Harness Engineering]] discipline.",
+                            source,
+                        )
+                        + "\n\nAn agent harness remains the lower-level operational system around a "
+                        f"model. (Source: `{prior_source}`)"
+                    ),
                 reason="The lower-level system remains independently reusable.",
             ),
         ),
@@ -161,6 +165,67 @@ def test_visible_update_uses_full_semantic_revision_before_application(clean_que
     assert "Harness Engineering" in subprocess.check_output(
         ["git", "show", "main:wiki/concepts/Harness Engineering.md"], cwd=target_repo, text=True
     )
+
+
+def test_semantic_revision_preserves_an_existing_paragraph_with_its_distinct_source(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    actor = Actor(subject="marc", display_name="Marc")
+    original_text = "The existing harness keeps a durable feedback loop for diagnosing failures."
+    original_source = _seed_page(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="semantic-revision-preserve-prior-source",
+        title="Agent Harness",
+        text=original_text,
+    )
+    _receipt, current_source = _capture(
+        clean_queue,
+        store,
+        actor=actor,
+        audience=None,
+        key="semantic-revision-preserve-current-source",
+        text="Harness engineering improves the agent harness through source-backed evaluation.",
+    )
+    draft = FilingPlan(
+        summary="Replaced an existing page with the current capture only.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=_body("Agent Harness", "The current capture adds source-backed evaluation.", current_source),
+                reason="The current capture changes the existing concept.",
+            ),
+        ),
+    )
+    revision = FilingPlan(
+        summary="Retained the update while dropping independently supported history.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=_body(
+                    "Agent Harness",
+                    "The current capture adds source-backed evaluation to the system.",
+                    current_source,
+                ),
+                reason="The current capture changes the existing concept.",
+            ),
+        ),
+    )
+
+    _item, outcome = _process(clean_queue, target_repo, store, RevisionPlanner(draft, revision))
+
+    assert outcome.status == schema.LANDED
+    page = subprocess.check_output(
+        ["git", "show", "main:wiki/concepts/Agent Harness.md"], cwd=target_repo, text=True
+    )
+    assert original_text in page
+    assert f"(Source: `{original_source}`)" in page
 
 
 def test_pure_create_does_not_invoke_semantic_revision(clean_queue, target_repo):
@@ -331,12 +396,12 @@ def test_visible_update_fails_closed_when_the_draft_consumes_the_request_budget(
         def revise(self, **_kwargs):
             raise AssertionError("no additional model request is permitted")
 
-    planner = ExhaustedPlanner(draft, draft, planning_requests=8)
+    planner = ExhaustedPlanner(draft, draft, planning_requests=10)
     item, outcome = _process(clean_queue, target_repo, store, planner)
 
     assert outcome.status == schema.LANDED
     assert planner.revision_calls == []
-    assert item["report"]["model_requests"] == 8
+    assert item["report"]["model_requests"] == 10
     assert item["report"]["plan_rejection"] == "semantic revision budget exhausted"
     assert _changed_paths(target_repo, item["commit_sha"]) == [source]
 

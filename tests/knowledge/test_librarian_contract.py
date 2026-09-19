@@ -255,7 +255,7 @@ def test_librarian_preserves_related_pages_at_distinct_conceptual_levels():
     text = " ".join(FROZEN.read_text().casefold().split())
     assert "related pages at different conceptual levels" in text
     assert "are not duplicates" in text
-    assert "update its distinct definition, and link both pages reciprocally" in text
+    assert "update its distinct definition, and link both pages reciprocally when both need substantive changes" in text
     assert "delete only a true semantic duplicate" in text
     assert "never delete merely because pages overlap or because a new page is broader" in text
 
@@ -340,7 +340,10 @@ def test_librarian_requires_full_frameworks_and_keeps_entity_anchors_out_of_wiki
         "split a child page only when it independently has a stable name, mechanism, significance",
         "treat a source-defined reusable discipline, framework, or method as a first-class page candidate",
         "differs in abstraction from an existing lower-level artifact, system, or component",
-        "preserve both: create or update each as needed and link them reciprocally",
+        (
+            "preserve both: create or update each as needed and link them reciprocally when both are changed "
+            "for their own knowledge"
+        ),
         "never collapse one into the other merely to reuse an existing page",
         "use wikilinks only for visible normal note/concept pages",
         "never use entity names as wikilinks",

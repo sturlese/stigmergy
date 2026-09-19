@@ -113,9 +113,13 @@ def _plan(case_id: str, *, passing: bool) -> FilingPlan:
                     title="Decision Trace Quality",
                     body=(
                         "# Decision Trace Quality\n\nDecision trace quality records the evidence behind "
-                        "a decision with a concise rationale so later readers can inspect the result. "
-                        "Mira Chen introduced the method "
-                        "and Northstar Signal Lab measured Recall at Five. (Source: "
+                        "a decision with a concise rationale so later readers can inspect and reproduce "
+                        "the result. It reviews the decisions made by an [[Agent Harness]] rather than "
+                        "describing that operational system itself. (Source: "
+                        "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)\n\n"
+                        "Mira Chen introduced the method, and Northstar Signal Lab measured Recall at "
+                        "Five. The source does not report a threshold, methodology, or independent "
+                        "verification for that result. (Source: "
                         "`sources/2026/09/00000000-0000-4000-8000-000000000002.md`)"
                     ),
                     entities=("Mira Chen", "Northstar Signal Lab"),
@@ -151,6 +155,9 @@ def _plan(case_id: str, *, passing: bool) -> FilingPlan:
                     body=(
                         "# Agent Harness\n\nAn agent harness is the operational system around a model. "
                         "It is designed and improved through [[Harness Engineering]]. "
+                        f"(Source: `{SOURCE}`)\n\n"
+                        "Its loop, tools, state, context selection, workspace, and verification turn "
+                        "model choices into repeatable work rather than leaving them as text alone. "
                         f"(Source: `{SOURCE}`)"
                     ),
                     entities=(),
@@ -167,9 +174,13 @@ def _plan(case_id: str, *, passing: bool) -> FilingPlan:
                 action="update",
                 path="wiki/concepts/Agent Harness.md",
                 body=(
-                    "# Agent Harness\n\nAn [[Agent Harness]] is the operating layer enriched by "
-                    "[[Harness Engineering]]. Santi, OpenAI, Anthropic, and LangChain illustrate its "
-                    f"leverage. (Source: `{SOURCE}`)"
+                    "# Agent Harness\n\nAn [[Agent Harness]] is the operating layer improved by "
+                    "[[Harness Engineering]]. Its task loop uses tools, memory, and context assembly "
+                    "to turn model output into work while the prompt is the policy. "
+                    f"(Source: `{SOURCE}`)\n\n"
+                    "A capable harness handles errors through feedback and exposes telemetry so its "
+                    "behavior can be inspected and evaluated across repeated tasks. "
+                    f"(Source: `{SOURCE}`)"
                 ),
                 entities=(),
                 reason="Existing concept gains evidence.",

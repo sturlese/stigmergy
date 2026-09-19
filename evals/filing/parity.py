@@ -62,6 +62,8 @@ REQUIRED_SEMANTIC_GATES = frozenset(
         "entity_relationships",
         "entity_wikilinks",
         "anti_fragmentation",
+        "editorial_quality",
+        "seeded_update",
         "graph_shape",
         "writer",
     }

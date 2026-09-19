@@ -12,6 +12,11 @@ _SOURCE_ATTRIBUTION = re.compile(
 )
 
 
+def source_attributions(body: str) -> frozenset[str]:
+    """Return the canonical local sources cited by a page body."""
+    return frozenset(match["path"] for match in _SOURCE_ATTRIBUTION.finditer(body))
+
+
 def has_entity_relationship_evidence(
     body: str,
     visible_name: str,
@@ -43,4 +48,4 @@ def _normalized(value: str) -> str:
 
 
 def _has_declared_attribution(paragraph: str, source_paths: frozenset[str]) -> bool:
-    return any(match["path"] in source_paths for match in _SOURCE_ATTRIBUTION.finditer(paragraph))
+    return bool(source_attributions(paragraph) & source_paths)

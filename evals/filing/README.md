@@ -25,6 +25,12 @@ exposes it; provider fields are never inferred. Schema v4 is obsolete because it
 agent-authored topology, enriched graph shape, editorial review, or their phase telemetry. Schema v5 is
 a clean cut: older evidence is not replayable admission evidence and must be rerun.
 
+Case contracts also score editorial quality that structural coverage alone cannot prove. They can require
+multiple explanatory paragraphs, explicit evidence limits, preservation of named seeded knowledge, useful
+contextual connections, and rejection of raw evidence inventories or duplicated entity-name prefixes.
+These gates complement rather than replace the blind review: deterministic checks catch known regressions,
+while the anonymous comparison remains the release authority for overall cold-read and reuse quality.
+
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use the production Cerebras route, medium reasoning,
 and a bounded ten-request ceiling. A healthy graph-shaped capture uses six requests; the remaining

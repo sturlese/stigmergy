@@ -59,6 +59,8 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
     )
     entity_wikilink_score = _entity_wikilinks(case, mutations, candidates)
     anti_fragmentation_score = _anti_fragmentation(case, mutations)
+    editorial_quality_score = _editorial_quality(case, plan)
+    seeded_update_score = _seeded_update(case, mutations)
     coverage_score = _link_coverage(
         _proposal_names(plan),
         {
@@ -86,6 +88,8 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
             entity_relationship_score,
             entity_wikilink_score,
             anti_fragmentation_score,
+            editorial_quality_score,
+            seeded_update_score,
             coverage_score,
             resolution_score,
         )
@@ -104,6 +108,8 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
         "entity_relationships": entity_relationship_score,
         "entity_wikilinks": entity_wikilink_score,
         "anti_fragmentation": anti_fragmentation_score,
+        "editorial_quality": editorial_quality_score,
+        "seeded_update": seeded_update_score,
     }
 
 
@@ -422,6 +428,110 @@ def _placeholder_body(body: str) -> bool:
     alphanumeric = re.sub(r"[^A-Za-z0-9]", "", prose)
     return not prose or len(alphanumeric) < 32 or bool(
         re.search(r"\b(?:todo|tbd|placeholder|to be written|coming soon)\b", prose, re.I)
+    )
+
+
+def _editorial_quality(case: dict, plan: FilingPlan) -> dict:
+    expectation = case.get("editorial_quality", {})
+    mutations = tuple(mutation for mutation in plan.mutations if mutation.action != "delete")
+    minimum = int(expectation.get("min_explanatory_paragraphs", 0))
+    paragraph_counts = {
+        _mutation_label(mutation): _explanatory_paragraph_count(mutation.body or "")
+        for mutation in mutations
+    }
+    thin_pages = sorted(title for title, count in paragraph_counts.items() if count < minimum)
+    combined = "\n".join(mutation.body or "" for mutation in mutations)
+    missing_caveat = bool(expectation.get("require_epistemic_caveat")) and not re.search(
+        r"\b(?:does\s+not\s+(?:report|provide|specify)|no\s+(?:score|scores|result|results|"
+        r"threshold|thresholds|procedure|methodology)\s+(?:is|are|was|were)?\s*(?:reported|provided|"
+        r"specified)|not\s+independently\s+verified|source[- ]reported|source\s+(?:omits|gives\s+no|"
+        r"provides\s+no))\b",
+        combined,
+        flags=re.IGNORECASE,
+    )
+    inventory_pages = []
+    if expectation.get("reject_evidence_inventory_mirroring"):
+        inventory_pages = sorted(
+            _mutation_label(mutation)
+            for mutation in mutations
+            if _looks_like_evidence_inventory(mutation.body or "")
+        )
+    duplicate_prefixes = []
+    if expectation.get("reject_duplicate_entity_prefixes"):
+        for mutation in mutations:
+            for proposal in plan.entities:
+                if _duplicated_name(mutation.body or "", proposal.name):
+                    duplicate_prefixes.append(
+                        {"mutation": _mutation_label(mutation), "entity": proposal.name}
+                    )
+    return {
+        "explanatory_paragraphs": paragraph_counts,
+        "thin_pages": thin_pages,
+        "missing_epistemic_caveat": missing_caveat,
+        "inventory_pages": inventory_pages,
+        "duplicate_entity_prefixes": duplicate_prefixes,
+        "passed": not thin_pages
+        and not missing_caveat
+        and not inventory_pages
+        and not duplicate_prefixes,
+    }
+
+
+def _seeded_update(case: dict, mutations: tuple[PageMutation, ...]) -> dict:
+    expectation = case.get("seeded_update")
+    if not expectation:
+        return {"required": False, "missing_terms": [], "passed": True}
+    path = str(expectation["path"])
+    mutation = next(
+        (item for item in mutations if item.action == "update" and item.path == path),
+        None,
+    )
+    body = _normalized_text("" if mutation is None else mutation.body or "")
+    missing = [
+        str(term)
+        for term in expectation.get("preserve_terms", ())
+        if _normalized_text(term) not in body
+    ]
+    return {
+        "required": True,
+        "path": path,
+        "missing_terms": missing,
+        "passed": mutation is not None and not missing,
+    }
+
+
+def _explanatory_paragraph_count(body: str) -> int:
+    count = 0
+    for block in re.split(r"\n\s*\n", body):
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines or all(line.startswith("#") for line in lines):
+            continue
+        if all(re.match(r"^(?:[-*+]|\d+[.)])\s+", line) for line in lines):
+            continue
+        prose = re.sub(r"\(Source:\s*`[^`]+`\)", "", " ".join(lines), flags=re.I)
+        prose = re.sub(r"[#*_`]", "", prose)
+        if len(re.findall(r"\b\w+\b", prose, flags=re.UNICODE)) >= 12:
+            count += 1
+    return count
+
+
+def _looks_like_evidence_inventory(body: str) -> bool:
+    listed = sum(
+        1
+        for line in body.splitlines()
+        if re.match(r"^\s*(?:[-*+]|\d+[.)])\s+", line)
+    )
+    return listed >= 4 and _explanatory_paragraph_count(body) < 2
+
+
+def _duplicated_name(body: str, name: str) -> bool:
+    escaped = re.escape(name)
+    return bool(
+        re.search(
+            rf"(?<!\w){escaped}(?!\w)(?:\s*\([^\n)]*\))?\s+{escaped}(?!\w)",
+            body,
+            flags=re.IGNORECASE,
+        )
     )
 
 
