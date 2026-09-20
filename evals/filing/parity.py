@@ -58,6 +58,7 @@ REQUIRED_SEMANTIC_GATES = frozenset(
         "bodies",
         "connections",
         "entity_relationships",
+        "entity_editorial_quality",
         "entity_wikilinks",
         "anti_fragmentation",
         "editorial_quality",

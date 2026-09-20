@@ -160,6 +160,11 @@ def _run_deploy(
             payload["stigmergy_commit"] = "a" * 40
         elif parity_artifact == "mismatched":
             payload["librarian_skill_sha256"] = "b" * 64
+        elif parity_artifact == "minimal-reasoning":
+            payload["runs"] = json.loads(json.dumps(payload["runs"]))
+            for run in payload["runs"]:
+                if run["implementation"] == "stigmergy":
+                    run["runtime"]["reasoning_level"] = "minimal"
         artifact.write_text(json.dumps(payload), encoding="utf-8")
         env["STIGMERGY_PARITY_ARTIFACT"] = str(artifact)
     if dirty_platform:
@@ -481,6 +486,78 @@ def _plan_for_case(case_id: str) -> FilingPlan:
                 ),
             ),
         )
+    if case_id == "meeting_entity_quality":
+        entities = (
+            EntityProposal(
+                name="Helio Stack",
+                entity_type="organization",
+                description=(
+                    "An early-stage product tool that helps teams compare candidate product directions "
+                    "using recorded customer evidence."
+                ),
+                facts=(
+                    "On 2026-09-20, its founders reviewed the evaluation workflow with engineering "
+                    "and customer-research leads.",
+                ),
+            ),
+            EntityProposal(
+                name="Maya Ortiz",
+                entity_type="person",
+                description="A founder of Helio Stack.",
+                facts=(
+                    "On 2026-09-20, she and Leon Park committed to decide whether the workflow is ready "
+                    "for a first customer pilot after reviewing the materials.",
+                ),
+            ),
+            EntityProposal(
+                name="Leon Park",
+                entity_type="person",
+                description="A founder of Helio Stack.",
+                facts=(
+                    "On 2026-09-20, he and Maya Ortiz committed to decide whether the workflow is ready "
+                    "for a first customer pilot after reviewing the materials.",
+                ),
+            ),
+            EntityProposal(
+                name="Noor Balan",
+                entity_type="person",
+                description="The engineering lead working with Helio Stack.",
+                facts=("On 2026-09-20, Noor committed to run the next evaluation cycle by 2026-10-01.",),
+            ),
+            EntityProposal(
+                name="Priya Sen",
+                entity_type="person",
+                description="The customer research lead working with Helio Stack.",
+                facts=(
+                    "On 2026-09-20, Priya committed to provide five interview summaries before the "
+                    "next review.",
+                ),
+            ),
+        )
+        return FilingPlan(
+            summary="Recorded the Helio Stack product review and participant commitments.",
+            entities=entities,
+            mutations=(
+                PageMutation(
+                    action="create",
+                    role="note",
+                    title="Helio Stack product review",
+                    body=(
+                        "# Helio Stack product review\n\nOn 2026-09-20, Maya Ortiz and Leon Park "
+                        "reviewed Helio Stack's evaluation workflow with Noor Balan and Priya Sen. Noor "
+                        "will run the next evaluation cycle by 2026-10-01, Priya will provide five interview "
+                        "summaries, and the founders will then decide whether the workflow is ready for a "
+                        "first customer pilot. (Source: `sources/2026/09/00000000-0000-4000-8000-000000000003.md`)\n\n"
+                        "The meeting links current operating work to AI-assisted Founder Evaluation while "
+                        "retaining the prior source for the founders' established roles. SignalBoard only "
+                        "organized notes and is not part of the product or operating work. (Source: "
+                        "`sources/2026/09/00000000-0000-4000-8000-000000000003.md`)"
+                    ),
+                    entities=tuple(entity.name for entity in entities),
+                    reason="The meeting records a dated operating decision and commitments.",
+                ),
+            ),
+        )
     entities = (
         EntityProposal(
             name="Santi",
@@ -660,6 +737,7 @@ def _parity_artifact(
             "raw_gates": raw_gates,
             "output": {"sha256": digest, "artifact_ref": f"sha256:{digest}"},
             "payload": payload,
+            "passed": score["passed"] and gates["passed"],
         }
 
     def run(implementation: str, run_id: str, level: str, *, passing: bool = True) -> dict:
@@ -706,7 +784,9 @@ def _parity_artifact(
             ],
         }
 
-    selected = [run("stigmergy", f"matrix-minimal-{repeat}", "minimal") for repeat in range(1, 4)]
+    minimal = run("stigmergy", "matrix-minimal-1", "minimal", passing=False)
+    low = run("stigmergy", "matrix-low-1", "low", passing=False)
+    selected = [run("stigmergy", f"matrix-medium-{repeat}", "medium") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
         "schema_version": 5,
@@ -724,6 +804,30 @@ def _parity_artifact(
                 "runtime": {
                     "model": "deepseek/deepseek-v4.1-flash",
                     "reasoning_level": "minimal",
+                    "provider": "openrouter:throughput",
+                    "max_tokens": 40960,
+                    "temperature": 0,
+                },
+                "runs": [minimal],
+                "passed": False,
+            },
+            {
+                "reasoning_level": "low",
+                "runtime": {
+                    "model": "deepseek/deepseek-v4.1-flash",
+                    "reasoning_level": "low",
+                    "provider": "openrouter:throughput",
+                    "max_tokens": 40960,
+                    "temperature": 0,
+                },
+                "runs": [low],
+                "passed": False,
+            },
+            {
+                "reasoning_level": "medium",
+                "runtime": {
+                    "model": "deepseek/deepseek-v4.1-flash",
+                    "reasoning_level": "medium",
                     "provider": "openrouter:throughput",
                     "max_tokens": 40960,
                     "temperature": 0,
@@ -791,6 +895,15 @@ def test_release_deploy_refuses_missing_or_candidate_mismatched_parity_evidence(
 
     assert result.returncode == 2
     assert "parity" in result.stderr
+    assert not seen.exists()
+
+
+def test_release_deploy_refuses_nonproduction_reasoning_evidence(tmp_path):
+    result, _deploy, seen = _run_deploy(tmp_path, parity_artifact="minimal-reasoning")
+
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert "runtime-production-reasoning" in {failure["reason"] for failure in report["failures"]}
     assert not seen.exists()
 
 

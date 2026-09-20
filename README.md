@@ -282,7 +282,7 @@ compatible zero-data-retention OpenRouter host, with same-model provider fallbac
 decides page boundaries, prose, links, entities, and contradictions together. A normal filing uses one
 request; one bounded correction may repair a failed mechanical writer contract. Both requests use the
 same `deepseek/deepseek-v4.1-flash` route. Provider requests require supported parameters, deny data collection,
-and require zero-data-retention processing. Librarian reasoning is `minimal` and excluded from output.
+and require zero-data-retention processing. Librarian reasoning is `medium` and excluded from output.
 Its output ceiling is `40960` tokens and is sent to OpenRouter as `max_tokens`. If the bounded correction
 cannot satisfy writer gates, the draft is never applied.
 Retryable failures use the existing bounded queue-attempt policy; answer and OCR requests retain
