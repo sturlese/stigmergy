@@ -36,10 +36,7 @@ reservation so the same reaction can retry safely.
 ## Filing and gates
 
 The worker extracts each artifact, stores readable derivatives, deterministically renders one
-source page, retrieves only safe context, and requests one structured draft `FilingPlan`. A draft
-that updates or deletes any ACL-authorized derived page, whether or not it is among the bounded page
-bodies visible to the model, or accounts for recompile prior pages, receives one complete
-semantic revision with the identical source, provenance, and safe context before application. The plan may
+source page, retrieves only safe context, and requests one complete structured `FilingPlan`. The plan may
 create, update, consolidate, or delete zero or more notes/concepts; propose identity claims; add
 contradictions; or make no wiki mutation. A reusable idea, rather than the incoming source, is the
 graph unit: related evidence stays cohesive, while independently reusable conclusions become
@@ -48,10 +45,10 @@ separate pages with meaningful links.
 The candidate tree must pass page, source immutability, reference, link, ACL-flow, entity,
 contradiction, registry, changed-path, and trusted-writer checks before the branch advances. New and
 updated knowledge pages must be cold-readable, use a matching H1, place source attribution near
-their factual conclusions, and explain material page and entity relationships in prose. A revised
-plan replaces its draft or nothing; it is applied only after the usual writer gates. Pure-create
-plans may use the remaining bounded body-only repair path, whose authorized metadata the writer
-reconstructs. If either path cannot pass the gates, the immutable source lands alone with a typed
+their factual conclusions, and explain material page and entity relationships in prose. Only when
+the complete plan fails a deterministic writer contract may the same agent return one corrected
+replacement plan over the same source and ACL-safe context. The correction replaces the draft or
+nothing and is applied only after the usual writer gates. If it cannot pass, the immutable source lands alone with a typed
 `plan_rejected` report. Every landed operation records a friendly manifest plus a hash-verified
 exact patch.
 
@@ -66,10 +63,11 @@ IDs, aliases, captures, contradictions, or diff records reveal no existence.
 ## Entities
 
 Entity IDs are immutable opaque UUIDs. Names are claims with scope, provenance, actor, and time.
-Names may be confidential. Entity files contain no facts or dossier body; facts live in ordinary
-notes and concepts anchored to the ID. Reader projections choose only visible claims, while
-`describe_entity` composes bounded content-bearing excerpts, local source records, and authored
-relationship evidence from visible anchored pages and sources. It is the ACL-safe entity dossier:
+Names may be confidential. Entity files contain a deterministic projection of structured,
+source-backed descriptions, facts, and page connections; they never contain arbitrary dossier
+prose. Reader projections choose only visible claims, while `describe_entity` composes those claims
+with bounded excerpts, local source records, and authored relationship evidence from visible
+anchored pages and sources. It is the ACL-safe entity dossier:
 the response has enough visible evidence for a client to render `What / Who`, `Facts`, and
 `Connections` without reading the raw identity record or making a second retrieval call. Visibility
 filtering precedes all caps, and caps disclose only the visible result.

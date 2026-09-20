@@ -1,29 +1,15 @@
 # Filing parity release gate
 
-`parity.py` validates recorded real-model evidence before an image can be published or rolled out.
-It independently derives the candidate Git commit, the current librarian-skill hash, the hashes of
-every versioned filing case and fixture, and the exact checked-out brain prompt. An artifact cannot
-self-attest those inputs. This is a release gate, not a fake-backend test or a score-only benchmark.
+`run_planner.py` records real-model evidence from the same agent-first filing path used in production.
+One coherent librarian request returns a complete `FilingPlan`. The writer then applies deterministic
+ACL, provenance, identity, link, and atomicity gates. One bounded replacement-plan request is allowed
+only when those contracts reject the first plan; there is no staged semantic review pipeline.
 
-The artifact contains one complete result for every current case inside every recorded repeat. It
-does not accept a summary score standing in for individual case results. Schema v5 binds every result
-to the SHA-256 of its versioned case and readable fixture, plus the commit and SHA-256 of the exact
-knowledge-repository librarian prompt that executed it. Each case result records the full raw semantic
-gate map: mutation and identity quality, links and reference resolution, readable bodies, local
-provenance, entity relationships, anti-fragmentation, graph-shape quality, writer gates, actual model
-requests split across topology draft, topology review, evidence enrichment, compilation, and editorial
-review, derived schema retries, semantic-revision trigger/attempt/application and request metrics, semantic-repair
-count, elapsed time, and a content-addressed output reference. Its
-canonical payload retains the reviewed `GraphTopology`, enriched `GraphShape`, graph-contract violations,
-the original filing draft, any post-planning reviewed replacement, nullable canonical `RepairPlan`
-and its SHA-256, and the effective derived plan, never source text. A repair plan is recorded only when
-the pure-create structural-repair request actually runs; otherwise both fields are null. The gate rebuilds pristine ACL-safe context and the complete internal authorized-page
-set, recomputes topology and graph-shape compliance, replays the filing plan through the production writer once, and requires its canonical effective
-plan to equal the recorded plan before deriving the revision telemetry, semantic score, writer gate,
-raw gate map, and blind-review effective-page hash against the current case and fixture. Token usage is recorded only when the runner
-exposes it; provider fields are never inferred. Schema v4 is obsolete because it cannot bind the
-agent-authored topology, enriched graph shape, editorial review, or their phase telemetry. Schema v5 is
-a clean cut: older evidence is not replayable admission evidence and must be rerun.
+`parity.py` binds every recorded result to the candidate commit, librarian skill, brain prompt, case,
+fixture, configured provider route, request budget, writer result, semantic score, latency, usage, and
+content-addressed output. It rebuilds a pristine ACL-safe worktree and replays the recorded plan rather
+than trusting an aggregate score. Compatibility fields from older evidence schemas are recorded as
+null or zero and do not represent model phases.
 
 Case contracts also score editorial quality that structural coverage alone cannot prove. They can require
 multiple explanatory paragraphs, explicit evidence limits, preservation of named seeded knowledge, useful
@@ -32,24 +18,22 @@ These gates complement rather than replace the blind review: deterministic check
 while the anonymous comparison remains the release authority for overall cold-read and reuse quality.
 
 The selected Stigmergy level requires at least three independent, complete,
-`production-equivalent` repeats per case. Those runs use the production Cerebras compiler, medium
-reasoning, deterministic temperature zero, and the same bounded fourteen-request ceiling as the
-writer. They also preserve the single Azure recovery request used by production for editorial or
-compliance correction. Runs exercise the temporary-worktree writer and bounded semantic-repair path,
-and must all pass. Hippocampus and the selected Stigmergy runs share the same corpus and initial graph. The
+`production-equivalent` repeats per case. Those runs use `deepseek/deepseek-v4.1-flash` through
+throughput-sorted zero-data-retention OpenRouter providers, low reasoning, and the same three-request
+ceiling as the writer: one initial request, at most one schema retry, and at most one bounded
+correction. Runs exercise the temporary-worktree
+writer and its bounded contract-correction path, and must all pass. Hippocampus and the selected
+Stigmergy runs share the same corpus and initial graph. The
 blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a
 material regression. Hippocampus is comparative baseline evidence, not an admission candidate: its
 hard gates may honestly fail under Stigmergy's writer rubric, but every case, provenance field,
 canonical payload digest, semantic score, writer result, and raw gate map is still replay-verified.
 
-Every Stigmergy reasoning-level candidate records full per-case runs using the same corpus, initial
-graph, case hashes, candidate commit, skill hash, runtime route, exact `max_tokens` ceiling, and
-complete raw gate map. The runtime field names the abstract model setting; the librarian sends it to
-OpenRouter as `max_completion_tokens`. The
-selected production level must be the first passing level in the ordered matrix and equal the one
-runtime librarian reasoning setting. The runner accepts a diagnostic `planner-only` mode, but that
-evidence can never select a production level. Missing, stale, mismatched, aggregate-only, incomplete,
-or failing selected-Stigmergy evidence rejects the release.
+Every reasoning-level candidate records full per-case runs using the same corpus, initial graph, case
+hashes, candidate commit, skill hash, runtime route, token ceiling, and raw gate map. The librarian
+sends the completion ceiling to OpenRouter as `max_completion_tokens`. The selected production level
+must be the first passing level and equal the runtime setting. Diagnostic `planner-only` evidence can
+never select a production level. Missing, stale, incomplete, or failing evidence rejects the release.
 
 An admission packet is terminal only when `admission_status` is `passed`, no field is pending, and
 `blind_review_packet.status` is `completed`. Its `blind_editorial_review.provenance.artifact_ref` is a
@@ -92,7 +76,7 @@ content hash only. Add `--include-payload` only when recording a local release a
 derived page bodies and an explicit stderr warning, but never the supplied source text. The emitted
 `case_result` with that flag is the exact object embedded under its repeat's `case_results` array.
 Use the same repeat ID for every case in one matrix repeat; record a new ID for each independent
-repeat. The top-level repeat records the shared runtime, execution mode, ten-request ceiling, and
+repeat. The top-level repeat records the shared runtime, execution mode, three-request ceiling, and
 candidate provenance. The validator requires the nested records to repeat that runtime and budget,
 so summaries cannot stand in for individual outcomes.
 

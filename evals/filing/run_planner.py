@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run one source through the production-equivalent filing evaluation path.
 
-The default runs the planner, semantic draft revision when production would require it, the real
-temporary-worktree writer gates, and the bounded structural repair path without opening a database
-or writing Git. ``planner-only`` is a diagnostic mode that skips both model-backed follow-ups.
+The default runs one coherent planner request, the real temporary-worktree writer gates, and at most
+one bounded replacement-plan request after a rejection, without opening a database or writing Git.
+``planner-only`` is a diagnostic mode that skips the bounded correction.
 Every result is a single immutable, case-level evidence record suitable for
 embedding in the parity artifact. The request can cost money.
 
@@ -34,7 +34,7 @@ try:
         PRODUCTION_REASONING_LEVEL,
         REASONING_LEVELS,
     )
-    from planner_eval import load_case, score, score_graph_shape
+    from planner_eval import load_case, score
     from worktree import apply_and_gate, apply_with_production_repair, effective_plan, prepared
 except ModuleNotFoundError:
     from evals.filing.constants import (
@@ -44,7 +44,7 @@ except ModuleNotFoundError:
         PRODUCTION_REASONING_LEVEL,
         REASONING_LEVELS,
     )
-    from evals.filing.planner_eval import load_case, score, score_graph_shape
+    from evals.filing.planner_eval import load_case, score
     from evals.filing.worktree import (
         apply_and_gate,
         apply_with_production_repair,
@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         "--execution-mode",
         choices=(PRODUCTION_EQUIVALENT_MODE, PLANNER_ONLY_MODE),
         default=PRODUCTION_EQUIVALENT_MODE,
-        help="production-equivalent exercises draft revision and bounded repair; planner-only is diagnostic",
+        help="production-equivalent exercises writer gates and bounded correction; planner-only is diagnostic",
     )
     parser.add_argument(
         "--run-id",
@@ -201,9 +201,6 @@ def main(argv: list[str] | None = None) -> int:
             recorded_repair_plan = None
         scored_plan = effective_plan(evaluation, plan_for_score) if gates["passed"] else plan_for_score
         semantic = score(scored_plan, case, source_text=source_text)
-        graph_shape_score = score_graph_shape(run.graph_shape, case, scored_plan)
-        semantic["graph_shape"] = graph_shape_score
-        semantic["passed"] = bool(semantic["passed"] and graph_shape_score["passed"])
         planning_model_requests = int(run.model_requests)
         semantic_revision_model_requests = int(gates["semantic_revision_model_requests"])
         repair_model_requests = int(gates["repair_model_requests"])
@@ -284,7 +281,11 @@ def main(argv: list[str] | None = None) -> int:
             "graph_shape_reasoning_level": reasoning_level,
             "compilation_reasoning_level": reasoning_level,
             "graph_shape_max_tokens": LIBRARIAN_MAX_TOKENS,
-            "provider": LIBRARIAN_PROVIDER_ROUTING["only"][0],
+            "provider": (
+                LIBRARIAN_PROVIDER_ROUTING["only"][0]
+                if LIBRARIAN_PROVIDER_ROUTING.get("only")
+                else f"openrouter:{LIBRARIAN_PROVIDER_ROUTING.get('sort', 'default')}"
+            ),
             "max_tokens": LIBRARIAN_MAX_TOKENS,
             "temperature": LIBRARIAN_TEMPERATURE,
         }

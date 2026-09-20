@@ -44,6 +44,16 @@ class ExternalIdClaim:
 
 
 @dataclass(frozen=True)
+class EntityKnowledgeClaim:
+    kind: str
+    value: str
+    acl: tuple[str, ...] | None
+    source: str
+    actor: str
+    introduced_at: dt.datetime
+
+
+@dataclass(frozen=True)
 class EntityRecord:
     entity_id: str
     entity_type: str
@@ -51,6 +61,7 @@ class EntityRecord:
     updated_at: dt.datetime
     claims: tuple[NameClaim, ...]
     external_ids: tuple[ExternalIdClaim, ...] = ()
+    knowledge: tuple[EntityKnowledgeClaim, ...] = ()
     absorbed_ids: tuple[str, ...] = ()
 
     @property
@@ -95,6 +106,30 @@ def new_name_claim(
     )
 
 
+def new_knowledge_claim(
+    value: str,
+    *,
+    kind: str,
+    acl: tuple[str, ...] | None,
+    source: str,
+    actor: str,
+    introduced_at: dt.datetime,
+) -> EntityKnowledgeClaim:
+    cleaned = " ".join(value.split())
+    if not cleaned:
+        raise EntityContractError("entity knowledge is empty")
+    if kind not in {"description", "fact", "connection"}:
+        raise EntityContractError("entity knowledge kind is invalid")
+    return EntityKnowledgeClaim(
+        kind=kind,
+        value=cleaned,
+        acl=acl,
+        source=source,
+        actor=actor,
+        introduced_at=_utc(introduced_at),
+    )
+
+
 def render_entity(record: EntityRecord) -> str:
     _validate_record(record)
     metadata = {
@@ -107,13 +142,15 @@ def render_entity(record: EntityRecord) -> str:
         "external_ids": [_external_dict(claim) for claim in record.external_ids],
         "absorbed_ids": list(record.absorbed_ids),
     }
+    if record.knowledge:
+        metadata["knowledge"] = [_knowledge_dict(claim) for claim in record.knowledge]
     frontmatter = yaml.safe_dump(
         metadata,
         allow_unicode=True,
         sort_keys=False,
         width=1000,
     ).rstrip()
-    return f"---\n{frontmatter}\n---\n\n# {record.entity_id}\n"
+    return f"---\n{frontmatter}\n---\n\n{_render_entity_body(record)}\n"
 
 
 def parse_entity(path: str, text: str) -> EntityRecord:
@@ -123,14 +160,13 @@ def parse_entity(path: str, text: str) -> EntityRecord:
     entity_id = str(metadata.get("id") or "")
     if path != entity_path(entity_id) or metadata.get("type") != "entity":
         raise EntityContractError("entity id, type, or path is invalid")
-    if body.strip() != f"# {entity_id}":
-        raise EntityContractError("entity body must contain only its stable id heading")
     claims_raw = metadata.get("claims")
     external_raw = metadata.get("external_ids")
     absorbed_raw = metadata.get("absorbed_ids")
+    knowledge_raw = metadata.get("knowledge", [])
     if not isinstance(claims_raw, list) or not isinstance(external_raw, list):
         raise EntityContractError("entity claim collections must be lists")
-    if not isinstance(absorbed_raw, list):
+    if not isinstance(absorbed_raw, list) or not isinstance(knowledge_raw, list):
         raise EntityContractError("absorbed_ids must be a list")
     try:
         record = EntityRecord(
@@ -140,11 +176,14 @@ def parse_entity(path: str, text: str) -> EntityRecord:
             updated_at=_timestamp(metadata.get("updated_at")),
             claims=tuple(_parse_claim(value) for value in claims_raw),
             external_ids=tuple(_parse_external(value) for value in external_raw),
+            knowledge=tuple(_parse_knowledge(value) for value in knowledge_raw),
             absorbed_ids=tuple(_entity_ids(absorbed_raw)),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise EntityContractError("entity fields are invalid") from error
     _validate_record(record)
+    if body.strip() != _render_entity_body(record):
+        raise EntityContractError("entity body is not the deterministic knowledge projection")
     return record
 
 
@@ -179,6 +218,11 @@ def registry_bytes(records: dict[str, EntityRecord]) -> bytes:
                 "claims": [_claim_dict(claim) for claim in record.claims],
                 "external_ids": [_external_dict(claim) for claim in record.external_ids],
                 "absorbed_ids": list(record.absorbed_ids),
+                **(
+                    {"knowledge": [_knowledge_dict(claim) for claim in record.knowledge]}
+                    if record.knowledge
+                    else {}
+                ),
             }
             for entity_id, record in sorted(records.items())
         },
@@ -202,6 +246,44 @@ def with_preferred_claim(record: EntityRecord, claim: NameClaim) -> EntityRecord
     )
 
 
+def _render_entity_body(record: EntityRecord) -> str:
+    if not record.knowledge:
+        return f"# {record.entity_id}"
+    preferred = max(
+        (claim for claim in record.claims if claim.kind == "preferred"),
+        key=lambda claim: (claim.introduced_at, claim.claim_id),
+    )
+    sections = [f"# {preferred.value}"]
+    descriptions = tuple(claim for claim in record.knowledge if claim.kind == "description")
+    facts = tuple(claim for claim in record.knowledge if claim.kind == "fact")
+    connections = tuple(claim for claim in record.knowledge if claim.kind == "connection")
+    if descriptions:
+        sections.append(
+            "## Who / What\n\n"
+            + "\n\n".join(f"{claim.value} {_source_suffix(claim.source)}" for claim in descriptions)
+        )
+    if facts:
+        sections.append(
+            "## Facts\n\n"
+            + "\n".join(f"- {claim.value} {_source_suffix(claim.source)}" for claim in facts)
+        )
+    if connections:
+        seen = set()
+        lines = []
+        for claim in connections:
+            key = resolution_key(claim.value)
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"- [[{claim.value}]] {_source_suffix(claim.source)}")
+        sections.append("## Connections\n\n" + "\n".join(lines))
+    return "\n\n".join(sections)
+
+
+def _source_suffix(source: str) -> str:
+    return f"(Source: `{source}`)"
+
+
 def _claim_dict(claim: NameClaim) -> dict:
     return {
         "claim_id": claim.claim_id,
@@ -218,6 +300,17 @@ def _claim_dict(claim: NameClaim) -> dict:
 def _external_dict(claim: ExternalIdClaim) -> dict:
     return {
         "namespace": claim.namespace,
+        "value": claim.value,
+        "acl": None if claim.acl is None else list(claim.acl),
+        "source": claim.source,
+        "actor": claim.actor,
+        "introduced_at": _iso(claim.introduced_at),
+    }
+
+
+def _knowledge_dict(claim: EntityKnowledgeClaim) -> dict:
+    return {
+        "kind": claim.kind,
         "value": claim.value,
         "acl": None if claim.acl is None else list(claim.acl),
         "source": claim.source,
@@ -254,6 +347,19 @@ def _parse_external(value) -> ExternalIdClaim:
     )
 
 
+def _parse_knowledge(value) -> EntityKnowledgeClaim:
+    if not isinstance(value, dict):
+        raise EntityContractError("entity knowledge claim must be an object")
+    return EntityKnowledgeClaim(
+        kind=_required_text(value.get("kind"), "knowledge kind"),
+        value=_required_text(value.get("value"), "knowledge value"),
+        acl=_acl(value.get("acl")),
+        source=_required_text(value.get("source"), "source"),
+        actor=_required_text(value.get("actor"), "actor"),
+        introduced_at=_timestamp(value.get("introduced_at")),
+    )
+
+
 def _validate_record(record: EntityRecord) -> None:
     entity_path(record.entity_id)
     if not record.entity_type.strip() or not record.claims:
@@ -279,6 +385,12 @@ def _validate_record(record: EntityRecord) -> None:
         raise EntityContractError("entity requires a preferred name")
     for external in record.external_ids:
         _validate_provenance(external.source, external.actor, external.introduced_at)
+    for claim in record.knowledge:
+        if claim.kind not in {"description", "fact", "connection"}:
+            raise EntityContractError("entity knowledge kind is invalid")
+        if not claim.value.strip() or "\n" in claim.value or "\r" in claim.value:
+            raise EntityContractError("entity knowledge must be single-line prose")
+        _validate_provenance(claim.source, claim.actor, claim.introduced_at)
     _entity_ids(record.absorbed_ids)
     if record.entity_id in record.absorbed_ids:
         raise EntityContractError("entity cannot absorb itself")

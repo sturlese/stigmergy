@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from stigmergy.entities.service import (
     delete_entity,
     merge_entities,
     remove_source_claims,
+    remove_source_knowledge,
     write_records,
 )
 from stigmergy.knowledge.pages import parse_page, render_page
@@ -33,7 +35,14 @@ def _proposal(name: str, **values) -> EntityProposal:
     return EntityProposal(name=name, entity_type="organization", **values)
 
 
-def _apply(root: Path, *proposals: EntityProposal, acl=None, at=NOW, allowed_same_as=frozenset()):
+def _apply(
+    root: Path,
+    *proposals: EntityProposal,
+    acl=None,
+    at=NOW,
+    allowed_same_as=frozenset(),
+    connections=None,
+):
     aliases = tuple(alias for proposal in proposals for alias in proposal.aliases)
     if aliases:
         _source(
@@ -59,6 +68,7 @@ def _apply(root: Path, *proposals: EntityProposal, acl=None, at=NOW, allowed_sam
         actor="alice",
         at=at,
         allowed_same_as=allowed_same_as,
+        connections=connections,
     )
     return {
         value: resolution.resolve(value)
@@ -212,6 +222,28 @@ def test_repeated_identity_evidence_survives_deletion_of_its_first_source(tmp_pa
     remaining = load_entities(str(tmp_path))[entity_id]
     assert [(claim.source, claim.kind) for claim in remaining.claims] == [(SECOND_SOURCE, "preferred")]
     assert [claim.source for claim in remaining.external_ids] == [SECOND_SOURCE]
+
+
+def test_recompile_cleanup_replaces_knowledge_without_removing_identity_evidence(tmp_path):
+    entity_id = _apply(
+        tmp_path,
+        _proposal(
+            "Acme",
+            external_namespace="crm",
+            external_id="account-7",
+            description="Acme is an organization.",
+            facts=("Acme owns an operating decision.",),
+        ),
+    )["Acme"]
+    before = load_entities(str(tmp_path))[entity_id]
+
+    changed = remove_source_knowledge(str(tmp_path), {SOURCE})
+
+    after = load_entities(str(tmp_path))[entity_id]
+    assert changed == ("ops/entity-registry.json", before.path)
+    assert after.claims == before.claims
+    assert after.external_ids == before.external_ids
+    assert after.knowledge == ()
 
 
 def test_reader_projection_never_falls_back_to_a_hidden_name(tmp_path):
@@ -425,5 +457,38 @@ def test_entity_body_rejects_a_dossier(tmp_path):
     entity_id = _apply(tmp_path, _proposal("Acme"))["Acme"]
     path = tmp_path / "wiki" / "entities" / f"{entity_id}.md"
 
-    with pytest.raises(EntityContractError, match="stable id heading"):
+    with pytest.raises(EntityContractError, match="deterministic knowledge projection"):
         parse_entity(path.relative_to(tmp_path).as_posix(), path.read_text() + "\nFacts about Acme\n")
+
+
+def test_entity_page_projects_source_grounded_knowledge(tmp_path):
+    entity_id = _apply(
+        tmp_path,
+        _proposal(
+            "Acme",
+            description="A company that operates the Acme market.",
+            facts=("Published the Acme market report.",),
+        ),
+        connections={"acme": ("Market Structure",)},
+    )["Acme"]
+    path = tmp_path / "wiki" / "entities" / f"{entity_id}.md"
+
+    text = path.read_text(encoding="utf-8")
+    record = parse_entity(path.relative_to(tmp_path).as_posix(), text)
+
+    assert [claim.kind for claim in record.knowledge] == ["description", "fact", "connection"]
+    assert "# Acme" in text
+    assert "## Who / What" in text
+    assert "## Facts" in text
+    assert "## Connections" in text
+    assert "[[Market Structure]]" in text
+    assert f"(Source: `{SOURCE}`)" in text
+    projected = entity_aliases.project_record(
+        {"id": entity_id, **json.loads(registry_bytes({entity_id: record}))["entities"][entity_id]},
+        None,
+    )
+    assert [claim["kind"] for claim in projected["knowledge"]] == [
+        "connection",
+        "description",
+        "fact",
+    ]

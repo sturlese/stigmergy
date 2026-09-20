@@ -58,7 +58,8 @@ connections are readable relationships rather than unexplained link lists.
 A reader asks for an entity by a visible name, alias, or stable ID. One `describe_entity` call returns
 enough ACL-visible evidence to present a useful dynamic dossier with identity, relevant facts,
 knowledge pages, relationships, and sources. The raw `wiki/entities/ent_<uuid>.md` record remains an
-internal identity primitive and does not become a stored dossier.
+internal identity primitive whose body is a deterministic projection of structured source-backed
+claims, never arbitrary dossier prose.
 
 ### Empty, bounded, and error states
 
@@ -124,8 +125,9 @@ filing or repair records a typed operational failure without committing a partia
 9. **KG-09:** Entity evidence returned by `describe_entity` is composed only from ACL-visible anchored
    notes, concepts, and sources. Hidden and unknown entities remain indistinguishable, and capped
    output discloses no hidden counts, titles, names, or timing-dependent branch.
-10. **KG-10:** Entity machine pages remain minimal stable identity records; no fact dossier, generated
-    entity view, new database table, or per-read LLM call is introduced.
+10. **KG-10:** Entity pages render useful `Who / What`, `Facts`, and `Connections` content as a
+    deterministic projection of structured, source-backed, ACL-bearing identity knowledge claims.
+    Arbitrary dossier prose, a new database table, and per-read LLM calls remain prohibited.
 11. **KG-11:** Search by a visible entity name continues to retrieve its anchored knowledge, while
     explicit concept links and backlinks make the same graph navigable by page relationships.
 12. **KG-12:** The mechanical linter rejects unresolved or visibility-unsafe links, missing sources,
@@ -138,10 +140,10 @@ filing or repair records a typed operational failure without committing a partia
     Hippocampus is a comparative baseline whose complete evidence remains replay-verified even where
     it honestly fails Stigmergy-specific writer gates. A blind pairwise editorial review finds no
     material Stigmergy regression before deployment.
-14. **KG-14:** Production continues to use `openai/gpt-oss-120b` through the approved Cerebras
-    OpenRouter route. The lowest reasoning level that passes every hard reference case is selected
+14. **KG-14:** Production uses `deepseek/deepseek-v4.1-flash` through the fastest compatible
+    zero-data-retention OpenRouter route. The lowest reasoning level that passes every hard reference case is selected
     only after at least three independent production-equivalent repeats per case under the configured
-    three-request budget; runtime route, observed requests, derived schema retries, semantic repairs,
+    three-request budget; runtime route, observed requests, derived schema retries, bounded corrections,
     elapsed time, available usage, raw gates, and content-addressed output references are recorded.
     The selected level must equal the single reasoning-effort setting used by the production librarian.
     Every result binds the case and fixture hashes and the exact brain-prompt commit/hash; its
@@ -188,8 +190,8 @@ The cloud MCP server, local bridge, answer agent, master-only backoffice entity 
 documentation, and Codex/Claude Stigmergy skills consume the entity description. The response
 transition is additive so existing consumers remain valid; first-party consumers move to the richer
 fields in the same release.
-No persisted entity schema or database migration is required. Normal Markdown pages remain readable
-by existing versions.
+No database migration is required. The entity Markdown schema gains optional structured knowledge
+claims while records without them remain valid; normal Markdown pages remain readable by existing versions.
 
 ### Migration and backfill
 
@@ -209,17 +211,17 @@ external consumers have explicitly migrated, which is outside this change.
 
 ### Security and observability
 
-All entity content is fetched through the existing scoped page index and visibility policy. Caps are
+Entity content is projected through the scoped registry and page-index visibility policies. Caps are
 applied after visibility filtering and reveal only visible totals. Filing reports and evaluation
-history record model, reasoning, configured request budget, observed request count, derived schema
-retries, semantic-repair count, elapsed time, available usage, raw gates, output hash, mutation count,
+history record model, reasoning, configured provider route and request budget, observed request count, derived schema
+retries, bounded-correction count, elapsed time, available usage, raw gates, output hash, mutation count,
 entities, links, and failure class without logging restricted content.
 
 ## Resolved decisions
 
 - The reusable idea, not the submitted source, is the unit of graph structure.
 - Anti-fragmentation is an editorial reuse test, not a page quota.
-- Rich entity knowledge is a reader-scoped projection over normal pages, not a stored dossier.
+- Rich entity knowledge is a reader-scoped projection over structured source-backed entity claims and normal pages, not arbitrary dossier prose.
 - Page bodies carry human-readable provenance and relationships; frontmatter retains machine anchors.
 - Production stays prompt-first and uses the fast approved open model.
 - Quality is guaranteed operationally by hard reference gates and explicit failure, not by claiming

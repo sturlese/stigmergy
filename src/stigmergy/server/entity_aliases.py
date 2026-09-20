@@ -103,6 +103,10 @@ def visible_claims(record: dict, audiences: set[str] | None) -> list[dict]:
     return [claim for claim in record.get("claims", ()) if visible(claim.get("acl"), audiences)]
 
 
+def visible_knowledge(record: dict, audiences: set[str] | None) -> list[dict]:
+    return [claim for claim in record.get("knowledge", ()) if visible(claim.get("acl"), audiences)]
+
+
 def display_claim(record: dict, audiences: set[str] | None) -> dict | None:
     claims = visible_claims(record, audiences)
     preferred = [claim for claim in claims if claim.get("kind") == "preferred"]
@@ -135,6 +139,10 @@ def project_record(record: dict, audiences: set[str] | None) -> dict | None:
         "type": record["entity_type"],
         "aliases": aliases,
         "claims": claims,
+        "knowledge": sorted(
+            visible_knowledge(record, audiences),
+            key=lambda claim: (claim.get("introduced_at", ""), claim.get("kind", "")),
+        ),
     }
 
 
@@ -169,7 +177,7 @@ def _validate_record(entity_id: str, record, origin: str) -> None:
         "absorbed_ids",
     }
     if (
-        set(record) != required
+        not required <= set(record) <= required | {"knowledge"}
         or not isinstance(record["entity_type"], str)
         or not record["entity_type"].strip()
         or not isinstance(record["claims"], list)
@@ -237,6 +245,30 @@ def _validate_record(entity_id: str, record, origin: str) -> None:
             raise ValueError(f"entity registry {origin}: external id claim is invalid")
         external_keys.add(key)
         _provenance(external, origin)
+    knowledge_keys = set()
+    knowledge_fields = {"kind", "value", "acl", "source", "actor", "introduced_at"}
+    for claim in record.get("knowledge", []):
+        if (
+            not isinstance(claim, dict)
+            or set(claim) != knowledge_fields
+            or claim["kind"] not in {"description", "fact", "connection"}
+            or not isinstance(claim["value"], str)
+            or not claim["value"].strip()
+            or "\n" in claim["value"]
+            or "\r" in claim["value"]
+        ):
+            raise ValueError(f"entity registry {origin}: entity knowledge claim is invalid")
+        key = (
+            claim["kind"],
+            resolution_key(claim["value"]),
+            _acl(claim["acl"], origin),
+            claim["source"],
+            claim["actor"],
+        )
+        if key in knowledge_keys:
+            raise ValueError(f"entity registry {origin}: duplicate entity knowledge claim")
+        knowledge_keys.add(key)
+        _provenance(claim, origin)
     absorbed = record["absorbed_ids"]
     if (
         any(not isinstance(value, str) or not ENTITY_ID_RE.fullmatch(value) for value in absorbed)

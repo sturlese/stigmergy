@@ -16,6 +16,7 @@ from stigmergy.entities.model import (
     entity_path,
     load_entities,
     mint_entity_id,
+    new_knowledge_claim,
     new_name_claim,
     registry_bytes,
     render_entity,
@@ -57,6 +58,7 @@ def apply_proposals(
     actor: str,
     at: dt.datetime,
     allowed_same_as: frozenset[str] = frozenset(),
+    connections: Mapping[str, tuple[str, ...]] | None = None,
 ) -> ProposalResolution:
     _validate_alias_evidence(root, source, readable_artifacts, proposals)
     records = load_entities(root)
@@ -95,6 +97,25 @@ def apply_proposals(
                 for alias in proposal.aliases
             ),
         )
+        knowledge_values = []
+        if proposal.description:
+            knowledge_values.append(("description", proposal.description))
+        knowledge_values.extend(("fact", fact) for fact in proposal.facts)
+        knowledge_values.extend(
+            ("connection", title)
+            for title in (connections or {}).get(resolution_key(proposal.name), ())
+        )
+        knowledge = tuple(
+            new_knowledge_claim(
+                value,
+                kind=kind,
+                acl=acl,
+                source=source,
+                actor=actor,
+                introduced_at=at,
+            )
+            for kind, value in knowledge_values
+        )
         if entity_id not in records:
             external = _external_claim(proposal, acl=acl, source=source, actor=actor, at=at)
             records[entity_id] = EntityRecord(
@@ -104,6 +125,7 @@ def apply_proposals(
                 updated_at=at,
                 claims=claims,
                 external_ids=(external,) if external else (),
+                knowledge=knowledge,
             )
         else:
             record = records[entity_id]
@@ -140,6 +162,14 @@ def apply_proposals(
                     record,
                     external_ids=(*record.external_ids, external),
                     updated_at=max(record.updated_at, at),
+                )
+            for claim in knowledge:
+                if _same_knowledge_exists(record, claim):
+                    continue
+                record = replace(
+                    record,
+                    knowledge=(*record.knowledge, claim),
+                    updated_at=max(record.updated_at, claim.introduced_at),
                 )
             records[entity_id] = record
         proposal_ids.append(entity_id)
@@ -193,6 +223,7 @@ def merge_entities(
             canonical,
             claims=_dedupe_claims((*canonical.claims, *absorbed.claims)),
             external_ids=_dedupe_external((*canonical.external_ids, *absorbed.external_ids)),
+            knowledge=_dedupe_knowledge((*canonical.knowledge, *absorbed.knowledge)),
             absorbed_ids=tuple(dict.fromkeys((*canonical.absorbed_ids, absorbed_id, *absorbed.absorbed_ids))),
             updated_at=max(canonical.updated_at, absorbed.updated_at, at),
         )
@@ -416,7 +447,12 @@ def remove_source_claims(
     for entity_id, record in tuple(records.items()):
         claims = tuple(claim for claim in record.claims if claim.source not in sources)
         external_ids = tuple(claim for claim in record.external_ids if claim.source not in sources)
-        if claims == record.claims and external_ids == record.external_ids:
+        knowledge = tuple(claim for claim in record.knowledge if claim.source not in sources)
+        if (
+            claims == record.claims
+            and external_ids == record.external_ids
+            and knowledge == record.knowledge
+        ):
             continue
         changed.add(record.path)
         if not claims:
@@ -428,12 +464,32 @@ def remove_source_claims(
             record,
             claims=_promote_missing_preferred(claims),
             external_ids=external_ids,
+            knowledge=knowledge,
             updated_at=max(record.updated_at, at),
         )
     if not changed:
         return ()
     if removed_ids:
         changed.update(sweep_entity_anchors(root, removed_ids))
+    write_records(root, records)
+    changed.add("ops/entity-registry.json")
+    return tuple(sorted(changed))
+
+
+def remove_source_knowledge(root: str, sources: set[str]) -> tuple[str, ...]:
+    """Remove derived entity knowledge for sources without changing identity evidence."""
+    if not sources:
+        return ()
+    records = load_entities(root)
+    changed: set[str] = set()
+    for entity_id, record in tuple(records.items()):
+        knowledge = tuple(claim for claim in record.knowledge if claim.source not in sources)
+        if knowledge == record.knowledge:
+            continue
+        records[entity_id] = replace(record, knowledge=knowledge)
+        changed.add(record.path)
+    if not changed:
+        return ()
     write_records(root, records)
     changed.add("ops/entity-registry.json")
     return tuple(sorted(changed))
@@ -581,6 +637,14 @@ def _same_claim_exists(record: EntityRecord, claim: NameClaim) -> bool:
     )
 
 
+def _same_knowledge_exists(record: EntityRecord, claim) -> bool:
+    key = (claim.kind, resolution_key(claim.value), claim.acl, claim.source, claim.actor)
+    return any(
+        (current.kind, resolution_key(current.value), current.acl, current.source, current.actor) == key
+        for current in record.knowledge
+    )
+
+
 def _dedupe_claims(claims: tuple[NameClaim, ...]) -> tuple[NameClaim, ...]:
     seen: set[tuple] = set()
     result = []
@@ -605,6 +669,17 @@ def _dedupe_external(claims: tuple[ExternalIdClaim, ...]) -> tuple[ExternalIdCla
     result = []
     for claim in claims:
         key = (claim.namespace, claim.value, claim.acl, claim.source, claim.actor)
+        if key not in seen:
+            seen.add(key)
+            result.append(claim)
+    return tuple(result)
+
+
+def _dedupe_knowledge(claims):
+    seen = set()
+    result = []
+    for claim in claims:
+        key = (claim.kind, resolution_key(claim.value), claim.acl, claim.source, claim.actor)
         if key not in seen:
             seen.add(key)
             result.append(claim)

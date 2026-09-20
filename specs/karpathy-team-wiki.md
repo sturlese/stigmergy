@@ -102,19 +102,21 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 | Runtime purpose | Model |
 |---|---|
-| librarian filing, semantic revision, and repair | `openrouter:openai/gpt-oss-120b` |
+| librarian filing and bounded contract correction | `openrouter:deepseek/deepseek-v4.1-flash` |
 | cited answers | `z-ai/glm-5.2` |
 | vector embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | scanned-page and image OCR | `qwen/qwen3-vl-8b-instruct` |
 
-Deterministic linting is the gardener's detection step and makes no model call. Semantic revision
-and repair use the librarian's `openrouter:openai/gpt-oss-120b` model. Librarian calls request reasoning
-effort `high` with reasoning excluded from returned output and an output ceiling of `40960` tokens,
+Deterministic linting is the gardener's detection step and makes no model call. Filing and bounded
+contract correction use the librarian's `openrouter:deepseek/deepseek-v4.1-flash` model. Librarian calls request reasoning
+effort `low` with reasoning excluded from returned output and an output ceiling of `40960` tokens,
 sent as `max_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
 requires supported parameters, denies data collection, and requires
-zero-data-retention processing. The librarian is pinned to Cerebras, with no provider fallback. Each
-writer attempt makes at most three model requests across draft filing, schema retries, semantic
-revision, and repair; an eligible draft is never applied without its revision. Retryable failures
+zero-data-retention processing. The librarian prefers the fastest compatible provider and permits
+same-model provider fallback. Each
+writer attempt makes at most three model requests: one coherent filing request, one schema retry when
+structured output is invalid, and, only when a mechanical
+writer contract fails, one bounded correction over the same source and safe context. Retryable failures
 use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider
 failover. Model fallback is prohibited. The application never reads,
 forwards, or falls back to Anthropic, OpenAI, Gemini, or another direct model-provider credential.
@@ -414,8 +416,8 @@ The projection chooses a display name deterministically from claims visible to t
 bounded content-bearing dossier from ACL-visible notes, concepts, and sources anchored to the stable
 ID. Its visible excerpts, local sources, and authored relationships are sufficient for a client to
 render `What / Who`, `Facts`, and `Connections` without a second retrieval call. Visibility filtering
-precedes every cap; truncation reveals no hidden count, title, name, or source. It does not read a
-stored dossier from the entity page.
+precedes every cap; truncation reveals no hidden count, title, name, or source. Structured entity-page
+knowledge is included only through the same claim-level ACL and provenance checks.
 
 Unknown, hidden, and unauthorized IDs return the same neutral response shape so the tool is not an existence oracle.
 
@@ -468,7 +470,7 @@ Submitting the form creates an ordinary capture with `intent.resolution_of`. It 
 These names remain, but their responsibilities become small and precise:
 
 - **Linter:** a pure detector library. Given a candidate repository tree, it returns deterministic, structured violations. It has no database backlog and no side effects.
-- **Repair:** pure, bounded transformation primitives used by the writer: deterministic rewrites, link/anchor sweeps, registry regeneration, explicit deletion, a complete model plan revision when an eligible draft changes an ACL-authorized derived page, and a constrained body repair for ineligible drafts. Eligibility uses the complete authorized path set internally, never extra page bodies or paths in the model context. A semantic revision receives the original source and the same ACL-safe filing context, and replaces the complete candidate plan or nothing. It is not a daemon, queue, or user-facing workflow.
+- **Repair:** pure, bounded transformation primitives used by the writer: deterministic rewrites, link/anchor sweeps, registry regeneration, explicit deletion, and one complete replacement plan only after a deterministic contract rejects the initial filing. The correction receives the original source, the same ACL-safe filing context, and structured contract failures; it replaces the complete candidate plan or nothing. It is not a daemon, queue, user-facing workflow, or proactive semantic phase.
 - **Gardener:** the single scheduled orchestrator that runs the linter and repair primitives autonomously inside the existing writer process.
 
 There is no separate gardener worker and repair worker. The one knowledge writer performs:

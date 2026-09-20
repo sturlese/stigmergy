@@ -494,6 +494,20 @@ class EntityProposal(BaseModel):
     same_as: str | None = None
     external_namespace: Annotated[str, Field(min_length=1, max_length=64)] | None = None
     external_id: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    description: Annotated[
+        str | None,
+        Field(
+            max_length=1000,
+            description="Concise source-grounded account of who or what this entity is in context.",
+        ),
+    ] = None
+    facts: Annotated[
+        tuple[Annotated[str, Field(min_length=1, max_length=500)], ...],
+        Field(
+            max_length=10,
+            description="Durable source-grounded facts about this entity, without citations or repetition.",
+        ),
+    ] = ()
 
     @model_validator(mode="after")
     def valid_identity_evidence(self):
@@ -505,6 +519,12 @@ class EntityProposal(BaseModel):
             raise ValueError("entity names must contain searchable text")
         if preferred in aliases or len(set(aliases)) != len(aliases):
             raise ValueError("entity aliases must be unique and differ from the preferred name")
+        prose = tuple(value for value in (self.description, *self.facts) if value is not None)
+        if any("\n" in value or "\r" in value for value in prose):
+            raise ValueError("entity descriptions and facts must be single-line prose")
+        normalized_facts = tuple(resolution_key(value) for value in self.facts)
+        if len(set(normalized_facts)) != len(normalized_facts):
+            raise ValueError("entity facts must be unique")
         return self
 
 

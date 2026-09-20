@@ -1,9 +1,6 @@
-import json
 import subprocess
 
-import pytest
-
-from stigmergy.capture import evidence, queue, schema
+from stigmergy.capture import evidence, schema
 from stigmergy.capture.schema import Actor
 from stigmergy.capture.service import CaptureService
 from stigmergy.capture.source import source_path
@@ -83,7 +80,7 @@ def _changed_paths(repo, commit_sha):
     ).splitlines()
 
 
-def test_visible_update_uses_full_semantic_revision_before_application(clean_queue, target_repo):
+def test_contract_rejected_update_gets_one_bounded_correction(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     actor = Actor(subject="marc", display_name="Marc")
     prior_source = _seed_page(
@@ -96,7 +93,7 @@ def test_visible_update_uses_full_semantic_revision_before_application(clean_que
         title="Agent Harness",
         text="An agent harness is the lower-level operational system around a model.",
     )
-    receipt, source = _capture(
+    _receipt, source = _capture(
         clean_queue,
         store,
         actor=actor,
@@ -116,33 +113,21 @@ def test_visible_update_uses_full_semantic_revision_before_application(clean_que
         ),
     )
     revision = FilingPlan(
-        summary="Preserved both reusable conceptual levels.",
+        summary="Preserved the existing evidence while adding the new source.",
         mutations=(
             PageMutation(
-                action="create",
-                role="concept",
-                title="Harness Engineering",
-                body=_body(
-                    "Harness Engineering",
-                    "Harness Engineering designs the [[Agent Harness]], the operational system.",
-                    source,
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=(
+                    _body(
+                        "Agent Harness",
+                        "Harness engineering designs the agent harness as its operational system.",
+                        source,
+                    )
+                    + "\n\nAn agent harness is the lower-level operational system around a "
+                    f"model. (Source: `{prior_source}`)"
                 ),
-                entities=(),
-                reason="The source defines a broader reusable discipline.",
-            ),
-                PageMutation(
-                    action="update",
-                    path="wiki/concepts/Agent Harness.md",
-                    body=(
-                        _body(
-                            "Agent Harness",
-                            "The [[Agent Harness]] implements the broader [[Harness Engineering]] discipline.",
-                            source,
-                        )
-                        + "\n\nAn agent harness remains the lower-level operational system around a "
-                        f"model. (Source: `{prior_source}`)"
-                    ),
-                reason="The lower-level system remains independently reusable.",
+                reason="The correction preserves prior evidence and adds the new claim.",
             ),
         ),
     )
@@ -154,7 +139,7 @@ def test_visible_update_uses_full_semantic_revision_before_application(clean_que
     assert planner.revision_calls[0]["context"] == planner.plan_context
     assert planner.revision_calls[0]["draft"] == draft
     assert planner.revision_calls[0]["source_path"] == source
-    assert planner.revision_calls[0]["max_requests"] == 2
+    assert planner.revision_calls[0]["max_requests"] == 1
     assert item["report"]["model_requests"] == 2
     assert item["report"]["planning_model_requests"] == 1
     assert item["report"]["semantic_revision_model_requests"] == 1
@@ -162,12 +147,14 @@ def test_visible_update_uses_full_semantic_revision_before_application(clean_que
     assert item["report"]["semantic_revision_attempted"] is True
     assert item["report"]["semantic_revision_applied"] is True
     assert item["report"]["repair_model_requests"] == 0
-    assert "Harness Engineering" in subprocess.check_output(
-        ["git", "show", "main:wiki/concepts/Harness Engineering.md"], cwd=target_repo, text=True
+    page = subprocess.check_output(
+        ["git", "show", "main:wiki/concepts/Agent Harness.md"], cwd=target_repo, text=True
     )
+    assert "Harness engineering designs the agent harness" in page
+    assert f"(Source: `{prior_source}`)" in page
 
 
-def test_semantic_revision_preserves_an_existing_paragraph_with_its_distinct_source(
+def test_contract_correction_preserves_an_existing_paragraph_with_its_distinct_source(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
@@ -228,7 +215,7 @@ def test_semantic_revision_preserves_an_existing_paragraph_with_its_distinct_sou
     assert f"(Source: `{original_source}`)" in page
 
 
-def test_pure_create_does_not_invoke_semantic_revision(clean_queue, target_repo):
+def test_valid_create_does_not_invoke_contract_correction(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     actor = Actor(subject="marc", display_name="Marc")
     _receipt, source = _capture(
@@ -255,7 +242,7 @@ def test_pure_create_does_not_invoke_semantic_revision(clean_queue, target_repo)
 
     class NoRevisionPlanner(RevisionPlanner):
         def revise(self, **_kwargs):
-            raise AssertionError("pure creates must not request semantic revision")
+            raise AssertionError("a valid plan must not request contract correction")
 
     planner = NoRevisionPlanner(plan, plan)
     item, outcome = _process(clean_queue, target_repo, store, planner)
@@ -267,51 +254,7 @@ def test_pure_create_does_not_invoke_semantic_revision(clean_queue, target_repo)
     assert item["report"]["semantic_revision_attempted"] is False
 
 
-def test_multi_page_create_uses_semantic_revision_to_reject_fragmentation(
-    clean_queue, target_repo
-):
-    store = evidence.MemoryEvidenceStore()
-    actor = Actor(subject="marc", display_name="Marc")
-    _receipt, source = _capture(
-        clean_queue,
-        store,
-        actor=actor,
-        audience=None,
-        key="semantic-revision-multi-create",
-        text="A source establishes one concept with a supporting detail.",
-    )
-    central = PageMutation(
-        action="create",
-        role="concept",
-        title="Standalone Concept",
-        body=_body("Standalone Concept", "The source establishes a reusable concept.", source),
-        entities=(),
-        reason="The central concept has independent future reuse.",
-    )
-    fragment = PageMutation(
-        action="create",
-        role="concept",
-        title="Standalone Detail",
-        body=_body("Standalone Detail", "This detail belongs in the central concept.", source),
-        entities=(),
-        reason="The draft split out a supporting detail.",
-    )
-    draft = FilingPlan(summary="Created a fragmented graph.", mutations=(central, fragment))
-    revision = FilingPlan(summary="Kept the graph cohesive.", mutations=(central,))
-    planner = RevisionPlanner(draft, revision)
-
-    item, outcome = _process(clean_queue, target_repo, store, planner)
-
-    assert outcome.status == schema.LANDED
-    assert len(planner.revision_calls) == 1
-    assert planner.revision_calls[0]["max_requests"] == 2
-    assert item["report"]["model_requests"] == 2
-    assert item["report"]["semantic_revision_required"] is True
-    assert "wiki/concepts/Standalone Concept.md" in _changed_paths(target_repo, item["commit_sha"])
-    assert "wiki/concepts/Standalone Detail.md" not in _changed_paths(target_repo, item["commit_sha"])
-
-
-def test_failed_semantic_revision_never_falls_back_to_the_draft(clean_queue, target_repo):
+def test_failed_contract_correction_never_falls_back_to_the_draft(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     actor = Actor(subject="marc", display_name="Marc")
     _seed_page(
@@ -349,7 +292,7 @@ def test_failed_semantic_revision_never_falls_back_to_the_draft(clean_queue, tar
 
     assert outcome.status == schema.LANDED
     assert item["report"]["plan_rejected"] is True
-    assert item["report"]["plan_rejection"] == "semantic revision failed"
+    assert item["report"]["plan_rejection"] == "filing correction failed"
     assert _changed_paths(target_repo, item["commit_sha"]) == [source]
     existing = subprocess.check_output(
         ["git", "show", "main:wiki/concepts/Existing Concept.md"], cwd=target_repo, text=True
@@ -396,17 +339,17 @@ def test_visible_update_fails_closed_when_the_draft_consumes_the_request_budget(
         def revise(self, **_kwargs):
             raise AssertionError("no additional model request is permitted")
 
-    planner = ExhaustedPlanner(draft, draft, planning_requests=14)
+    planner = ExhaustedPlanner(draft, draft, planning_requests=3)
     item, outcome = _process(clean_queue, target_repo, store, planner)
 
     assert outcome.status == schema.LANDED
     assert planner.revision_calls == []
-    assert item["report"]["model_requests"] == 14
-    assert item["report"]["plan_rejection"] == "semantic revision budget exhausted"
+    assert item["report"]["model_requests"] == 3
+    assert item["report"]["plan_rejection"] == "filing correction budget exhausted"
     assert _changed_paths(target_repo, item["commit_sha"]) == [source]
 
 
-def test_semantic_revision_receives_only_the_same_acl_filtered_context(clean_queue, target_repo):
+def test_contract_correction_receives_only_the_same_acl_filtered_context(clean_queue, target_repo):
     store = evidence.MemoryEvidenceStore()
     _seed_page(
         clean_queue,
@@ -456,205 +399,3 @@ def test_semantic_revision_receives_only_the_same_acl_filtered_context(clean_que
     assert planner.revision_calls[0]["context"] == planner.plan_context
     assert "Private Finance Concept" not in planner.plan_context
     assert "Private finance context" not in planner.plan_context
-
-
-def test_authorized_page_outside_bounded_context_still_requires_semantic_revision(
-    clean_queue, target_repo
-):
-    store = evidence.MemoryEvidenceStore()
-    actor = Actor(subject="marc", display_name="Marc")
-    for index in range(13):
-        _seed_page(
-            clean_queue,
-            target_repo,
-            store,
-            actor=actor,
-            audience=None,
-            key=f"semantic-revision-candidate-{index}",
-            title=f"Candidate {index:02}",
-            text="Common signal keeps records current.",
-        )
-    _seed_page(
-        clean_queue,
-        target_repo,
-        store,
-        actor=actor,
-        audience=None,
-        key="semantic-revision-authorized-target",
-        title="Zebra Target",
-        text="Common signal keeps records current.",
-    )
-    _receipt, source = _capture(
-        clean_queue,
-        store,
-        actor=actor,
-        audience=None,
-        key="semantic-revision-authorized-update",
-        text="Common signal keeps records current.",
-    )
-    draft = FilingPlan(
-        summary="Updated an authorized page outside the bounded context.",
-        mutations=(
-            PageMutation(
-                action="update",
-                path="wiki/concepts/Zebra Target.md",
-                body=_body("Zebra Target", "The durable target remains current.", source),
-                reason="The source updates an existing durable page.",
-            ),
-        ),
-    )
-    planner = RevisionPlanner(draft, draft)
-
-    item, outcome = _process(clean_queue, target_repo, store, planner)
-
-    context = json.loads(planner.plan_context)
-    assert outcome.status == schema.LANDED
-    assert len(context["candidates"]) == 12
-    assert "wiki/concepts/Zebra Target.md" not in {
-        candidate["path"] for candidate in context["candidates"]
-    }
-    assert len(planner.revision_calls) == 1
-    assert item["report"]["semantic_revision_required"] is True
-
-
-@pytest.mark.parametrize("action", ("update", "delete"))
-def test_asymmetric_capture_acl_revises_authorized_hidden_context_page(
-    clean_queue, target_repo, action
-):
-    store = evidence.MemoryEvidenceStore()
-    actor = Actor(subject="alice", display_name="Alice")
-    _seed_page(
-        clean_queue,
-        target_repo,
-        store,
-        actor=actor,
-        audience=("engineering",),
-        key=f"semantic-revision-asymmetric-seed-{action}",
-        title="Engineering Target",
-        text="Engineering-only context must not enter a wider capture prompt.",
-    )
-    _receipt, source = _capture(
-        clean_queue,
-        store,
-        actor=actor,
-        audience=("engineering", "finance"),
-        key=f"semantic-revision-asymmetric-{action}",
-        text="The wider capture authorizes an engineering target revision.",
-    )
-    mutation = PageMutation(
-        action=action,
-        path="wiki/concepts/Engineering Target.md",
-        reason="The source changes an existing engineering concept.",
-        **(
-            {
-                "body": _body(
-                    "Engineering Target",
-                    "The authorized target remains an engineering-only concept.",
-                    source,
-                )
-            }
-            if action == "update"
-            else {}
-        ),
-    )
-    draft = FilingPlan(summary="Revised an authorized asymmetric-ACL target.", mutations=(mutation,))
-    planner = RevisionPlanner(draft, draft)
-
-    item, outcome = _process(clean_queue, target_repo, store, planner)
-
-    assert outcome.status == schema.LANDED
-    assert item["report"]["semantic_revision_required"] is True
-    assert item["report"]["semantic_revision_attempted"] is True
-    assert item["report"]["semantic_revision_applied"] is True
-    assert len(planner.revision_calls) == 1
-    assert "Engineering Target" not in planner.plan_context
-    assert "Engineering-only context" not in planner.plan_context
-    assert planner.revision_calls[0]["context"] == planner.plan_context
-
-
-def test_inaccessible_page_update_never_becomes_semantic_revision_eligible(clean_queue, target_repo):
-    store = evidence.MemoryEvidenceStore()
-    _seed_page(
-        clean_queue,
-        target_repo,
-        store,
-        actor=Actor(subject="bob", display_name="Bob"),
-        audience=("finance",),
-        key="semantic-revision-inaccessible-seed",
-        title="Private Finance Target",
-        text="Private finance evidence remains restricted.",
-    )
-    actor = Actor(subject="alice", display_name="Alice")
-    _receipt, source = _capture(
-        clean_queue,
-        store,
-        actor=actor,
-        audience=("engineering",),
-        key="semantic-revision-inaccessible-update",
-        text="Engineering evidence must not reveal finance context.",
-    )
-    draft = FilingPlan(
-        summary="Attempted hidden update.",
-        mutations=(
-            PageMutation(
-                action="update",
-                path="wiki/concepts/Private Finance Target.md",
-                body=_body("Private Finance Target", "Hidden content must not land.", source),
-                reason="The hidden target is not available to this capture.",
-            ),
-        ),
-    )
-    planner = RevisionPlanner(draft, draft)
-
-    item, outcome = _process(clean_queue, target_repo, store, planner)
-
-    assert outcome.status == schema.LANDED
-    assert planner.revision_calls == []
-    assert "Private Finance Target" not in planner.plan_context
-    assert item["report"]["semantic_revision_required"] is False
-
-
-def test_recompile_revises_a_create_only_draft_when_prior_pages_exist(clean_queue, target_repo):
-    store = evidence.MemoryEvidenceStore()
-    actor = Actor(subject="marc", display_name="Marc")
-    source = _seed_page(
-        clean_queue,
-        target_repo,
-        store,
-        actor=actor,
-        audience=None,
-        key="semantic-revision-recompile-seed",
-        title="Recompile Target",
-        text="The source defines a recompiled durable concept.",
-    )
-    draft = FilingPlan(
-        summary="Recreated the source-backed concept.",
-        mutations=(
-            PageMutation(
-                action="create",
-                role="concept",
-                title="Recompile Target",
-                body=_body("Recompile Target", "The durable concept is recreated from its source.", source),
-                entities=(),
-                reason="The current compiler recreates the source-backed page.",
-            ),
-        ),
-    )
-    planner = RevisionPlanner(draft, draft)
-    queue.enqueue_garden(
-        clean_queue,
-        schema.GardenRequest(
-            idempotency_key="semantic-revision-recompile",
-            actor=actor,
-            rationale="Recompile the current source-backed graph.",
-            mode="recompile",
-        ),
-    )
-
-    item, outcome = _process(clean_queue, target_repo, store, planner)
-
-    assert outcome.status == schema.LANDED
-    assert len(planner.revision_calls) == 1
-    assert planner.revision_calls[0]["draft"].mutations[0].action == "create"
-    assert planner.revision_calls[0]["max_requests"] == 2
-    assert item["report"]["semantic_revision_count"] == 1
