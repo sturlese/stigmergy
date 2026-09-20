@@ -97,7 +97,7 @@ def _meeting_note_mutation(*, title: str, role: str = "note") -> PageMutation:
 
 def test_production_budget_is_one_filing_plus_one_bounded_correction():
     assert constants.PRODUCTION_MAX_TURNS == 3
-    assert constants.PRODUCTION_REASONING_LEVEL == "minimal"
+    assert constants.PRODUCTION_REASONING_LEVEL == "medium"
 
 
 def test_quality_score_checks_topology_content_and_entities():
@@ -234,7 +234,10 @@ def test_meeting_case_rejects_empty_entity_proposals():
     plan = FilingPlan(
         summary="Recorded the Helio Stack review and its dated next evaluation cycle.",
         entities=(
-            *(EntityProposal(name=name, entity_type="person") for name in ("Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen")),
+            *(
+                EntityProposal(name=name, entity_type="person")
+                for name in ("Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen")
+            ),
             EntityProposal(name="Helio Stack", entity_type="organization"),
         ),
         mutations=(

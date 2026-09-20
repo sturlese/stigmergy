@@ -123,7 +123,6 @@ def _mutations(expectation: dict, mutations: tuple[PageMutation, ...]) -> dict:
         forbidden_items = tuple(expectation.get("forbidden", ()))
         required = {_case_signature(item) for item in required_items}
         allowed = required | {_case_signature(item) for item in allowed_items}
-        forbidden = {_case_signature(item) for item in forbidden_items}
         actual = tuple(_mutation_signature(mutation) for mutation in mutations)
         found = set(actual)
         duplicates = {item for item in found if actual.count(item) > 1}

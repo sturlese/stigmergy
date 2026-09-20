@@ -19,7 +19,7 @@ while the anonymous comparison remains the release authority for overall cold-re
 
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use `deepseek/deepseek-v4.1-flash` through
-throughput-sorted zero-data-retention OpenRouter providers, minimal reasoning, and the same three-request
+throughput-sorted zero-data-retention OpenRouter providers, medium reasoning, and the same three-request
 ceiling as the writer: one initial request, at most one schema retry, and at most one bounded
 correction. Runs exercise the temporary-worktree
 writer and its bounded contract-correction path, and must all pass. Hippocampus and the selected
