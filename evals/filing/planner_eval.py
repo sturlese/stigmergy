@@ -442,15 +442,19 @@ def _editorial_quality(case: dict, plan: FilingPlan) -> dict:
 def _entity_editorial_quality(case: dict, plan: FilingPlan) -> dict:
     expectation = case.get("entity_editorial_quality", {})
     required = tuple(expectation.get("required", ()))
+    min_description_words = int(expectation.get("min_description_words", 1))
+    min_facts = int(expectation.get("min_facts", 1))
+    require_temporal_fact = bool(expectation.get("require_temporal_fact"))
     proposals = {resolution_key(proposal.name): proposal for proposal in plan.entities}
     missing_entities = []
     missing_descriptions = []
     missing_description_coverage = []
     missing_fact_coverage = []
+    missing_temporal_fact_anchors = []
     description_fact_duplicates = []
 
     for required_entity in required:
-        name = str(required_entity["name"])
+        name = str(required_entity)
         proposal = proposals.get(resolution_key(name))
         if proposal is None:
             missing_entities.append(name)
@@ -458,49 +462,35 @@ def _entity_editorial_quality(case: dict, plan: FilingPlan) -> dict:
         description = (proposal.description or "").strip()
         if not description:
             missing_descriptions.append(name)
-        elif not _term_expectation_met(
-            (description,),
-            required_entity.get("description_terms", ()),
-            required_entity.get("description_term_groups", ()),
-        ):
+        elif len(re.findall(r"\b[\w'-]+\b", description)) < min_description_words:
             missing_description_coverage.append(name)
         facts = tuple(fact for fact in proposal.facts if fact.strip())
-        if not _term_expectation_met(
-            facts,
-            required_entity.get("fact_terms", ()),
-            required_entity.get("fact_term_groups", ()),
-        ):
+        if len(facts) < min_facts:
             missing_fact_coverage.append(name)
+        elif require_temporal_fact and not any(
+            re.search(r"\b(?:19|20)\d{2}(?:-\d{2}(?:-\d{2})?)?\b", fact) for fact in facts
+        ):
+            missing_temporal_fact_anchors.append(name)
         description_key = _entity_editorial_key(description)
         for fact in facts:
             if description_key and description_key == _entity_editorial_key(fact):
                 description_fact_duplicates.append({"entity": name, "fact": fact})
 
     return {
-        "required": [str(item["name"]) for item in required],
+        "required": [str(item) for item in required],
         "missing_entities": missing_entities,
         "missing_descriptions": missing_descriptions,
         "missing_description_coverage": missing_description_coverage,
         "missing_fact_coverage": missing_fact_coverage,
+        "missing_temporal_fact_anchors": missing_temporal_fact_anchors,
         "description_fact_duplicates": description_fact_duplicates,
         "passed": not missing_entities
         and not missing_descriptions
         and not missing_description_coverage
         and not missing_fact_coverage
+        and not missing_temporal_fact_anchors
         and not description_fact_duplicates,
     }
-
-
-def _term_expectation_met(values, terms, term_groups) -> bool:
-    normalized = tuple(_normalized_text(value) for value in values)
-    return all(any(_normalized_text(term) in value for value in normalized) for term in terms) and (
-        not term_groups
-        or any(
-            all(_normalized_text(term) in value for term in group)
-            for group in term_groups
-            for value in normalized
-        )
-    )
 
 
 def _entity_editorial_key(value: str) -> str:

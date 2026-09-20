@@ -16,6 +16,10 @@ multiple explanatory paragraphs, explicit evidence limits, preservation of named
 contextual connections, and rejection of raw evidence inventories or duplicated entity-name prefixes.
 These gates complement rather than replace the blind review: deterministic checks catch known regressions,
 while the anonymous comparison remains the release authority for overall cold-read and reuse quality.
+Entity editorial gates are deliberately source-neutral: they check substantive descriptions, durable facts,
+temporal anchors when the case is time-sensitive, and separation between descriptions and facts, but never
+require fixture phrases. The blind reviewer receives the complete source alongside each anonymous comparison
+and judges factual support, relevance, and whether the resulting graph would remain useful outside the source.
 
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use `deepseek/deepseek-v4.1-flash` through
