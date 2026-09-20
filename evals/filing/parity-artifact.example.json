@@ -36,10 +36,10 @@
   "runs": [
     {
       "implementation": "stigmergy",
-      "run_id": "matrix-low-repeat-1",
+      "run_id": "matrix-minimal-repeat-1",
       "runtime": {
         "model": "deepseek/deepseek-v4.1-flash",
-        "reasoning_level": "low",
+        "reasoning_level": "minimal",
         "provider": "openrouter:throughput",
         "max_tokens": 40960,
         "temperature": 0
@@ -75,7 +75,7 @@
           },
           "runtime": {
             "model": "deepseek/deepseek-v4.1-flash",
-            "reasoning_level": "low",
+            "reasoning_level": "minimal",
             "provider": "openrouter:throughput",
             "max_tokens": 40960,
             "temperature": 0
@@ -159,10 +159,10 @@
   ],
   "reasoning_matrix": [
     {
-      "reasoning_level": "low",
+      "reasoning_level": "minimal",
       "runtime": {
         "model": "deepseek/deepseek-v4.1-flash",
-        "reasoning_level": "low",
+        "reasoning_level": "minimal",
         "provider": "openrouter:throughput",
         "max_tokens": 40960,
         "temperature": 0

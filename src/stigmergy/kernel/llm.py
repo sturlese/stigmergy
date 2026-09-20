@@ -9,7 +9,7 @@ from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettin
 
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:deepseek/deepseek-v4.1-flash"
-LIBRARIAN_REASONING_LEVEL = "low"
+LIBRARIAN_REASONING_LEVEL = "minimal"
 LIBRARIAN_MAX_TOKENS = 40960
 LIBRARIAN_TEMPERATURE = 0
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"

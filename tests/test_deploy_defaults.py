@@ -706,7 +706,7 @@ def _parity_artifact(
             ],
         }
 
-    selected = [run("stigmergy", f"matrix-low-{repeat}", "low") for repeat in range(1, 4)]
+    selected = [run("stigmergy", f"matrix-minimal-{repeat}", "minimal") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
         "schema_version": 5,
@@ -720,25 +720,10 @@ def _parity_artifact(
         "runs": [hippocampus, *selected],
         "reasoning_matrix": [
             {
-                "reasoning_level": level,
+                "reasoning_level": "minimal",
                 "runtime": {
                     "model": "deepseek/deepseek-v4.1-flash",
-                    "reasoning_level": level,
-                    "provider": "openrouter:throughput",
-                    "max_tokens": 40960,
-                    "temperature": 0,
-                },
-                "runs": [run("stigmergy", f"matrix-{level}-1", level, passing=False)],
-                "passed": False,
-            }
-            for level in ("minimal",)
-        ]
-        + [
-            {
-                "reasoning_level": "low",
-                "runtime": {
-                    "model": "deepseek/deepseek-v4.1-flash",
-                    "reasoning_level": "low",
+                    "reasoning_level": "minimal",
                     "provider": "openrouter:throughput",
                     "max_tokens": 40960,
                     "temperature": 0,

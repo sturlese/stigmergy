@@ -109,7 +109,7 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 
 Deterministic linting is the gardener's detection step and makes no model call. Filing and bounded
 contract correction use the librarian's `openrouter:deepseek/deepseek-v4.1-flash` model. Librarian calls request reasoning
-effort `low` with reasoning excluded from returned output and an output ceiling of `40960` tokens,
+effort `minimal` with reasoning excluded from returned output and an output ceiling of `40960` tokens,
 sent as `max_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
 requires supported parameters, denies data collection, and requires
 zero-data-retention processing. The librarian prefers the fastest compatible provider and permits

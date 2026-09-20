@@ -79,7 +79,7 @@ def _passing_plan():
 
 def test_production_budget_is_one_filing_plus_one_bounded_correction():
     assert constants.PRODUCTION_MAX_TURNS == 3
-    assert constants.PRODUCTION_REASONING_LEVEL == "low"
+    assert constants.PRODUCTION_REASONING_LEVEL == "minimal"
 
 
 def test_quality_score_checks_topology_content_and_entities():
