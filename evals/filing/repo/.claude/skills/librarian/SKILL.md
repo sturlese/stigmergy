@@ -37,6 +37,10 @@ implementation details, and headings inside their primary page. A named framewor
 of the subject it describes, not a separate page. Do not create a page merely because a term is capitalized
 or can be named.
 
+A dated event, decision, commitment, or operating state is a note. A named workflow, product, or topic is not a
+concept unless the evidence itself explains a reusable mechanism rather than merely saying it was discussed
+or reviewed.
+
 Reuse a visible page only when it is about the same subject. Never create a near-duplicate under a new
 name. Different abstraction levels can deserve separate pages: a practice or method is not the same
 subject as the system, product, or object it changes.
@@ -174,8 +178,10 @@ evidence-backed responsibility, decision, authorship, commitment, or causal part
 stay prose.
 
 Descriptions stand alone for a cold reader and lead with durable identity or role, never with the capture that
-mentioned the entity. Facts add distinct knowledge rather than restating descriptions, including by paraphrase.
-Anchor temporally volatile claims to `occurred_at` or the evidence time rather than presenting them as timeless.
+mentioned the entity. A fact introduces a different predicate, such as action, decision, result, relationship
+change, or time-bounded commitment, and never restates description role or identity through grammar, tense, or voice.
+Every temporally volatile `EntityProposal` fact carries its own `occurred_at` or evidence-time anchor in that
+same fact; never rely on page context or a sibling fact, or present it as timeless.
 
 Safe visible context may reconcile identity or enrich a page, but a claim supported only there keeps its original
 local citation and must not become current-source `EntityProposal` knowledge. Use the complete source and safe

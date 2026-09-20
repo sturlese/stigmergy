@@ -269,8 +269,31 @@ def test_librarian_requires_standalone_nonduplicative_and_temporally_grounded_en
     text = _skill_text()
     assert "descriptions stand alone for a cold reader" in text
     assert "never with the capture that mentioned the entity" in text
-    assert "facts add distinct knowledge rather than restating descriptions" in text
-    assert "anchor temporally volatile claims to `occurred_at` or the evidence time" in text
+    assert "temporally volatile" in text and "occurred_at" in text
+
+
+def test_librarian_requires_each_volatile_entity_fact_to_carry_its_own_time_anchor():
+    text = _skill_text()
+    assert "temporally volatile" in text and "entityproposal" in text
+    assert "its own" in text and "occurred_at" in text and "evidence-time anchor" in text
+    assert "same fact" in text
+    assert "never rely on page context or a sibling fact" in text
+
+
+def test_librarian_distinguishes_dated_records_from_reusable_concepts():
+    text = _skill_text()
+    assert all(term in text for term in ("dated event", "decision", "commitment", "operating state", "note"))
+    assert all(term in text for term in ("named workflow", "product", "topic", "reusable mechanism"))
+
+
+def test_librarian_requires_facts_to_add_a_distinct_predicate_from_identity():
+    text = _skill_text()
+    assert "different predicate" in text
+    assert all(
+        term in text
+        for term in ("action", "decision", "result", "relationship change", "time-bounded commitment")
+    )
+    assert all(term in text for term in ("grammar", "tense", "voice"))
 
 
 def test_librarian_treats_source_body_as_authoritative_over_nonexhaustive_metadata():

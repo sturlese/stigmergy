@@ -60,6 +60,7 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
     entity_wikilink_score = _entity_wikilinks(case, mutations, candidates)
     anti_fragmentation_score = _anti_fragmentation(case, mutations)
     editorial_quality_score = _editorial_quality(case, plan)
+    entity_editorial_quality_score = _entity_editorial_quality(case, plan)
     seeded_update_score = _seeded_update(case, mutations)
     coverage_score = _link_coverage(
         _proposal_names(plan),
@@ -89,6 +90,7 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
             entity_wikilink_score,
             anti_fragmentation_score,
             editorial_quality_score,
+            entity_editorial_quality_score,
             seeded_update_score,
             coverage_score,
             resolution_score,
@@ -109,6 +111,7 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
         "entity_wikilinks": entity_wikilink_score,
         "anti_fragmentation": anti_fragmentation_score,
         "editorial_quality": editorial_quality_score,
+        "entity_editorial_quality": entity_editorial_quality_score,
         "seeded_update": seeded_update_score,
     }
 
@@ -398,6 +401,74 @@ def _editorial_quality(case: dict, plan: FilingPlan) -> dict:
         and not inventory_pages
         and not duplicate_prefixes,
     }
+
+
+def _entity_editorial_quality(case: dict, plan: FilingPlan) -> dict:
+    expectation = case.get("entity_editorial_quality", {})
+    required = tuple(expectation.get("required", ()))
+    proposals = {resolution_key(proposal.name): proposal for proposal in plan.entities}
+    missing_entities = []
+    missing_descriptions = []
+    missing_description_coverage = []
+    missing_fact_coverage = []
+    description_fact_duplicates = []
+
+    for required_entity in required:
+        name = str(required_entity["name"])
+        proposal = proposals.get(resolution_key(name))
+        if proposal is None:
+            missing_entities.append(name)
+            continue
+        description = (proposal.description or "").strip()
+        if not description:
+            missing_descriptions.append(name)
+        elif not _term_expectation_met(
+            (description,),
+            required_entity.get("description_terms", ()),
+            required_entity.get("description_term_groups", ()),
+        ):
+            missing_description_coverage.append(name)
+        facts = tuple(fact for fact in proposal.facts if fact.strip())
+        if not _term_expectation_met(
+            facts,
+            required_entity.get("fact_terms", ()),
+            required_entity.get("fact_term_groups", ()),
+        ):
+            missing_fact_coverage.append(name)
+        description_key = _entity_editorial_key(description)
+        for fact in facts:
+            if description_key and description_key == _entity_editorial_key(fact):
+                description_fact_duplicates.append({"entity": name, "fact": fact})
+
+    return {
+        "required": [str(item["name"]) for item in required],
+        "missing_entities": missing_entities,
+        "missing_descriptions": missing_descriptions,
+        "missing_description_coverage": missing_description_coverage,
+        "missing_fact_coverage": missing_fact_coverage,
+        "description_fact_duplicates": description_fact_duplicates,
+        "passed": not missing_entities
+        and not missing_descriptions
+        and not missing_description_coverage
+        and not missing_fact_coverage
+        and not description_fact_duplicates,
+    }
+
+
+def _term_expectation_met(values, terms, term_groups) -> bool:
+    normalized = tuple(_normalized_text(value) for value in values)
+    return all(any(_normalized_text(term) in value for value in normalized) for term in terms) and (
+        not term_groups
+        or any(
+            all(_normalized_text(term) in value for term in group)
+            for group in term_groups
+            for value in normalized
+        )
+    )
+
+
+def _entity_editorial_key(value: str) -> str:
+    return re.sub(r"[^\w]+", " ", _normalized_text(value)).strip()
 
 
 def _seeded_update(case: dict, mutations: tuple[PageMutation, ...]) -> dict:

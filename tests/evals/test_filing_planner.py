@@ -106,8 +106,46 @@ def test_meeting_case_requires_every_named_participant_as_a_cited_entity_anchor(
     plan = FilingPlan(
         summary="Recorded the Helio Stack review and its dated next evaluation cycle.",
         entities=(
-            *(EntityProposal(name=name, entity_type="person") for name in people),
-            EntityProposal(name="Helio Stack", entity_type="organization"),
+            EntityProposal(
+                name="Maya Ortiz",
+                entity_type="person",
+                description="Founder of Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Maya Ortiz was assigned to decide whether the customer pilot is ready.",
+                ),
+            ),
+            EntityProposal(
+                name="Leon Park",
+                entity_type="person",
+                description="Founder of Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Leon Park was assigned to decide whether the customer pilot is ready.",
+                ),
+            ),
+            EntityProposal(
+                name="Noor Balan",
+                entity_type="person",
+                description="Engineering lead at Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Noor Balan was assigned to run the next evaluation cycle.",
+                ),
+            ),
+            EntityProposal(
+                name="Priya Sen",
+                entity_type="person",
+                description="Customer research lead at Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",
+                ),
+            ),
+            EntityProposal(
+                name="Helio Stack",
+                entity_type="organization",
+                description="Organization developing a tool for early-stage teams.",
+                facts=(
+                    "Its evaluation workflow was reviewed at the 2026-09-20 product review.",
+                ),
+            ),
         ),
         mutations=(
             PageMutation(
@@ -140,6 +178,184 @@ def test_meeting_case_requires_every_named_participant_as_a_cited_entity_anchor(
         "priya sen",
     ]
     assert result["entity_relationships"]["passed"] is True
+    assert result["entity_editorial_quality"]["passed"] is True
+
+
+def test_meeting_case_rejects_empty_entity_proposals():
+    case = planner_eval.load_case(MEETING_CASE)
+    citation = f"(Source: {TICK}{MEETING_SOURCE}{TICK})"
+    plan = FilingPlan(
+        summary="Recorded the Helio Stack review and its dated next evaluation cycle.",
+        entities=(
+            *(EntityProposal(name=name, entity_type="person") for name in ("Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen")),
+            EntityProposal(name="Helio Stack", entity_type="organization"),
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Helio Stack product review",
+                body=(
+                    "# Helio Stack product review\n\n"
+                    "Maya Ortiz and Leon Park are Helio Stack founders. Noor Balan leads engineering "
+                    "and Priya Sen leads customer research for the product review. "
+                    f"{citation}\n\n"
+                    "As of the 2026-09-20 meeting, Noor Balan will run the next evaluation cycle by "
+                    "2026-10-01, while Priya Sen will provide five interview summaries before that "
+                    f"review. {citation}"
+                ),
+                entities=("Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen", "Helio Stack"),
+                reason="The meeting records durable participant responsibilities and a dated operating state.",
+            ),
+        ),
+    )
+
+    result = planner_eval.score(plan, case, source_text=MEETING_FIXTURE.read_text(encoding="utf-8"))
+
+    assert result["entity_editorial_quality"]["passed"] is False
+
+
+def test_meeting_case_rejects_missing_expected_entity_fact_coverage():
+    case = planner_eval.load_case(MEETING_CASE)
+    citation = f"(Source: {TICK}{MEETING_SOURCE}{TICK})"
+    people = ("Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen")
+    plan = FilingPlan(
+        summary="Recorded the Helio Stack review and its dated next evaluation cycle.",
+        entities=(
+            EntityProposal(
+                name="Maya Ortiz",
+                entity_type="person",
+                description="Founder of Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Maya Ortiz was assigned to decide whether the customer pilot is ready.",
+                ),
+            ),
+            EntityProposal(
+                name="Leon Park",
+                entity_type="person",
+                description="Founder of Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Leon Park was assigned to decide whether the customer pilot is ready.",
+                ),
+            ),
+            EntityProposal(
+                name="Noor Balan",
+                entity_type="person",
+                description="Engineering lead at Helio Stack.",
+                facts=("At the 2026-09-20 review, Noor Balan participated.",),
+            ),
+            EntityProposal(
+                name="Priya Sen",
+                entity_type="person",
+                description="Customer research lead at Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",
+                ),
+            ),
+            EntityProposal(
+                name="Helio Stack",
+                entity_type="organization",
+                description="Organization developing a tool for early-stage teams.",
+                facts=(
+                    "Its evaluation workflow was reviewed at the 2026-09-20 product review.",
+                ),
+            ),
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Helio Stack product review",
+                body=(
+                    "# Helio Stack product review\n\n"
+                    "Maya Ortiz and Leon Park are Helio Stack founders. Noor Balan leads engineering "
+                    "and Priya Sen leads customer research for the product review. "
+                    f"{citation}\n\n"
+                    "As of the 2026-09-20 meeting, Noor Balan will run the next evaluation cycle by "
+                    "2026-10-01, while Priya Sen will provide five interview summaries before that "
+                    f"review. {citation}"
+                ),
+                entities=(*people, "Helio Stack"),
+                reason="The meeting records durable participant responsibilities and a dated operating state.",
+            ),
+        ),
+    )
+
+    result = planner_eval.score(plan, case, source_text=MEETING_FIXTURE.read_text(encoding="utf-8"))
+
+    assert result["entity_editorial_quality"]["passed"] is False
+
+
+def test_meeting_case_rejects_description_fact_duplication():
+    case = planner_eval.load_case(MEETING_CASE)
+    citation = f"(Source: {TICK}{MEETING_SOURCE}{TICK})"
+    repeated = "Founder of Helio Stack who participated in the 2026-09-20 review and will decide on the pilot."
+    people = ("Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen")
+    plan = FilingPlan(
+        summary="Recorded the Helio Stack review and its dated next evaluation cycle.",
+        entities=(
+            EntityProposal(
+                name="Maya Ortiz",
+                entity_type="person",
+                description=repeated,
+                facts=(repeated,),
+            ),
+            EntityProposal(
+                name="Leon Park",
+                entity_type="person",
+                description="Founder of Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Leon Park was assigned to decide whether the customer pilot is ready.",
+                ),
+            ),
+            EntityProposal(
+                name="Noor Balan",
+                entity_type="person",
+                description="Engineering lead at Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Noor Balan was assigned to run the next evaluation cycle.",
+                ),
+            ),
+            EntityProposal(
+                name="Priya Sen",
+                entity_type="person",
+                description="Customer research lead at Helio Stack.",
+                facts=(
+                    "At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",
+                ),
+            ),
+            EntityProposal(
+                name="Helio Stack",
+                entity_type="organization",
+                description="Organization developing a tool for early-stage teams.",
+                facts=(
+                    "Its evaluation workflow was reviewed at the 2026-09-20 product review.",
+                ),
+            ),
+        ),
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title="Helio Stack product review",
+                body=(
+                    "# Helio Stack product review\n\n"
+                    "Maya Ortiz and Leon Park are Helio Stack founders. Noor Balan leads engineering "
+                    "and Priya Sen leads customer research for the product review. "
+                    f"{citation}\n\n"
+                    "As of the 2026-09-20 meeting, Noor Balan will run the next evaluation cycle by "
+                    "2026-10-01, while Priya Sen will provide five interview summaries before that "
+                    f"review. {citation}"
+                ),
+                entities=(*people, "Helio Stack"),
+                reason="The meeting records durable participant responsibilities and a dated operating state.",
+            ),
+        ),
+    )
+
+    result = planner_eval.score(plan, case, source_text=MEETING_FIXTURE.read_text(encoding="utf-8"))
+
+    assert result["entity_editorial_quality"]["passed"] is False
 
 
 def test_real_writer_gate_accepts_a_grounded_plan():

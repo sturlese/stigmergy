@@ -19,7 +19,7 @@
   "identities": {
     "required": ["Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen", "Helio Stack"],
     "allowed": [],
-    "forbidden": [],
+    "forbidden": ["SignalBoard"],
     "closed": true
   },
   "external_ids": {
@@ -30,7 +30,7 @@
   "links": {
     "required": ["Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen", "Helio Stack"],
     "allowed": [],
-    "forbidden": [],
+    "forbidden": ["SignalBoard"],
     "closed": true
   },
   "link_coverage": {"allow_unlinked": []},
@@ -48,5 +48,34 @@
   },
   "editorial_quality": {
     "min_explanatory_paragraphs": 1
+  },
+  "entity_editorial_quality": {
+    "required": [
+      {
+        "name": "Helio Stack",
+        "description_term_groups": [["tool", "early-stage"], ["product", "early-stage"]],
+        "fact_term_groups": [["2026-09-20", "reviewed"]]
+      },
+      {
+        "name": "Maya Ortiz",
+        "description_terms": ["founder"],
+        "fact_term_groups": [["2026-09-20", "pilot"]]
+      },
+      {
+        "name": "Leon Park",
+        "description_terms": ["founder"],
+        "fact_term_groups": [["2026-09-20", "pilot"]]
+      },
+      {
+        "name": "Noor Balan",
+        "description_terms": ["engineering", "lead"],
+        "fact_term_groups": [["2026-09-20", "evaluation"]]
+      },
+      {
+        "name": "Priya Sen",
+        "description_terms": ["customer", "research"],
+        "fact_term_groups": [["2026-09-20", "interview"]]
+      }
+    ]
   }
 }
