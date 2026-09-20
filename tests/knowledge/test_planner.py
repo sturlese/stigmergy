@@ -73,10 +73,7 @@ def test_one_model_result_is_the_complete_filing_plan(tmp_path):
     assert isinstance(run.plan, FilingPlan)
     assert run.plan.summary == "Filed one coherent plan"
     assert run.model_requests == 1
-    assert run.compilation_model_requests == 0
     assert run.schema_retry_count == 0
-    assert run.semantic_reviewed is False
-    assert run.graph_shape is None
 
 
 def test_filing_prompt_keeps_source_provenance_and_safe_context_together():
@@ -105,7 +102,7 @@ def test_correction_is_one_complete_replacement_with_explicit_failures():
         violations=({"path": "wiki/concepts/Decision.md", "code": "heading-title"},),
     )
 
-    assert "complete replacement FilingPlan" in prompt
+    assert "complete corrected FilingPlan" in prompt
     assert "CONTRACT FAILURES" in prompt
     assert "heading-title" in prompt
     assert '"summary": "Draft"' in prompt
@@ -151,8 +148,3 @@ def test_prompt_guard_rejects_oversized_inputs(monkeypatch):
             source_text="Primary evidence",
             context="{}",
         )
-
-
-def test_legacy_graph_gates_are_inert_compatibility_only():
-    assert planner.graph_topology_violations(object(), object()) == ()
-    assert planner.graph_shape_violations(object(), object()) == ()

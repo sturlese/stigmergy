@@ -6,10 +6,13 @@ ACL, provenance, identity, link, and atomicity gates. One bounded replacement-pl
 only when those contracts reject the first plan; there is no staged semantic review pipeline.
 
 `parity.py` binds every recorded result to the candidate commit, librarian skill, brain prompt, case,
-fixture, configured provider route, request budget, writer result, semantic score, latency, usage, and
-content-addressed output. It rebuilds a pristine ACL-safe worktree and replays the recorded plan rather
-than trusting an aggregate score. Compatibility fields from older evidence schemas are recorded as
-null or zero and do not represent model phases.
+fixture, canonical initial-graph template manifest, configured provider route, request budget, writer
+result, semantic score, latency, usage, and content-addressed output. It rebuilds a pristine ACL-safe
+worktree and replays the recorded plan rather
+than trusting an aggregate score. Schema v6 is a clean cut designed from the active release invariants:
+candidate and prompt binding, production-equivalent execution, per-case input/plan/result evidence,
+bounded correction telemetry, replayed effective output, reasoning selection, and a verified blind-review
+bundle. Older evidence formats, staged planner phases, and legacy compatibility fields are unsupported.
 
 Case contracts also score editorial quality that structural coverage alone cannot prove. They can require
 multiple explanatory paragraphs, explicit evidence limits, preservation of named seeded knowledge, useful
@@ -18,8 +21,9 @@ These gates complement rather than replace the blind review: deterministic check
 while the anonymous comparison remains the release authority for overall cold-read and reuse quality.
 Entity editorial gates are deliberately source-neutral: they check substantive descriptions, durable facts,
 temporal anchors when the case is time-sensitive, and separation between descriptions and facts, but never
-require fixture phrases. The blind reviewer receives the complete source alongside each anonymous comparison
-and judges factual support, relevance, and whether the resulting graph would remain useful outside the source.
+require fixture phrases. The blind reviewer receives the complete recorded fixture alongside the complete
+anonymous effective-plan payload for each candidate, and judges factual support, relevance, and whether the
+resulting graph would remain useful outside the source.
 
 The selected Stigmergy level requires at least three independent, complete,
 `production-equivalent` repeats per case. Those runs use `deepseek/deepseek-v4.1-flash` through
@@ -31,7 +35,7 @@ Stigmergy runs share the same corpus and initial graph. The
 blind editorial review binds to every exact selected run ID and declares whether Stigmergy has a
 material regression. Hippocampus is comparative baseline evidence, not an admission candidate: its
 hard gates may honestly fail under Stigmergy's writer rubric, but every case, provenance field,
-canonical payload digest, semantic score, writer result, and raw gate map is still replay-verified.
+canonical payload, semantic score, writer result, and raw gate map is still replay-verified.
 
 Every reasoning-level candidate records full per-case runs using the same corpus, initial graph, case
 hashes, candidate commit, skill hash, runtime route, token ceiling, and raw gate map. The librarian
@@ -43,10 +47,10 @@ An admission packet is terminal only when `admission_status` is `passed`, no fie
 `blind_review_packet.status` is `completed`. Its `blind_editorial_review.provenance.artifact_ref` is a
 `sha256:<digest>` reference to `blind-review-unblind-<digest>.json` in the same external evidence
 directory. The validator loads that record and its content-addressed reviewer response, blind packet,
-and private mapping; it verifies their raw and canonical hashes, packet bindings, candidate labels,
-case-output coverage, reviewed run IDs, and the mechanically derived verdict. The blind packet also
-binds draft/review plan hashes and revision telemetry without exposing implementation, model, provider,
-or run identity. Keep the complete
+and private mapping; it verifies their raw and canonical hashes, fixture text and hash, complete
+effective-plan payloads, candidate labels, case-output coverage, reviewed run IDs, and the mechanically
+derived verdict. The blind packet binds initial and optional correction plan hashes without exposing
+implementation, model, provider, or run identity. Keep the complete
 evidence bundle outside the candidate checkout; a self-reported verdict or mutable path is rejected.
 
 ### Trust boundary
@@ -72,17 +76,18 @@ Run one immutable case-result record with the production-equivalent path:
 
 `--brain-root` is the verified Git checkout used only to prove the exact librarian prompt. Do not
 pass it as `--worktree`: the latter is the fixed versioned initial graph at `evals/filing/repo` by
-default. The runner validates the template's librarian skill byte-for-byte against the packaged
+default. Production-equivalent evidence rejects any other worktree and records the materialized initial
+worktree manifest. The runner validates the template's librarian skill byte-for-byte against the packaged
 skill, but the template itself does not need to be a Git checkout.
 
 By default the runner prints safe telemetry, gate results, prompt/case/fixture provenance, and the
 content hash only. Add `--include-payload` only when recording a local release artifact: it prints the
 derived page bodies and an explicit stderr warning, but never the supplied source text. The emitted
 `case_result` with that flag is the exact object embedded under its repeat's `case_results` array.
-Use the same repeat ID for every case in one matrix repeat; record a new ID for each independent
-repeat. The top-level repeat records the shared runtime, execution mode, three-request ceiling, and
-candidate provenance. The validator requires the nested records to repeat that runtime and budget,
-so summaries cannot stand in for individual outcomes.
+The artifact assembler assigns one run ID to the records in an independent repeat and a new ID to every
+subsequent repeat. The top-level repeat records the shared runtime, execution mode, three-request ceiling,
+and candidate provenance. The validator requires the nested records to repeat that runtime and budget, so
+summaries cannot stand in for individual outcomes.
 
 [`parity-artifact.example.json`](./parity-artifact.example.json) documents the nested shape only;
 it is deliberately marked `example_only` and cannot pass the release validator. A real artifact

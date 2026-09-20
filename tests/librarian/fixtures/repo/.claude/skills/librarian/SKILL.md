@@ -62,24 +62,6 @@ sentences of context and a meaningful wikilink, not a copied component list, fra
 entity relationship. Self-contained means complete about the page's own subject, not a duplicate of its
 neighbors.
 
-For example, if a source explains a reliability practice and the database system it improves, create a
-practice page for diagnosis, testing, iteration, and reported operational outcomes; create a system page
-for replication components, failure modes, and extensions. The practice page names and links the system
-without listing its components. The system page links the practice without repeating operational results.
-A named replication framework remains a section of the system page when it merely groups those components.
-Organizations reporting outcomes are identities anchored only on the practice page, never page mutations.
-
-Contrastive example: a source by Alex describes `Telemetry Engineering`, the practice used to improve a
-`Telemetry Pipeline`. It enumerates the pipeline's collectors, processors, storage, and alerting extensions,
-then reports that Acme reduced diagnosis time after engineering changes.
-
-- Correct: exactly two concept mutations. `Telemetry Engineering` owns the iterative engineering workflow,
-  the explicitly attributed Acme outcome, and the Alex and Acme identity anchors. `Telemetry Pipeline` owns
-  the complete component list and extensions with `entities: []`. The two pages link reciprocally.
-- Incorrect: enumerating pipeline components on the practice page; repeating Acme's result on the pipeline
-  page; creating separate `Pipeline Component Framework`, Alex, or Acme page mutations; anchoring the same
-  identity on both pages; or presenting the reported sequence as causal proof.
-
 Across the complete plan, preserve every material source-backed item identified before writing. Coverage
 must not become duplication.
 
@@ -147,6 +129,15 @@ For an update, treat the visible page as the base manuscript. Preserve every use
 claim, exact local citation, and distinctive formulation unless the new source explicitly corrects it.
 Add or reorganize knowledge without regenerating the page from a fresh summary. Preserve useful existing
 connections. Delete only to consolidate a true semantic duplicate.
+
+## Correct a rejected filing plan
+
+When asked to correct a rejected draft, return one complete replacement `FilingPlan`, never a patch or
+commentary. Read the source and safe context again, preserve all sound editorial decisions, and change only
+what the reported contract failures require. Keep mutation actions and targets unless the failure makes one
+invalid. For an update, retain the visible source-backed manuscript as the base while adding the supported
+correction. Recheck the complete replacement against this skill, local evidence, links, identity anchors,
+and the supplied failures before returning it.
 
 ## Connect pages and identities
 

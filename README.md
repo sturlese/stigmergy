@@ -298,11 +298,14 @@ history rather than adding a second change type.
 
 Before release or deployment, the real-model parity artifact MUST pass
 `python evals/filing/parity.py --artifact <result.json>`; a non-zero result blocks rollout. It
-requires identical corpus, initial graph, source-case hashes, Stigmergy commit and librarian-skill
-hashes across runs; replay-verified draft/revision telemetry and raw gates; a provenance-bearing blind
-review; and a reasoning matrix that proves the selected Stigmergy level is the lowest passing level.
-Schema v5 parity evidence is required; earlier schemas cannot prove the bounded-correction trigger and
-complete candidate binding. Hippocampus is retained
+requires identical corpus, initial graph and manifest, source-case hashes, Stigmergy commit and librarian-skill
+hashes across runs; replay-verified initial/correction/effective-plan telemetry and raw gates; a
+provenance-bearing blind review; and a reasoning matrix that proves the selected Stigmergy level is the
+lowest passing level. Schema v6 is defined by those live invariants: candidate and prompt binding,
+production-equivalent execution, per-case input/plan/result evidence, bounded-correction telemetry,
+replayed output, reasoning selection, and blind-review provenance. Earlier schemas are unsupported after
+the clean-cut contract transition; staged planner phases and legacy compatibility fields are not part of
+the evidence. Hippocampus is retained
 as comparative, replay-verified baseline evidence and is not a Stigmergy admission candidate.
 
 | Purpose | Model |

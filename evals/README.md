@@ -42,11 +42,11 @@ Filing quality has a separate real-model, fail-closed release gate in
 source corpus and initial graph, including cold-readable bodies, local citations, meaningful page
 connections, entity precision and relationships, anti-fragmentation, writer gates, ACL safety, and
 a provenance-bearing blind editorial review. Evidence is per case and per repeat: the selected
-Stigmergy level needs three independent production-equivalent repeats of every case under the bounded
-ten-request ceiling. A healthy graph-shaped capture uses six requests for topology, topology review,
-enrichment, enrichment review, compilation, and editorial review; extra requests are reserved for
-correction. The artifact
-records phase requests, retries, repairs, elapsed time, available usage metadata, case and fixture hashes,
-and the exact brain-prompt commit/hash. The release gate recomputes the recorded topology and graph-shape
-contract, then replays the source-free filing plan and effective output before permitting deployment only
-at the lowest passing level.
+Stigmergy level needs three independent production-equivalent repeats of every case. Each repeat records
+the initial plan, optional bounded correction, request telemetry, elapsed time, usage metadata, case and
+fixture hashes, canonical initial-graph template manifest, and the exact brain-prompt commit/hash. The
+release gate replays the recorded plan and effective output before permitting deployment only at the
+lowest passing level. Schema v6 is an
+invariant-based release record, not a reduced staged-planner artifact: it binds the candidate and prompt,
+production-equivalent execution, per-case evidence, bounded correction, replayed gates, reasoning
+selection, and the blind-review bundle. Earlier schemas and legacy phase fields are unsupported.

@@ -157,14 +157,20 @@ def _run_deploy(
     if parity_artifact != "absent":
         payload = _parity_artifact(tmp_path, candidate_commit, knowledge, staging_sha)
         if parity_artifact == "stale":
-            payload["stigmergy_commit"] = "a" * 40
+            payload["release"]["candidate"]["commit"] = "a" * 40
         elif parity_artifact == "mismatched":
-            payload["librarian_skill_sha256"] = "b" * 64
+            payload["release"]["candidate"]["librarian_skill_sha256"] = "b" * 64
         elif parity_artifact == "minimal-reasoning":
             payload["runs"] = json.loads(json.dumps(payload["runs"]))
             for run in payload["runs"]:
                 if run["implementation"] == "stigmergy":
                     run["runtime"]["reasoning_level"] = "minimal"
+        elif parity_artifact == "tampered-blind-packet":
+            packet_digest = payload["blind_review_packet"]["canonical_sha256"]
+            packet_path = tmp_path.parent / f"blind-review-packet-{packet_digest}.json"
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["comparisons"] = packet["comparisons"][:-1]
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
         artifact.write_text(json.dumps(payload), encoding="utf-8")
         env["STIGMERGY_PARITY_ARTIFACT"] = str(artifact)
     if dirty_platform:
@@ -194,253 +200,6 @@ def _raw_gates(*, passed=True):
 
 def _canonical(value) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _write_review_bundle(root: pathlib.Path, artifact: dict) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    baseline = next(run for run in artifact["runs"] if run["implementation"] == "hippocampus")
-    selected = [run for run in artifact["runs"] if run["implementation"] == "stigmergy"]
-    baseline_cases = {case["case_id"]: case for case in baseline["case_results"]}
-    comparisons, mappings, pairs, regressions = [], [], [], []
-    for run in selected:
-        for case in run["case_results"]:
-            comparison_id = f"comparison-{case['case_id']}-{run['run_id']}"
-            labels = []
-            for implementation, candidate_run, candidate_case in (
-                ("hippocampus", baseline, baseline_cases[case["case_id"]]),
-                ("stigmergy", run, case),
-            ):
-                label = "candidate-" + hashlib.sha256(f"{comparison_id}:{implementation}".encode()).hexdigest()[:16]
-                labels.append(
-                    {
-                        "label": label,
-                        "case_output_sha256": candidate_case["output"]["sha256"],
-                        "effective_pages_sha256": hashlib.sha256(
-                            _canonical(candidate_case["payload"]["effective_plan"])
-                        ).hexdigest(),
-                        "draft_plan_sha256": hashlib.sha256(_canonical(candidate_case["payload"]["plan"])).hexdigest(),
-                        "reviewed_plan_sha256": (
-                            hashlib.sha256(_canonical(candidate_case["payload"]["reviewed_plan"])).hexdigest()
-                            if candidate_case["payload"]["reviewed_plan"] is not None
-                            else None
-                        ),
-                        "repair_plan_sha256": candidate_case["payload"]["repair_plan_sha256"],
-                        "semantic_revision": candidate_case["payload"]["semantic_revision"],
-                        "implementation": implementation,
-                        "run_id": candidate_run["run_id"],
-                    }
-                )
-            comparisons.append(
-                {
-                    "comparison_id": comparison_id,
-                    "candidates": [
-                        {key: value for key, value in label.items() if key not in {"implementation", "run_id"}}
-                        for label in labels
-                    ],
-                }
-            )
-            mappings.append({"comparison_id": comparison_id, "labels": labels})
-            regression = {
-                "comparison_id": comparison_id,
-                "candidate_label": labels[0]["label"],
-                "implementation": "hippocampus",
-                "run_id": baseline["run_id"],
-                "case_output_sha256": labels[0]["case_output_sha256"],
-                "effective_pages_sha256": labels[0]["effective_pages_sha256"],
-                "reason": "Fixture baseline regression.",
-            }
-            regressions.append(regression)
-            pairs.append(
-                {
-                    "pair_id": comparison_id,
-                    "judgments": {"fixture": {"winner": "tie", "reason": "Fixture."}},
-                    "overall": {"winner": "tie", "reason": "Fixture."},
-                    "material_regression": {"side": labels[0]["label"], "reason": regression["reason"]},
-                }
-            )
-    packet = {"schema_version": 1, "comparisons": comparisons}
-    packet_bytes = _canonical(packet)
-    packet_digest = hashlib.sha256(packet_bytes).hexdigest()
-    packet_name = f"blind-review-packet-{packet_digest}.json"
-    (root / packet_name).write_bytes(packet_bytes)
-    mapping = {"schema_version": 1, "packet_sha256": packet_digest, "mapping": mappings}
-    mapping_bytes = _canonical(mapping)
-    mapping_digest = hashlib.sha256(mapping_bytes).hexdigest()
-    mapping_name = f"blind-review-mapping-{mapping_digest}.secret.json"
-    (root / mapping_name).write_bytes(mapping_bytes)
-    response = {
-        "reviewer_identity": "fixture-reviewer",
-        "method": "fixture-blind-pairwise",
-        "packet_sha256": hashlib.sha256(packet_bytes).hexdigest(),
-        "pairs": pairs,
-    }
-    response_bytes = _canonical(response)
-    response_digest = hashlib.sha256(response_bytes).hexdigest()
-    response_name = f"blind-reviewer-response-{response_digest}.json"
-    (root / response_name).write_bytes(response_bytes)
-    review = {
-        "schema_version": "blind-editorial-review-unblind-v2",
-        "verdict": "no_material_stigmergy_regression",
-        "reviewer_response": {
-            "path": response_name,
-            "raw_sha256": hashlib.sha256(response_bytes).hexdigest(),
-            "canonical_sha256": response_digest,
-            "artifact_ref": f"sha256:{response_digest}",
-        },
-        "packet": {
-            "path": packet_name,
-            "raw_sha256": hashlib.sha256(packet_bytes).hexdigest(),
-            "canonical_sha256": packet_digest,
-        },
-        "mapping": {
-            "path": mapping_name,
-            "raw_sha256": hashlib.sha256(mapping_bytes).hexdigest(),
-            "canonical_sha256": mapping_digest,
-        },
-        "unblinding": {
-            "material_regressions": regressions,
-            "stigmergy_material_regressions": [],
-        },
-    }
-    review_bytes = _canonical(review)
-    review_digest = hashlib.sha256(review_bytes).hexdigest()
-    (root / f"blind-review-unblind-{review_digest}.json").write_bytes(review_bytes)
-    artifact["admission_status"] = "passed"
-    artifact["blind_review_packet"] = {
-        "status": "completed",
-        "raw_sha256": hashlib.sha256(packet_bytes).hexdigest(),
-        "canonical_sha256": packet_digest,
-    }
-    artifact["blind_editorial_review"]["provenance"]["artifact_ref"] = f"sha256:{review_digest}"
-
-
-def _legacy_parity_artifact(repo: pathlib.Path, commit: str) -> dict:
-    expected = parity.current_release_inputs(repo)
-    assert expected.commit == commit
-    corpus = "0123456789abcdef" * 4
-    initial = "0123456789abcdef0123456789abcdef01234567"
-    provenance = {
-        "corpus_sha256": corpus,
-        "initial_graph_ref": initial,
-        "source_cases": expected.source_cases,
-        "commit": expected.commit,
-        "librarian_skill_sha256": expected.librarian_skill_sha256,
-    }
-
-    def case_result(case_id: str, repeat: int, passed: bool, runtime: dict) -> dict:
-        digest = f"{repeat + len(case_id):064x}"
-        return {
-            "case_id": case_id,
-            "runtime": runtime,
-            "execution_mode": "production-equivalent",
-            "configured_max_turns": 3,
-            "model_requests": 1,
-            "planning_model_requests": 1,
-            "semantic_revision_required": False,
-            "semantic_revision_attempted": False,
-            "semantic_revision_applied": False,
-            "semantic_revision_model_requests": 0,
-            "repair_model_requests": 0,
-            "schema_retry_count": 0,
-            "semantic_repair_count": 0,
-            "elapsed_ms": 1,
-            "usage": {"requests": 1},
-            "score": {"passed": passed},
-            "gates": {"passed": passed},
-            "raw_gates": _raw_gates(passed=passed),
-            "output": {"sha256": digest, "artifact_ref": f"sha256:{digest}"},
-        }
-
-    def run(implementation: str, run_id: str, level: str, repeat: int, passed: bool) -> dict:
-        runtime = (
-            {
-                "model": "deepseek/deepseek-v4.1-flash",
-                "reasoning_level": level,
-                "provider": "openrouter:throughput",
-                "max_tokens": 40960,
-                "temperature": 0,
-            }
-            if implementation == "stigmergy"
-            else {"model": "fixture", "reasoning_level": level, "provider": "fixture"}
-        )
-        run_provenance = (
-            provenance
-            if implementation == "stigmergy"
-            else {key: value for key, value in provenance.items() if key not in {"commit", "librarian_skill_sha256"}}
-        )
-        return {
-            "implementation": implementation,
-            "run_id": run_id,
-            "runtime": runtime,
-            "execution": {"mode": "production-equivalent", "configured_max_turns": 3},
-            "provenance": run_provenance,
-            "case_results": [
-                case_result(case_id, repeat, passed, runtime) for case_id in sorted(expected.source_cases)
-            ],
-        }
-
-    def matrix(level: str, passed: bool, repeats: int = 1) -> dict:
-        return {
-            "reasoning_level": level,
-            "runtime": {
-                "model": "deepseek/deepseek-v4.1-flash",
-                "reasoning_level": level,
-                "provider": "openrouter:throughput",
-                "max_tokens": 40960,
-                "temperature": 0,
-            },
-            "runs": [
-                run("stigmergy", f"matrix-{level}-{repeat}", level, repeat, passed) for repeat in range(1, repeats + 1)
-            ],
-            "passed": passed,
-        }
-
-    selected = [run("stigmergy", f"matrix-high-{repeat}", "high", repeat, True) for repeat in range(1, 4)]
-
-    return {
-        "schema_version": 2,
-        "corpus_sha256": corpus,
-        "initial_graph_ref": initial,
-        "stigmergy_commit": expected.commit,
-        "librarian_skill_sha256": expected.librarian_skill_sha256,
-        "source_cases": [{"id": key, "sha256": value} for key, value in expected.source_cases.items()],
-        "runs": [
-            run("hippocampus", "hippocampus-recorded-run", "medium", 1, True),
-            *selected,
-        ],
-        "reasoning_matrix": [
-            matrix("minimal", False),
-            matrix("low", False),
-            matrix("medium", False),
-            {
-                "reasoning_level": "high",
-                "runtime": {
-                    "model": "deepseek/deepseek-v4.1-flash",
-                    "reasoning_level": "high",
-                    "provider": "openrouter:throughput",
-                    "max_tokens": 40960,
-                    "temperature": 0,
-                },
-                "runs": selected,
-                "passed": True,
-            },
-        ],
-        "blind_editorial_review": {
-            "verdict": "no_material_stigmergy_regression",
-            "provenance": {
-                "reviewer": "recorded-reviewer",
-                "method": "blind-pairwise",
-                "artifact_ref": "recorded-review",
-                "corpus_sha256": corpus,
-                "initial_graph_ref": initial,
-                "source_cases": expected.source_cases,
-                "runs": {
-                    "hippocampus": ["hippocampus-recorded-run"],
-                    "stigmergy": ["matrix-high-1", "matrix-high-2", "matrix-high-3"],
-                },
-            },
-        },
-    }
 
 
 def _plan_for_case(case_id: str) -> FilingPlan:
@@ -528,10 +287,7 @@ def _plan_for_case(case_id: str) -> FilingPlan:
                 name="Priya Sen",
                 entity_type="person",
                 description="The customer research lead working with Helio Stack.",
-                facts=(
-                    "On 2026-09-20, Priya committed to provide five interview summaries before the "
-                    "next review.",
-                ),
+                facts=("On 2026-09-20, Priya committed to provide five interview summaries before the next review.",),
             ),
         )
         return FilingPlan(
@@ -635,11 +391,7 @@ def _parity_artifact(
     brain_root: pathlib.Path,
     brain_commit: str,
 ) -> dict:
-    expected = parity.current_release_inputs(
-        repo,
-        brain_root=brain_root,
-        brain_commit=brain_commit,
-    )
+    expected = parity.current_release_inputs(repo, brain_root=brain_root, brain_commit=brain_commit)
     corpus = "0123456789abcdef" * 4
     initial = "0123456789abcdef0123456789abcdef01234567"
 
@@ -647,129 +399,102 @@ def _parity_artifact(
         case = planner_eval.load_case(expected.case_paths[case_id])
         source_text = expected.fixture_paths[case_id].read_text(encoding="utf-8")
         plan = _plan_for_case(case_id) if passing else FilingPlan(summary="Deliberately failing result.")
-        graph_shape = None
-        graph_shape_draft = None
-        graph_shape_review = None
-        graph_shape_failures = []
-        graph_semantic_reviewed = False
-        planning_model_requests = 1
-        active_plan = plan
-        revision = {"required": False, "attempted": False, "applied": False, "model_requests": 0}
         with eval_worktree.prepared(
-            case,
-            source_text,
-            template=str(expected.repo_root / "evals" / "filing" / "repo"),
+            case, source_text, template=str(expected.repo_root / "evals" / "filing" / "repo")
         ) as worktree:
+            initial_worktree_manifest = worktree.initial_worktree_manifest_sha256
             gates, active_plan = eval_worktree.apply_with_production_repair(
                 worktree,
                 plan,
                 _RecordedRevisionPlanner(plan),
-                planning_model_requests=planning_model_requests,
+                planning_model_requests=1,
                 max_turns=parity.PRODUCTION_MAX_TURNS,
-                graph_shape=graph_shape,
-                semantic_reviewed=graph_semantic_reviewed,
                 return_plan=True,
             )
-            revision = {
-                "required": gates["semantic_revision_required"],
-                "attempted": gates["semantic_revision_attempted"],
-                "applied": gates["semantic_revision_applied"],
-                "model_requests": gates["semantic_revision_model_requests"],
-            }
             effective = eval_worktree.effective_plan(worktree, active_plan) if gates["passed"] else active_plan
-        score = planner_eval.score(effective, case, source_text=source_text)
+        semantic = planner_eval.score(effective, case, source_text=source_text)
         raw_gates = {
-            **{gate: score[gate]["passed"] for gate in sorted(score) if gate != "passed"},
+            **{gate: semantic[gate]["passed"] for gate in sorted(semantic) if gate != "passed"},
             "writer": gates["passed"],
         }
-        payload = {
-            "brain_prompt": brain_prompt,
-            "case_sha256": expected.source_cases[case_id],
-            "fixture_sha256": expected.source_fixtures[case_id],
-            "plan": plan.model_dump(mode="json"),
-            "graph_shape": (graph_shape.model_dump(mode="json") if graph_shape is not None else None),
-            "graph_shape_draft": (graph_shape_draft.model_dump(mode="json") if graph_shape_draft is not None else None),
-            "graph_shape_review": (
-                graph_shape_review.model_dump(mode="json") if graph_shape_review is not None else None
-            ),
-            "graph_shape_violations": graph_shape_failures,
-            "reviewed_plan": active_plan.model_dump(mode="json") if revision["applied"] else None,
-            "semantic_revision": revision,
-            "repair_plan": None,
-            "repair_plan_sha256": None,
-            "effective_plan": effective.model_dump(mode="json"),
-            "score": score,
-            "gates": gates,
-            "raw_gates": raw_gates,
+        correction_plan = active_plan.model_dump(mode="json") if gates["semantic_revision_applied"] else None
+        correction = {
+            "required": gates["semantic_revision_required"],
+            "attempted": gates["semantic_revision_attempted"],
+            "applied": gates["semantic_revision_applied"],
+            "plan": correction_plan,
         }
-        digest = hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        model_requests = planning_model_requests + revision["model_requests"]
+        evidence = {
+            "input": {
+                "brain_prompt": brain_prompt,
+                "case_sha256": expected.source_cases[case_id],
+                "fixture_sha256": expected.source_fixtures[case_id],
+                "source_sha256": expected.source_fixtures[case_id],
+                "initial_worktree_manifest_sha256": initial_worktree_manifest,
+            },
+            "plans": {
+                "initial": plan.model_dump(mode="json"),
+                "correction": correction_plan,
+                "effective": effective.model_dump(mode="json"),
+            },
+            "result": {
+                "score": semantic,
+                "writer_gates": {
+                    "passed": gates["passed"],
+                    "violations": gates["violations"],
+                    "changed_paths": gates["changed_paths"],
+                },
+                "raw_gates": raw_gates,
+            },
+        }
+        digest = hashlib.sha256(_canonical(evidence)).hexdigest()
+        correction_requests = gates["semantic_revision_model_requests"]
         return {
             "case_id": case_id,
-            "case_sha256": expected.source_cases[case_id],
-            "fixture_sha256": expected.source_fixtures[case_id],
-            "brain_prompt": brain_prompt,
             "runtime": runtime,
-            "execution_mode": "production-equivalent",
-            "configured_max_turns": parity.PRODUCTION_MAX_TURNS,
-            "model_requests": model_requests,
-            "planning_model_requests": planning_model_requests,
-            "graph_shape_model_requests": 0,
-            "graph_shape_review_model_requests": 0,
-            "graph_shape_enrichment_model_requests": 0,
-            "compilation_model_requests": 0,
-            "graph_semantic_review_model_requests": 0,
-            "graph_semantic_reviewed": bool(graph_semantic_reviewed),
-            "semantic_revision_required": revision["required"],
-            "semantic_revision_attempted": revision["attempted"],
-            "semantic_revision_applied": revision["applied"],
-            "semantic_revision_model_requests": revision["model_requests"],
-            "repair_model_requests": 0,
-            "repair_plan_sha256": None,
-            "schema_retry_count": 0,
-            "semantic_repair_count": 0,
-            "elapsed_ms": 1,
-            "usage": {"requests": model_requests},
-            "score": score,
-            "gates": gates,
-            "raw_gates": raw_gates,
+            "execution": {
+                "mode": parity.PRODUCTION_EQUIVALENT_MODE,
+                "configured_max_turns": parity.PRODUCTION_MAX_TURNS,
+            },
+            "input": evidence["input"],
+            "requests": {
+                "initial": 1,
+                "correction": correction_requests,
+                "total": 1 + correction_requests,
+                "schema_retries": 0,
+                "elapsed_ms": 1,
+                "usage": {"requests": 1 + correction_requests},
+            },
+            "correction": correction,
+            "evidence": evidence,
             "output": {"sha256": digest, "artifact_ref": f"sha256:{digest}"},
-            "payload": payload,
-            "passed": score["passed"] and gates["passed"],
         }
 
     def run(implementation: str, run_id: str, level: str, *, passing: bool = True) -> dict:
         runtime = (
-            {
-                "model": "deepseek/deepseek-v4.1-flash",
-                "reasoning_level": level,
-                "provider": "openrouter:throughput",
-                "max_tokens": 40960,
-                "temperature": 0,
-            }
+            {**parity.STIGMERGY_RUNTIME, "reasoning_level": level}
             if implementation == "stigmergy"
             else {"model": "fixture", "reasoning_level": level, "provider": "fixture"}
         )
         provenance = {
             "corpus_sha256": corpus,
             "initial_graph_ref": initial,
+            "initial_graph_manifest_sha256": expected.initial_graph_manifest_sha256,
             "source_cases": expected.source_cases,
             "source_fixtures": expected.source_fixtures,
         }
         if implementation == "stigmergy":
-            provenance.update(
-                commit=expected.commit,
-                librarian_skill_sha256=expected.librarian_skill_sha256,
-                brain_prompt=expected.brain_prompt,
-            )
+            provenance["candidate"] = {
+                "commit": expected.commit,
+                "librarian_skill_sha256": expected.librarian_skill_sha256,
+                "brain_prompt": expected.brain_prompt,
+            }
         return {
             "implementation": implementation,
             "run_id": run_id,
             "runtime": runtime,
             "execution": {
-                "mode": "production-equivalent",
+                "mode": parity.PRODUCTION_EQUIVALENT_MODE,
                 "configured_max_turns": parity.PRODUCTION_MAX_TURNS,
             },
             "provenance": provenance,
@@ -789,71 +514,351 @@ def _parity_artifact(
     selected = [run("stigmergy", f"matrix-medium-{repeat}", "medium") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
-        "schema_version": 5,
-        "corpus_sha256": corpus,
-        "initial_graph_ref": initial,
-        "stigmergy_commit": expected.commit,
-        "librarian_skill_sha256": expected.librarian_skill_sha256,
-        "brain_prompt": expected.brain_prompt,
-        "source_cases": [{"id": key, "sha256": value} for key, value in expected.source_cases.items()],
-        "source_fixtures": [{"id": key, "sha256": value} for key, value in expected.source_fixtures.items()],
-        "runs": [hippocampus, *selected],
-        "reasoning_matrix": [
-            {
-                "reasoning_level": "minimal",
-                "runtime": {
-                    "model": "deepseek/deepseek-v4.1-flash",
-                    "reasoning_level": "minimal",
-                    "provider": "openrouter:throughput",
-                    "max_tokens": 40960,
-                    "temperature": 0,
-                },
-                "runs": [minimal],
-                "passed": False,
-            },
-            {
-                "reasoning_level": "low",
-                "runtime": {
-                    "model": "deepseek/deepseek-v4.1-flash",
-                    "reasoning_level": "low",
-                    "provider": "openrouter:throughput",
-                    "max_tokens": 40960,
-                    "temperature": 0,
-                },
-                "runs": [low],
-                "passed": False,
-            },
-            {
-                "reasoning_level": "medium",
-                "runtime": {
-                    "model": "deepseek/deepseek-v4.1-flash",
-                    "reasoning_level": "medium",
-                    "provider": "openrouter:throughput",
-                    "max_tokens": 40960,
-                    "temperature": 0,
-                },
-                "runs": selected,
-                "passed": True,
-            }
-        ],
+        "schema_version": parity.ARTIFACT_SCHEMA_VERSION,
+        "admission_status": "passed",
+        "blind_review_packet": {"status": "completed", "raw_sha256": "", "canonical_sha256": ""},
         "blind_editorial_review": {
             "verdict": "no_material_stigmergy_regression",
             "provenance": {
-                "reviewer": "recorded-reviewer",
-                "method": "blind-pairwise",
-                "artifact_ref": "recorded-review",
+                "reviewer": "fixture-reviewer",
+                "method": "fixture-blind-pairwise",
+                "artifact_ref": "",
                 "corpus_sha256": corpus,
                 "initial_graph_ref": initial,
+                "initial_graph_manifest_sha256": expected.initial_graph_manifest_sha256,
                 "source_cases": expected.source_cases,
+                "source_fixtures": expected.source_fixtures,
                 "runs": {
                     "hippocampus": [hippocampus["run_id"]],
                     "stigmergy": [item["run_id"] for item in selected],
                 },
             },
         },
+        "release": {
+            "corpus_sha256": corpus,
+            "initial_graph_ref": initial,
+            "initial_graph_manifest_sha256": expected.initial_graph_manifest_sha256,
+            "source_cases": [{"id": key, "sha256": value} for key, value in expected.source_cases.items()],
+            "source_fixtures": [{"id": key, "sha256": value} for key, value in expected.source_fixtures.items()],
+            "candidate": {
+                "commit": expected.commit,
+                "librarian_skill_sha256": expected.librarian_skill_sha256,
+                "brain_prompt": expected.brain_prompt,
+            },
+        },
+        "runs": [hippocampus, minimal, low, *selected],
+        "reasoning_matrix": [
+            {
+                "reasoning_level": "minimal",
+                "runtime": {**parity.STIGMERGY_RUNTIME, "reasoning_level": "minimal"},
+                "run_ids": [minimal["run_id"]],
+                "passed": False,
+            },
+            {
+                "reasoning_level": "low",
+                "runtime": {**parity.STIGMERGY_RUNTIME, "reasoning_level": "low"},
+                "run_ids": [low["run_id"]],
+                "passed": False,
+            },
+            {
+                "reasoning_level": "medium",
+                "runtime": {**parity.STIGMERGY_RUNTIME, "reasoning_level": "medium"},
+                "run_ids": [item["run_id"] for item in selected],
+                "passed": True,
+            },
+        ],
     }
-    _write_review_bundle(repo.parent, artifact)
+    _write_blind_review_bundle(
+        repo.parent,
+        artifact,
+        {case_id: path.read_text(encoding="utf-8") for case_id, path in expected.fixture_paths.items()},
+    )
     return artifact
+
+
+def _review_binding(case: dict) -> dict:
+    evidence = case["evidence"]
+    plans = evidence["plans"]
+    return {
+        "case_id": case["case_id"],
+        "source_sha256": case["input"]["source_sha256"],
+        "effective_payload": plans["effective"],
+        "effective_payload_sha256": hashlib.sha256(_canonical(plans["effective"])).hexdigest(),
+        "case_output_sha256": case["output"]["sha256"],
+        "initial_plan_sha256": hashlib.sha256(_canonical(plans["initial"])).hexdigest(),
+        "correction_plan_sha256": (
+            hashlib.sha256(_canonical(plans["correction"])).hexdigest() if plans["correction"] is not None else None
+        ),
+        "correction": case["correction"],
+    }
+
+
+def _write_blind_review_bundle(
+    root: pathlib.Path,
+    artifact: dict,
+    sources: dict[str, str],
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    runs = {run["run_id"]: run for run in artifact["runs"]}
+    baseline = next(run for run in runs.values() if run["implementation"] == "hippocampus")
+    selected_ids = next(
+        row["run_ids"]
+        for row in artifact["reasoning_matrix"]
+        if row["reasoning_level"] == parity.LIBRARIAN_REASONING_LEVEL
+    )
+    baseline_cases = {case["case_id"]: case for case in baseline["case_results"]}
+    comparisons, mappings, pairs = [], [], []
+    for run_id in selected_ids:
+        candidate_run = runs[run_id]
+        for candidate_case in candidate_run["case_results"]:
+            comparison_id = f"comparison-{candidate_case['case_id']}-{run_id}"
+            labels = []
+            for implementation, run, case in (
+                ("hippocampus", baseline, baseline_cases[candidate_case["case_id"]]),
+                ("stigmergy", candidate_run, candidate_case),
+            ):
+                label = "candidate-" + hashlib.sha256(f"{comparison_id}:{implementation}".encode()).hexdigest()[:16]
+                labels.append(
+                    {
+                        "label": label,
+                        **_review_binding(case),
+                        "implementation": implementation,
+                        "run_id": run["run_id"],
+                    }
+                )
+            case_id = candidate_case["case_id"]
+            source = sources[case_id]
+            comparisons.append(
+                {
+                    "comparison_id": comparison_id,
+                    "case_id": case_id,
+                    "source": {
+                        "sha256": candidate_case["input"]["source_sha256"],
+                        "text": source,
+                    },
+                    "candidates": [{key: label[key] for key in parity.PACKET_CANDIDATE_FIELDS} for label in labels],
+                }
+            )
+            mappings.append(
+                {
+                    "comparison_id": comparison_id,
+                    "case_id": case_id,
+                    "source_sha256": candidate_case["input"]["source_sha256"],
+                    "labels": [{key: label[key] for key in parity.MAPPING_LABEL_FIELDS} for label in labels],
+                }
+            )
+            pairs.append(
+                {
+                    "pair_id": comparison_id,
+                    "judgments": {
+                        dimension: {"winner": "tie", "reason": "Fixture comparison."}
+                        for dimension in parity.BLIND_REVIEW_DIMENSIONS
+                    },
+                    "overall": {"winner": "tie", "reason": "Fixture."},
+                    "material_regression": {"side": "none", "reason": "Fixture."},
+                }
+            )
+    packet = {"schema_version": 1, "comparisons": comparisons}
+    packet_bytes = _canonical(packet)
+    packet_digest = hashlib.sha256(packet_bytes).hexdigest()
+    packet_name = f"blind-review-packet-{packet_digest}.json"
+    (root / packet_name).write_bytes(packet_bytes)
+    mapping = {"schema_version": 1, "packet_sha256": packet_digest, "mapping": mappings}
+    mapping_bytes = _canonical(mapping)
+    mapping_digest = hashlib.sha256(mapping_bytes).hexdigest()
+    mapping_name = f"blind-review-mapping-{mapping_digest}.secret.json"
+    (root / mapping_name).write_bytes(mapping_bytes)
+    response = {
+        "reviewer_identity": "fixture-reviewer",
+        "method": "fixture-blind-pairwise",
+        "packet_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        "pairs": pairs,
+    }
+    response_bytes = _canonical(response)
+    response_digest = hashlib.sha256(response_bytes).hexdigest()
+    response_name = f"blind-reviewer-response-{response_digest}.json"
+    (root / response_name).write_bytes(response_bytes)
+    review = {
+        "schema_version": "blind-editorial-review-unblind-v2",
+        "verdict": "no_material_stigmergy_regression",
+        "reviewer_response": {
+            "path": response_name,
+            "raw_sha256": hashlib.sha256(response_bytes).hexdigest(),
+            "canonical_sha256": response_digest,
+            "artifact_ref": f"sha256:{response_digest}",
+        },
+        "packet": {
+            "path": packet_name,
+            "raw_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+            "canonical_sha256": packet_digest,
+        },
+        "mapping": {
+            "path": mapping_name,
+            "raw_sha256": hashlib.sha256(mapping_bytes).hexdigest(),
+            "canonical_sha256": mapping_digest,
+        },
+        "unblinding": {
+            "material_regressions": [],
+            "stigmergy_material_regressions": [],
+        },
+    }
+    review_bytes = _canonical(review)
+    review_digest = hashlib.sha256(review_bytes).hexdigest()
+    (root / f"blind-review-unblind-{review_digest}.json").write_bytes(review_bytes)
+    artifact["blind_review_packet"] = {
+        "status": "completed",
+        "raw_sha256": hashlib.sha256(packet_bytes).hexdigest(),
+        "canonical_sha256": packet_digest,
+    }
+    artifact["blind_editorial_review"]["provenance"]["artifact_ref"] = f"sha256:{review_digest}"
+
+
+def _evaluate_recorded_artifact(repo: pathlib.Path, payload: dict | None = None) -> dict:
+    artifact = payload or json.loads(_artifact_path(repo).read_text(encoding="utf-8"))
+    brain = _sidecar_path(repo, "knowledge")
+    return parity.evaluate(
+        artifact,
+        expected=parity.current_release_inputs(
+            repo,
+            brain_root=brain,
+            brain_commit=_git(brain, "rev-parse", "HEAD"),
+        ),
+        review_root=repo.parent,
+    )
+
+
+def _review_document(repo: pathlib.Path, payload: dict, field: str) -> tuple[dict, pathlib.Path, dict]:
+    reference = payload["blind_editorial_review"]["provenance"]["artifact_ref"].removeprefix("sha256:")
+    review_path = repo.parent / f"blind-review-unblind-{reference}.json"
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    metadata = review[field]
+    return review, repo.parent / metadata["path"], metadata
+
+
+@pytest.mark.parametrize(
+    ("container", "retired_field", "reason"),
+    [
+        ("root", "graph_shape", "artifact-shape"),
+        ("run", "reviewed_plan", "run-shape"),
+        ("case", "expected_graph_mutations", "case-result-shape"),
+        ("runtime", "graph_shape_draft", "runtime-metadata"),
+        ("provenance", "graph_shape_review", "run-provenance"),
+        ("input", "graph_shape_violations", "case-input"),
+        ("requests", "repair_model_requests", "case-request-telemetry"),
+        ("correction", "compilation_model_requests", "case-correction"),
+        ("evidence", "reviewed_plan", "case-evidence"),
+        ("output", "repair_model_requests", "case-output"),
+        ("matrix", "graph_shape", "reasoning-matrix"),
+        ("review", "expected_graph_mutations", "stale-or-mismatched-review"),
+    ],
+)
+def test_v6_evaluate_rejects_retired_staged_fields(tmp_path, container, retired_field, reason):
+    result, _deploy, _seen = _run_deploy(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
+    run = payload["runs"][0]
+    case = run["case_results"][0]
+    target = {
+        "root": payload,
+        "run": run,
+        "case": case,
+        "runtime": run["runtime"],
+        "provenance": run["provenance"],
+        "input": case["input"],
+        "requests": case["requests"],
+        "correction": case["correction"],
+        "evidence": case["evidence"],
+        "output": case["output"],
+        "matrix": payload["reasoning_matrix"][0],
+        "review": payload["blind_editorial_review"]["provenance"],
+    }[container]
+    target[retired_field] = "retired"
+
+    report = _evaluate_recorded_artifact(tmp_path, payload)
+
+    assert report["passed"] is False
+    assert reason in {failure["reason"] for failure in report["failures"]}
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "source",
+        "candidate",
+        "response",
+        "mapping",
+        "label",
+        "unblinding",
+    ],
+)
+def test_v6_evaluate_rejects_tampered_blind_evidence(tmp_path, tamper):
+    result, _deploy, _seen = _run_deploy(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
+    if tamper == "unblinding":
+        review, path, _metadata = _review_document(tmp_path, payload, "packet")
+        review["unblinding"]["material_regressions"].append({"unexpected": "record"})
+        reference = payload["blind_editorial_review"]["provenance"]["artifact_ref"].removeprefix("sha256:")
+        (tmp_path.parent / f"blind-review-unblind-{reference}.json").write_text(json.dumps(review), encoding="utf-8")
+    else:
+        field = {
+            "source": "packet",
+            "candidate": "packet",
+            "response": "reviewer_response",
+            "mapping": "mapping",
+            "label": "mapping",
+        }[tamper]
+        _review, path, _metadata = _review_document(tmp_path, payload, field)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if tamper == "source":
+            document["comparisons"][0]["source"]["text"] += " tampered"
+        elif tamper == "candidate":
+            document["comparisons"][0]["candidates"][0]["effective_payload"]["summary"] = "tampered"
+        elif tamper == "response":
+            document["pairs"][0]["overall"]["reason"] = "tampered"
+        elif tamper == "mapping":
+            document["mapping"][0]["source_sha256"] = "a" * 64
+        else:
+            document["mapping"][0]["labels"][0]["label"] = "tampered-label"
+        path.write_text(json.dumps(document), encoding="utf-8")
+
+    report = _evaluate_recorded_artifact(tmp_path, payload)
+
+    assert report["passed"] is False
+    assert "blind-review-evidence" in {failure["reason"] for failure in report["failures"]}
+
+
+def test_v6_evaluate_rejects_a_non_derived_material_regression(tmp_path):
+    result, _deploy, _seen = _run_deploy(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
+    review, response_path, _response_metadata = _review_document(tmp_path, payload, "reviewer_response")
+    response = json.loads(response_path.read_text(encoding="utf-8"))
+    _mapping_review, mapping_path, _mapping_metadata = _review_document(tmp_path, payload, "mapping")
+    mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+    response["pairs"][0]["material_regression"] = {
+        "side": mapping["mapping"][0]["labels"][0]["label"],
+        "reason": "Invalid fixture derivation.",
+    }
+    response_bytes = _canonical(response)
+    response_digest = hashlib.sha256(response_bytes).hexdigest()
+    response_name = f"blind-reviewer-response-{response_digest}.json"
+    (tmp_path.parent / response_name).write_bytes(response_bytes)
+    review["reviewer_response"] = {
+        "path": response_name,
+        "raw_sha256": response_digest,
+        "canonical_sha256": response_digest,
+        "artifact_ref": f"sha256:{response_digest}",
+    }
+    review_bytes = _canonical(review)
+    review_digest = hashlib.sha256(review_bytes).hexdigest()
+    (tmp_path.parent / f"blind-review-unblind-{review_digest}.json").write_bytes(review_bytes)
+    payload["blind_editorial_review"]["provenance"]["artifact_ref"] = f"sha256:{review_digest}"
+
+    report = _evaluate_recorded_artifact(tmp_path, payload)
+
+    assert report["passed"] is False
+    assert "blind-review-evidence" in {failure["reason"] for failure in report["failures"]}
 
 
 def test_deploy_bakes_all_controls_then_restores_defaults(tmp_path):
@@ -895,6 +900,15 @@ def test_release_deploy_refuses_missing_or_candidate_mismatched_parity_evidence(
 
     assert result.returncode == 2
     assert "parity" in result.stderr
+    assert not seen.exists()
+
+
+def test_release_deploy_refuses_a_tampered_blind_review_packet(tmp_path):
+    result, _deploy, seen = _run_deploy(tmp_path, parity_artifact="tampered-blind-packet")
+
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert "blind-review-evidence" in {failure["reason"] for failure in report["failures"]}
     assert not seen.exists()
 
 

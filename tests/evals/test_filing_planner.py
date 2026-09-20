@@ -1,8 +1,15 @@
+import hashlib
+import json
+import shutil
+from dataclasses import replace
 from pathlib import Path
 
-from evals.filing import constants, planner_eval, run_planner
+import pytest
+
+from evals.filing import constants, parity, planner_eval, run_planner
 from evals.filing import worktree as eval_worktree
 from stigmergy.knowledge.plan import EntityProposal, FilingPlan, PageMutation
+from stigmergy.knowledge.planner import PlanRun
 
 ROOT = Path(__file__).resolve().parents[2]
 CASE = ROOT / "evals" / "filing" / "cases" / "harness_engineering.json"
@@ -100,6 +107,150 @@ def test_production_budget_is_one_filing_plus_one_bounded_correction():
     assert constants.PRODUCTION_REASONING_LEVEL == "medium"
 
 
+@pytest.mark.parametrize("requires_correction", [False, True])
+def test_runner_record_replays_through_v6_case_validation(monkeypatch, capsys, tmp_path, requires_correction):
+    prompt = {
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    }
+    initial = (
+        FilingPlan(
+            summary="Deliberately uncited first draft.",
+            mutations=(
+                PageMutation(
+                    action="create",
+                    role="concept",
+                    title="Harness Engineering",
+                    body="# Harness Engineering\n\nThis draft has no source citation.",
+                    entities=(),
+                    reason="Deliberately invalid fixture draft.",
+                ),
+            ),
+        )
+        if requires_correction
+        else _passing_plan()
+    )
+
+    class RecordedPlanner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def plan(self, **_kwargs):
+            return PlanRun(initial, model_requests=1)
+
+        def revise(self, **_kwargs):
+            return PlanRun(_passing_plan(), model_requests=1)
+
+    monkeypatch.setattr(run_planner, "PydanticPlanner", RecordedPlanner)
+    monkeypatch.setattr(run_planner, "validate_librarian_skill", lambda _root: None)
+    monkeypatch.setattr(run_planner, "librarian_skill_provenance", lambda _root: prompt)
+
+    assert (
+        run_planner.main(
+            [
+                "--live",
+                "--source",
+                str(FIXTURE),
+                "--brain-root",
+                str(tmp_path),
+                "--include-payload",
+            ]
+        )
+        == 0
+    )
+    record = json.loads(capsys.readouterr().out)["case_result"]
+    inputs = parity.current_release_inputs(ROOT)
+    expected = replace(
+        inputs,
+        source_cases={"harness_engineering": inputs.source_cases["harness_engineering"]},
+        source_fixtures={"harness_engineering": inputs.source_fixtures["harness_engineering"]},
+        case_paths={"harness_engineering": inputs.case_paths["harness_engineering"]},
+        fixture_paths={"harness_engineering": inputs.fixture_paths["harness_engineering"]},
+        brain_prompt=prompt,
+    )
+    failures, replayed = [], {}
+
+    parity._case(
+        record,
+        "stigmergy",
+        record["runtime"],
+        record["execution"],
+        expected,
+        "recorded-run",
+        failures,
+        replayed,
+    )
+
+    assert not failures
+    assert record["correction"]["applied"] is requires_correction
+    assert replayed[("stigmergy", "recorded-run", "harness_engineering")]
+
+    malformed = json.loads(json.dumps(record))
+    malformed["correction"].pop("plan")
+    failures, replayed = [], {}
+    parity._case(
+        malformed,
+        "stigmergy",
+        malformed["runtime"],
+        malformed["execution"],
+        expected,
+        "recorded-run",
+        failures,
+        replayed,
+    )
+
+    assert {failure["reason"] for failure in failures} == {"case-correction"}
+    assert not replayed
+
+    mismatched_manifest = json.loads(json.dumps(record))
+    mismatched_manifest["input"]["initial_worktree_manifest_sha256"] = "a" * 64
+    mismatched_manifest["evidence"]["input"] = mismatched_manifest["input"]
+    digest = hashlib.sha256(
+        json.dumps(
+            mismatched_manifest["evidence"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    mismatched_manifest["output"] = {"sha256": digest, "artifact_ref": f"sha256:{digest}"}
+    failures, replayed = [], {}
+    parity._case(
+        mismatched_manifest,
+        "stigmergy",
+        mismatched_manifest["runtime"],
+        mismatched_manifest["execution"],
+        expected,
+        "recorded-run",
+        failures,
+        replayed,
+    )
+
+    assert {failure["reason"] for failure in failures} == {"initial-worktree-manifest"}
+    assert not replayed
+
+
+def test_production_equivalent_runner_rejects_a_noncanonical_worktree(tmp_path):
+    alternate = tmp_path / "alternate-worktree"
+    shutil.copytree(run_planner.DEFAULT_WORKTREE, alternate)
+    (alternate / "unbound.txt").write_text("not the release template\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as error:
+        run_planner.main(
+            [
+                "--live",
+                "--source",
+                str(FIXTURE),
+                "--brain-root",
+                str(tmp_path),
+                "--worktree",
+                str(alternate),
+            ]
+        )
+
+    assert error.value.code == 2
+
+
 def test_quality_score_checks_topology_content_and_entities():
     case = planner_eval.load_case(CASE)
     result = planner_eval.score(
@@ -141,25 +292,19 @@ def test_meeting_case_requires_every_named_participant_as_a_cited_entity_anchor(
                 name="Noor Balan",
                 entity_type="person",
                 description="Engineering lead at Helio Stack.",
-                facts=(
-                    "At the 2026-09-20 review, Noor Balan was assigned to run the next evaluation cycle.",
-                ),
+                facts=("At the 2026-09-20 review, Noor Balan was assigned to run the next evaluation cycle.",),
             ),
             EntityProposal(
                 name="Priya Sen",
                 entity_type="person",
                 description="Customer research lead at Helio Stack.",
-                facts=(
-                    "At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",
-                ),
+                facts=("At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",),
             ),
             EntityProposal(
                 name="Helio Stack",
                 entity_type="organization",
                 description="Organization developing a tool for early-stage teams.",
-                facts=(
-                    "Its evaluation workflow was reviewed at the 2026-09-20 product review.",
-                ),
+                facts=("Its evaluation workflow was reviewed at the 2026-09-20 product review.",),
             ),
         ),
         mutations=(
@@ -207,9 +352,7 @@ def test_meeting_case_accepts_a_semantically_arbitrary_note_title():
 
 def test_meeting_case_rejects_a_concept_where_a_note_is_required():
     case = planner_eval.load_case(MEETING_CASE)
-    plan = _meeting_mutation_plan(
-        _meeting_note_mutation(title="Current operating state", role="concept")
-    )
+    plan = _meeting_mutation_plan(_meeting_note_mutation(title="Current operating state", role="concept"))
 
     result = planner_eval.score(plan, case, source_text=MEETING_FIXTURE.read_text(encoding="utf-8"))
 
@@ -298,17 +441,13 @@ def test_meeting_case_rejects_undated_entity_fact_coverage():
                 name="Priya Sen",
                 entity_type="person",
                 description="Customer research lead at Helio Stack.",
-                facts=(
-                    "At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",
-                ),
+                facts=("At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",),
             ),
             EntityProposal(
                 name="Helio Stack",
                 entity_type="organization",
                 description="Organization developing a tool for early-stage teams.",
-                facts=(
-                    "Its evaluation workflow was reviewed at the 2026-09-20 product review.",
-                ),
+                facts=("Its evaluation workflow was reviewed at the 2026-09-20 product review.",),
             ),
         ),
         mutations=(
@@ -363,25 +502,19 @@ def test_meeting_case_rejects_description_fact_duplication():
                 name="Noor Balan",
                 entity_type="person",
                 description="Engineering lead at Helio Stack.",
-                facts=(
-                    "At the 2026-09-20 review, Noor Balan was assigned to run the next evaluation cycle.",
-                ),
+                facts=("At the 2026-09-20 review, Noor Balan was assigned to run the next evaluation cycle.",),
             ),
             EntityProposal(
                 name="Priya Sen",
                 entity_type="person",
                 description="Customer research lead at Helio Stack.",
-                facts=(
-                    "At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",
-                ),
+                facts=("At the 2026-09-20 review, Priya Sen was assigned to provide interview summaries.",),
             ),
             EntityProposal(
                 name="Helio Stack",
                 entity_type="organization",
                 description="Organization developing a tool for early-stage teams.",
-                facts=(
-                    "Its evaluation workflow was reviewed at the 2026-09-20 product review.",
-                ),
+                facts=("Its evaluation workflow was reviewed at the 2026-09-20 product review.",),
             ),
         ),
         mutations=(

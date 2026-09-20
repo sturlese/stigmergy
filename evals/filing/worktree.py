@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import hashlib
+import json
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -38,6 +39,35 @@ class EvaluationWorktree:
     source_path: str
     source_text: str
     context: str
+    initial_worktree_manifest_sha256: str
+
+
+def initial_graph_manifest(template: str | Path) -> str:
+    """Return the content-addressed manifest of a versioned initial-graph template."""
+    return _tree_manifest(Path(template))
+
+
+def _tree_manifest(root: Path) -> str:
+    if not root.is_dir():
+        raise ValueError(f"evaluation template is not a directory: {root}")
+    entries = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if ".git" in relative.parts:
+            continue
+        if path.is_symlink() or path.is_dir():
+            continue
+        if not path.is_file():
+            raise ValueError(f"evaluation template contains a non-file entry: {relative}")
+        entries.append(
+            {
+                "path": relative.as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    return hashlib.sha256(
+        json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 @contextlib.contextmanager
@@ -68,6 +98,7 @@ def prepared(case: dict, source_text: str, *, template: str):
             source_path=source_path,
             source_text=rendered_source,
             context=context,
+            initial_worktree_manifest_sha256=_tree_manifest(root),
         )
 
 
@@ -105,9 +136,7 @@ def apply_and_gate(worktree: EvaluationWorktree, plan) -> dict:
         violations = check(root, editorial_paths=editorial)
         return {
             "passed": not violations,
-            "violations": [
-                {"path": item.path, "code": item.code} for item in violations
-            ],
+            "violations": [{"path": item.path, "code": item.code} for item in violations],
             "changed_paths": sorted(reasons),
         }
     except Exception as error:  # The artifact records only the safe class, never model/source text.
@@ -125,10 +154,7 @@ def apply_with_production_repair(
     *,
     planning_model_requests: int,
     max_turns: int,
-    graph_shape=None,
-    semantic_reviewed: bool = False,
     return_plan: bool = False,
-    return_repair_plan: bool = False,
 ):
     """Exercise the production filing gate and its single bounded model-repair path in memory."""
     root = worktree.root
@@ -144,15 +170,10 @@ def apply_with_production_repair(
     plan_invalid = False
     plan_rejection = ""
     contract_failures = ()
-    repair_model_requests = 0
-    semantic_repair_count = 0
     semantic_revision_required = False
     semantic_revision_attempted = False
     semantic_revision_applied = False
     semantic_revision_model_requests = 0
-    repair_rejection = None
-    repair_mutation_shape = []
-    recorded_repair_plan = None
     active_plan = plan
     if not isinstance(active_plan, FilingPlan):
         plan_invalid = True
@@ -191,9 +212,7 @@ def apply_with_production_repair(
                 },
             )
 
-    editorial_paths = frozenset(
-        path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
-    )
+    editorial_paths = frozenset(path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/")))
     violations = check(root, editorial_paths=editorial_paths) if not plan_invalid else ()
     if plan_invalid or violations:
         semantic_revision_required = True
@@ -246,9 +265,7 @@ def apply_with_production_repair(
                 )
                 repair_deterministic(root)
                 editorial_paths = frozenset(
-                    path
-                    for path in reasons
-                    if path.startswith(("wiki/notes/", "wiki/concepts/"))
+                    path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
                 )
                 violations = check(root, editorial_paths=editorial_paths)
             except Exception:
@@ -267,21 +284,13 @@ def apply_with_production_repair(
         "violations": [{"path": item.path, "code": item.code} for item in violations],
         "changed_paths": sorted(reasons),
         "plan_rejection": plan_rejection or None,
-        "repair_model_requests": repair_model_requests,
-        "semantic_repair_count": semantic_repair_count,
         "semantic_revision_required": semantic_revision_required,
         "semantic_revision_attempted": semantic_revision_attempted,
         "semantic_revision_applied": semantic_revision_applied,
         "semantic_revision_model_requests": semantic_revision_model_requests,
-        "repair_rejection": repair_rejection,
-        "repair_mutation_shape": repair_mutation_shape,
     }
-    if return_plan and return_repair_plan:
-        return result, active_plan, recorded_repair_plan
     if return_plan:
         return result, active_plan
-    if return_repair_plan:
-        return result, recorded_repair_plan
     return result
 
 
@@ -318,11 +327,7 @@ def _source(case: dict, source_text: str) -> tuple[schema.CaptureEnvelope, str, 
         capture_id=capture_id,
         idempotency_key=f"filing-eval:{capture_id}",
         actor=schema.Actor(subject="filing-eval", display_name="Filing evaluation"),
-        audience=(
-            tuple(case["audience"])
-            if case.get("audience") is not None
-            else None
-        ),
+        audience=(tuple(case["audience"]) if case.get("audience") is not None else None),
         origin=schema.Origin(
             adapter="mcp",
             captured_at=dt.datetime(2026, 9, 12, 14, 36, 31, tzinfo=dt.UTC),
@@ -357,11 +362,7 @@ def _seed_pages(root: Path, case: dict, source_path: str) -> None:
                 role=role,
                 title=title,
                 body=item["body"].replace("{source_path}", source_path),
-                acl=(
-                    tuple(item["audience"])
-                    if item.get("audience") is not None
-                    else None
-                ),
+                acl=(tuple(item["audience"]) if item.get("audience") is not None else None),
                 sources=(source_path,),
                 status="developing",
                 page_id=item.get("id"),

@@ -105,8 +105,10 @@ deployment command: `python evals/filing/parity.py --artifact <result.json>`. Th
 fail-closed release gate: a non-zero result blocks rollout. The artifact must bind both independent
 implementation runs to the same corpus, immutable initial graph, source-case hashes, Stigmergy
 commit, librarian skill hash, recorded raw gates, a verified content-addressed blind-review bundle,
-and the lowest-passing reasoning-level matrix bound to the production librarian setting. Keep the
-artifact and its review bundle outside the candidate checkout.
+and the lowest-passing reasoning-level matrix bound to the production librarian setting. Schema v6
+models those current invariants directly, including each case's initial plan, optional bounded correction,
+and replayed effective output; it has no staged-planner phases or live legacy compatibility fields. Keep
+the artifact and its review bundle outside the candidate checkout.
 
 The gate trusts the release operator and verifies evidence integrity within that operational boundary.
 Give the reviewer only the blind packet and response schema, retain the response verbatim, and unblind
