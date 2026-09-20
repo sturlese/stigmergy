@@ -48,7 +48,7 @@ def test_non_librarian_models_keep_same_model_provider_failover(monkeypatch):
         assert "max_tokens" not in model.settings
 
 
-def test_librarian_requests_minimal_reasoning_and_native_deterministic_output(monkeypatch):
+def test_librarian_requests_medium_reasoning_and_native_deterministic_output(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     model, settings = llm.build_model(llm.LIBRARIAN_MODEL)
@@ -57,7 +57,7 @@ def test_librarian_requests_minimal_reasoning_and_native_deterministic_output(mo
     assert settings["max_tokens"] == llm.LIBRARIAN_MAX_TOKENS
     assert settings["temperature"] == 0
     assert settings["openrouter_reasoning"] == {
-        "effort": "minimal",
+        "effort": "medium",
         "exclude": True,
     }
     assert model.profile["supports_json_schema_output"] is True

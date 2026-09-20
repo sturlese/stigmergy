@@ -60,6 +60,7 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
     entity_wikilink_score = _entity_wikilinks(case, mutations, candidates)
     anti_fragmentation_score = _anti_fragmentation(case, mutations)
     editorial_quality_score = _editorial_quality(case, plan)
+    entity_editorial_quality_score = _entity_editorial_quality(case, plan)
     seeded_update_score = _seeded_update(case, mutations)
     coverage_score = _link_coverage(
         _proposal_names(plan),
@@ -89,6 +90,7 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
             entity_wikilink_score,
             anti_fragmentation_score,
             editorial_quality_score,
+            entity_editorial_quality_score,
             seeded_update_score,
             coverage_score,
             resolution_score,
@@ -109,24 +111,46 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
         "entity_wikilinks": entity_wikilink_score,
         "anti_fragmentation": anti_fragmentation_score,
         "editorial_quality": editorial_quality_score,
+        "entity_editorial_quality": entity_editorial_quality_score,
         "seeded_update": seeded_update_score,
     }
 
 
 def _mutations(expectation: dict, mutations: tuple[PageMutation, ...]) -> dict:
     if "min_count" in expectation:
-        required = {_case_signature(item) for item in expectation.get("required", ())}
-        allowed = required | {_case_signature(item) for item in expectation.get("allowed", ())}
-        forbidden = {_case_signature(item) for item in expectation.get("forbidden", ())}
+        required_items = tuple(expectation.get("required", ()))
+        allowed_items = tuple(expectation.get("allowed", ()))
+        forbidden_items = tuple(expectation.get("forbidden", ()))
+        required = {_case_signature(item) for item in required_items}
+        allowed = required | {_case_signature(item) for item in allowed_items}
         actual = tuple(_mutation_signature(mutation) for mutation in mutations)
         found = set(actual)
         duplicates = {item for item in found if actual.count(item) > 1}
-        missing = required - found
-        unexpected = found - allowed if expectation.get("closed", True) else set()
-        present_forbidden = forbidden & found
+        missing = {
+            _case_signature(item)
+            for item in required_items
+            if not any(_matches_case_mutation(actual_item, item) for actual_item in actual)
+        }
+        expected_indexes = tuple(
+            index
+            for index, actual_item in enumerate(actual)
+            if any(
+                _matches_case_mutation(actual_item, item)
+                for item in (*required_items, *allowed_items)
+            )
+        )
+        unexpected = (
+            {item for index, item in enumerate(actual) if index not in expected_indexes}
+            if expectation.get("closed", True)
+            else set()
+        )
+        present_forbidden = {
+            actual_item
+            for actual_item in actual
+            if any(_matches_case_mutation(actual_item, item) for item in forbidden_items)
+        }
         minimum = int(expectation["min_count"])
         maximum = int(expectation["max_count"])
-        expected_indexes = tuple(index for index, signature in enumerate(actual) if signature in allowed)
         return {
             "minimum_count": minimum,
             "maximum_count": maximum,
@@ -141,12 +165,20 @@ def _mutations(expectation: dict, mutations: tuple[PageMutation, ...]) -> dict:
             "passed": minimum <= len(mutations) <= maximum and not missing and not unexpected
             and not present_forbidden and not duplicates,
         }
-    allowed = {_case_signature(item) for item in expectation["allowed"]}
+    allowed_items = tuple(expectation["allowed"])
+    allowed = {_case_signature(item) for item in allowed_items}
     actual = tuple(_mutation_signature(mutation) for mutation in mutations)
-    expected_indexes = tuple(index for index, signature in enumerate(actual) if signature in allowed)
-    found = set(actual)
-    missing = allowed - found
-    unexpected = set(actual) - allowed
+    expected_indexes = tuple(
+        index
+        for index, actual_item in enumerate(actual)
+        if any(_matches_case_mutation(actual_item, item) for item in allowed_items)
+    )
+    missing = {
+        _case_signature(item)
+        for item in allowed_items
+        if not any(_matches_case_mutation(actual_item, item) for actual_item in actual)
+    }
+    unexpected = {item for index, item in enumerate(actual) if index not in expected_indexes}
     expected_count = int(expectation["count"])
     return {
         "expected_count": expected_count,
@@ -185,6 +217,13 @@ def _case_signature(item: dict) -> tuple[str, str, str]:
         str(item["action"]),
         str(item.get("role") or ""),
         resolution_key(item.get("title") or item.get("path") or ""),
+    )
+
+
+def _matches_case_mutation(actual: tuple[str, str, str], expectation: dict) -> bool:
+    action, role, title = _case_signature(expectation)
+    return actual[:2] == (action, role) and (
+        expectation.get("title") is None or actual[2] == title
     )
 
 
@@ -398,6 +437,74 @@ def _editorial_quality(case: dict, plan: FilingPlan) -> dict:
         and not inventory_pages
         and not duplicate_prefixes,
     }
+
+
+def _entity_editorial_quality(case: dict, plan: FilingPlan) -> dict:
+    expectation = case.get("entity_editorial_quality", {})
+    required = tuple(expectation.get("required", ()))
+    proposals = {resolution_key(proposal.name): proposal for proposal in plan.entities}
+    missing_entities = []
+    missing_descriptions = []
+    missing_description_coverage = []
+    missing_fact_coverage = []
+    description_fact_duplicates = []
+
+    for required_entity in required:
+        name = str(required_entity["name"])
+        proposal = proposals.get(resolution_key(name))
+        if proposal is None:
+            missing_entities.append(name)
+            continue
+        description = (proposal.description or "").strip()
+        if not description:
+            missing_descriptions.append(name)
+        elif not _term_expectation_met(
+            (description,),
+            required_entity.get("description_terms", ()),
+            required_entity.get("description_term_groups", ()),
+        ):
+            missing_description_coverage.append(name)
+        facts = tuple(fact for fact in proposal.facts if fact.strip())
+        if not _term_expectation_met(
+            facts,
+            required_entity.get("fact_terms", ()),
+            required_entity.get("fact_term_groups", ()),
+        ):
+            missing_fact_coverage.append(name)
+        description_key = _entity_editorial_key(description)
+        for fact in facts:
+            if description_key and description_key == _entity_editorial_key(fact):
+                description_fact_duplicates.append({"entity": name, "fact": fact})
+
+    return {
+        "required": [str(item["name"]) for item in required],
+        "missing_entities": missing_entities,
+        "missing_descriptions": missing_descriptions,
+        "missing_description_coverage": missing_description_coverage,
+        "missing_fact_coverage": missing_fact_coverage,
+        "description_fact_duplicates": description_fact_duplicates,
+        "passed": not missing_entities
+        and not missing_descriptions
+        and not missing_description_coverage
+        and not missing_fact_coverage
+        and not description_fact_duplicates,
+    }
+
+
+def _term_expectation_met(values, terms, term_groups) -> bool:
+    normalized = tuple(_normalized_text(value) for value in values)
+    return all(any(_normalized_text(term) in value for value in normalized) for term in terms) and (
+        not term_groups
+        or any(
+            all(_normalized_text(term) in value for term in group)
+            for group in term_groups
+            for value in normalized
+        )
+    )
+
+
+def _entity_editorial_key(value: str) -> str:
+    return re.sub(r"[^\w]+", " ", _normalized_text(value)).strip()
 
 
 def _seeded_update(case: dict, mutations: tuple[PageMutation, ...]) -> dict:

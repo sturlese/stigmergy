@@ -265,6 +265,53 @@ def test_librarian_requires_rich_source_grounded_entity_proposals():
     assert "exact local source citation" in text
 
 
+def test_librarian_requires_standalone_nonduplicative_and_temporally_grounded_entity_knowledge():
+    text = _skill_text()
+    assert "descriptions stand alone for a cold reader" in text
+    assert "never with the capture that mentioned the entity" in text
+    assert "temporally volatile" in text and "occurred_at" in text
+
+
+def test_librarian_requires_each_volatile_entity_fact_to_carry_its_own_time_anchor():
+    text = _skill_text()
+    assert "temporally volatile" in text and "entityproposal" in text
+    assert "its own" in text and "occurred_at" in text and "evidence-time anchor" in text
+    assert "same fact" in text
+    assert "never rely on page context or a sibling fact" in text
+
+
+def test_librarian_distinguishes_dated_records_from_reusable_concepts():
+    text = _skill_text()
+    assert all(term in text for term in ("dated event", "decision", "commitment", "operating state", "note"))
+    assert all(term in text for term in ("named workflow", "product", "topic", "reusable mechanism"))
+
+
+def test_librarian_requires_facts_to_add_a_distinct_predicate_from_identity():
+    text = _skill_text()
+    assert "different predicate" in text
+    assert all(
+        term in text
+        for term in ("action", "decision", "result", "relationship change", "time-bounded commitment")
+    )
+    assert all(term in text for term in ("grammar", "tense", "voice"))
+
+
+def test_librarian_treats_source_body_as_authoritative_over_nonexhaustive_metadata():
+    text = _skill_text()
+    assert "read and preserve the complete original source" in text
+    assert "structured metadata is a non-exhaustive hint" in text
+    assert "field never negates or limits evidence plainly supported by the readable body" in text
+
+
+def test_librarian_uses_general_entity_relevance_and_preserves_prior_provenance():
+    text = _skill_text()
+    assert "responsibility, decision, authorship, commitment, or causal participation" in text
+    assert "incidental mentions stay prose" in text
+    assert "safe visible context may reconcile identity or enrich a page" in text
+    assert "claim supported only there keeps its original local citation" in text
+    assert "one coherent `filingplan`" in text
+
+
 def test_librarian_preserves_conflicts_and_recompile_knowledge():
     text = _skill_text()
     assert "preserve both and emit a contradiction" in text

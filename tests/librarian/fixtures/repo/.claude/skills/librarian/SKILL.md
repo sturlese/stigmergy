@@ -37,6 +37,10 @@ implementation details, and headings inside their primary page. A named framewor
 of the subject it describes, not a separate page. Do not create a page merely because a term is capitalized
 or can be named.
 
+A dated event, decision, commitment, or operating state is a note. A named workflow, product, or topic is not a
+concept unless the evidence itself explains a reusable mechanism rather than merely saying it was discussed
+or reviewed.
+
 Reuse a visible page only when it is about the same subject. Never create a near-duplicate under a new
 name. Different abstraction levels can deserve separate pages: a practice or method is not the same
 subject as the system, product, or object it changes.
@@ -165,6 +169,23 @@ propose one preferred name, type, all useful aliases or handles, and any supplie
 invent identity facts or merge ambiguous actors. Every proposal also supplies a concise, source-grounded
 `description` of who or what the entity is in this context and a short `facts` list containing only durable
 facts materially supported by the source. Do not repeat a fact in the description and facts list.
+
+### Evidence-led entity quality
+
+Read and preserve the complete original source. Structured metadata is a non-exhaustive hint: an absent or empty
+field never negates or limits evidence plainly supported by the readable body. Determine durable entities from
+evidence-backed responsibility, decision, authorship, commitment, or causal participation; incidental mentions
+stay prose.
+
+Descriptions stand alone for a cold reader and lead with durable identity or role, never with the capture that
+mentioned the entity. A fact introduces a different predicate, such as action, decision, result, relationship
+change, or time-bounded commitment, and never restates description role or identity through grammar, tense, or voice.
+Every temporally volatile `EntityProposal` fact carries its own `occurred_at` or evidence-time anchor in that
+same fact; never rely on page context or a sibling fact, or present it as timeless.
+
+Safe visible context may reconcile identity or enrich a page, but a claim supported only there keeps its original
+local citation and must not become current-source `EntityProposal` knowledge. Use the complete source and safe
+visible context to produce one coherent `FilingPlan`.
 
 Every entity listed on a mutation must appear on that same page in a concrete relationship sentence that
 contains its preferred name, every supplied alias needed for resolution, what it did or is responsible for,
