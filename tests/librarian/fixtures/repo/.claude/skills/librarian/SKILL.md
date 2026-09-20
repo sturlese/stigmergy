@@ -166,25 +166,20 @@ invent identity facts or merge ambiguous actors. Every proposal also supplies a 
 `description` of who or what the entity is in this context and a short `facts` list containing only durable
 facts materially supported by the source. Do not repeat a fact in the description and facts list.
 
-### Entity quality for meetings and updates
+### Evidence-led entity quality
 
-An entity description must stand on its own for a cold reader: lead with the entity's durable identity or role,
-not with the note, meeting, or capture that mentioned it. Do not use transient assignments as descriptions.
-Facts add distinct knowledge rather than restating the description, including by paraphrase. When a meeting or
-update assigns work, express it as a dated state tied to `occurred_at` (for example, `At the 17 September 2026
-meeting, Priya was assigned to measure renewal conversion`), never as a timeless present or future claim.
+Read and preserve the complete original source. Structured metadata is a non-exhaustive hint: an absent or empty
+field never negates or limits evidence plainly supported by the readable body. Determine durable entities from
+evidence-backed responsibility, decision, authorship, commitment, or causal participation; incidental mentions
+stay prose.
 
-An explicitly named attendee in readable source body is a qualifying participant: anchor the resolved identity
-on the durable meeting or note even when structured provenance has no participants. This is not a rule to turn
-every named mention into an entity; ordinary mentions still stay prose. Safe existing context may resolve an
-identity or enrich a page, but a claim supported only by that prior context keeps its original local citation and
-must not appear as current-source `EntityProposal` knowledge.
+Descriptions stand alone for a cold reader and lead with durable identity or role, never with the capture that
+mentioned the entity. Facts add distinct knowledge rather than restating descriptions, including by paraphrase.
+Anchor temporally volatile claims to `occurred_at` or the evidence time rather than presenting them as timeless.
 
-Contrastive example: a meeting identifies Jordan as the CEO of Delta Labs, lists Priya as an attendee, and assigns
-Priya a retention analysis. A useful Delta Labs description starts `Delta Labs is ...`, not `the company whose
-meeting this note records`; Priya is anchored on the note; and the assignment is dated. If an existing cited page,
-but not this meeting, establishes that Jordan founded Delta Labs, retain that claim with the existing citation
-rather than adding it to a proposal filed against the meeting source.
+Safe visible context may reconcile identity or enrich a page, but a claim supported only there keeps its original
+local citation and must not become current-source `EntityProposal` knowledge. Use the complete source and safe
+visible context to produce one coherent `FilingPlan`.
 
 Every entity listed on a mutation must appear on that same page in a concrete relationship sentence that
 contains its preferred name, every supplied alias needed for resolution, what it did or is responsible for,

@@ -265,21 +265,28 @@ def test_librarian_requires_rich_source_grounded_entity_proposals():
     assert "exact local source citation" in text
 
 
-def test_librarian_requires_standalone_nonduplicative_and_time_bound_entity_knowledge():
+def test_librarian_requires_standalone_nonduplicative_and_temporally_grounded_entity_knowledge():
     text = _skill_text()
-    assert "stand on its own for a cold reader" in text
-    assert "not with the note, meeting, or capture that mentioned it" in text
-    assert "facts add distinct knowledge rather than restating the description" in text
-    assert "dated state tied to `occurred_at`" in text
-    assert "never as a timeless present or future claim" in text
+    assert "descriptions stand alone for a cold reader" in text
+    assert "never with the capture that mentioned the entity" in text
+    assert "facts add distinct knowledge rather than restating descriptions" in text
+    assert "anchor temporally volatile claims to `occurred_at` or the evidence time" in text
 
 
-def test_librarian_reuses_visible_entity_knowledge_and_anchors_named_meeting_participants():
+def test_librarian_treats_source_body_as_authoritative_over_nonexhaustive_metadata():
     text = _skill_text()
-    assert "safe existing context may resolve an identity or enrich a page" in text
-    assert "keeps its original local citation" in text
-    assert "explicitly named attendee in readable source body" in text
-    assert "even when structured provenance has no participants" in text
+    assert "read and preserve the complete original source" in text
+    assert "structured metadata is a non-exhaustive hint" in text
+    assert "field never negates or limits evidence plainly supported by the readable body" in text
+
+
+def test_librarian_uses_general_entity_relevance_and_preserves_prior_provenance():
+    text = _skill_text()
+    assert "responsibility, decision, authorship, commitment, or causal participation" in text
+    assert "incidental mentions stay prose" in text
+    assert "safe visible context may reconcile identity or enrich a page" in text
+    assert "claim supported only there keeps its original local citation" in text
+    assert "one coherent `filingplan`" in text
 
 
 def test_librarian_preserves_conflicts_and_recompile_knowledge():
