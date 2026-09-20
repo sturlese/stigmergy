@@ -6,14 +6,12 @@
   "fixture_path": "../fixtures/meeting_entity_quality.md",
   "mutations": {
     "min_count": 1,
-    "max_count": 2,
+    "max_count": 1,
     "closed": true,
     "required": [
-      {"action": "create", "role": "note", "title": "Helio Stack product review"}
+      {"action": "create", "role": "note"}
     ],
-    "allowed": [
-      {"action": "update", "title": "AI-assisted Founder Evaluation"}
-    ],
+    "allowed": [],
     "forbidden": []
   },
   "identities": {

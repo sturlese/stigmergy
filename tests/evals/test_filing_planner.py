@@ -80,6 +80,21 @@ def _passing_plan():
     )
 
 
+def _meeting_mutation_plan(*mutations: PageMutation) -> FilingPlan:
+    return FilingPlan(summary="Recorded a dated operating state.", mutations=mutations)
+
+
+def _meeting_note_mutation(*, title: str, role: str = "note") -> PageMutation:
+    return PageMutation(
+        action="create",
+        role=role,
+        title=title,
+        body=f"# {title}\n\nA dated operating state. {_citation()}",
+        entities=(),
+        reason="The source records a dated operating state.",
+    )
+
+
 def test_production_budget_is_one_filing_plus_one_bounded_correction():
     assert constants.PRODUCTION_MAX_TURNS == 3
     assert constants.PRODUCTION_REASONING_LEVEL == "minimal"
@@ -179,6 +194,38 @@ def test_meeting_case_requires_every_named_participant_as_a_cited_entity_anchor(
     ]
     assert result["entity_relationships"]["passed"] is True
     assert result["entity_editorial_quality"]["passed"] is True
+
+
+def test_meeting_case_accepts_a_semantically_arbitrary_note_title():
+    case = planner_eval.load_case(MEETING_CASE)
+    plan = _meeting_mutation_plan(_meeting_note_mutation(title="Current operating state"))
+
+    result = planner_eval.score(plan, case, source_text=MEETING_FIXTURE.read_text(encoding="utf-8"))
+
+    assert result["mutations"]["passed"] is True
+
+
+def test_meeting_case_rejects_a_concept_where_a_note_is_required():
+    case = planner_eval.load_case(MEETING_CASE)
+    plan = _meeting_mutation_plan(
+        _meeting_note_mutation(title="Current operating state", role="concept")
+    )
+
+    result = planner_eval.score(plan, case, source_text=MEETING_FIXTURE.read_text(encoding="utf-8"))
+
+    assert result["mutations"]["passed"] is False
+
+
+def test_meeting_case_rejects_an_extra_unexpected_mutation():
+    case = planner_eval.load_case(MEETING_CASE)
+    plan = _meeting_mutation_plan(
+        _meeting_note_mutation(title="Current operating state"),
+        _meeting_note_mutation(title="Another dated operating state"),
+    )
+
+    result = planner_eval.score(plan, case, source_text=MEETING_FIXTURE.read_text(encoding="utf-8"))
+
+    assert result["mutations"]["passed"] is False
 
 
 def test_meeting_case_rejects_empty_entity_proposals():

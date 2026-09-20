@@ -118,18 +118,40 @@ def score(plan: FilingPlan, case: dict, *, source_text: str = "") -> dict:
 
 def _mutations(expectation: dict, mutations: tuple[PageMutation, ...]) -> dict:
     if "min_count" in expectation:
-        required = {_case_signature(item) for item in expectation.get("required", ())}
-        allowed = required | {_case_signature(item) for item in expectation.get("allowed", ())}
-        forbidden = {_case_signature(item) for item in expectation.get("forbidden", ())}
+        required_items = tuple(expectation.get("required", ()))
+        allowed_items = tuple(expectation.get("allowed", ()))
+        forbidden_items = tuple(expectation.get("forbidden", ()))
+        required = {_case_signature(item) for item in required_items}
+        allowed = required | {_case_signature(item) for item in allowed_items}
+        forbidden = {_case_signature(item) for item in forbidden_items}
         actual = tuple(_mutation_signature(mutation) for mutation in mutations)
         found = set(actual)
         duplicates = {item for item in found if actual.count(item) > 1}
-        missing = required - found
-        unexpected = found - allowed if expectation.get("closed", True) else set()
-        present_forbidden = forbidden & found
+        missing = {
+            _case_signature(item)
+            for item in required_items
+            if not any(_matches_case_mutation(actual_item, item) for actual_item in actual)
+        }
+        expected_indexes = tuple(
+            index
+            for index, actual_item in enumerate(actual)
+            if any(
+                _matches_case_mutation(actual_item, item)
+                for item in (*required_items, *allowed_items)
+            )
+        )
+        unexpected = (
+            {item for index, item in enumerate(actual) if index not in expected_indexes}
+            if expectation.get("closed", True)
+            else set()
+        )
+        present_forbidden = {
+            actual_item
+            for actual_item in actual
+            if any(_matches_case_mutation(actual_item, item) for item in forbidden_items)
+        }
         minimum = int(expectation["min_count"])
         maximum = int(expectation["max_count"])
-        expected_indexes = tuple(index for index, signature in enumerate(actual) if signature in allowed)
         return {
             "minimum_count": minimum,
             "maximum_count": maximum,
@@ -144,12 +166,20 @@ def _mutations(expectation: dict, mutations: tuple[PageMutation, ...]) -> dict:
             "passed": minimum <= len(mutations) <= maximum and not missing and not unexpected
             and not present_forbidden and not duplicates,
         }
-    allowed = {_case_signature(item) for item in expectation["allowed"]}
+    allowed_items = tuple(expectation["allowed"])
+    allowed = {_case_signature(item) for item in allowed_items}
     actual = tuple(_mutation_signature(mutation) for mutation in mutations)
-    expected_indexes = tuple(index for index, signature in enumerate(actual) if signature in allowed)
-    found = set(actual)
-    missing = allowed - found
-    unexpected = set(actual) - allowed
+    expected_indexes = tuple(
+        index
+        for index, actual_item in enumerate(actual)
+        if any(_matches_case_mutation(actual_item, item) for item in allowed_items)
+    )
+    missing = {
+        _case_signature(item)
+        for item in allowed_items
+        if not any(_matches_case_mutation(actual_item, item) for actual_item in actual)
+    }
+    unexpected = {item for index, item in enumerate(actual) if index not in expected_indexes}
     expected_count = int(expectation["count"])
     return {
         "expected_count": expected_count,
@@ -188,6 +218,13 @@ def _case_signature(item: dict) -> tuple[str, str, str]:
         str(item["action"]),
         str(item.get("role") or ""),
         resolution_key(item.get("title") or item.get("path") or ""),
+    )
+
+
+def _matches_case_mutation(actual: tuple[str, str, str], expectation: dict) -> bool:
+    action, role, title = _case_signature(expectation)
+    return actual[:2] == (action, role) and (
+        expectation.get("title") is None or actual[2] == title
     )
 
 
