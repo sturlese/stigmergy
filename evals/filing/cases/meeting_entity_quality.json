@@ -52,7 +52,11 @@
       {
         "name": "Helio Stack",
         "description_term_groups": [["tool", "early-stage"], ["product", "early-stage"]],
-        "fact_term_groups": [["2026-09-20", "reviewed"]]
+        "fact_term_groups": [
+          ["2026-09-20", "review"],
+          ["2026-09-20", "workflow"],
+          ["2026-09-20", "pilot"]
+        ]
       },
       {
         "name": "Maya Ortiz",
