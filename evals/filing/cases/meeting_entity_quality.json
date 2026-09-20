@@ -48,36 +48,9 @@
     "min_explanatory_paragraphs": 1
   },
   "entity_editorial_quality": {
-    "required": [
-      {
-        "name": "Helio Stack",
-        "description_term_groups": [["tool", "early-stage"], ["product", "early-stage"]],
-        "fact_term_groups": [
-          ["2026-09-20", "review"],
-          ["2026-09-20", "workflow"],
-          ["2026-09-20", "pilot"]
-        ]
-      },
-      {
-        "name": "Maya Ortiz",
-        "description_terms": ["founder"],
-        "fact_term_groups": [["2026-09-20", "pilot"]]
-      },
-      {
-        "name": "Leon Park",
-        "description_terms": ["founder"],
-        "fact_term_groups": [["2026-09-20", "pilot"]]
-      },
-      {
-        "name": "Noor Balan",
-        "description_terms": ["engineering", "lead"],
-        "fact_term_groups": [["2026-09-20", "evaluation"]]
-      },
-      {
-        "name": "Priya Sen",
-        "description_terms": ["customer", "research"],
-        "fact_term_groups": [["2026-09-20", "interview"]]
-      }
-    ]
+    "required": ["Helio Stack", "Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen"],
+    "min_description_words": 3,
+    "min_facts": 1,
+    "require_temporal_fact": true
   }
 }

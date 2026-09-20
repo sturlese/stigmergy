@@ -265,7 +265,7 @@ def test_meeting_case_rejects_empty_entity_proposals():
     assert result["entity_editorial_quality"]["passed"] is False
 
 
-def test_meeting_case_rejects_missing_expected_entity_fact_coverage():
+def test_meeting_case_rejects_undated_entity_fact_coverage():
     case = planner_eval.load_case(MEETING_CASE)
     citation = f"(Source: {TICK}{MEETING_SOURCE}{TICK})"
     people = ("Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen")
@@ -292,7 +292,7 @@ def test_meeting_case_rejects_missing_expected_entity_fact_coverage():
                 name="Noor Balan",
                 entity_type="person",
                 description="Engineering lead at Helio Stack.",
-                facts=("At the 2026-09-20 review, Noor Balan participated.",),
+                facts=("Noor Balan participated in the product review.",),
             ),
             EntityProposal(
                 name="Priya Sen",
@@ -334,6 +334,7 @@ def test_meeting_case_rejects_missing_expected_entity_fact_coverage():
     result = planner_eval.score(plan, case, source_text=MEETING_FIXTURE.read_text(encoding="utf-8"))
 
     assert result["entity_editorial_quality"]["passed"] is False
+    assert result["entity_editorial_quality"]["missing_temporal_fact_anchors"] == ["Noor Balan"]
 
 
 def test_meeting_case_rejects_description_fact_duplication():
