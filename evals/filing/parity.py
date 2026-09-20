@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from planner_eval import load_case, score, score_graph_shape
+    from planner_eval import load_case, score
     from worktree import apply_with_production_repair, effective_plan, prepared
 except ModuleNotFoundError:
-    from evals.filing.planner_eval import load_case, score, score_graph_shape
+    from evals.filing.planner_eval import load_case, score
     from evals.filing.worktree import apply_with_production_repair, effective_plan, prepared
 
 from stigmergy.kernel.llm import (
@@ -24,16 +24,10 @@ from stigmergy.kernel.llm import (
     LIBRARIAN_REASONING_LEVEL,
     LIBRARIAN_TEMPERATURE,
 )
-from stigmergy.knowledge.context import authorized_derived_page_paths, filing_context
 from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
 from stigmergy.knowledge.plan import FilingPlan, GraphShape, GraphTopology, RepairPlan
-from stigmergy.knowledge.planner import (
-    PlanRun,
-    graph_shape_violations,
-    graph_topology_violations,
-)
-from stigmergy.knowledge.write_guard import WriteContext
-from stigmergy.knowledge.writer import GateRefused, requires_semantic_revision
+from stigmergy.knowledge.planner import PlanRun
+from stigmergy.knowledge.writer import GateRefused
 
 try:
     from constants import (
@@ -68,13 +62,12 @@ REQUIRED_SEMANTIC_GATES = frozenset(
         "anti_fragmentation",
         "editorial_quality",
         "seeded_update",
-        "graph_shape",
         "writer",
     }
 )
 STIGMERGY_RUNTIME = {
-    "model": "openai/gpt-oss-120b",
-    "provider": "cerebras",
+    "model": "deepseek/deepseek-v4.1-flash",
+    "provider": "openrouter:throughput",
     "max_tokens": LIBRARIAN_MAX_TOKENS,
     "temperature": LIBRARIAN_TEMPERATURE,
 }
@@ -561,9 +554,7 @@ def _case_observability(
                 "compilation_model_requests",
                 "graph_semantic_review_model_requests",
             )
-            if any(item.get(field, 0) < 1 for field in phase_fields[:4]) or sum(
-                item.get(field, 0) for field in phase_fields
-            ) != item.get("planning_model_requests"):
+            if any(item.get(field, 0) != 0 for field in phase_fields):
                 _failure(
                     failures,
                     implementation,
@@ -699,71 +690,30 @@ def _verify_case_payload(
         ):
             raise ValueError("graph shape violations must be a string list")
         if implementation == "stigmergy":
-            if (
-                recorded_shape is None
-                or recorded_shape_draft is None
-                or recorded_shape_review is None
-            ):
-                _failure(failures, implementation, "case-graph-shape", case_id=case_id)
-                return
-            computed_shape_violations = list(
-                graph_topology_violations(recorded_shape_review, recorded_shape)
-                + graph_shape_violations(
-                    recorded_shape,
-                    draft,
-                    source_path=case["source_path"],
-                )
+            recorded_graph_parts = (
+                recorded_shape,
+                recorded_shape_draft,
+                recorded_shape_review,
             )
-            if computed_shape_violations != recorded_shape_violations or item.get(
-                "graph_semantic_reviewed"
-            ) != (not computed_shape_violations):
-                _failure(failures, implementation, "case-graph-shape", case_id=case_id)
-            if require_passing and (
-                computed_shape_violations or not item.get("graph_semantic_reviewed")
-            ):
-                _failure(failures, implementation, "case-graph-shape", case_id=case_id)
+            if any(item is not None for item in recorded_graph_parts):
+                _failure(failures, implementation, "case-obsolete-graph-pipeline", case_id=case_id)
+            if recorded_shape_violations:
+                _failure(failures, implementation, "case-obsolete-graph-pipeline", case_id=case_id)
         source_text = expected.fixture_paths[case_id].read_text(encoding="utf-8")
         with prepared(
             case,
             source_text,
             template=str(expected.repo_root / "evals" / "filing" / "repo"),
         ) as worktree:
-            safe_context = filing_context(
-                worktree.root,
-                source_text=worktree.source_text,
-                capture_acl=worktree.envelope.audience,
-                actor_groups=None,
-            )
-            authorized_existing_paths = authorized_derived_page_paths(
-                worktree.root,
-                write_context=WriteContext(
-                    None,
-                    worktree.envelope.audience,
-                    unrestricted=True,
-                ),
-            )
-            graph_shape_failed = recorded_shape is not None and not item.get(
-                "graph_semantic_reviewed"
-            )
-            revision_required = graph_shape_failed or (
-                not item.get("graph_semantic_reviewed")
-                and requires_semantic_revision(
-                    draft,
-                    safe_context,
-                    authorized_existing_paths=authorized_existing_paths,
-                )
-            )
             telemetry = _semantic_revision_telemetry(item)
-            if telemetry["required"] != revision_required:
-                _failure(failures, implementation, "case-semantic-revision-trigger", case_id=case_id)
-            if not revision_required and telemetry != _empty_revision_telemetry():
+            if not telemetry["required"] and telemetry != _empty_revision_telemetry():
                 _failure(failures, implementation, "case-semantic-revision-telemetry", case_id=case_id)
             passing_production_case = (
                 require_passing
                 and (execution or {}).get("mode") == PRODUCTION_EQUIVALENT_MODE
                 and _case_passed(item)
             )
-            if revision_required and passing_production_case and not (
+            if telemetry["required"] and passing_production_case and not (
                 telemetry["attempted"]
                 and telemetry["applied"]
                 and telemetry["model_requests"] >= 1
@@ -820,9 +770,6 @@ def _verify_case_payload(
     if run_id is not None:
         replayed_effective[(implementation, run_id, case_id)] = replayed_effective_payload
     semantic = score(replayed_effective_plan, case, source_text=source_text)
-    graph_shape_score = score_graph_shape(recorded_shape, case, replayed_effective_plan)
-    semantic["graph_shape"] = graph_shape_score
-    semantic["passed"] = bool(semantic["passed"] and graph_shape_score["passed"])
     expected_raw_gates = {
         **{gate: semantic[gate]["passed"] for gate in sorted(semantic) if gate != "passed"},
         "writer": writer["passed"],

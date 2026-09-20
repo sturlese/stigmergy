@@ -26,12 +26,6 @@
     "allowed": [],
     "forbidden": []
   },
-  "graph_shape": {
-    "closed": true,
-    "required_subjects": [
-      {"title": "Decision Trace Quality", "role": "concept", "abstraction": "method"}
-    ]
-  },
   "identities": {
     "required": ["Mira Chen", "Northstar Signal Lab"],
     "allowed": [],

@@ -166,14 +166,14 @@ def test_static_environment_contains_no_credentials():
     ),
 )
 def test_deployed_librarian_uses_the_supported_default_model(surface, configured):
-    expected = "openrouter:openai/gpt-oss-120b"
+    expected = "openrouter:deepseek/deepseek-v4.1-flash"
     assert configured == expected, surface
 
 
 def test_deployed_librarian_uses_the_bounded_recovery_budget():
-    assert librarian_config.DEFAULT_MAX_TURNS == 14
-    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MAX_TURNS"] == "14"
-    assert _env_example_value("STIGMERGY_LIBRARIAN_MAX_TURNS") == "14"
+    assert librarian_config.DEFAULT_MAX_TURNS == 3
+    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MAX_TURNS"] == "3"
+    assert _env_example_value("STIGMERGY_LIBRARIAN_MAX_TURNS") == "3"
 
 
 def test_specification_names_the_exact_librarian_model():

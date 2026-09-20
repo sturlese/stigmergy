@@ -205,9 +205,7 @@ def test_rejected_plan_records_why_in_the_capture_report(clean_queue, target_rep
 
     assert outcome.status == schema.LANDED
     assert item["report"]["plan_rejected"] is True
-    assert item["report"]["plan_rejection"] == (
-        "only the contradiction named by the capture can be resolved"
-    )
+    assert item["report"]["plan_rejection"] == "filing correction failed"
 
 
 def test_missing_required_plan_items_reject_the_entire_derived_graph(clean_queue, target_repo):
@@ -2179,141 +2177,6 @@ def test_invalid_filing_candidate_lands_only_immutable_evidence(clean_queue, tar
     assert [entry.page_role for entry in changes[0].manifest] == ["source"]
 
 
-def test_editorial_gate_repairs_a_candidate_once_before_rejecting_it(
-    clean_queue, target_repo
-):
-    class RepairingPlanner(ScriptedPlanner):
-        def __init__(self, plan: FilingPlan, source: str):
-            super().__init__(plan)
-            self.source = source
-
-        def plan(self, **kwargs) -> PlanRun:
-            return PlanRun(super().plan(**kwargs).plan, model_requests=1)
-
-        def repair(self, *, files: dict[str, str], max_requests: int, **_kwargs) -> PlanRun:
-            assert max_requests == 1
-            path = "wiki/notes/Repairable release decision.md"
-            original = files[path]
-            repaired = original.replace(
-                "The release decision remains current.",
-                "The release decision remains current and records the operating conclusion. "
-                f"(Source: `{self.source}`)",
-            )
-            return PlanRun(
-                RepairPlan(
-                    summary="Added local evidence to the durable conclusion",
-                    mutations=(
-                        RepairMutation(
-                            path=path,
-                            body=repaired,
-                            reason="Added the missing local evidence citation",
-                        ),
-                    ),
-                ),
-                model_requests=1,
-            )
-
-    store = evidence.MemoryEvidenceStore()
-    receipt = CaptureService(clean_queue, store).capture_text(
-        actor=Actor(subject="marc", display_name="Marc"),
-        audience=None,
-        adapter="mcp",
-        text="The release decision remains current.",
-        idempotency_key="repair-editorial-candidate",
-    )
-    source = source_path(schema.parse_capture(receipt["request"]))
-    plan = FilingPlan(
-        summary="Recorded the release decision",
-        mutations=(
-            PageMutation(
-                action="create",
-                role="note",
-                title="Repairable release decision",
-                body="# Repairable release decision\n\nThe release decision remains current.",
-                entities=(),
-                reason="The source records the current release decision",
-            ),
-        ),
-    )
-    settings = config.Settings(repo=str(target_repo), branch="main", backend="scripted")
-
-    item, outcome = worker.process_next(
-        clean_queue,
-        WriterDeps(settings, store, RepairingPlanner(plan, source), str(target_repo)),
-    )
-
-    assert outcome.status == schema.LANDED
-    assert item["report"]["plan_rejected"] is False
-    assert item["report"]["model_requests"] == 2
-    page = parse_page(
-        "wiki/notes/Repairable release decision.md",
-        subprocess.check_output(
-            ["git", "show", "main:wiki/notes/Repairable release decision.md"],
-            cwd=target_repo,
-            text=True,
-        ),
-    )
-    assert source in page.body
-
-
-def test_editorial_gate_rejects_an_out_of_bounds_repair_but_keeps_the_source(
-    clean_queue, target_repo
-):
-    class OutOfBoundsRepairPlanner(ScriptedPlanner):
-        def repair(self, **_kwargs) -> PlanRun:
-            return PlanRun(
-                RepairPlan(
-                    summary="Attempted an unrelated repair",
-                    mutations=(
-                        RepairMutation(
-                            path="wiki/notes/Unrelated repair.md",
-                            body="# Unrelated repair\n\nThis page must not be written.",
-                            reason="This repair is outside the violated page",
-                        ),
-                    ),
-                ),
-                model_requests=1,
-            )
-
-    store = evidence.MemoryEvidenceStore()
-    plan = FilingPlan(
-        summary="Recorded a repairable but incomplete release decision",
-        mutations=(
-            PageMutation(
-                action="create",
-                role="note",
-                title="Incomplete release decision",
-                body="# Incomplete release decision\n\nThe release decision remains current.",
-                entities=(),
-                reason="The source records the current release decision",
-            ),
-        ),
-    )
-    receipt, item, outcome = _process_capture(
-        clean_queue,
-        target_repo,
-        store,
-        actor=Actor(subject="marc", display_name="Marc"),
-        audience=None,
-        key="reject-out-of-bounds-repair",
-        text="The release decision remains current.",
-        plan=plan,
-        planner=OutOfBoundsRepairPlanner(plan),
-    )
-
-    assert outcome.status == schema.LANDED
-    assert item["report"]["model_requests"] == 1
-    assert item["report"]["plan_rejected"] is True
-    assert item["report"]["plan_rejection"] == "knowledge gates found invalid-repair-plan"
-    source = source_path(schema.parse_capture(receipt["request"]))
-    changed_paths = subprocess.check_output(
-        ["git", "show", "--format=", "--name-only", item["commit_sha"]],
-        cwd=target_repo,
-        text=True,
-    ).splitlines()
-    assert changed_paths == [source]
-
-
 def test_repair_writer_reconstructs_the_authorized_page_metadata(tmp_path):
     path = "wiki/concepts/Repair boundary.md"
     target = tmp_path.joinpath(*path.split("/"))
@@ -2419,7 +2282,7 @@ def test_master_recompile_preserves_sources_reuses_identity_and_is_idempotent(
     clean_queue, target_repo
 ):
     store = evidence.MemoryEvidenceStore()
-    plan = FilingPlan.model_construct(
+    seed_plan = FilingPlan.model_construct(
         summary="Recorded source-backed identity evidence without a page anchor",
         entities=(
             EntityProposal(
@@ -2427,13 +2290,28 @@ def test_master_recompile_preserves_sources_reuses_identity_and_is_idempotent(
                 entity_type="organization",
                 external_namespace="crm",
                 external_id="account-7",
+                description="Acme is an organization.",
+                facts=("Acme owns an operating decision.",),
+            ),
+        ),
+    )
+    recompiled_plan = FilingPlan.model_construct(
+        summary="Recompiled the source into richer entity knowledge",
+        entities=(
+            EntityProposal(
+                name="Acme",
+                entity_type="organization",
+                external_namespace="crm",
+                external_id="account-7",
+                description="Acme is the CRM organization for account account-7.",
+                facts=("Acme owns a durable operating decision.",),
             ),
         ),
     )
     receipt, _item, outcome = _process_capture(
         clean_queue, target_repo, store,
         actor=Actor(subject="marc", display_name="Marc"), audience=None,
-        key="recompile-seed", text="Acme CRM account account-7 owns a durable operating decision.", plan=plan,
+        key="recompile-seed", text="Acme CRM account account-7 owns a durable operating decision.", plan=seed_plan,
         editorial=True,
     )
     assert outcome.status == schema.LANDED
@@ -2461,7 +2339,7 @@ def test_master_recompile_preserves_sources_reuses_identity_and_is_idempotent(
 
     item, outcome = worker.process_next(
         clean_queue,
-        WriterDeps(settings, store, EditorialFixturePlanner(plan), str(target_repo)),
+        WriterDeps(settings, store, EditorialFixturePlanner(recompiled_plan), str(target_repo)),
     )
 
     assert outcome.status == schema.LANDED
@@ -2476,9 +2354,14 @@ def test_master_recompile_preserves_sources_reuses_identity_and_is_idempotent(
         cwd=target_repo,
         check=False,
     ).returncode == 0
-    assert entity_before == subprocess.check_output(
+    entity_after = subprocess.check_output(
         ["git", "show", f"main:{entity_path_before}"], cwd=target_repo, text=True
     )
+    assert entity_after != entity_before
+    assert "Acme is the CRM organization for account account-7." in entity_after
+    assert "Acme owns a durable operating decision." in entity_after
+    assert "Acme is an organization." not in entity_after
+    assert "Acme owns an operating decision." not in entity_after
 
     queue.enqueue_garden(
         clean_queue,
@@ -2490,7 +2373,7 @@ def test_master_recompile_preserves_sources_reuses_identity_and_is_idempotent(
     )
     repeated, repeated_outcome = worker.process_next(
         clean_queue,
-        WriterDeps(settings, store, EditorialFixturePlanner(plan), str(target_repo)),
+        WriterDeps(settings, store, EditorialFixturePlanner(recompiled_plan), str(target_repo)),
     )
 
     assert repeated_outcome.status == schema.LANDED
@@ -3336,6 +3219,10 @@ def test_entity_rename_merge_and_delete_use_atomic_writer_operations(
                     path="wiki/notes/Northstar account.md",
                     body=(
                         "# Northstar account\n\n"
+                        "Northstar Labs and Northstar Research remain substantive accounts.\n\n"
+                        "Northstar Labs is materially related to this conclusion. "
+                        "Northstar Research is materially related to this conclusion. "
+                        f"(Source: `{first_item['source_path']}`)\n\n"
                         "The account remains substantive after the rename; Northstar Systems "
                         "and Northstar Research remain the associated organizations."
                     ),

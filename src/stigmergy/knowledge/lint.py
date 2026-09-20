@@ -145,7 +145,7 @@ def _relationship_violations(pages, records) -> list[Violation]:
         by_stem.setdefault(Path(path).stem.casefold(), []).append(path)
 
     for record in records.values():
-        for claim in (*record.claims, *record.external_ids):
+        for claim in (*record.claims, *record.external_ids, *record.knowledge):
             source = pages.get(claim.source)
             if source is None or source.page_type != "source":
                 violations.append(

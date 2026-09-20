@@ -89,11 +89,10 @@ It never rewrites `sources/` and never broadens an ACL. Deletion is a separate e
 
 Each accepted knowledge mutation must be readable without reopening the source: it states the
 supported conclusion, gives local source attribution, and explains every material page or entity
-relationship in prose. A draft that changes a visible existing page receives one bounded semantic
-revision using the same source and safe context; the revision replaces the complete plan or nothing.
-Pure-create drafts retain the bounded repair path for structural writer violations. If either path
-fails, the writer commits only the immutable source and reports the plan as rejected; it never
-leaves a partial derived graph.
+relationship in prose. A plan rejected by deterministic writer gates may receive one bounded
+replacement-plan request using the same source, safe context, and exact violations; the replacement
+supersedes the complete plan or nothing. If it also fails, the writer commits only the immutable
+source and reports the plan as rejected; it never leaves a partial derived graph.
 
 ## The knowledge model
 
@@ -278,19 +277,19 @@ Report vulnerabilities privately: [`SECURITY.md`](./SECURITY.md).
 
 One `OPENROUTER_API_KEY`, a closed allowlist in `kernel.llm`, no model fallback or direct
 alternate-provider credentials, and zero-data retention. Direct Anthropic, OpenAI, or Gemini
-credentials are rejected. The librarian's strict provider-native JSON Schema compilation is pinned
-to Cerebras, with no provider fallback. One bounded editorial or compliance recovery request uses
-GPT-5.4 on Azure when the primary compiler cannot satisfy the quality contract. Both routes require
-supported parameters, deny data collection, and require zero-data-retention processing. Librarian
-reasoning is `medium` and excluded from output. Its output ceiling is `40960` tokens and is sent to
-OpenRouter as `max_tokens`. Each writer attempt makes at most fourteen model requests across graph
-topology, review, enrichment, compilation, compliance, schema retries, and bounded repair. If the
-budget is unavailable or the result fails writer gates, the unreviewed draft is never applied.
+credentials are rejected. The librarian uses strict provider-native JSON Schema through the fastest
+compatible zero-data-retention OpenRouter host, with same-model provider fallback. One coherent agent reads the source and safe graph context and
+decides page boundaries, prose, links, entities, and contradictions together. A normal filing uses one
+request; one bounded correction may repair a failed mechanical writer contract. Both requests use the
+same `deepseek/deepseek-v4.1-flash` route. Provider requests require supported parameters, deny data collection,
+and require zero-data-retention processing. Librarian reasoning is `minimal` and excluded from output.
+Its output ceiling is `40960` tokens and is sent to OpenRouter as `max_tokens`. If the bounded correction
+cannot satisfy writer gates, the draft is never applied.
 Retryable failures use the existing bounded queue-attempt policy; answer and OCR requests retain
 same-model provider failover.
 
-`POST /admin/api/knowledge/recompile` is a separate master-only control: it rebuilds only derived
-notes, concepts, links, and entity anchors from immutable sources in one isolated worktree. It
+`POST /admin/api/knowledge/recompile` is a separate master-only control: it rebuilds derived notes,
+concepts, links, entity anchors, and structured entity knowledge from immutable sources in one isolated worktree. It
 reports source count, page mutations, retained identities, link health, request count, and final
 commit; valid source-backed identities are never auto-pruned, and any failed source or gate abandons
 the complete rebuild. A recompile is a `GardenRequest` in `recompile` mode and records its commit
@@ -302,13 +301,13 @@ Before release or deployment, the real-model parity artifact MUST pass
 requires identical corpus, initial graph, source-case hashes, Stigmergy commit and librarian-skill
 hashes across runs; replay-verified draft/revision telemetry and raw gates; a provenance-bearing blind
 review; and a reasoning matrix that proves the selected Stigmergy level is the lowest passing level.
-Schema v3 parity evidence is obsolete because it cannot prove the revision trigger. Hippocampus is retained
+Schema v5 parity evidence is required; earlier schemas cannot prove the bounded-correction trigger and
+complete candidate binding. Hippocampus is retained
 as comparative, replay-verified baseline evidence and is not a Stigmergy admission candidate.
 
 | Purpose | Model |
 |---|---|
-| filing and semantic repair | `openai/gpt-oss-120b` |
-| bounded librarian quality recovery | `openai/gpt-5.4` |
+| filing and bounded contract correction | `deepseek/deepseek-v4.1-flash` |
 | cited answers | `z-ai/glm-5.2` |
 | embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |

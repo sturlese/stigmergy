@@ -216,14 +216,14 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                 PageMutation(
                     action="update",
                     path="wiki/notes/Northstar renewal.md",
-                    body=(
-                        "# Northstar renewal\n\n"
-                        "Northstar Labs and Northstar Research retain the same renewal identity. "
-                        "The signed renewal records an annual cadence "
-                        f"(Source: `{first_source}`). "
-                        "The current signed schedule records a monthly cadence that conflicts "
-                        "with the previously recorded annual renewal; the evidence remains "
-                        f"unresolved (Source: `{second_source}`)."
+                        body=(
+                            "# Northstar renewal\n\n"
+                            "Northstar Labs is the CRM identity for the signed annual renewal. "
+                            "Northstar Research is its duplicate CRM identity for the same renewal. "
+                            f"(Source: `{first_source}`)\n\n"
+                            "The current signed schedule records a monthly cadence that conflicts "
+                            "with the previously recorded annual renewal; the evidence remains "
+                            f"unresolved (Source: `{second_source}`)."
                     ),
                     reason="The current signed schedule conflicts with the renewal",
                 ),
@@ -438,16 +438,17 @@ def test_clean_system_flow_converges_from_capture_to_full_index(
                 PageMutation(
                     action="update",
                     path="wiki/notes/Northstar renewal.md",
-                    body=(
-                        "# Northstar renewal\n\n"
-                        "Northstar Labs and Northstar Research retain the same renewal identity. "
-                        "The signed renewal records an annual cadence "
-                        f"(Source: `{first_source}`). "
-                        "The later signed schedule records a conflicting monthly cadence "
-                        f"(Source: `{second_source}`). "
-                        "The countersigned amendment makes the annual cadence controlling and "
-                        "supersedes the monthly schedule for this renewal "
-                        f"(Source: `{resolution_source}`)."
+                        body=(
+                            "# Northstar renewal\n\n"
+                            "Northstar Labs is the CRM identity for the signed annual renewal. "
+                            "Northstar Research is its duplicate CRM identity for the same renewal. "
+                            f"(Source: `{first_source}`)\n\n"
+                            "The current signed schedule records a monthly cadence that conflicts "
+                            "with the previously recorded annual renewal; the evidence remains "
+                            f"unresolved (Source: `{second_source}`).\n\n"
+                            "The countersigned amendment makes the annual cadence controlling and "
+                            "supersedes the monthly schedule for this renewal "
+                            f"(Source: `{resolution_source}`)."
                     ),
                     reason="The amendment resolves the conflicting schedules",
                 ),

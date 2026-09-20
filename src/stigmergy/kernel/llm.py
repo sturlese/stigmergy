@@ -8,14 +8,13 @@ import os
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 
 ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
-LIBRARIAN_MODEL = "openrouter:openai/gpt-oss-120b"
-LIBRARIAN_RECOVERY_MODEL = "openrouter:openai/gpt-5.4"
-LIBRARIAN_REASONING_LEVEL = "medium"
+LIBRARIAN_MODEL = "openrouter:deepseek/deepseek-v4.1-flash"
+LIBRARIAN_REASONING_LEVEL = "minimal"
 LIBRARIAN_MAX_TOKENS = 40960
 LIBRARIAN_TEMPERATURE = 0
 OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
 APPROVED_MODELS = frozenset(
-    {ANSWER_MODEL, LIBRARIAN_MODEL, LIBRARIAN_RECOVERY_MODEL, OCR_MODEL}
+    {ANSWER_MODEL, LIBRARIAN_MODEL, OCR_MODEL}
 )
 
 OPENROUTER_PROVIDER_POLICY = {
@@ -25,27 +24,16 @@ OPENROUTER_PROVIDER_POLICY = {
     "zdr": True,
 }
 
-# The librarian's native structured output is verified on Cerebras. A failed request must retry
-# rather than silently route through an unverified host.
+# Prefer the fastest privacy-compatible host. Native structured output is required below, so
+# OpenRouter automatically excludes providers that cannot honor the librarian's schema.
 LIBRARIAN_PROVIDER_ROUTING = {
-    "allow_fallbacks": False,
-    "only": ["cerebras"],
+    "sort": "throughput",
 }
-LIBRARIAN_RECOVERY_PROVIDER_ROUTING = {
-    "allow_fallbacks": False,
-    "only": ["azure"],
-}
-
-
 def provider_policy(model_name: str) -> dict:
     """The OpenRouter provider policy one approved model is requested with."""
     policy = dict(OPENROUTER_PROVIDER_POLICY)
     if model_name == LIBRARIAN_MODEL:
         policy.update(LIBRARIAN_PROVIDER_ROUTING)
-        policy["only"] = list(LIBRARIAN_PROVIDER_ROUTING["only"])
-    elif model_name == LIBRARIAN_RECOVERY_MODEL:
-        policy.update(LIBRARIAN_RECOVERY_PROVIDER_ROUTING)
-        policy["only"] = list(LIBRARIAN_RECOVERY_PROVIDER_ROUTING["only"])
     return policy
 
 _MODEL_OVERRIDE = None
@@ -81,7 +69,7 @@ def build_model(model_name: str = ANSWER_MODEL):
     model_settings = OpenRouterModelSettings(
         openrouter_provider=provider_policy(model_name)
     )
-    if model_name in {LIBRARIAN_MODEL, LIBRARIAN_RECOVERY_MODEL}:
+    if model_name == LIBRARIAN_MODEL:
         model_settings["max_tokens"] = LIBRARIAN_MAX_TOKENS
         model_settings["openrouter_reasoning"] = {
             "effort": LIBRARIAN_REASONING_LEVEL,
@@ -89,9 +77,18 @@ def build_model(model_name: str = ANSWER_MODEL):
         }
     if model_name == LIBRARIAN_MODEL:
         model_settings["temperature"] = LIBRARIAN_TEMPERATURE
+    model_kwargs = {}
+    if model_name == LIBRARIAN_MODEL:
+        # OpenRouter exposes native JSON Schema for DeepSeek V4.1 Flash. The installed
+        # pydantic-ai catalogue predates the model and otherwise falls back to tool output.
+        model_kwargs["profile"] = {
+            "supports_json_schema_output": True,
+            "supports_json_object_output": True,
+        }
     model = OpenRouterModel(
         model_name.removeprefix("openrouter:"),
         provider=OpenRouterProvider(api_key=key),
         settings=model_settings,
+        **model_kwargs,
     )
     return model, model_settings
