@@ -265,6 +265,23 @@ def test_librarian_requires_rich_source_grounded_entity_proposals():
     assert "exact local source citation" in text
 
 
+def test_librarian_requires_standalone_nonduplicative_and_time_bound_entity_knowledge():
+    text = _skill_text()
+    assert "stand on its own for a cold reader" in text
+    assert "not with the note, meeting, or capture that mentioned it" in text
+    assert "facts add distinct knowledge rather than restating the description" in text
+    assert "dated state tied to `occurred_at`" in text
+    assert "never as a timeless present or future claim" in text
+
+
+def test_librarian_reuses_visible_entity_knowledge_and_anchors_named_meeting_participants():
+    text = _skill_text()
+    assert "safe existing context may resolve an identity or enrich a page" in text
+    assert "keeps its original local citation" in text
+    assert "explicitly named attendee in readable source body" in text
+    assert "even when structured provenance has no participants" in text
+
+
 def test_librarian_preserves_conflicts_and_recompile_knowledge():
     text = _skill_text()
     assert "preserve both and emit a contradiction" in text

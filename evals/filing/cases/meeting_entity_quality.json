@@ -1,0 +1,52 @@
+{
+  "version": 2,
+  "name": "meeting-entity-quality",
+  "source_title": "Helio Stack product review",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000003.md",
+  "fixture_path": "../fixtures/meeting_entity_quality.md",
+  "mutations": {
+    "min_count": 1,
+    "max_count": 2,
+    "closed": true,
+    "required": [
+      {"action": "create", "role": "note", "title": "Helio Stack product review"}
+    ],
+    "allowed": [
+      {"action": "update", "title": "AI-assisted Founder Evaluation"}
+    ],
+    "forbidden": []
+  },
+  "identities": {
+    "required": ["Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen", "Helio Stack"],
+    "allowed": [],
+    "forbidden": [],
+    "closed": true
+  },
+  "external_ids": {
+    "required": [],
+    "allowed": [],
+    "closed": true
+  },
+  "links": {
+    "required": ["Maya Ortiz", "Leon Park", "Noor Balan", "Priya Sen", "Helio Stack"],
+    "allowed": [],
+    "forbidden": [],
+    "closed": true
+  },
+  "link_coverage": {"allow_unlinked": []},
+  "normal_page_targets": ["AI-assisted Founder Evaluation"],
+  "bodies": {
+    "required": ["five interview summaries"],
+    "required_any": [
+      {
+        "label": "dated evaluation cycle",
+        "phrases": ["2026-10-01", "1 October 2026", "October 1, 2026"]
+      }
+    ],
+    "forbidden": [],
+    "require_local_source": true
+  },
+  "editorial_quality": {
+    "min_explanatory_paragraphs": 1
+  }
+}
