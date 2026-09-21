@@ -1040,12 +1040,13 @@ def _validate_blind_comparison(
             _failure(failures, "review", "blind-review-evidence")
             return False
         reviewed.add(key)
-    return _review_regression(response, labels, comparison_id, failures)
+    return _review_regression(response, labels, source["sha256"], comparison_id, failures)
 
 
 def _review_regression(
     response: dict[str, Any],
     labels: dict[str, dict[str, Any]],
+    source_sha256: str,
     comparison_id: str,
     failures: list[dict[str, Any]],
 ) -> dict[str, Any] | None | bool:
@@ -1082,7 +1083,7 @@ def _review_regression(
         "implementation": selected["implementation"],
         "run_id": selected["run_id"],
         "case_id": selected["case_id"],
-        "source_sha256": selected["source_sha256"],
+        "source_sha256": source_sha256,
         "case_output_sha256": selected["case_output_sha256"],
         "effective_payload_sha256": selected["effective_payload_sha256"],
         "reason": material["reason"],

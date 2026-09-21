@@ -901,6 +901,7 @@ def test_v6_evaluate_rejects_a_non_derived_material_regression(tmp_path):
         "side": mapping["mapping"][0]["labels"][0]["label"],
         "reason": "Invalid fixture derivation.",
     }
+    response["pairs"][0]["overall"]["winner"] = mapping["mapping"][0]["labels"][1]["label"]
     response_bytes = _canonical(response)
     response_digest = hashlib.sha256(response_bytes).hexdigest()
     response_name = f"blind-reviewer-response-{response_digest}.json"
