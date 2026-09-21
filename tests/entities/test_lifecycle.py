@@ -80,7 +80,8 @@ def _apply(
 def _note(root: Path, entity_id: str, *, link_target: str | None = None) -> Path:
     path = root / "wiki" / "notes" / "Relationship.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    link = f"[[wiki/entities/{link_target or entity_id}|Visible label]]"
+    record = load_entities(str(root))[link_target or entity_id]
+    link = f"[[{record.path.removesuffix('.md')}|Visible label]]"
     path.write_text(
         render_page(
             path="wiki/notes/Relationship.md",
@@ -129,13 +130,17 @@ def _source_evidence(assertion: str) -> schema.EntityMergeEvidence:
     )
 
 
-def test_birth_uses_an_opaque_path_and_name_collision_does_not_merge(tmp_path):
+def test_birth_uses_a_descriptive_path_and_name_collision_does_not_merge(tmp_path):
     first = _apply(tmp_path, _proposal("Acme"))["Acme"]
     second = _apply(tmp_path, _proposal("Acme"))["Acme"]
+    records = load_entities(str(tmp_path))
 
     assert first.startswith("ent_") and second.startswith("ent_")
     assert first != second
-    assert (tmp_path / "wiki" / "entities" / f"{first}.md").is_file()
+    assert records[first].path_slug == records[second].path_slug == "acme"
+    assert records[first].path != records[second].path
+    assert tmp_path.joinpath(*records[first].path.split("/")).is_file()
+    assert tmp_path.joinpath(*records[second].path.split("/")).is_file()
 
 
 def test_one_proposal_records_every_explicit_name_for_the_same_identity(tmp_path):
@@ -308,7 +313,7 @@ def test_merge_preserves_claim_provenance_rewrites_anchors_and_adds_redirect(tmp
     assert second not in records
     assert {claim.value for claim in records[first].claims} == {"Acme One", "Acme Two"}
     assert page.entities == (first,)
-    assert f"wiki/entities/{first}" in page.body
+    assert records[first].path.removesuffix(".md") in page.body
     assert payload["redirects"] == {second: first}
 
 
@@ -432,6 +437,24 @@ def test_out_of_order_claim_keeps_entity_timestamps_valid(tmp_path):
     assert load_entities(str(tmp_path))[entity_id].updated_at == NOW
 
 
+def test_entity_path_slug_is_immutable_and_private_names_do_not_leak(tmp_path):
+    entity_id = _apply(tmp_path, _proposal("Acme"))["Acme"]
+    original_path = load_entities(str(tmp_path))[entity_id].path
+
+    _apply(
+        tmp_path,
+        _proposal("Acme Holdings", same_as=entity_id),
+        allowed_same_as=frozenset({entity_id}),
+    )
+    private_id = _apply(tmp_path, _proposal("Private Person"), acl=("finance",))["Private Person"]
+    records = load_entities(str(tmp_path))
+
+    assert records[entity_id].path == original_path
+    assert records[entity_id].path_slug == "acme"
+    assert records[private_id].path_slug == "entity"
+    assert "private-person" not in records[private_id].path
+
+
 def test_delete_sweeps_identity_references_but_keeps_substantive_page_text(tmp_path):
     entity_id = _apply(tmp_path, _proposal("Acme"))["Acme"]
     note = _note(tmp_path, entity_id)
@@ -455,7 +478,7 @@ def test_registry_is_reproducible_only_from_entity_pages(tmp_path):
 
 def test_entity_body_rejects_a_dossier(tmp_path):
     entity_id = _apply(tmp_path, _proposal("Acme"))["Acme"]
-    path = tmp_path / "wiki" / "entities" / f"{entity_id}.md"
+    path = tmp_path.joinpath(*load_entities(str(tmp_path))[entity_id].path.split("/"))
 
     with pytest.raises(EntityContractError, match="deterministic knowledge projection"):
         parse_entity(path.relative_to(tmp_path).as_posix(), path.read_text() + "\nFacts about Acme\n")
@@ -471,7 +494,7 @@ def test_entity_page_projects_source_grounded_knowledge(tmp_path):
         ),
         connections={"acme": ("Market Structure",)},
     )["Acme"]
-    path = tmp_path / "wiki" / "entities" / f"{entity_id}.md"
+    path = tmp_path.joinpath(*load_entities(str(tmp_path))[entity_id].path.split("/"))
 
     text = path.read_text(encoding="utf-8")
     record = parse_entity(path.relative_to(tmp_path).as_posix(), text)

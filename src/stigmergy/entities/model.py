@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -12,7 +13,12 @@ import yaml
 from stigmergy.index.corpus import split_frontmatter_checked
 from stigmergy.kernel.normalize import resolution_key
 
-ENTITY_ID_RE = re.compile(r"^ent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+_ENTITY_ID_PATTERN = r"ent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+ENTITY_ID_RE = re.compile(rf"^{_ENTITY_ID_PATTERN}$")
+ENTITY_FILENAME_RE = re.compile(
+    rf"^(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)--(?P<entity_id>{_ENTITY_ID_PATTERN})\.md$"
+)
+ENTITY_SLUG_MAX_LENGTH = 64
 ENTITY_FOLDER = "wiki/entities"
 REGISTRY_PATH = "ops/entity-registry.json"
 
@@ -56,6 +62,7 @@ class EntityKnowledgeClaim:
 @dataclass(frozen=True)
 class EntityRecord:
     entity_id: str
+    path_slug: str
     entity_type: str
     created_at: dt.datetime
     updated_at: dt.datetime
@@ -66,17 +73,46 @@ class EntityRecord:
 
     @property
     def path(self) -> str:
-        return entity_path(self.entity_id)
+        return entity_path(self.entity_id, self.path_slug)
 
 
 def mint_entity_id() -> str:
     return f"ent_{uuid.uuid4()}"
 
 
-def entity_path(entity_id: str) -> str:
+def entity_path_slug(name: str) -> str:
+    """Return the immutable, portable filename label for an accepted public name."""
+    ascii_name = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-")
+    slug = slug[:ENTITY_SLUG_MAX_LENGTH].rstrip("-")
+    return slug or "entity"
+
+
+def entity_path(entity_id: str, slug: str) -> str:
     if not ENTITY_ID_RE.fullmatch(entity_id):
         raise EntityContractError("invalid entity id")
-    return f"{ENTITY_FOLDER}/{entity_id}.md"
+    if (
+        not isinstance(slug, str)
+        or len(slug) > ENTITY_SLUG_MAX_LENGTH
+        or not ENTITY_FILENAME_RE.fullmatch(f"{slug}--{entity_id}.md")
+    ):
+        raise EntityContractError("invalid entity path slug")
+    return f"{ENTITY_FOLDER}/{slug}--{entity_id}.md"
+
+
+def parse_entity_path(path: str) -> tuple[str, str]:
+    prefix = f"{ENTITY_FOLDER}/"
+    filename = path.removeprefix(prefix)
+    if not path.startswith(prefix) or "/" in filename:
+        raise EntityContractError("entity path is invalid")
+    match = ENTITY_FILENAME_RE.fullmatch(filename)
+    if match is None or len(match.group("slug")) > ENTITY_SLUG_MAX_LENGTH:
+        raise EntityContractError("entity path is invalid")
+    return match.group("slug"), match.group("entity_id")
+
+
+def entity_id_from_path(path: str) -> str:
+    return parse_entity_path(path)[1]
 
 
 def new_name_claim(
@@ -157,8 +193,9 @@ def parse_entity(path: str, text: str) -> EntityRecord:
     metadata, body, malformed = split_frontmatter_checked(text)
     if malformed or not metadata:
         raise EntityContractError("entity frontmatter is invalid")
+    path_slug, path_entity_id = parse_entity_path(path)
     entity_id = str(metadata.get("id") or "")
-    if path != entity_path(entity_id) or metadata.get("type") != "entity":
+    if entity_id != path_entity_id or metadata.get("type") != "entity":
         raise EntityContractError("entity id, type, or path is invalid")
     claims_raw = metadata.get("claims")
     external_raw = metadata.get("external_ids")
@@ -171,6 +208,7 @@ def parse_entity(path: str, text: str) -> EntityRecord:
     try:
         record = EntityRecord(
             entity_id=entity_id,
+            path_slug=path_slug,
             entity_type=_required_text(metadata.get("entity_type"), "entity_type"),
             created_at=_timestamp(metadata.get("created_at")),
             updated_at=_timestamp(metadata.get("updated_at")),
@@ -361,7 +399,7 @@ def _parse_knowledge(value) -> EntityKnowledgeClaim:
 
 
 def _validate_record(record: EntityRecord) -> None:
-    entity_path(record.entity_id)
+    entity_path(record.entity_id, record.path_slug)
     if not record.entity_type.strip() or not record.claims:
         raise EntityContractError("entity requires a type and at least one name claim")
     if record.updated_at < record.created_at:

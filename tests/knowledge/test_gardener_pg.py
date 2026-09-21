@@ -391,6 +391,7 @@ def test_registry_and_absorbed_anchor_are_repaired_deterministically(
     absorbed = "ent_22222222-2222-4222-8222-222222222222"
     record = EntityRecord(
         entity_id=canonical,
+        path_slug="acme",
         entity_type="organization",
         created_at=now,
         updated_at=now,

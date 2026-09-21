@@ -104,7 +104,7 @@ source and reports the plan as rejected; it never leaves a partial derived graph
 |---|---|:---:|---|
 | Note | `wiki/notes/` | yes | contextual conclusion, decision, or event |
 | Concept | `wiki/concepts/` | yes | durable explanatory knowledge |
-| Entity identity | `wiki/entities/ent_<uuid>.md` | entity primitives only | opaque ID and scoped name claims |
+| Entity identity | `wiki/entities/<slug>--ent_<uuid>.md` | entity primitives only | immutable human label, opaque ID, and scoped name claims |
 | Source | `sources/YYYY/MM/<capture-id>.md` | no | immutable evidence for one capture |
 
 A note or concept carries a maturity (`seed`, `developing`, `mature`, `evergreen`), an optional
@@ -394,7 +394,7 @@ your-brain/
 ├── wiki/
 │   ├── notes/
 │   ├── concepts/
-│   └── entities/ent_<uuid>.md
+│   └── entities/<slug>--ent_<uuid>.md
 ├── ops/
 │   ├── identities.json            people, groups, default audience
 │   ├── slack-channels.json        channel id → audience

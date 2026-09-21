@@ -10,10 +10,12 @@ from types import MappingProxyType
 
 from stigmergy.capture.schema import EntityMergeEvidence
 from stigmergy.entities.model import (
+    EntityContractError,
     EntityRecord,
     ExternalIdClaim,
     NameClaim,
-    entity_path,
+    entity_id_from_path,
+    entity_path_slug,
     load_entities,
     mint_entity_id,
     new_knowledge_claim,
@@ -120,6 +122,7 @@ def apply_proposals(
             external = _external_claim(proposal, acl=acl, source=source, actor=actor, at=at)
             records[entity_id] = EntityRecord(
                 entity_id=entity_id,
+                path_slug=entity_path_slug(proposal.name) if acl is None else "entity",
                 entity_type=proposal.entity_type,
                 created_at=at,
                 updated_at=at,
@@ -503,8 +506,8 @@ def follow_redirect(records: dict[str, EntityRecord], entity_id: str) -> str:
 
 
 def write_records(root: str, records: dict[str, EntityRecord]) -> None:
-    for entity_id, record in records.items():
-        path = os.path.join(root, *entity_path(entity_id).split("/"))
+    for record in records.values():
+        path = os.path.join(root, *record.path.split("/"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(render_entity(record))
@@ -515,17 +518,22 @@ def write_records(root: str, records: dict[str, EntityRecord]) -> None:
 
 
 def rewrite_entity_anchors(root: str, old: str, new: str) -> tuple[str, ...]:
-    return _rewrite_anchor_values(root, {old}, new)
+    records = load_entities(root)
+    replacement = records.get(new)
+    if replacement is None:
+        raise EntityOperationError("replacement entity does not exist")
+    return _rewrite_anchor_values(root, {old}, new, replacement.path)
 
 
 def sweep_entity_anchors(root: str, removed: set[str]) -> tuple[str, ...]:
-    return _rewrite_anchor_values(root, removed, None)
+    return _rewrite_anchor_values(root, removed, None, None)
 
 
 def _rewrite_anchor_values(
     root: str,
     targets: set[str],
     replacement: str | None,
+    replacement_path: str | None,
 ) -> tuple[str, ...]:
     import yaml
 
@@ -549,7 +557,7 @@ def _rewrite_anchor_values(
             after = [replacement if value in targets and replacement else value for value in before]
             after = [value for value in after if value not in targets]
             after = list(dict.fromkeys(after))
-            rewritten_body = _rewrite_entity_links(body, targets, replacement)
+            rewritten_body = _rewrite_entity_links(body, targets, replacement_path)
             if after == before and rewritten_body == body:
                 continue
             metadata["entity"] = after
@@ -563,16 +571,18 @@ def _rewrite_anchor_values(
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 
 
-def _rewrite_entity_links(body: str, targets: set[str], replacement: str | None) -> str:
+def _rewrite_entity_links(body: str, targets: set[str], replacement_path: str | None) -> str:
     def rewrite(match):
         target, separator, label = match.group(1).partition("|")
         cleaned = target.strip().removesuffix(".md")
-        entity_id = cleaned.rsplit("/", 1)[-1]
+        try:
+            entity_id = entity_id_from_path(f"{cleaned}.md")
+        except EntityContractError:
+            return match.group(0)
         if entity_id not in targets:
             return match.group(0)
-        if replacement:
-            prefix = cleaned[: -len(entity_id)]
-            rewritten = f"{prefix}{replacement}"
+        if replacement_path:
+            rewritten = replacement_path.removesuffix(".md")
             return f"[[{rewritten}|{label}]]" if separator else f"[[{rewritten}]]"
         return label.strip() if separator else target.strip()
 
