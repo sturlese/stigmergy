@@ -251,6 +251,180 @@ def test_production_equivalent_runner_rejects_a_noncanonical_worktree(tmp_path):
     assert error.value.code == 2
 
 
+def test_runner_records_typed_source_block_rejection_without_derived_paths(monkeypatch, capsys, tmp_path):
+    prompt = {
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    }
+    source = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
+    draft = FilingPlan(
+        summary="Replaced the seeded source-backed manuscript.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=f"# Agent Harness\n\nNew material only. (Source: `{source}`)",
+                reason="The fixture deliberately drops preserved prose.",
+            ),
+        ),
+    )
+    rejected_correction = draft.model_copy(
+        update={
+            "summary": "The correction still drops the seeded source-backed manuscript.",
+            "mutations": (
+                draft.mutations[0].model_copy(
+                    update={
+                        "body": f"# Agent Harness\n\nStill new material only. (Source: `{source}`)",
+                    }
+                ),
+            ),
+        }
+    )
+
+    class RecordedPlanner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def plan(self, **_kwargs):
+            return PlanRun(draft, model_requests=1)
+
+        def revise(self, **_kwargs):
+            return PlanRun(rejected_correction, model_requests=1)
+
+    monkeypatch.setattr(run_planner, "PydanticPlanner", RecordedPlanner)
+    monkeypatch.setattr(run_planner, "validate_librarian_skill", lambda _root: None)
+    monkeypatch.setattr(run_planner, "librarian_skill_provenance", lambda _root: prompt)
+    seeded_case = ROOT / "evals" / "filing" / "cases" / "harness_engineering_seeded.json"
+
+    assert (
+        run_planner.main(
+            [
+                "--live",
+                "--source",
+                str(FIXTURE),
+                "--case",
+                str(seeded_case),
+                "--brain-root",
+                str(tmp_path),
+                "--include-payload",
+            ]
+        )
+        == 1
+    )
+    record = json.loads(capsys.readouterr().out)["case_result"]
+
+    assert record["correction"] == {"required": True, "attempted": True, "applied": False, "plan": None}
+    assert record["evidence"]["result"]["writer_gates"] == {
+        "passed": False,
+        "violations": [],
+        "changed_paths": [],
+        "plan_rejection": "existing-source-block-not-preserved",
+    }
+
+
+def test_initial_source_block_rejection_is_typed_through_runner_and_parity_replay(
+    monkeypatch, capsys, tmp_path
+):
+    prompt = {
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    }
+    source = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
+    seeded_case = ROOT / "evals" / "filing" / "cases" / "harness_engineering_seeded.json"
+    seeded = planner_eval.load_case(seeded_case)["seed_pages"][0]["body"].replace("{source_path}", source)
+    base = _passing_plan()
+    draft = base.model_copy(
+        update={
+            "summary": "The first draft drops the existing source-backed manuscript.",
+            "mutations": (
+                base.mutations[0],
+                PageMutation(
+                    action="update",
+                    path="wiki/concepts/Agent Harness.md",
+                    body=f"# Agent Harness\n\nNew material only. (Source: `{source}`)",
+                    reason="The fixture deliberately drops preserved prose.",
+                ),
+            ),
+        }
+    )
+    correction = base.model_copy(
+        update={
+            "summary": "The bounded correction preserves the base manuscript.",
+            "mutations": (
+                base.mutations[0],
+                PageMutation(
+                    action="update",
+                    path="wiki/concepts/Agent Harness.md",
+                    body=(
+                        f"{seeded}\n\n## Connections\n\n[[Harness Engineering]] is the practice that "
+                        f"improves this system. (Source: `{source}`)"
+                    ),
+                    reason="The correction retains the existing evidence and adds the connection.",
+                ),
+            ),
+        }
+    )
+
+    class RecordedPlanner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def plan(self, **_kwargs):
+            return PlanRun(draft, model_requests=1)
+
+        def revise(self, **_kwargs):
+            return PlanRun(correction, model_requests=1)
+
+    monkeypatch.setattr(run_planner, "PydanticPlanner", RecordedPlanner)
+    monkeypatch.setattr(run_planner, "validate_librarian_skill", lambda _root: None)
+    monkeypatch.setattr(run_planner, "librarian_skill_provenance", lambda _root: prompt)
+
+    assert (
+        run_planner.main(
+            [
+                "--live",
+                "--source",
+                str(FIXTURE),
+                "--case",
+                str(seeded_case),
+                "--brain-root",
+                str(tmp_path),
+                "--include-payload",
+            ]
+        )
+        == 0
+    )
+    record = json.loads(capsys.readouterr().out)["case_result"]
+    case_id = record["case_id"]
+    inputs = parity.current_release_inputs(ROOT)
+    expected = replace(
+        inputs,
+        source_cases={case_id: hashlib.sha256(seeded_case.read_bytes()).hexdigest()},
+        source_fixtures={case_id: hashlib.sha256(FIXTURE.read_bytes()).hexdigest()},
+        case_paths={case_id: seeded_case},
+        fixture_paths={case_id: FIXTURE},
+        brain_prompt=prompt,
+    )
+    failures, replayed = [], {}
+
+    parity._case(
+        record,
+        "stigmergy",
+        record["runtime"],
+        record["execution"],
+        expected,
+        "recorded-run",
+        failures,
+        replayed,
+    )
+
+    assert record["evidence"]["result"]["writer_gates"]["plan_rejection"] == (
+        "existing-source-block-not-preserved"
+    )
+    assert not failures
+    assert replayed[("stigmergy", "recorded-run", case_id)]
+
+
 def test_quality_score_checks_topology_content_and_entities():
     case = planner_eval.load_case(CASE)
     result = planner_eval.score(

@@ -45,8 +45,8 @@ a provenance-bearing blind editorial review. Evidence is per case and per repeat
 Stigmergy level needs three independent production-equivalent repeats of every case. Each repeat records
 the initial plan, optional bounded correction, request telemetry, elapsed time, usage metadata, case and
 fixture hashes, canonical initial-graph template manifest, and the exact brain-prompt commit/hash. The
-release gate replays the recorded plan and effective output before permitting deployment only at the
-lowest passing level. Schema v6 is an
+release gate replays the recorded plan and effective output before permitting deployment only after exactly
+three complete configured-production repeats. Schema v6 is an
 invariant-based release record, not a reduced staged-planner artifact: it binds the candidate and prompt,
-production-equivalent execution, per-case evidence, bounded correction, replayed gates, reasoning
-selection, and the blind-review bundle. Earlier schemas and legacy phase fields are unsupported.
+production-equivalent execution, per-case evidence, bounded correction, replayed gates, production-repeat
+coverage, and the blind-review bundle. Earlier schemas and legacy phase fields are unsupported.

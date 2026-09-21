@@ -82,6 +82,13 @@ class GateRefused(KnowledgeWriteError):
     pass
 
 
+class ExistingSourceBlockNotPreserved(KnowledgeWriteError):
+    code = "existing-source-block-not-preserved"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
 class CorpusUnavailable(GateRefused):
     retryable = True
 
@@ -230,9 +237,7 @@ def _garden(
         return WriteResult(commit_sha=commit, change_id=str(change.id), report=dict(run.stats))
 
 
-def _garden_repair_files(
-    root: str, violations: tuple[Violation, ...]
-) -> tuple[dict[str, str], str]:
+def _garden_repair_files(root: str, violations: tuple[Violation, ...]) -> tuple[dict[str, str], str]:
     """Authorize maintenance repair targets and their already-declared provenance."""
     paths = {violation.path for violation in violations}
     if not paths or not all(path.startswith(("wiki/notes/", "wiki/concepts/")) for path in paths):
@@ -283,10 +288,7 @@ def _recompile(conn, deps: WriterDeps, base: gitcmd.BaseRef, *, request: schema.
             run.stats.update(report)
             return WriteResult(commit_sha="", change_id=None, report=report)
         _gate_diff(entries, trigger="garden")
-        reasons = {
-            entry.path: "Recompiled derived knowledge from immutable sources"
-            for entry in entries
-        }
+        reasons = {entry.path: "Recompiled derived knowledge from immutable sources" for entry in entries}
         commit, change = _commit_and_record(
             conn,
             deps,
@@ -296,9 +298,7 @@ def _recompile(conn, deps: WriterDeps, base: gitcmd.BaseRef, *, request: schema.
             item_id=str(request.operation_id),
             trigger="garden",
             actor=request.actor.subject,
-            summary=(
-                f"Recompiled derived knowledge from {report['source_count']} immutable source(s)"
-            ),
+            summary=(f"Recompiled derived knowledge from {report['source_count']} immutable source(s)"),
             reasons=reasons,
             job_run_id=str(run.id),
         )
@@ -322,16 +322,10 @@ def _recompile_derived(
     operation removes them.
     """
     before_entities = set(load_entities(worktree))
-    previous_pages = {
-        path: _path(worktree, path).read_text(encoding="utf-8")
-        for path in _derived_paths(worktree)
-    }
-    previous_page_records = {
-        path: parse_page(path, text) for path, text in previous_pages.items()
-    }
+    previous_pages = {path: _path(worktree, path).read_text(encoding="utf-8") for path in _derived_paths(worktree)}
+    previous_page_records = {path: parse_page(path, text) for path, text in previous_pages.items()}
     source_paths = tuple(
-        path.relative_to(worktree).as_posix()
-        for path in sorted(Path(worktree, "sources").glob("*/*/*.md"))
+        path.relative_to(worktree).as_posix() for path in sorted(Path(worktree, "sources").glob("*/*/*.md"))
     )
     if not source_paths:
         raise GateRefused("recompile requires at least one immutable source")
@@ -367,10 +361,7 @@ def _recompile_derived(
             actor_groups=None,
         )
         safe_context["recompile"] = {
-            "prior_pages": [
-                _recompile_prior_page_context(prior_pages[path])
-                for path in sorted(prior_pages)
-            ],
+            "prior_pages": [_recompile_prior_page_context(prior_pages[path]) for path in sorted(prior_pages)],
         }
         try:
             rendered_context = render_context(safe_context)
@@ -408,9 +399,7 @@ def _recompile_derived(
                     readable_artifacts=(source.body,),
                     reasons={},
                     visible_entities=tuple(safe_context["entities"]),
-                    visible_entity_ids=frozenset(
-                        entity["id"] for entity in safe_context["entities"]
-                    ),
+                    visible_entity_ids=frozenset(entity["id"] for entity in safe_context["entities"]),
                     allowed_contradiction_sources=frozenset(
                         {
                             relative_source,
@@ -527,9 +516,7 @@ def _recompile_prior_pages(previous_pages: dict, *, source: str, context: WriteC
         try:
             allow_existing(context, page.acl)
         except WriteRefused as error:
-            raise GateRefused(
-                "recompile prior page is outside its backing source audience"
-            ) from error
+            raise GateRefused("recompile prior page is outside its backing source audience") from error
         result[path] = page
     return result
 
@@ -548,9 +535,7 @@ def _recompile_prior_page_context(page) -> dict:
 
 def _prepare_recompile_plan(plan: FilingPlan, *, prior_pages: dict) -> tuple[FilingPlan, frozenset[str]]:
     """Require an explicit model disposition for every prior source-backed page."""
-    delete_paths = [
-        mutation.path or "" for mutation in plan.mutations if mutation.action == "delete"
-    ]
+    delete_paths = [mutation.path or "" for mutation in plan.mutations if mutation.action == "delete"]
     tombstones = frozenset(delete_paths)
     if len(tombstones) != len(delete_paths):
         raise GateRefused("recompile plan repeats a prior-page tombstone")
@@ -571,24 +556,16 @@ def _prepare_recompile_plan(plan: FilingPlan, *, prior_pages: dict) -> tuple[Fil
     for path in tombstones:
         try:
             if contradictions.parse_all(prior_pages[path].body):
-                raise GateRefused(
-                    "recompile cannot tombstone a page with unresolved contradictions"
-                )
+                raise GateRefused("recompile cannot tombstone a page with unresolved contradictions")
         except contradictions.ContradictionContractError as error:
             raise GateRefused("recompile prior-page contradiction data is invalid") from error
     if set(prior_pages) - retained - tombstones:
-        raise GateRefused(
-            "recompile plan omitted prior derived knowledge without an explicit tombstone"
-        )
+        raise GateRefused("recompile plan omitted prior derived knowledge without an explicit tombstone")
     if not tombstones:
         return plan, tombstones
     return (
         plan.model_copy(
-            update={
-                "mutations": tuple(
-                    mutation for mutation in plan.mutations if mutation.action != "delete"
-                )
-            }
+            update={"mutations": tuple(mutation for mutation in plan.mutations if mutation.action != "delete")}
         ),
         tombstones,
     )
@@ -607,9 +584,7 @@ def _gate_recompile_disappearance(
             continue
         backing_sources = set(page.sources)
         if not backing_sources or tombstone_authorizations.get(path, set()) != backing_sources:
-            raise GateRefused(
-                "recompile cannot remove a page without every backing source's authorization"
-            )
+            raise GateRefused("recompile cannot remove a page without every backing source's authorization")
         removed += 1
     return removed
 
@@ -669,9 +644,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             actor_groups=groups,
         )
         visible_entities = tuple(safe_context["entities"])
-        visible_entity_ids = frozenset(
-            item["id"] for item in visible_entities
-        )
+        visible_entity_ids = frozenset(item["id"] for item in visible_entities)
         allowed_contradiction_sources = frozenset(
             {
                 relative_source,
@@ -738,9 +711,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                         "message": str(error),
                     },
                 )
-        editorial_paths = frozenset(
-            path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
-        )
+        editorial_paths = frozenset(path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/")))
         violations = check(worktree, editorial_paths=editorial_paths) if not plan_invalid else ()
         if plan_invalid or violations:
             semantic_revision_required = True
@@ -793,11 +764,12 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                     )
                     repair_deterministic(worktree)
                     editorial_paths = frozenset(
-                        path
-                        for path in reasons
-                        if path.startswith(("wiki/notes/", "wiki/concepts/"))
+                        path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
                     )
                     violations = check(worktree, editorial_paths=editorial_paths)
+                except ExistingSourceBlockNotPreserved:
+                    plan_invalid = True
+                    plan_rejection = ExistingSourceBlockNotPreserved.code
                 except (
                     KnowledgeWriteError,
                     PageContractError,
@@ -827,10 +799,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
         summary = (
             "Archived source without wiki changes"
             if plan_invalid or not wiki_changes
-            else (
-                f"Applied {wiki_changes} wiki change(s); "
-                f"skipped {len(plan_skipped)} plan operation(s)"
-            )
+            else (f"Applied {wiki_changes} wiki change(s); skipped {len(plan_skipped)} plan operation(s)")
         )
         commit, change = _commit_and_record(
             conn,
@@ -878,13 +847,8 @@ def _filing_failure_payload(
     source_path: str,
 ) -> tuple[dict[str, str], ...]:
     """Expose mechanical failures with entity names, never opaque registry IDs alone."""
-    payload = [
-        {"path": item.path, "code": item.code, "message": item.message}
-        for item in violations
-    ]
-    violated_paths = {
-        item.path for item in violations if item.code == "entity-without-relationship"
-    }
+    payload = [{"path": item.path, "code": item.code, "message": item.message} for item in violations]
+    violated_paths = {item.path for item in violations if item.code == "entity-without-relationship"}
     for mutation in plan.mutations:
         if mutation.action not in {"create", "update"} or not mutation.body:
             continue
@@ -1026,9 +990,7 @@ def _apply_filing_plan(
     for proposal in plan.contradictions:
         proposed_sources = {claim.source for claim in proposal.claims}
         if not proposed_sources <= allowed_contradiction_sources:
-            raise KnowledgeWriteError(
-                "contradiction cites evidence outside the supplied filing context"
-            )
+            raise KnowledgeWriteError("contradiction cites evidence outside the supplied filing context")
     proposal_resolution = ProposalResolution.empty()
     if plan.entities:
         proposal_resolution = apply_proposals(
@@ -1055,6 +1017,8 @@ def _apply_filing_plan(
                 reasons=reasons,
                 visible_entity_ids=visible_entity_ids,
             )
+        except ExistingSourceBlockNotPreserved:
+            raise
         except (KnowledgeWriteError, PageContractError, WriteRefused) as error:
             raise KnowledgeWriteError(f"planned mutation {index} could not be applied") from error
         if mutation.action == "update" and changed_path:
@@ -1079,9 +1043,7 @@ def _apply_filing_plan(
                 body=contradictions.append(page.body, record),
                 acl=page.acl,
                 entities=page.entities,
-                sources=tuple(
-                    dict.fromkeys((*page.sources, *(claim.source for claim in record.claims)))
-                ),
+                sources=tuple(dict.fromkeys((*page.sources, *(claim.source for claim in record.claims)))),
                 status=page.status,
                 page_id=page.page_id,
                 created=page.created,
@@ -1159,13 +1121,9 @@ def _apply_page_mutation(
         body = mutation.body or ""
         try:
             if contradictions.parse_all(body):
-                raise KnowledgeWriteError(
-                    "contradictions must use the structured contradiction plan"
-                )
+                raise KnowledgeWriteError("contradictions must use the structured contradiction plan")
         except contradictions.ContradictionContractError as error:
-            raise KnowledgeWriteError(
-                "planned page body has invalid contradiction markers"
-            ) from error
+            raise KnowledgeWriteError("planned page body has invalid contradiction markers") from error
         text = render_page(
             path=target_path,
             role=mutation.role or "",
@@ -1190,9 +1148,7 @@ def _apply_page_mutation(
     allow_existing(context, page.acl)
     if mutation.action == "delete":
         if contradictions.parse_all(page.body):
-            raise KnowledgeWriteError(
-                "a capture cannot delete a page with unresolved contradictions"
-            )
+            raise KnowledgeWriteError("a capture cannot delete a page with unresolved contradictions")
         target.unlink()
         reasons[target_path] = mutation.reason
         return None
@@ -1211,15 +1167,12 @@ def _apply_page_mutation(
         )
     )
     body = _preserve_contradictions(page.body, mutation.body or "")
+    normalized_body = _preservation_key(body)
+    if any(_preservation_key(block) not in normalized_body for block in _source_backed_blocks(page.body)):
+        raise ExistingSourceBlockNotPreserved()
     missing_attributions = source_attributions(page.body) - source_attributions(body)
     if missing_attributions:
         raise KnowledgeWriteError("planned update drops existing local source attribution")
-    normalized_body = _preservation_key(body)
-    if any(
-        _preservation_key(block) not in normalized_body
-        for block in _source_backed_blocks(page.body)
-    ):
-        raise KnowledgeWriteError("planned update drops existing source-backed prose")
     rendered = render_page(
         path=destination,
         role=page.role,
@@ -1240,11 +1193,7 @@ def _apply_page_mutation(
 
 def _source_backed_blocks(body: str) -> tuple[str, ...]:
     """Return exact prose blocks whose evidence must survive additive capture updates."""
-    return tuple(
-        block.strip()
-        for block in re.split(r"\n\s*\n", body)
-        if source_attributions(block)
-    )
+    return tuple(block.strip() for block in re.split(r"\n\s*\n", body) if source_attributions(block))
 
 
 def _preservation_key(value: str) -> str:
@@ -1269,26 +1218,14 @@ def _preservation_key(value: str) -> str:
 
 def _preserve_contradictions(existing: str, proposed: str) -> str:
     try:
-        current = {
-            item.record.contradiction_id: item.record
-            for item in contradictions.parse_all(existing)
-        }
-        candidate = {
-            item.record.contradiction_id: item.record
-            for item in contradictions.parse_all(proposed)
-        }
+        current = {item.record.contradiction_id: item.record for item in contradictions.parse_all(existing)}
+        candidate = {item.record.contradiction_id: item.record for item in contradictions.parse_all(proposed)}
     except contradictions.ContradictionContractError as error:
-        raise KnowledgeWriteError(
-            "planned page body has invalid contradiction markers"
-        ) from error
+        raise KnowledgeWriteError("planned page body has invalid contradiction markers") from error
     if set(candidate) - set(current):
-        raise KnowledgeWriteError(
-            "contradictions must use the structured contradiction plan"
-        )
+        raise KnowledgeWriteError("contradictions must use the structured contradiction plan")
     if any(candidate[item_id] != record for item_id, record in current.items() if item_id in candidate):
-        raise KnowledgeWriteError(
-            "existing contradiction claims cannot be rewritten in a page mutation"
-        )
+        raise KnowledgeWriteError("existing contradiction claims cannot be rewritten in a page mutation")
     result = proposed
     for item_id, record in current.items():
         if item_id not in candidate:
@@ -1302,11 +1239,7 @@ def _resolve_entities(
     proposal_resolution: ProposalResolution,
     visible_entity_ids: frozenset[str],
 ) -> tuple[str, ...]:
-    visible_records = {
-        entity_id: record
-        for entity_id, record in records.items()
-        if entity_id in visible_entity_ids
-    }
+    visible_records = {entity_id: record for entity_id, record in records.items() if entity_id in visible_entity_ids}
     result = []
     for value in values:
         candidates = proposal_resolution.candidates(value)
@@ -1681,9 +1614,7 @@ def _apply_repair_plan(
     existing_paths: frozenset[str] = frozenset(),
 ) -> dict[str, str]:
     allowed = {
-        violation.path
-        for violation in violations
-        if violation.path.startswith(("wiki/notes/", "wiki/concepts/"))
+        violation.path for violation in violations if violation.path.startswith(("wiki/notes/", "wiki/concepts/"))
     }
     changed = {}
     for mutation in plan.mutations:

@@ -31,7 +31,6 @@ try:
         PRODUCTION_EQUIVALENT_MODE,
         PRODUCTION_MAX_TURNS,
         PRODUCTION_REASONING_LEVEL,
-        REASONING_LEVELS,
     )
     from planner_eval import load_case, score
     from worktree import (
@@ -47,7 +46,6 @@ except ModuleNotFoundError:
         PRODUCTION_EQUIVALENT_MODE,
         PRODUCTION_MAX_TURNS,
         PRODUCTION_REASONING_LEVEL,
-        REASONING_LEVELS,
     )
     from evals.filing.planner_eval import load_case, score
     from evals.filing.worktree import (
@@ -104,13 +102,6 @@ def main(argv: list[str] | None = None) -> int:
         help="production-equivalent exercises writer gates and bounded correction; planner-only is diagnostic",
     )
     parser.add_argument(
-        "--reasoning-level",
-        choices=REASONING_LEVELS,
-        help=(
-            f"evaluation-only OpenRouter reasoning override; default preserves production {PRODUCTION_REASONING_LEVEL}"
-        ),
-    )
-    parser.add_argument(
         "--include-payload",
         action="store_true",
         help="emit derived plan bodies for a local release artifact; stdout is otherwise safe telemetry",
@@ -158,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     source_text = source_bytes.decode("utf-8")
     case_sha256 = hashlib.sha256(case_path.read_bytes()).hexdigest()
     fixture_sha256 = hashlib.sha256(fixture_bytes).hexdigest()
-    reasoning_level = args.reasoning_level or PRODUCTION_REASONING_LEVEL
+    reasoning_level = PRODUCTION_REASONING_LEVEL
     started_ns = time.monotonic_ns()
     with prepared(case, source_text, template=str(args.worktree)) as evaluation:
         settings = Settings(
@@ -167,10 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=args.timeout_s,
             max_turns=args.max_turns,
         )
-        planner = PydanticPlanner(
-            settings,
-            reasoning_level_override=args.reasoning_level,
-        )
+        planner = PydanticPlanner(settings)
         run = planner.plan(
             worktree=evaluation.root,
             envelope=evaluation.envelope,
@@ -209,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
             "passed": gates["passed"],
             "violations": gates["violations"],
             "changed_paths": gates["changed_paths"],
+            "plan_rejection": gates["plan_rejection"],
         }
         output_payload = {
             "input": {

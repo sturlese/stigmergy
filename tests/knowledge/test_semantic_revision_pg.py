@@ -147,6 +147,7 @@ def test_contract_rejected_update_gets_one_bounded_correction(clean_queue, targe
     assert item["report"]["semantic_revision_attempted"] is True
     assert item["report"]["semantic_revision_applied"] is True
     assert item["report"]["repair_model_requests"] == 0
+    assert item["report"]["plan_rejection"] == "existing-source-block-not-preserved"
     page = subprocess.check_output(
         ["git", "show", "main:wiki/concepts/Agent Harness.md"], cwd=target_repo, text=True
     )
@@ -208,6 +209,71 @@ def test_contract_correction_preserves_an_existing_paragraph_with_its_distinct_s
     _item, outcome = _process(clean_queue, target_repo, store, RevisionPlanner(draft, revision))
 
     assert outcome.status == schema.LANDED
+    page = subprocess.check_output(
+        ["git", "show", "main:wiki/concepts/Agent Harness.md"], cwd=target_repo, text=True
+    )
+    assert original_text in page
+    assert f"(Source: `{original_source}`)" in page
+
+
+def test_rejected_correction_that_drops_existing_source_backed_prose_rolls_back_all_derived_changes(
+    clean_queue, target_repo
+):
+    store = evidence.MemoryEvidenceStore()
+    actor = Actor(subject="marc", display_name="Marc")
+    original_text = "The existing harness keeps a durable feedback loop for diagnosing failures."
+    original_source = _seed_page(
+        clean_queue,
+        target_repo,
+        store,
+        actor=actor,
+        audience=None,
+        key="semantic-revision-reject-preservation-seed",
+        title="Agent Harness",
+        text=original_text,
+    )
+    _receipt, source = _capture(
+        clean_queue,
+        store,
+        actor=actor,
+        audience=None,
+        key="semantic-revision-reject-preservation-update",
+        text="Harness engineering improves the agent harness through source-backed evaluation.",
+    )
+    draft = FilingPlan(
+        summary="Replaced independently supported history.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=_body("Agent Harness", "The current capture adds source-backed evaluation.", source),
+                reason="The current capture changes the existing concept.",
+            ),
+        ),
+    )
+    rejected_correction = FilingPlan(
+        summary="Still replaced independently supported history.",
+        mutations=(
+            PageMutation(
+                action="update",
+                path="wiki/concepts/Agent Harness.md",
+                body=_body("Agent Harness", "The correction still drops prior evidence.", source),
+                reason="The current capture changes the existing concept.",
+            ),
+        ),
+    )
+
+    item, outcome = _process(
+        clean_queue,
+        target_repo,
+        store,
+        RevisionPlanner(draft, rejected_correction),
+    )
+
+    assert outcome.status == schema.LANDED
+    assert item["report"]["plan_rejected"] is True
+    assert item["report"]["plan_rejection"] == "existing-source-block-not-preserved"
+    assert _changed_paths(target_repo, item["commit_sha"]) == [source]
     page = subprocess.check_output(
         ["git", "show", "main:wiki/concepts/Agent Harness.md"], cwd=target_repo, text=True
     )

@@ -44,15 +44,13 @@ try:
     from constants import (
         PRODUCTION_EQUIVALENT_MODE,
         PRODUCTION_MAX_TURNS,
-        REASONING_LEVELS,
-        SELECTED_LEVEL_MIN_REPEATS,
+        PRODUCTION_REPEAT_COUNT,
     )
 except ModuleNotFoundError:
     from evals.filing.constants import (
         PRODUCTION_EQUIVALENT_MODE,
         PRODUCTION_MAX_TURNS,
-        REASONING_LEVELS,
-        SELECTED_LEVEL_MIN_REPEATS,
+        PRODUCTION_REPEAT_COUNT,
     )
 
 ARTIFACT_SCHEMA_VERSION = 6
@@ -128,7 +126,7 @@ CORRECTION_FIELDS = frozenset({"required", "attempted", "applied", "plan"})
 EVIDENCE_FIELDS = frozenset({"input", "plans", "result"})
 PLAN_EVIDENCE_FIELDS = frozenset({"initial", "correction", "effective"})
 RESULT_FIELDS = frozenset({"score", "writer_gates", "raw_gates"})
-WRITER_GATE_FIELDS = frozenset({"passed", "violations", "changed_paths"})
+WRITER_GATE_FIELDS = frozenset({"passed", "violations", "changed_paths", "plan_rejection"})
 OUTPUT_FIELDS = frozenset({"sha256", "artifact_ref"})
 MATRIX_FIELDS = frozenset({"reasoning_level", "runtime", "run_ids", "passed"})
 PACKET_STATE_FIELDS = frozenset({"status", "raw_sha256", "canonical_sha256"})
@@ -492,9 +490,13 @@ def _run(
         return
     if implementation == "stigmergy" and runtime != {
         **STIGMERGY_RUNTIME,
-        "reasoning_level": runtime["reasoning_level"],
+        "reasoning_level": LIBRARIAN_REASONING_LEVEL,
     }:
-        _failure(failures, implementation, "runtime-route")
+        reason = (
+            "nonproduction-reasoning" if runtime["reasoning_level"] != LIBRARIAN_REASONING_LEVEL else "runtime-route"
+        )
+        _failure(failures, implementation, reason)
+        return
     if not _exact_keys(execution, EXECUTION_FIELDS, failures, implementation, "execution-metadata"):
         return
     if not _text(execution["mode"]) or not _nonnegative(execution["configured_max_turns"]):
@@ -603,6 +605,9 @@ def _case(
     if not _exact_keys(
         result["writer_gates"], WRITER_GATE_FIELDS, failures, implementation, "case-evidence", case_id=case_id
     ):
+        return
+    if result["writer_gates"]["plan_rejection"] is not None and not _text(result["writer_gates"]["plan_rejection"]):
+        _failure(failures, implementation, "case-evidence", case_id=case_id)
         return
     if hashlib.sha256(_json(evidence)).hexdigest() != output["sha256"]:
         _failure(failures, implementation, "case-evidence", case_id=case_id)
@@ -724,64 +729,44 @@ def _matrix(
     stigmergy_runs: list[dict[str, Any]],
     failures: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, list) or len(value) != 1:
         _failure(failures, "stigmergy", "reasoning-matrix")
         return []
-    levels: dict[str, tuple[bool, list[dict[str, Any]]]] = {}
-    run_ids: set[str] = set()
-    for row in value:
-        if not _exact_keys(row, MATRIX_FIELDS, failures, "stigmergy", "reasoning-matrix"):
-            continue
-        level = row["reasoning_level"]
-        if level not in REASONING_LEVELS or level in levels:
-            _failure(failures, "stigmergy", "reasoning-matrix")
-            continue
-        runtime = row["runtime"]
-        ids = row["run_ids"]
-        if (
-            runtime != {**STIGMERGY_RUNTIME, "reasoning_level": level}
-            or not isinstance(ids, list)
-            or not ids
-            or len(set(ids)) != len(ids)
-            or not all(_text(run_id) for run_id in ids)
-        ):
-            _failure(failures, "stigmergy", "reasoning-matrix")
-            continue
-        selected: list[dict[str, Any]] = []
-        for run_id in ids:
-            run = runs.get(run_id)
-            if run is None or run["implementation"] != "stigmergy" or run["runtime"] != runtime:
-                _failure(failures, "stigmergy", "reasoning-matrix-run", run_id=run_id)
-                if level == LIBRARIAN_REASONING_LEVEL:
-                    _failure(failures, "stigmergy", "runtime-production-reasoning", run_id=run_id)
-                continue
-            if level == LIBRARIAN_REASONING_LEVEL and run["runtime"]["reasoning_level"] != LIBRARIAN_REASONING_LEVEL:
-                _failure(failures, "stigmergy", "runtime-production-reasoning", run_id=run_id)
-            if run["execution"] != {
-                "mode": PRODUCTION_EQUIVALENT_MODE,
-                "configured_max_turns": PRODUCTION_MAX_TURNS,
-            }:
-                _failure(failures, "stigmergy", "production-equivalence", run_id=run_id)
-            selected.append(run)
-            run_ids.add(run_id)
-        observed = bool(selected) and all(_passed(case) for run in selected for case in run["case_results"])
-        if row["passed"] != observed:
-            _failure(failures, "stigmergy", "reasoning-matrix-result")
-        levels[level] = (observed, selected)
-    if run_ids != {run["run_id"] for run in stigmergy_runs}:
-        _failure(failures, "stigmergy", "reasoning-matrix-coverage")
-    selected = levels.get(LIBRARIAN_REASONING_LEVEL)
-    if selected is None or not selected[0]:
-        _failure(failures, "stigmergy", "selected-reasoning-not-passing")
+    row = value[0]
+    if not _exact_keys(row, MATRIX_FIELDS, failures, "stigmergy", "reasoning-matrix"):
         return []
-    for level in REASONING_LEVELS[: REASONING_LEVELS.index(LIBRARIAN_REASONING_LEVEL)]:
-        if level not in levels:
-            _failure(failures, "stigmergy", "reasoning-matrix-incomplete")
-        elif levels[level][0]:
-            _failure(failures, "stigmergy", "reasoning-not-lowest-passing")
-    if len(selected[1]) < SELECTED_LEVEL_MIN_REPEATS:
-        _failure(failures, "stigmergy", "selected-reasoning-insufficient-repeats")
-    return selected[1]
+    runtime = {**STIGMERGY_RUNTIME, "reasoning_level": LIBRARIAN_REASONING_LEVEL}
+    ids = row["run_ids"]
+    if (
+        row["reasoning_level"] != LIBRARIAN_REASONING_LEVEL
+        or row["runtime"] != runtime
+        or not isinstance(ids, list)
+        or len(ids) != PRODUCTION_REPEAT_COUNT
+        or len(set(ids)) != len(ids)
+        or not all(_text(run_id) for run_id in ids)
+    ):
+        _failure(failures, "stigmergy", "reasoning-matrix")
+        return []
+    selected: list[dict[str, Any]] = []
+    for run_id in ids:
+        run = runs.get(run_id)
+        if run is None or run["implementation"] != "stigmergy" or run["runtime"] != runtime:
+            _failure(failures, "stigmergy", "reasoning-matrix-run", run_id=run_id)
+            continue
+        if run["execution"] != {
+            "mode": PRODUCTION_EQUIVALENT_MODE,
+            "configured_max_turns": PRODUCTION_MAX_TURNS,
+        }:
+            _failure(failures, "stigmergy", "production-equivalence", run_id=run_id)
+        selected.append(run)
+    if set(ids) != {run["run_id"] for run in stigmergy_runs}:
+        _failure(failures, "stigmergy", "reasoning-matrix-coverage")
+    observed = bool(selected) and all(_passed(case) for run in selected for case in run["case_results"])
+    if row["passed"] is not observed:
+        _failure(failures, "stigmergy", "reasoning-matrix-result")
+    if not observed:
+        _failure(failures, "stigmergy", "production-repeats-not-passing")
+    return selected
 
 
 def _blind(

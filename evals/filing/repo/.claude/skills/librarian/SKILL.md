@@ -127,6 +127,8 @@ concrete result appears under `Examples`, but must not restate that result. Do n
 
 For an update, treat the visible page as the base manuscript. Preserve every useful existing source-backed
 claim, exact local citation, and distinctive formulation unless the new source explicitly corrects it.
+Keep existing source-cited paragraphs unchanged unless explicitly corrected; add new material separately
+rather than inserting, rephrasing, or moving cited prose.
 Add or reorganize knowledge without regenerating the page from a fresh summary. Preserve useful existing
 connections. Delete only to consolidate a true semantic duplicate.
 

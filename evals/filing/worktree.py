@@ -24,6 +24,7 @@ from stigmergy.knowledge.plan import FilingPlan
 from stigmergy.knowledge.repair import repair_deterministic
 from stigmergy.knowledge.write_guard import WriteContext, WriteRefused
 from stigmergy.knowledge.writer import (
+    ExistingSourceBlockNotPreserved,
     KnowledgeWriteError,
     _apply_filing_plan,
     _filing_failure_payload,
@@ -203,7 +204,11 @@ def apply_with_production_repair(
             contradictions.ContradictionContractError,
         ) as error:
             plan_invalid = True
-            plan_rejection = error.__class__.__name__
+            plan_rejection = (
+                ExistingSourceBlockNotPreserved.code
+                if isinstance(error, ExistingSourceBlockNotPreserved)
+                else error.__class__.__name__
+            )
             contract_failures = (
                 {
                     "path": "plan",
@@ -268,6 +273,9 @@ def apply_with_production_repair(
                     path for path in reasons if path.startswith(("wiki/notes/", "wiki/concepts/"))
                 )
                 violations = check(root, editorial_paths=editorial_paths)
+            except ExistingSourceBlockNotPreserved:
+                plan_invalid = True
+                plan_rejection = ExistingSourceBlockNotPreserved.code
             except Exception:
                 plan_invalid = True
                 plan_rejection = "filing-correction-failed"
@@ -279,6 +287,7 @@ def apply_with_production_repair(
 
     if plan_invalid:
         _restore_mutable(root, snapshot)
+        reasons = {}
     result = {
         "passed": not plan_invalid and not violations,
         "violations": [{"path": item.path, "code": item.code} for item in violations],

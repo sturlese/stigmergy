@@ -443,6 +443,7 @@ def _parity_artifact(
                     "passed": gates["passed"],
                     "violations": gates["violations"],
                     "changed_paths": gates["changed_paths"],
+                    "plan_rejection": gates["plan_rejection"],
                 },
                 "raw_gates": raw_gates,
             },
@@ -509,8 +510,6 @@ def _parity_artifact(
             ],
         }
 
-    minimal = run("stigmergy", "matrix-minimal-1", "minimal", passing=False)
-    low = run("stigmergy", "matrix-low-1", "low", passing=False)
     selected = [run("stigmergy", f"matrix-medium-{repeat}", "medium") for repeat in range(1, 4)]
     hippocampus = run("hippocampus", "hippocampus-recorded-run", "medium")
     artifact = {
@@ -546,20 +545,8 @@ def _parity_artifact(
                 "brain_prompt": expected.brain_prompt,
             },
         },
-        "runs": [hippocampus, minimal, low, *selected],
+        "runs": [hippocampus, *selected],
         "reasoning_matrix": [
-            {
-                "reasoning_level": "minimal",
-                "runtime": {**parity.STIGMERGY_RUNTIME, "reasoning_level": "minimal"},
-                "run_ids": [minimal["run_id"]],
-                "passed": False,
-            },
-            {
-                "reasoning_level": "low",
-                "runtime": {**parity.STIGMERGY_RUNTIME, "reasoning_level": "low"},
-                "run_ids": [low["run_id"]],
-                "passed": False,
-            },
             {
                 "reasoning_level": "medium",
                 "runtime": {**parity.STIGMERGY_RUNTIME, "reasoning_level": "medium"},
@@ -733,6 +720,80 @@ def _review_document(repo: pathlib.Path, payload: dict, field: str) -> tuple[dic
     review = json.loads(review_path.read_text(encoding="utf-8"))
     metadata = review[field]
     return review, repo.parent / metadata["path"], metadata
+
+
+def test_v6_release_evidence_accepts_exactly_three_complete_production_repeats(tmp_path):
+    result, _deploy, _seen = _run_deploy(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
+    production_runs = [
+        run
+        for run in payload["runs"]
+        if run["implementation"] == "stigmergy"
+        and run["runtime"]["reasoning_level"] == parity.LIBRARIAN_REASONING_LEVEL
+    ]
+    assert len(production_runs) == 3
+    assert all(len(run["case_results"]) == len(payload["release"]["source_cases"]) for run in production_runs)
+    report = _evaluate_recorded_artifact(tmp_path, payload)
+
+    assert report["passed"] is True
+
+
+def test_v6_release_evidence_rejects_nonproduction_reasoning_runs(tmp_path):
+    result, _deploy, _seen = _run_deploy(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
+    nonproduction = json.loads(json.dumps(next(run for run in payload["runs"] if run["implementation"] == "stigmergy")))
+    nonproduction["run_id"] = "matrix-minimal-1"
+    nonproduction["runtime"]["reasoning_level"] = "minimal"
+    for case in nonproduction["case_results"]:
+        case["runtime"]["reasoning_level"] = "minimal"
+    payload["runs"].append(nonproduction)
+
+    report = _evaluate_recorded_artifact(tmp_path, payload)
+
+    assert report["passed"] is False
+    assert "nonproduction-reasoning" in {failure["reason"] for failure in report["failures"]}
+
+
+def test_v6_evaluate_rejects_altered_writer_plan_rejection(tmp_path):
+    result, _deploy, _seen = _run_deploy(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
+    case = payload["runs"][0]["case_results"][0]
+    case["evidence"]["result"]["writer_gates"]["plan_rejection"] = "existing-source-block-not-preserved"
+    digest = hashlib.sha256(_canonical(case["evidence"])).hexdigest()
+    case["output"] = {"sha256": digest, "artifact_ref": f"sha256:{digest}"}
+
+    report = _evaluate_recorded_artifact(tmp_path, payload)
+
+    assert report["passed"] is False
+    assert "case-writer-gate" in {failure["reason"] for failure in report["failures"]}
+
+
+@pytest.mark.parametrize("change", ["remove", "add"])
+def test_v6_release_evidence_requires_exactly_three_production_repeats(tmp_path, change):
+    result, _deploy, _seen = _run_deploy(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
+    matrix = next(
+        row for row in payload["reasoning_matrix"] if row["reasoning_level"] == parity.LIBRARIAN_REASONING_LEVEL
+    )
+    if change == "remove":
+        run_id = matrix["run_ids"].pop()
+        payload["runs"] = [run for run in payload["runs"] if run["run_id"] != run_id]
+    else:
+        extra = json.loads(json.dumps(next(run for run in payload["runs"] if run["run_id"] == matrix["run_ids"][0])))
+        extra["run_id"] = "matrix-medium-4"
+        payload["runs"].append(extra)
+        matrix["run_ids"].append(extra["run_id"])
+
+    report = _evaluate_recorded_artifact(tmp_path, payload)
+
+    assert report["passed"] is False
+    assert {"reasoning-matrix", "reasoning-matrix-coverage"} & {
+        failure["reason"] for failure in report["failures"]
+    }
 
 
 @pytest.mark.parametrize(
@@ -917,7 +978,7 @@ def test_release_deploy_refuses_nonproduction_reasoning_evidence(tmp_path):
 
     assert result.returncode == 2
     report = json.loads(result.stdout)
-    assert "runtime-production-reasoning" in {failure["reason"] for failure in report["failures"]}
+    assert "nonproduction-reasoning" in {failure["reason"] for failure in report["failures"]}
     assert not seen.exists()
 
 

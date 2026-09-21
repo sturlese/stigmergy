@@ -246,6 +246,13 @@ def test_librarian_uses_hippocampus_page_templates_and_preserves_existing_eviden
     assert "preserve every useful existing source-backed claim" in text
 
 
+def test_librarian_requires_exact_preservation_of_existing_source_cited_paragraphs():
+    text = _skill_text()
+
+    assert "existing source-cited paragraphs unchanged" in text
+    assert "add new material separately" in text
+
+
 def test_librarian_keeps_page_boundaries_semantic_and_connected():
     text = _skill_text()
     assert "one primary subject" in text

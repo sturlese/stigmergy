@@ -11,7 +11,7 @@ result, semantic score, latency, usage, and content-addressed output. It rebuild
 worktree and replays the recorded plan rather
 than trusting an aggregate score. Schema v6 is a clean cut designed from the active release invariants:
 candidate and prompt binding, production-equivalent execution, per-case input/plan/result evidence,
-bounded correction telemetry, replayed effective output, reasoning selection, and a verified blind-review
+bounded correction telemetry, replayed effective output, three configured production repeats, and a verified blind-review
 bundle. Older evidence formats, staged planner phases, and legacy compatibility fields are unsupported.
 
 Case contracts also score editorial quality that structural coverage alone cannot prove. They can require
@@ -25,7 +25,7 @@ require fixture phrases. The blind reviewer receives the complete recorded fixtu
 anonymous effective-plan payload for each candidate, and judges factual support, relevance, and whether the
 resulting graph would remain useful outside the source.
 
-The selected Stigmergy level requires at least three independent, complete,
+The configured Stigmergy production level requires exactly three independent, complete,
 `production-equivalent` repeats per case. Those runs use `deepseek/deepseek-v4.1-flash` through
 throughput-sorted zero-data-retention OpenRouter providers, medium reasoning, and the same three-request
 ceiling as the writer: one initial request, at most one schema retry, and at most one bounded
@@ -37,11 +37,10 @@ material regression. Hippocampus is comparative baseline evidence, not an admiss
 hard gates may honestly fail under Stigmergy's writer rubric, but every case, provenance field,
 canonical payload, semantic score, writer result, and raw gate map is still replay-verified.
 
-Every reasoning-level candidate records full per-case runs using the same corpus, initial graph, case
-hashes, candidate commit, skill hash, runtime route, token ceiling, and raw gate map. The librarian
-sends the completion ceiling to OpenRouter as `max_completion_tokens`. The selected production level
-must be the first passing level and equal the runtime setting. Diagnostic `planner-only` evidence can
-never select a production level. Missing, stale, incomplete, or failing evidence rejects the release.
+Every production repeat records the same corpus, initial graph, case hashes, candidate commit, skill hash,
+runtime route, token ceiling, and raw gate map. The librarian sends the completion ceiling to OpenRouter as
+`max_completion_tokens`. Nonproduction reasoning evidence and diagnostic `planner-only` evidence are rejected.
+Missing, stale, incomplete, or failing evidence rejects the release.
 
 An admission packet is terminal only when `admission_status` is `passed`, no field is pending, and
 `blind_review_packet.status` is `completed`. Its `blind_editorial_review.provenance.artifact_ref` is a
@@ -71,7 +70,7 @@ Run one immutable case-result record with the production-equivalent path:
   --source evals/filing/fixtures/harness_engineering_synthetic.md \
   --case evals/filing/cases/harness_engineering.json \
   --brain-root /absolute/path/to/verified/stigmergy-brain \
-  --run-id <independent-case-run-id>
+  --include-payload
 ```
 
 `--brain-root` is the verified Git checkout used only to prove the exact librarian prompt. Do not
@@ -91,7 +90,7 @@ summaries cannot stand in for individual outcomes.
 
 [`parity-artifact.example.json`](./parity-artifact.example.json) documents the nested shape only;
 it is deliberately marked `example_only` and cannot pass the release validator. A real artifact
-must contain every current case and complete run objects at every recorded matrix level.
+must contain every current case in each of the three complete production repeats.
 
 Run the gate directly while recording a release artifact:
 
