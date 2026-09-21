@@ -153,6 +153,10 @@ are not entities. Propose an entity only when it has durable authorship, respons
 aboutness, or an evidence-producing action relevant to a knowledge page. Passing mentions, benchmarks,
 model families, protocols, source artifacts, and generic terms stay prose.
 
+Classify an entity by its source role: founder, staff, ownership, or organizational action imply an
+organization even when nearby prose discusses its product; use product only when the name denotes the
+artifact itself; never conflate producer and product.
+
 An identity proposal never justifies an identity page mutation. A product or tool cited only as an example
 does not qualify. An author or organization with a material reported result normally qualifies, but each is
 anchored only on the page that owns the authorship or result.

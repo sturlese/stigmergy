@@ -319,6 +319,19 @@ def test_librarian_uses_general_entity_relevance_and_preserves_prior_provenance(
     assert "one coherent `filingplan`" in text
 
 
+def test_librarian_classifies_organizations_and_products_by_source_role():
+    text = _skill_text()
+
+    assert "classify an entity by its source role" in text
+    assert "founder, staff, ownership, or organizational action" in text
+    assert "imply an organization" in text
+    assert "product only when the name denotes the artifact itself" in text
+    assert all(
+        term not in text
+        for term in ("helio stack", "meeting", "founder-evaluation", "maya ortiz", "leon park")
+    )
+
+
 def test_librarian_preserves_conflicts_and_recompile_knowledge():
     text = _skill_text()
     assert "preserve both and emit a contradiction" in text
