@@ -57,7 +57,7 @@ connections are readable relationships rather than unexplained link lists.
 
 A reader asks for an entity by a visible name, alias, or stable ID. One `describe_entity` call returns
 enough ACL-visible evidence to present a useful dynamic dossier with identity, relevant facts,
-knowledge pages, relationships, and sources. The raw `wiki/entities/ent_<uuid>.md` record remains an
+knowledge pages, relationships, and sources. The raw `wiki/entities/<slug>--ent_<uuid>.md` record remains an
 internal identity primitive whose body is a deterministic projection of structured source-backed
 claims, never arbitrary dossier prose.
 

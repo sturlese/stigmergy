@@ -7,7 +7,7 @@
 | Original artifacts and exact patches | private object store | content-addressed; deleted only when no live reference remains |
 | Readable evidence | Git `sources/YYYY/MM/<capture-id>.md` | append-only except explicit deletion |
 | Current knowledge | Git `wiki/notes` and `wiki/concepts` | one serialized writer |
-| Entity identity | Git `wiki/entities/<opaque-id>.md` | entity primitives only |
+| Entity identity | Git `wiki/entities/<immutable-slug>--<opaque-id>.md` | entity primitives only; UUID is authoritative |
 | Entity registry | Git `ops/entity-registry.json` | deterministic derivative of entity pages |
 | Queue, runs, and change metadata | Postgres | operational and append-only audit state |
 | Search index and contradiction list | Postgres derived from Git | rebuildable |

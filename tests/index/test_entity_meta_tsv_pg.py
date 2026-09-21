@@ -9,7 +9,7 @@ from tests.index.support import write_controls
 def test_entity_identity_page_is_not_indexed(tmp_path):
     entity_dir = tmp_path / "wiki" / "entities"
     entity_dir.mkdir(parents=True)
-    (entity_dir / "ent_00000000-0000-4000-8000-000000000001.md").write_text(
+    (entity_dir / "entity--ent_00000000-0000-4000-8000-000000000001.md").write_text(
         "---\nid: ent_00000000-0000-4000-8000-000000000001\ntype: entity\n---\n"
         "# ent_00000000-0000-4000-8000-000000000001\n"
     )

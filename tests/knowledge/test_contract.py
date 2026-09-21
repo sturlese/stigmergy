@@ -5,9 +5,13 @@ import pytest
 
 from stigmergy.capture import schema
 from stigmergy.entities.model import (
+    EntityContractError,
     EntityRecord,
+    entity_path,
+    entity_path_slug,
     load_entities,
     new_name_claim,
+    parse_entity_path,
     registry_bytes,
     render_entity,
 )
@@ -68,6 +72,38 @@ def test_page_path_accepts_the_maximum_portable_filename_component():
     assert page_path("note", "a" * 252) == f"wiki/notes/{'a' * 252}.md"
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    (
+        ("Santi", "santi"),
+        ("Pedro García", "pedro-garcia"),
+        ("ACME & Co.", "acme-co"),
+        ("東京", "entity"),
+    ),
+)
+def test_entity_path_slug_is_portable_and_deterministic(name, expected):
+    assert entity_path_slug(name) == expected
+
+
+def test_entity_path_contract_rejects_the_legacy_uuid_only_format():
+    entity_id = "ent_11111111-1111-4111-8111-111111111111"
+    path = entity_path(entity_id, "santi")
+
+    assert path == f"wiki/entities/santi--{entity_id}.md"
+    assert parse_entity_path(path) == ("santi", entity_id)
+    with pytest.raises(EntityContractError, match="entity path is invalid"):
+        parse_entity_path(f"wiki/entities/{entity_id}.md")
+
+
+def test_equal_entity_names_have_distinct_paths_by_uuid():
+    first = "ent_11111111-1111-4111-8111-111111111111"
+    second = "ent_22222222-2222-4222-8222-222222222222"
+    slug = entity_path_slug("Acme")
+
+    assert entity_path(first, slug) != entity_path(second, slug)
+    assert entity_path(first, slug).startswith("wiki/entities/acme--ent_")
+
+
 def test_entity_registry_is_reproducible_and_merge_reanchors(tmp_path):
     at = dt.datetime(2026, 8, 24, tzinfo=dt.UTC)
     assertion = "Acme and Globex are duplicate company identities."
@@ -78,6 +114,7 @@ def test_entity_registry_is_reproducible_and_merge_reanchors(tmp_path):
     )
     first = EntityRecord(
         entity_id="ent_11111111-1111-4111-8111-111111111111",
+        path_slug="acme",
         entity_type="organization",
         created_at=at,
         updated_at=at,
@@ -94,6 +131,7 @@ def test_entity_registry_is_reproducible_and_merge_reanchors(tmp_path):
     )
     second = EntityRecord(
         entity_id="ent_22222222-2222-4222-8222-222222222222",
+        path_slug="entity",
         entity_type="organization",
         created_at=at + dt.timedelta(seconds=1),
         updated_at=at + dt.timedelta(seconds=1),
@@ -200,6 +238,7 @@ def test_linter_rejects_entity_claim_without_live_provenance(tmp_path):
     source = "sources/2026/08/11111111-1111-4111-8111-111111111111.md"
     entity = EntityRecord(
         entity_id="ent_11111111-1111-4111-8111-111111111111",
+        path_slug="acme",
         entity_type="organization",
         created_at=at,
         updated_at=at,
@@ -230,6 +269,7 @@ def test_linter_rejects_entity_claim_broader_than_its_source(tmp_path):
     )
     entity = EntityRecord(
         entity_id="ent_11111111-1111-4111-8111-111111111111",
+        path_slug="acme",
         entity_type="organization",
         created_at=at,
         updated_at=at,
@@ -256,6 +296,7 @@ def test_entity_body_cannot_become_a_dossier(tmp_path):
     source = "sources/2026/08/11111111-1111-4111-8111-111111111111.md"
     entity = EntityRecord(
         entity_id="ent_11111111-1111-4111-8111-111111111111",
+        path_slug="ada",
         entity_type="person",
         created_at=at,
         updated_at=at,

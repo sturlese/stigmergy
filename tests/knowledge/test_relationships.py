@@ -13,6 +13,7 @@ def _record():
     at = dt.datetime(2026, 9, 13, tzinfo=dt.UTC)
     return EntityRecord(
         entity_id=ENTITY_ID,
+        path_slug="claude-code",
         entity_type="organization",
         created_at=at,
         updated_at=at,

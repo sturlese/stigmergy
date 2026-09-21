@@ -47,7 +47,8 @@
     <rect x="40" y="220" width="335" height="130" rx="14" class="card"/>
     <rect x="52" y="236" width="4" height="98" rx="2" fill="#60A5FA"/>
     <text x="70" y="258" class="h">Entity identity</text>
-    <text x="70" y="282" class="mono p" fill="#93C5FD">wiki/entities/ent_&lt;uuid&gt;.md</text>
+    <text x="70" y="276" class="mono p" fill="#93C5FD">wiki/entities/</text>
+    <text x="70" y="296" class="mono p" fill="#93C5FD">&lt;slug&gt;--ent_&lt;uuid&gt;.md</text>
     <text x="70" y="310" class="s">identity only, never a dossier</text>
 
     <rect x="395" y="220" width="335" height="130" rx="14" class="card"/>
