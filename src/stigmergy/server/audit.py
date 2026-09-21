@@ -1,7 +1,5 @@
 """Privacy-minimized, bounded tool audit shared by every service path."""
 
-import hashlib
-import json
 import logging
 import re
 import threading
@@ -15,6 +13,7 @@ log = logging.getLogger(__name__)
 
 AUDIT_RETENTION_DAYS = 30
 _PURGE_INTERVAL_SECONDS = 24 * 60 * 60
+_PURGE_RETRY_SECONDS = 5 * 60
 _OPAQUE_ID = re.compile(
     r"(?:[a-z][a-z0-9]*_)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\Z"
@@ -52,26 +51,16 @@ DELETE FROM audit_log WHERE ts < now() - make_interval(days => %s)
 """
 
 
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+def _text_summary(value: str) -> dict[str, int]:
+    return {"chars": len(value)}
 
 
-def _fingerprint(value: str) -> dict[str, int | str]:
-    return {"chars": len(value), "sha256": _sha256(value)}
+def _container_summary(value, *, count_key: str) -> dict[str, int]:
+    return {count_key: len(value)}
 
 
-def _container_fingerprint(value, *, count_key: str) -> dict[str, int | str]:
-    try:
-        canonical = json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=lambda item: f"<{type(item).__name__}>",
-        )
-    except Exception:  # noqa: BLE001 -- unfamiliar audit containers still need a safe digest
-        canonical = f"<{type(value).__name__}>"
-    return {count_key: len(value), "sha256": _sha256(canonical)}
+def _safe_field_name(key: str, index: int) -> str:
+    return key if _SAFE_ARG_KEY.fullmatch(key) else f"field_{index}"
 
 
 def _minimize_value(key: str, value):
@@ -81,22 +70,47 @@ def _minimize_value(key: str, value):
     if isinstance(value, str):
         is_identifier = (key.endswith("_id") or key == "resolution_of") and _OPAQUE_ID.fullmatch(value)
         is_digest = key.endswith("_sha256") and _SHA256.fullmatch(value)
-        return value if is_identifier or is_digest else _fingerprint(value)
+        return value if is_identifier or is_digest else _text_summary(value)
     if isinstance(value, dict):
-        return _container_fingerprint(value, count_key="fields")
+        return _container_summary(value, count_key="fields")
     if isinstance(value, (list, tuple)):
-        return _container_fingerprint(value, count_key="items")
+        return _container_summary(value, count_key="items")
     return {"type": type(value).__name__}
 
 
 def minimize_audit_args(args: dict) -> dict:
     """Remove free text from arguments while preserving their operational shape."""
     minimized = {}
-    for key, value in args.items():
+    for index, (key, value) in enumerate(args.items(), start=1):
         key_text = str(key)
-        safe_key = key_text if _SAFE_ARG_KEY.fullmatch(key_text) else f"field_{_sha256(key_text)[:12]}"
-        minimized[safe_key] = _minimize_value(key_text, value)
+        minimized[_safe_field_name(key_text, index)] = _minimize_value(key_text, value)
     return minimized
+
+
+def _minimize_result_value(key: str, value):
+    """Retain numeric telemetry recursively while removing future free-text result fields."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _minimize_value(key, value)
+    if isinstance(value, dict):
+        return {
+            _safe_field_name(str(child_key), index): _minimize_result_value(str(child_key), child)
+            for index, (child_key, child) in enumerate(value.items(), start=1)
+        }
+    if isinstance(value, (list, tuple)):
+        return _container_summary(value, count_key="items")
+    return {"type": type(value).__name__}
+
+
+def minimize_audit_result(result: dict | None) -> dict | None:
+    """Enforce the audit privacy boundary even when a future caller changes its summary."""
+    if result is None:
+        return None
+    return {
+        _safe_field_name(str(key), index): _minimize_result_value(str(key), value)
+        for index, (key, value) in enumerate(result.items(), start=1)
+    }
 
 
 def _purge_expired_if_due(conn) -> None:
@@ -110,16 +124,18 @@ def _purge_expired_if_due(conn) -> None:
         now = time.monotonic()
         if now < _next_purge_at:
             return
-        _next_purge_at = now + _PURGE_INTERVAL_SECONDS
         try:
             with conn.cursor() as cur:
                 cur.execute(_DELETE_EXPIRED, (AUDIT_RETENTION_DAYS,))
         except Exception as error:  # noqa: BLE001 -- retention must not fail a served call
+            _next_purge_at = now + _PURGE_RETRY_SECONDS
             log.error(
                 "expired audit row cleanup failed (%s)",
                 error.__class__.__name__,
                 exc_info=log.isEnabledFor(logging.DEBUG),
             )
+        else:
+            _next_purge_at = now + _PURGE_INTERVAL_SECONDS
 
 
 def ensure_audit_table(conn) -> None:
@@ -146,6 +162,7 @@ class AuditWriter:
               outcome: str, error_class: str = "", result: dict | None = None) -> None:
         try:
             minimized_args = minimize_audit_args(args)
+            minimized_result = minimize_audit_result(result)
         except Exception as error:  # noqa: BLE001 -- audit shaping must not fail a served call
             log.error(
                 "audit argument minimization failed (%s)",
@@ -153,12 +170,13 @@ class AuditWriter:
                 exc_info=log.isEnabledFor(logging.DEBUG),
             )
             minimized_args = {"args_unavailable": True}
+            minimized_result = None
         try:
             with self.conn.cursor() as cur:
                 cur.execute(_INSERT, (identity or "(unknown)", tool, Jsonb(minimized_args),
                                        duration_ms,
                                        outcome, error_class,
-                                       None if result is None else Jsonb(result)))
+                                       None if minimized_result is None else Jsonb(minimized_result)))
         except Exception as error:  # noqa: BLE001 — audit failure must not fail the serving call
             log.error(
                 "audit write failed (tool=%s outcome=%s error=%s)",
