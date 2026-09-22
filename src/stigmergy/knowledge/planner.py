@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from stigmergy.capture.schema import CaptureEnvelope
@@ -11,6 +13,8 @@ from stigmergy.knowledge.plan import FilingPlan, RepairPlan
 from stigmergy.text import fence
 
 MAX_PLANNER_PROMPT_BYTES = 4 * 1024 * 1024
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,7 @@ class PlanRun:
     plan: FilingPlan | RepairPlan
     model_requests: int = 0
     schema_retry_count: int = 0
+    telemetry: dict = field(default_factory=dict)
 
 
 class Planner(Protocol):
@@ -111,23 +116,38 @@ class PydanticPlanner:
         from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
         ensure_usage_extraction_repaired()
-        async with asyncio.timeout(self.settings.timeout_s):
-            result = await self._run_structured(
-                output_type=FilingPlan,
-                instructions=_read_skill(worktree),
-                prompt=_filing_prompt(
-                    envelope=envelope,
-                    source_path=source_path,
-                    source_text=source_text,
-                    context=context,
-                ),
-                max_requests=max(1, self.settings.max_turns - 1),
-                reasoning_level=self.reasoning_level_override,
+        started = time.perf_counter()
+        try:
+            async with asyncio.timeout(self.settings.timeout_s):
+                result = await self._run_structured(
+                    output_type=FilingPlan,
+                    instructions=_read_skill(worktree),
+                    prompt=_filing_prompt(
+                        envelope=envelope,
+                        source_path=source_path,
+                        source_text=source_text,
+                        context=context,
+                    ),
+                    max_requests=max(1, self.settings.max_turns - 1),
+                    reasoning_level=self.reasoning_level_override,
+                    phase="planning",
+                )
+        except TimeoutError:
+            log.warning(
+                "librarian model timeout capture=%s phase=planning elapsed_ms=%.2f "
+                "source_bytes=%d context_bytes=%d model=%s",
+                envelope.capture_id,
+                (time.perf_counter() - started) * 1000,
+                len(source_text.encode("utf-8")),
+                len(context.encode("utf-8")),
+                self.settings.model,
             )
+            raise
         return PlanRun(
             plan=result.plan,
             model_requests=result.model_requests,
             schema_retry_count=max(0, result.model_requests - 1),
+            telemetry=result.telemetry,
         )
 
     def revise(
@@ -172,21 +192,35 @@ class PydanticPlanner:
         from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
         ensure_usage_extraction_repaired()
-        async with asyncio.timeout(self.settings.timeout_s):
-            return await self._run_structured(
-                output_type=FilingPlan,
-                instructions=_read_skill(worktree),
-                prompt=_correction_prompt(
-                    envelope=envelope,
-                    source_path=source_path,
-                    source_text=source_text,
-                    context=context,
-                    draft=draft,
-                    violations=violations,
-                ),
-                max_requests=max_requests,
-                reasoning_level=self.reasoning_level_override,
+        started = time.perf_counter()
+        try:
+            async with asyncio.timeout(self.settings.timeout_s):
+                return await self._run_structured(
+                    output_type=FilingPlan,
+                    instructions=_read_skill(worktree),
+                    prompt=_correction_prompt(
+                        envelope=envelope,
+                        source_path=source_path,
+                        source_text=source_text,
+                        context=context,
+                        draft=draft,
+                        violations=violations,
+                    ),
+                    max_requests=max_requests,
+                    reasoning_level=self.reasoning_level_override,
+                    phase="semantic_revision",
+                )
+        except TimeoutError:
+            log.warning(
+                "librarian model timeout capture=%s phase=semantic_revision elapsed_ms=%.2f "
+                "source_bytes=%d context_bytes=%d model=%s",
+                envelope.capture_id,
+                (time.perf_counter() - started) * 1000,
+                len(source_text.encode("utf-8")),
+                len(context.encode("utf-8")),
+                self.settings.model,
             )
+            raise
 
     def repair(
         self,
@@ -240,6 +274,7 @@ class PydanticPlanner:
                 ),
                 max_requests=max_requests,
                 reasoning_level=self.reasoning_level_override,
+                phase="repair",
             )
 
     async def _run_structured(
@@ -252,6 +287,7 @@ class PydanticPlanner:
         max_requests: int | None = None,
         reasoning_level: str | None = None,
         max_tokens: int | None = None,
+        phase: str = "model",
     ) -> PlanRun:
         from pydantic_ai import Agent, NativeOutput
         from pydantic_ai.usage import RunUsage, UsageLimits
@@ -281,15 +317,76 @@ class PydanticPlanner:
             retries=max(0, request_limit - 1),
             model_settings=model_settings,
         )
+        started = time.perf_counter()
         result = await agent.run(
             prompt,
             usage=usage,
             usage_limits=UsageLimits(request_limit=request_limit),
         )
+        telemetry = _model_telemetry(
+            result,
+            usage,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            phase=phase,
+            prompt=prompt,
+            instructions=instructions,
+            request_limit=request_limit,
+            reasoning_level=reasoning_level,
+        )
+        log.info("librarian model telemetry %s", json.dumps(telemetry, sort_keys=True))
         return PlanRun(
             plan=result.output,
             model_requests=int(getattr(usage, "requests", 0) or 0),
+            telemetry=telemetry,
         )
+
+
+def _model_telemetry(
+    result,
+    usage,
+    *,
+    duration_ms: float,
+    phase: str,
+    prompt: str,
+    instructions: str,
+    request_limit: int,
+    reasoning_level: str | None,
+) -> dict:
+    responses = []
+    for message in result.all_messages():
+        if getattr(message, "kind", "") != "response":
+            continue
+        response_usage = getattr(message, "usage", None)
+        responses.append(
+            {
+                "response_id": str(getattr(message, "provider_response_id", "") or ""),
+                "model": str(getattr(message, "model_name", "") or ""),
+                "provider": str(getattr(message, "provider_name", "") or ""),
+                "finish_reason": str(getattr(message, "finish_reason", "") or ""),
+                "input_tokens": int(getattr(response_usage, "input_tokens", 0) or 0),
+                "output_tokens": int(getattr(response_usage, "output_tokens", 0) or 0),
+                "cache_read_tokens": int(getattr(response_usage, "cache_read_tokens", 0) or 0),
+            }
+        )
+    usage_details = {
+        str(key): value
+        for key, value in (getattr(usage, "details", None) or {}).items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    return {
+        "phase": phase,
+        "duration_ms": round(duration_ms, 2),
+        "prompt_bytes": len(prompt.encode("utf-8")),
+        "instructions_bytes": len(instructions.encode("utf-8")),
+        "request_limit": request_limit,
+        "reasoning_level": reasoning_level or "configured",
+        "requests": int(getattr(usage, "requests", 0) or 0),
+        "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+        "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+        "cache_read_tokens": int(getattr(usage, "cache_read_tokens", 0) or 0),
+        "usage_details": usage_details,
+        "responses": responses,
+    }
 
 
 def _read_skill(worktree: str) -> str:

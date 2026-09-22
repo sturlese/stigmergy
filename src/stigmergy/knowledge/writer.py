@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -615,21 +616,31 @@ def _restore_recompiled_page_identity(root: str, previous_pages: dict[str, str])
 
 
 def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteResult:
+    capture_started = time.perf_counter()
+    latency_ms: dict[str, float] = {}
+    model_telemetry: dict[str, dict] = {}
     envelope = schema.parse_capture(item["request"])
+    phase_started = time.perf_counter()
     extracted = extract_capture(
         deps.evidence,
         envelope,
         ocr_model=deps.settings.ocr_model,
     )
+    latency_ms["extraction"] = round((time.perf_counter() - phase_started) * 1000, 2)
+    phase_started = time.perf_counter()
     relative_source = source_path(envelope)
     source_text = render_source(envelope, extracted)
     trigger = "contradiction_resolution" if envelope.intent.resolution_of else "capture"
+    latency_ms["source_render"] = round((time.perf_counter() - phase_started) * 1000, 2)
 
+    phase_started = time.perf_counter()
     with gitcmd.ephemeral_worktree(
         deps.repo,
         base.sha,
         root=deps.settings.worktree_root,
     ) as worktree:
+        latency_ms["worktree_setup"] = round((time.perf_counter() - phase_started) * 1000, 2)
+        phase_started = time.perf_counter()
         _write_new(worktree, relative_source, source_text)
         groups, unrestricted = actor_scope(worktree, envelope.actor.subject)
         context = WriteContext(
@@ -652,6 +663,8 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             }
         )
         rendered_context = render_context(safe_context)
+        latency_ms["context"] = round((time.perf_counter() - phase_started) * 1000, 2)
+        phase_started = time.perf_counter()
         plan_run = deps.planner.plan(
             worktree=worktree,
             envelope=envelope,
@@ -659,6 +672,9 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             source_text=source_text,
             context=rendered_context,
         )
+        latency_ms["planning"] = round((time.perf_counter() - phase_started) * 1000, 2)
+        model_telemetry["planning"] = plan_run.telemetry
+        phase_started = time.perf_counter()
         reasons = {relative_source: "Archived immutable readable evidence"}
         baseline = check(worktree)
         if baseline:
@@ -746,6 +762,7 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
                     )
                     semantic_revision_model_requests = int(revision_run.model_requests)
                     model_requests += semantic_revision_model_requests
+                    model_telemetry["semantic_revision"] = revision_run.telemetry
                     if not isinstance(revision_run.plan, FilingPlan):
                         raise GateRefused("filing correction returned the wrong plan type")
                     plan = revision_run.plan
@@ -793,6 +810,11 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             fallback = check(worktree)
             if fallback:
                 raise GateRefused(_violation_summary(fallback))
+        latency_ms["plan_apply_and_gates"] = round(
+            (time.perf_counter() - phase_started) * 1000,
+            2,
+        )
+        phase_started = time.perf_counter()
         entries = gitcmd.diff_entries(worktree)
         _gate_diff(entries, trigger=trigger, expected_source=relative_source)
         wiki_changes = sum(1 for entry in entries if entry.path.startswith("wiki/"))
@@ -814,7 +836,19 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             reasons=reasons,
             capture_id=str(envelope.capture_id),
         )
+        latency_ms["commit_publish"] = round((time.perf_counter() - phase_started) * 1000, 2)
+        phase_started = time.perf_counter()
         references.record_capture(conn, envelope, extracted, relative_source)
+        latency_ms["reference_record"] = round((time.perf_counter() - phase_started) * 1000, 2)
+        cleanup_started = time.perf_counter()
+    latency_ms["worktree_cleanup"] = round((time.perf_counter() - cleanup_started) * 1000, 2)
+    latency_ms["total"] = round((time.perf_counter() - capture_started) * 1000, 2)
+    log.info(
+        "capture latency capture=%s latency_ms=%s model_telemetry=%s",
+        envelope.capture_id,
+        json.dumps(latency_ms, sort_keys=True),
+        json.dumps(model_telemetry, sort_keys=True),
+    )
     return WriteResult(
         commit_sha=commit,
         change_id=str(change.id),
@@ -832,6 +866,8 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             "semantic_revision_applied": semantic_revision_applied,
             "semantic_revision_model_requests": semantic_revision_model_requests,
             "repair_model_requests": repair_model_requests,
+            "latency_ms": latency_ms,
+            "model_telemetry": model_telemetry,
             "plan_rejected": plan_invalid,
             "plan_rejection": plan_rejection,
             # Empty when the plan was rejected outright: nothing of it was kept to drop from.
