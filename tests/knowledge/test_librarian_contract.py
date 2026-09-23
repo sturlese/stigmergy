@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from stigmergy.knowledge.contract import (
     KnowledgeContractError,
     expected_librarian_skill,
-    validate_librarian_skill,
     validate_source_template,
     validate_workflows,
 )
@@ -19,25 +18,11 @@ from stigmergy.knowledge.plan import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-FROZEN = ROOT / "tests/librarian/fixtures/repo/.claude/skills/librarian/SKILL.md"
-EVALUATION = ROOT / "evals/filing/repo/.claude/skills/librarian/SKILL.md"
+SKILL = ROOT / "src/stigmergy/knowledge/librarian_skill.md"
 
 
-def test_packaged_frozen_and_evaluation_librarian_contracts_are_identical():
-    expected = expected_librarian_skill()
-    assert FROZEN.read_bytes() == expected
-    assert EVALUATION.read_bytes() == expected
-
-
-def test_repository_validator_requires_the_exact_librarian_contract(tmp_path):
-    skill = tmp_path / ".claude" / "skills" / "librarian" / "SKILL.md"
-    skill.parent.mkdir(parents=True)
-    skill.write_bytes(expected_librarian_skill())
-    validate_librarian_skill(tmp_path)
-
-    skill.write_text("incomplete\n", encoding="utf-8")
-    with pytest.raises(KnowledgeContractError, match="does not match"):
-        validate_librarian_skill(tmp_path)
+def test_packaged_librarian_contract_is_the_canonical_skill():
+    assert SKILL.read_bytes() == expected_librarian_skill()
 
 
 def test_repository_validator_requires_the_nightly_rebuild_contract(tmp_path):
@@ -217,7 +202,7 @@ def test_librarian_contract_rejects_retired_page_roles(role):
 
 
 def _skill_text() -> str:
-    return " ".join(FROZEN.read_text().casefold().split())
+    return " ".join(SKILL.read_text().casefold().split())
 
 
 def test_librarian_skill_is_one_coherent_agent_without_retired_workflows():

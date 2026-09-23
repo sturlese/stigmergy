@@ -87,7 +87,6 @@ def _run_deploy(
     python: str | None = sys.executable,
     parity_artifact: str = "valid",
     dirty_platform: bool = False,
-    brain_drift: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], pathlib.Path, pathlib.Path]:
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -131,9 +130,6 @@ def _run_deploy(
     (ops / "identities.json").write_text(json.dumps(roster), encoding="utf-8")
     (ops / "entity-registry.json").write_text(json.dumps(REGISTRY), encoding="utf-8")
     (ops / "slack-channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
-    brain_skill = knowledge / ".claude" / "skills" / "librarian" / "SKILL.md"
-    brain_skill.parent.mkdir(parents=True)
-    brain_skill.write_bytes((candidate_skill / "librarian_skill.md").read_bytes())
     staging_sha = _commit(knowledge, "test controls")
 
     seen = _sidecar_path(tmp_path, "seen")
@@ -155,7 +151,7 @@ def _run_deploy(
     }
     artifact = _artifact_path(tmp_path)
     if parity_artifact != "absent":
-        payload = _parity_artifact(tmp_path, candidate_commit, knowledge, staging_sha)
+        payload = _parity_artifact(tmp_path, candidate_commit)
         if parity_artifact == "stale":
             payload["release"]["candidate"]["commit"] = "a" * 40
         elif parity_artifact == "mismatched":
@@ -176,9 +172,6 @@ def _run_deploy(
     if dirty_platform:
         with (candidate_skill / "librarian_skill.md").open("a", encoding="utf-8") as output:
             output.write("\nDirty after parity recording.\n")
-    if brain_drift:
-        with brain_skill.open("ab") as output:
-            output.write(b"\n")
     if python is not None:
         env["STIGMERGY_PYTHON"] = python
     else:
@@ -388,14 +381,12 @@ def _plan_for_case(case_id: str) -> FilingPlan:
 def _parity_artifact(
     repo: pathlib.Path,
     commit: str,
-    brain_root: pathlib.Path,
-    brain_commit: str,
 ) -> dict:
-    expected = parity.current_release_inputs(repo, brain_root=brain_root, brain_commit=brain_commit)
+    expected = parity.current_release_inputs(repo)
     corpus = "0123456789abcdef" * 4
     initial = "0123456789abcdef0123456789abcdef01234567"
 
-    def case_result(case_id: str, runtime: dict, brain_prompt: dict | None, passing: bool) -> dict:
+    def case_result(case_id: str, runtime: dict, passing: bool) -> dict:
         case = planner_eval.load_case(expected.case_paths[case_id])
         source_text = expected.fixture_paths[case_id].read_text(encoding="utf-8")
         plan = _plan_for_case(case_id) if passing else FilingPlan(summary="Deliberately failing result.")
@@ -426,7 +417,6 @@ def _parity_artifact(
         }
         evidence = {
             "input": {
-                "brain_prompt": brain_prompt,
                 "case_sha256": expected.source_cases[case_id],
                 "fixture_sha256": expected.source_fixtures[case_id],
                 "source_sha256": expected.source_fixtures[case_id],
@@ -488,7 +478,6 @@ def _parity_artifact(
             provenance["candidate"] = {
                 "commit": expected.commit,
                 "librarian_skill_sha256": expected.librarian_skill_sha256,
-                "brain_prompt": expected.brain_prompt,
             }
         return {
             "implementation": implementation,
@@ -503,7 +492,6 @@ def _parity_artifact(
                 case_result(
                     case_id,
                     runtime,
-                    expected.brain_prompt if implementation == "stigmergy" else None,
                     passing,
                 )
                 for case_id in sorted(expected.source_cases)
@@ -542,7 +530,6 @@ def _parity_artifact(
             "candidate": {
                 "commit": expected.commit,
                 "librarian_skill_sha256": expected.librarian_skill_sha256,
-                "brain_prompt": expected.brain_prompt,
             },
         },
         "runs": [hippocampus, *selected],
@@ -702,14 +689,9 @@ def _write_blind_review_bundle(
 
 def _evaluate_recorded_artifact(repo: pathlib.Path, payload: dict | None = None) -> dict:
     artifact = payload or json.loads(_artifact_path(repo).read_text(encoding="utf-8"))
-    brain = _sidecar_path(repo, "knowledge")
     return parity.evaluate(
         artifact,
-        expected=parity.current_release_inputs(
-            repo,
-            brain_root=brain,
-            brain_commit=_git(brain, "rev-parse", "HEAD"),
-        ),
+        expected=parity.current_release_inputs(repo),
         review_root=repo.parent,
     )
 
@@ -722,7 +704,7 @@ def _review_document(repo: pathlib.Path, payload: dict, field: str) -> tuple[dic
     return review, repo.parent / metadata["path"], metadata
 
 
-def test_v6_release_evidence_accepts_exactly_three_complete_production_repeats(tmp_path):
+def test_v7_release_evidence_accepts_exactly_three_complete_production_repeats(tmp_path):
     result, _deploy, _seen = _run_deploy(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
@@ -739,7 +721,7 @@ def test_v6_release_evidence_accepts_exactly_three_complete_production_repeats(t
     assert report["passed"] is True
 
 
-def test_v6_release_evidence_rejects_nonproduction_reasoning_runs(tmp_path):
+def test_v7_release_evidence_rejects_nonproduction_reasoning_runs(tmp_path):
     result, _deploy, _seen = _run_deploy(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
@@ -756,7 +738,7 @@ def test_v6_release_evidence_rejects_nonproduction_reasoning_runs(tmp_path):
     assert "nonproduction-reasoning" in {failure["reason"] for failure in report["failures"]}
 
 
-def test_v6_evaluate_rejects_altered_writer_plan_rejection(tmp_path):
+def test_v7_evaluate_rejects_altered_writer_plan_rejection(tmp_path):
     result, _deploy, _seen = _run_deploy(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
@@ -772,7 +754,7 @@ def test_v6_evaluate_rejects_altered_writer_plan_rejection(tmp_path):
 
 
 @pytest.mark.parametrize("change", ["remove", "add"])
-def test_v6_release_evidence_requires_exactly_three_production_repeats(tmp_path, change):
+def test_v7_release_evidence_requires_exactly_three_production_repeats(tmp_path, change):
     result, _deploy, _seen = _run_deploy(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
@@ -813,7 +795,7 @@ def test_v6_release_evidence_requires_exactly_three_production_repeats(tmp_path,
         ("review", "expected_graph_mutations", "stale-or-mismatched-review"),
     ],
 )
-def test_v6_evaluate_rejects_retired_staged_fields(tmp_path, container, retired_field, reason):
+def test_v7_evaluate_rejects_retired_staged_fields(tmp_path, container, retired_field, reason):
     result, _deploy, _seen = _run_deploy(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
@@ -852,7 +834,7 @@ def test_v6_evaluate_rejects_retired_staged_fields(tmp_path, container, retired_
         "unblinding",
     ],
 )
-def test_v6_evaluate_rejects_tampered_blind_evidence(tmp_path, tamper):
+def test_v7_evaluate_rejects_tampered_blind_evidence(tmp_path, tamper):
     result, _deploy, _seen = _run_deploy(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
@@ -889,7 +871,7 @@ def test_v6_evaluate_rejects_tampered_blind_evidence(tmp_path, tamper):
     assert "blind-review-evidence" in {failure["reason"] for failure in report["failures"]}
 
 
-def test_v6_evaluate_rejects_a_non_derived_material_regression(tmp_path):
+def test_v7_evaluate_rejects_a_non_derived_material_regression(tmp_path):
     result, _deploy, _seen = _run_deploy(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(_artifact_path(tmp_path).read_text(encoding="utf-8"))
@@ -983,14 +965,6 @@ def test_release_deploy_refuses_nonproduction_reasoning_evidence(tmp_path):
     assert not seen.exists()
 
 
-def test_deploy_refuses_one_byte_drift_in_the_refreshed_brain_prompt(tmp_path):
-    result, _deploy, seen = _run_deploy(tmp_path, brain_drift=True)
-
-    assert result.returncode == 2
-    assert "parity" in result.stderr
-    assert not seen.exists()
-
-
 @pytest.mark.parametrize("name", ["identities", "entity-registry", "slack-channels"])
 def test_missing_control_file_stops_deploy(tmp_path, name):
     result, _, seen = _run_deploy(tmp_path)
@@ -1000,7 +974,7 @@ def test_missing_control_file_stops_deploy(tmp_path, name):
     knowledge_file.unlink()
     staging_sha = _commit(knowledge, "remove deployed control")
     _artifact_path(tmp_path).write_text(
-        json.dumps(_parity_artifact(tmp_path, _git(tmp_path, "rev-parse", "HEAD"), knowledge, staging_sha)),
+        json.dumps(_parity_artifact(tmp_path, _git(tmp_path, "rev-parse", "HEAD"))),
         encoding="utf-8",
     )
 

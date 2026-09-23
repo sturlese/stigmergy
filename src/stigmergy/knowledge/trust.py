@@ -85,3 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     for violation in violations:
         print(f"{violation.commit} {violation.path}: {violation.message}", file=sys.stderr)
     return int(bool(violations))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

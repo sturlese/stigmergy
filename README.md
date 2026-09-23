@@ -399,7 +399,6 @@ your-brain/
 │   ├── identities.json            people, groups, default audience
 │   ├── slack-channels.json        channel id → audience
 │   └── entity-registry.json       derived, written by the platform
-├── .claude/skills/librarian/SKILL.md
 └── .github/workflows/             nightly index rebuild
 ```
 

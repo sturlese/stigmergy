@@ -34,7 +34,6 @@ from stigmergy.knowledge.context import (
     filing_context,
     render_context,
 )
-from stigmergy.knowledge.contract import validate_librarian_skill_at_ref
 from stigmergy.knowledge.lint import Violation, check
 from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
 from stigmergy.knowledge.plan import FilingPlan, PageMutation
@@ -125,7 +124,6 @@ def _process_with_lock(conn, item: dict, deps: WriterDeps) -> WriteResult:
         if not acquired:
             raise WriterBusy("another knowledge write is active")
         base = gitcmd.base_ref(deps.repo, deps.settings.branch)
-        validate_librarian_skill_at_ref(deps.repo, base.sha)
         recovered = _recover(conn, item, deps, base.sha)
         if recovered:
             return recovered

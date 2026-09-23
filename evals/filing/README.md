@@ -5,7 +5,7 @@ One coherent librarian request returns a complete `FilingPlan`. The writer then 
 ACL, provenance, identity, link, and atomicity gates. One bounded replacement-plan request is allowed
 only when those contracts reject the first plan; there is no staged semantic review pipeline.
 
-`parity.py` binds every recorded result to the candidate commit, librarian skill, brain prompt, case,
+`parity.py` binds every recorded result to the candidate commit, librarian skill, case,
 fixture, canonical initial-graph template manifest, configured provider route, request budget, writer
 result, semantic score, latency, usage, and content-addressed output. It rebuilds a pristine ACL-safe
 worktree and replays the recorded plan rather
@@ -69,15 +69,12 @@ Run one immutable case-result record with the production-equivalent path:
 .venv/bin/python evals/filing/run_planner.py --live \
   --source evals/filing/fixtures/harness_engineering_synthetic.md \
   --case evals/filing/cases/harness_engineering.json \
-  --brain-root /absolute/path/to/verified/stigmergy-brain \
   --include-payload
 ```
 
-`--brain-root` is the verified Git checkout used only to prove the exact librarian prompt. Do not
-pass it as `--worktree`: the latter is the fixed versioned initial graph at `evals/filing/repo` by
-default. Production-equivalent evidence rejects any other worktree and records the materialized initial
-worktree manifest. The runner validates the template's librarian skill byte-for-byte against the packaged
-skill, but the template itself does not need to be a Git checkout.
+`--worktree` is the fixed versioned initial graph at `evals/filing/repo` by default.
+Production-equivalent evidence rejects any other worktree and records the materialized initial
+worktree manifest. The runner always uses the librarian skill packaged with the candidate platform.
 
 By default the runner prints safe telemetry, gate results, prompt/case/fixture provenance, and the
 content hash only. Add `--include-payload` only when recording a local release artifact: it prints the
@@ -96,7 +93,7 @@ Run the gate directly while recording a release artifact:
 
 ```bash
 .venv/bin/python evals/filing/parity.py --artifact /absolute/path/to/parity-result.json \
-  --brain-root /absolute/path/to/verified/stigmergy-brain --brain-commit <verified-40-char-commit>
+  --repo-root /absolute/path/to/stigmergy
 ```
 
 Deploy only through the guarded entrypoint; it validates the artifact before `fly deploy`:
@@ -107,5 +104,5 @@ make deploy-staging PARITY_ARTIFACT=/absolute/path/to/parity-result.json
 
 `scripts/deploy_staging.sh` rejects a missing, stale, mismatched, or failing artifact before it
 calls `fly deploy`. After refreshing the brain at its verified commit, it compares the artifact prompt
-provenance, the brain `SKILL.md`, and the packaged platform skill byte for byte. It also requires an
+provenance and the packaged platform skill. It also requires an
 exact clean platform checkout, so keep the artifact outside that checkout.

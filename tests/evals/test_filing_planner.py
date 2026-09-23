@@ -108,11 +108,7 @@ def test_production_budget_is_one_filing_plus_one_bounded_correction():
 
 
 @pytest.mark.parametrize("requires_correction", [False, True])
-def test_runner_record_replays_through_v6_case_validation(monkeypatch, capsys, tmp_path, requires_correction):
-    prompt = {
-        "commit": "0123456789abcdef0123456789abcdef01234567",
-        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    }
+def test_runner_record_replays_through_v7_case_validation(monkeypatch, capsys, tmp_path, requires_correction):
     initial = (
         FilingPlan(
             summary="Deliberately uncited first draft.",
@@ -142,8 +138,6 @@ def test_runner_record_replays_through_v6_case_validation(monkeypatch, capsys, t
             return PlanRun(_passing_plan(), model_requests=1)
 
     monkeypatch.setattr(run_planner, "PydanticPlanner", RecordedPlanner)
-    monkeypatch.setattr(run_planner, "validate_librarian_skill", lambda _root: None)
-    monkeypatch.setattr(run_planner, "librarian_skill_provenance", lambda _root: prompt)
 
     assert (
         run_planner.main(
@@ -151,8 +145,6 @@ def test_runner_record_replays_through_v6_case_validation(monkeypatch, capsys, t
                 "--live",
                 "--source",
                 str(FIXTURE),
-                "--brain-root",
-                str(tmp_path),
                 "--include-payload",
             ]
         )
@@ -166,7 +158,6 @@ def test_runner_record_replays_through_v6_case_validation(monkeypatch, capsys, t
         source_fixtures={"harness_engineering": inputs.source_fixtures["harness_engineering"]},
         case_paths={"harness_engineering": inputs.case_paths["harness_engineering"]},
         fixture_paths={"harness_engineering": inputs.fixture_paths["harness_engineering"]},
-        brain_prompt=prompt,
     )
     failures, replayed = [], {}
 
@@ -241,8 +232,6 @@ def test_production_equivalent_runner_rejects_a_noncanonical_worktree(tmp_path):
                 "--live",
                 "--source",
                 str(FIXTURE),
-                "--brain-root",
-                str(tmp_path),
                 "--worktree",
                 str(alternate),
             ]
@@ -252,10 +241,6 @@ def test_production_equivalent_runner_rejects_a_noncanonical_worktree(tmp_path):
 
 
 def test_runner_records_typed_source_block_rejection_without_derived_paths(monkeypatch, capsys, tmp_path):
-    prompt = {
-        "commit": "0123456789abcdef0123456789abcdef01234567",
-        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    }
     source = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
     draft = FilingPlan(
         summary="Replaced the seeded source-backed manuscript.",
@@ -292,8 +277,6 @@ def test_runner_records_typed_source_block_rejection_without_derived_paths(monke
             return PlanRun(rejected_correction, model_requests=1)
 
     monkeypatch.setattr(run_planner, "PydanticPlanner", RecordedPlanner)
-    monkeypatch.setattr(run_planner, "validate_librarian_skill", lambda _root: None)
-    monkeypatch.setattr(run_planner, "librarian_skill_provenance", lambda _root: prompt)
     seeded_case = ROOT / "evals" / "filing" / "cases" / "harness_engineering_seeded.json"
 
     assert (
@@ -304,8 +287,6 @@ def test_runner_records_typed_source_block_rejection_without_derived_paths(monke
                 str(FIXTURE),
                 "--case",
                 str(seeded_case),
-                "--brain-root",
-                str(tmp_path),
                 "--include-payload",
             ]
         )
@@ -325,10 +306,6 @@ def test_runner_records_typed_source_block_rejection_without_derived_paths(monke
 def test_initial_source_block_rejection_is_typed_through_runner_and_parity_replay(
     monkeypatch, capsys, tmp_path
 ):
-    prompt = {
-        "commit": "0123456789abcdef0123456789abcdef01234567",
-        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    }
     source = "sources/2026/09/00000000-0000-4000-8000-000000000001.md"
     seeded_case = ROOT / "evals" / "filing" / "cases" / "harness_engineering_seeded.json"
     seeded = planner_eval.load_case(seeded_case)["seed_pages"][0]["body"].replace("{source_path}", source)
@@ -376,8 +353,6 @@ def test_initial_source_block_rejection_is_typed_through_runner_and_parity_repla
             return PlanRun(correction, model_requests=1)
 
     monkeypatch.setattr(run_planner, "PydanticPlanner", RecordedPlanner)
-    monkeypatch.setattr(run_planner, "validate_librarian_skill", lambda _root: None)
-    monkeypatch.setattr(run_planner, "librarian_skill_provenance", lambda _root: prompt)
 
     assert (
         run_planner.main(
@@ -387,8 +362,6 @@ def test_initial_source_block_rejection_is_typed_through_runner_and_parity_repla
                 str(FIXTURE),
                 "--case",
                 str(seeded_case),
-                "--brain-root",
-                str(tmp_path),
                 "--include-payload",
             ]
         )
@@ -403,7 +376,6 @@ def test_initial_source_block_rejection_is_typed_through_runner_and_parity_repla
         source_fixtures={case_id: hashlib.sha256(FIXTURE.read_bytes()).hexdigest()},
         case_paths={case_id: seeded_case},
         fixture_paths={case_id: FIXTURE},
-        brain_prompt=prompt,
     )
     failures, replayed = [], {}
 

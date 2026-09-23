@@ -121,7 +121,7 @@ class PydanticPlanner:
             async with asyncio.timeout(self.settings.timeout_s):
                 result = await self._run_structured(
                     output_type=FilingPlan,
-                    instructions=_read_skill(worktree),
+                    instructions=_read_skill(),
                     prompt=_filing_prompt(
                         envelope=envelope,
                         source_path=source_path,
@@ -197,7 +197,7 @@ class PydanticPlanner:
             async with asyncio.timeout(self.settings.timeout_s):
                 return await self._run_structured(
                     output_type=FilingPlan,
-                    instructions=_read_skill(worktree),
+                    instructions=_read_skill(),
                     prompt=_correction_prompt(
                         envelope=envelope,
                         source_path=source_path,
@@ -264,7 +264,7 @@ class PydanticPlanner:
         async with asyncio.timeout(self.settings.timeout_s):
             return await self._run_structured(
                 output_type=RepairPlan,
-                instructions=_read_skill(worktree),
+                instructions=_read_skill(),
                 prompt=_repair_prompt(
                     violations=violations,
                     files=files,
@@ -389,9 +389,10 @@ def _model_telemetry(
     }
 
 
-def _read_skill(worktree: str) -> str:
-    with open(f"{worktree}/.claude/skills/librarian/SKILL.md", encoding="utf-8") as handle:
-        return handle.read()
+def _read_skill() -> str:
+    from stigmergy.knowledge.contract import expected_librarian_skill
+
+    return expected_librarian_skill().decode("utf-8")
 
 
 def _filing_prompt(*, envelope, source_path: str, source_text: str, context: str) -> str:
