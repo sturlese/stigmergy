@@ -62,11 +62,6 @@ from stigmergy.kernel.llm import (  # noqa: E402
     LIBRARIAN_PROVIDER_ROUTING,
     LIBRARIAN_TEMPERATURE,
 )
-from stigmergy.knowledge.contract import (  # noqa: E402
-    KnowledgeContractError,
-    librarian_skill_provenance,
-    validate_librarian_skill,
-)
 from stigmergy.knowledge.planner import PydanticPlanner  # noqa: E402
 from stigmergy.librarian.config import Settings  # noqa: E402
 
@@ -83,11 +78,6 @@ def main(argv: list[str] | None = None) -> int:
         help="acknowledge that source text is sent to configured OpenRouter and can cost money",
     )
     parser.add_argument("--case", default=str(DEFAULT_CASE), help="versioned semantic case")
-    parser.add_argument(
-        "--brain-root",
-        required=True,
-        help="verified Git checkout whose librarian prompt executed the evaluation",
-    )
     parser.add_argument(
         "--worktree",
         default=str(DEFAULT_WORKTREE),
@@ -136,11 +126,6 @@ def main(argv: list[str] | None = None) -> int:
     fixture_bytes = fixture.read_bytes()
     if hashlib.sha256(source_bytes).digest() != hashlib.sha256(fixture_bytes).digest():
         parser.error("source bytes do not match the versioned case fixture")
-    try:
-        validate_librarian_skill(args.worktree)
-        brain_prompt = librarian_skill_provenance(args.brain_root)
-    except KnowledgeContractError as error:
-        parser.error(str(error))
     if args.include_payload:
         print(
             "run-planner: --include-payload emits derived page bodies; keep this diagnostic output local",
@@ -201,7 +186,6 @@ def main(argv: list[str] | None = None) -> int:
         }
         output_payload = {
             "input": {
-                "brain_prompt": brain_prompt,
                 "case_sha256": case_sha256,
                 "fixture_sha256": fixture_sha256,
                 "source_sha256": fixture_sha256,

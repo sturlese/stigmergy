@@ -47,8 +47,8 @@ or product behavior. Active documentation lives in `docs/ARCHITECTURE.md`, `docs
 - `admin`: master-only operational API and browser UI.
 - `librarian`: long-running worker/bootstrap, Git transport, credentials, schedule, and model setup.
 - `ops`: explicitly guarded non-production reset tooling.
-- `evals/` (outside the package): frozen canonical corpus, golden retrieval/QA sets, measured
-  release gates, and the evaluation copy of the librarian skill under `evals/filing/`.
+- `evals/` (outside the package): frozen canonical corpus, golden retrieval/QA sets, and measured
+  release gates.
 
 ## Working rules
 
@@ -60,9 +60,8 @@ or product behavior. Active documentation lives in `docs/ARCHITECTURE.md`, `docs
 - This deployment is a clean cut (spec §2): no migrations, compatibility branches, or dual formats
   for the replaced implementation.
 - Update platform code, knowledge-repository controls, tests, workflows, documentation, and the
-  eval corpus together. `knowledge/librarian_skill.md` is the canonical librarian skill; its copies
-  under `tests/librarian/fixtures/` and `evals/filing/` must match byte for byte
-  (`tests/knowledge/test_librarian_contract.py`).
+  eval corpus together. `knowledge/librarian_skill.md` is the single canonical librarian skill and
+  ships inside the platform package.
 - `deploy/identities.json`, `deploy/entity-registry.json`, and `deploy/slack-channels.json` are
   empty safe defaults. `scripts/deploy_staging.sh` overwrites them with the knowledge repository's
   real `ops/` files before a deploy; never commit those baked versions.

@@ -31,9 +31,8 @@ python evals/run_qa.py --embedder openrouter --llm openrouter --rebuild --repo e
 Real runs append one row to `history.ndjson`. Fake backends exercise plumbing and append nothing.
 `run_gates.py` combines the two measured bars with the adversarial test suite.
 
-The evaluation librarian skill remains at
-`filing/repo/.claude/skills/librarian/SKILL.md` as the required contract copy; write-path behavior
-is covered deterministically by the real Postgres/Git integration suite.
+The evaluation runner uses the librarian skill packaged with the platform. Write-path behavior is
+covered deterministically by the real Postgres/Git integration suite.
 
 ## Knowledge-graph parity
 

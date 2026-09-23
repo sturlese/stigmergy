@@ -55,6 +55,8 @@ EXECUTABLE_MODULES = {
     "src/stigmergy/librarian/cli.py": "service",
     "src/stigmergy/librarian/gitcredential.py": "bootstrap",
     "src/stigmergy/knowledge/contract.py": "operations",
+    "src/stigmergy/knowledge/lint.py": "operations",
+    "src/stigmergy/knowledge/trust.py": "operations",
     "src/stigmergy/ops/reset.py": "operations",
     "src/stigmergy/server/issue_token.py": "bootstrap",
     "src/stigmergy/server/mcp_server.py": "service",

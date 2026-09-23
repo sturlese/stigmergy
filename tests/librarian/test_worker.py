@@ -7,7 +7,6 @@ from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
 from stigmergy.capture import schema
 from stigmergy.knowledge import writer as knowledge_writer
-from stigmergy.knowledge.contract import expected_librarian_skill
 from stigmergy.knowledge.writer import WriterDeadline, WriteResult
 from stigmergy.librarian import config, gitcmd, worker
 from stigmergy.librarian.errors import LibrarianConfigError
@@ -23,22 +22,6 @@ def test_pydantic_worker_requires_openrouter_before_reading_the_repository(monke
 
     with pytest.raises(LibrarianConfigError, match="OPENROUTER_API_KEY"):
         worker.startup_checks(config.Settings())
-
-
-def test_pydantic_worker_rejects_one_byte_librarian_prompt_drift(tmp_path, monkeypatch):
-    skill = tmp_path / ".claude" / "skills" / "librarian" / "SKILL.md"
-    skill.parent.mkdir(parents=True)
-    skill.write_bytes(expected_librarian_skill())
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr(worker.gitcmd, "ensure_repo", lambda _repo: str(tmp_path))
-    monkeypatch.setattr(worker.gitcmd, "base_ref", lambda *_args: SimpleNamespace(remote=False))
-    monkeypatch.setattr(worker.gitcmd, "reap", lambda *_args: None)
-
-    assert worker.startup_checks(config.Settings(repo=str(tmp_path)))["repo"] == str(tmp_path)
-
-    skill.write_bytes(skill.read_bytes() + b"\n")
-    with pytest.raises(LibrarianConfigError, match="does not match"):
-        worker.startup_checks(config.Settings(repo=str(tmp_path)))
 
 
 def test_worker_connection_bounds_database_statements():

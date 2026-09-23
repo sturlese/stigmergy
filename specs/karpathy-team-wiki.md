@@ -606,11 +606,9 @@ Manual queue claim, one-shot librarian, and one-shot gardener execution remain c
 
 ### 5.14 Librarian contract cleanup
 
-The knowledge repository's live librarian skill and every platform-owned frozen/evaluation copy change in the same implementation:
-
-- live knowledge repository (`STIGMERGY_REPO`): `.claude/skills/librarian/SKILL.md`
-- `tests/librarian/fixtures/repo/.claude/skills/librarian/SKILL.md`
-- `evals/filing/repo/.claude/skills/librarian/SKILL.md`
+The platform package owns the single librarian skill at
+`src/stigmergy/knowledge/librarian_skill.md`. Knowledge repositories and evaluation worktrees contain
+knowledge only and never carry executable prompt copies.
 
 The instructions must describe only real operations exposed by the structured response and implemented by the writer. In particular they remove claims about a meeting distiller, document door, view regenerator, human approval, a future repair loop, or an identity gardener that is not part of the same release.
 
@@ -885,7 +883,7 @@ Secure erasure from all historical Git objects is not part of ordinary page dele
 63. **OPS-08:** Hybrid lexical/vector search ranking remains covered by its current golden tests plus ACL and deletion/rebuild tests.
 64. **OPS-09:** `stigmergy-search`, `stigmergy-queue`, and `stigmergy-gardener` are absent from installed scripts; retained commands are classified and tested as service/bootstrap/operations or local bridge commands.
 65. **OPS-10:** A repository-wide executable audit finds no user capability available only through CLI.
-66. **OPS-11:** The live, frozen-test, and evaluation librarian skills contain no claims about nonexistent writers, human approval, or maintenance, and contract tests bind every promised operation to code.
+66. **OPS-11:** The packaged librarian skill contains no claims about nonexistent writers, human approval, or maintenance, and contract tests bind every promised operation to code.
 67. **OPS-12:** Runtime and tests contain no legacy capture-kind, generated-view, old entity-dossier, permanent-finding, retired-repair-kind, or compatibility branch.
 68. **OPS-13:** A review of changed production comments and docstrings finds no migration narration, historical justification, review commentary, or prose that merely restates the implementation.
 

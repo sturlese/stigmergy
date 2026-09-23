@@ -13,7 +13,6 @@ from pydantic_ai.exceptions import AgentRunError, ModelHTTPError
 from stigmergy.capture import ops, queue, schema, uploads
 from stigmergy.capture.errors import CaptureError, QueueStateError, SubmissionRejected
 from stigmergy.kernel.deadline import hard_deadline
-from stigmergy.knowledge.contract import KnowledgeContractError, validate_librarian_skill
 from stigmergy.knowledge.planner import PydanticPlanner, ScriptedPlanner
 from stigmergy.knowledge.writer import (
     WriterDeadline,
@@ -54,11 +53,6 @@ def startup_checks(settings) -> dict:
     if settings.backend == "pydantic" and not os.environ.get("OPENROUTER_API_KEY", "").strip():
         raise LibrarianConfigError("OPENROUTER_API_KEY is required by the writer")
     repo = gitcmd.ensure_repo(settings.repo)
-    if settings.backend == "pydantic":
-        try:
-            validate_librarian_skill(repo)
-        except KnowledgeContractError as error:
-            raise LibrarianConfigError(str(error)) from error
     base = gitcmd.base_ref(repo, settings.branch)
     if settings.require_remote_base and not base.remote:
         raise LibrarianConfigError("the deployed writer could not resolve the remote branch")

@@ -85,7 +85,7 @@ if [ -z "$PARITY_ARTIFACT" ] || [ ! -f "$PARITY_ARTIFACT" ]; then
   exit 2
 fi
 if ! PYTHONDONTWRITEBYTECODE=1 "$PREFLIGHT_PY" "$HERE/evals/filing/parity.py" \
-  --artifact "$PARITY_ARTIFACT" --repo-root "$HERE" --brain-root "$root" --brain-commit "$sha"; then
+  --artifact "$PARITY_ARTIFACT" --repo-root "$HERE"; then
   echo "deploy: recorded parity gate rejected this candidate" >&2
   exit 2
 fi

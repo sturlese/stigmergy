@@ -317,3 +317,26 @@ def _has_relationship_prose(text: str, name: str) -> bool:
 
 def _list(value: tuple[str, ...] | None) -> list[str] | None:
     return None if value is None else list(value)
+
+
+def main(argv=None) -> int:
+    import argparse
+    import json
+    from dataclasses import asdict
+
+    parser = argparse.ArgumentParser(prog="python -m stigmergy.knowledge.lint")
+    parser.add_argument("--repo", default=".")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--strict", action="store_true")
+    args = parser.parse_args(argv)
+    violations = check(args.repo)
+    if args.json:
+        print(json.dumps([asdict(item) for item in violations], indent=2, sort_keys=True))
+    else:
+        for item in violations:
+            print(f"{item.path}: {item.code}: {item.message}")
+    return 1 if args.strict and violations else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

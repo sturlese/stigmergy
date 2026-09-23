@@ -408,12 +408,6 @@ def test_the_knowledge_planner_installs_the_repair(spy, tmp_path):
 
     from stigmergy.knowledge.planner import PydanticPlanner
 
-    brief = pathlib.Path(tmp_path, ".claude", "skills", "librarian", "SKILL.md")
-    brief.parent.mkdir(parents=True)
-    frozen = (ROOT / "tests" / "librarian" / "fixtures" / "repo" / ".claude" / "skills"
-              / "librarian" / "SKILL.md")
-    brief.write_text(frozen.read_text(encoding="utf-8"), encoding="utf-8")
-
     settings = type("Settings", (), {"model": "openrouter:deepseek/deepseek-v4-flash", "timeout_s": 5,
                                      "max_turns": 1})()
     planner = PydanticPlanner(settings, model_factory=lambda: TestModel())

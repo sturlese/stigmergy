@@ -35,7 +35,6 @@ from stigmergy.kernel.llm import (
     LIBRARIAN_REASONING_LEVEL,
     LIBRARIAN_TEMPERATURE,
 )
-from stigmergy.knowledge.contract import KnowledgeContractError, librarian_skill_provenance
 from stigmergy.knowledge.plan import FilingPlan
 from stigmergy.knowledge.planner import PlanRun
 from stigmergy.knowledge.writer import GateRefused
@@ -53,7 +52,7 @@ except ModuleNotFoundError:
         PRODUCTION_REPEAT_COUNT,
     )
 
-ARTIFACT_SCHEMA_VERSION = 6
+ARTIFACT_SCHEMA_VERSION = 7
 REQUIRED_IMPLEMENTATIONS = frozenset({"hippocampus", "stigmergy"})
 REQUIRED_SEMANTIC_GATES = frozenset(
     {
@@ -108,13 +107,12 @@ RELEASE_FIELDS = frozenset(
         "candidate",
     }
 )
-CANDIDATE_FIELDS = frozenset({"commit", "librarian_skill_sha256", "brain_prompt"})
+CANDIDATE_FIELDS = frozenset({"commit", "librarian_skill_sha256"})
 RUN_FIELDS = frozenset({"implementation", "run_id", "runtime", "execution", "provenance", "case_results"})
 EXECUTION_FIELDS = frozenset({"mode", "configured_max_turns"})
 CASE_FIELDS = frozenset({"case_id", "runtime", "execution", "input", "requests", "correction", "evidence", "output"})
 INPUT_FIELDS = frozenset(
     {
-        "brain_prompt",
         "case_sha256",
         "fixture_sha256",
         "source_sha256",
@@ -197,19 +195,13 @@ class ReleaseInputs:
     case_paths: dict[str, Path]
     fixture_paths: dict[str, Path]
     repo_root: Path
-    brain_prompt: dict[str, str] | None = None
 
 
 class ReleaseInputError(ValueError):
     pass
 
 
-def current_release_inputs(
-    repo_root: Path,
-    *,
-    brain_root: Path | None = None,
-    brain_commit: str | None = None,
-) -> ReleaseInputs:
+def current_release_inputs(repo_root: Path) -> ReleaseInputs:
     root = repo_root.resolve()
     try:
         commit = subprocess.check_output(
@@ -247,12 +239,6 @@ def current_release_inputs(
         fixture_paths[key] = fixture
         fixtures[key] = hashlib.sha256(fixture.read_bytes()).hexdigest()
 
-    prompt = None
-    if brain_root is not None:
-        try:
-            prompt = librarian_skill_provenance(brain_root, expected_commit=brain_commit)
-        except KnowledgeContractError as error:
-            raise ReleaseInputError(str(error)) from error
     return ReleaseInputs(
         commit=commit,
         librarian_skill_sha256=hashlib.sha256(skill_path.read_bytes()).hexdigest(),
@@ -262,7 +248,6 @@ def current_release_inputs(
         case_paths=case_paths,
         fixture_paths=fixture_paths,
         repo_root=root,
-        brain_prompt=prompt,
     )
 
 
@@ -339,7 +324,6 @@ def _binding(value: object, expected: ReleaseInputs, failures: list[dict[str, An
     fixtures = _cases(value.get("source_fixtures"), failures, "source-fixtures")
     commit = _ref(candidate.get("commit"), "candidate.commit", failures)
     skill = _sha(candidate.get("librarian_skill_sha256"), "candidate.librarian_skill_sha256", failures)
-    prompt = _prompt(candidate.get("brain_prompt"), failures)
     if commit != expected.commit:
         _failure(failures, "artifact", "candidate-commit")
     if skill != expected.librarian_skill_sha256:
@@ -350,8 +334,6 @@ def _binding(value: object, expected: ReleaseInputs, failures: list[dict[str, An
         _failure(failures, "artifact", "candidate-cases")
     if fixtures != expected.source_fixtures:
         _failure(failures, "artifact", "candidate-fixtures")
-    if expected.brain_prompt is None or prompt != expected.brain_prompt:
-        _failure(failures, "artifact", "candidate-brain-prompt")
     return {
         "corpus_sha256": corpus,
         "initial_graph_ref": initial,
@@ -361,7 +343,6 @@ def _binding(value: object, expected: ReleaseInputs, failures: list[dict[str, An
         "candidate": {
             "commit": commit,
             "librarian_skill_sha256": skill,
-            "brain_prompt": prompt,
         },
     }
 
@@ -397,14 +378,6 @@ def _cases(value: object, failures: list[dict[str, Any]], field: str) -> dict[st
         elif digest is not None:
             result[case_id] = digest
     return result
-
-
-def _prompt(value: object, failures: list[dict[str, Any]]) -> dict[str, str] | None:
-    if not _exact_keys(value, frozenset({"commit", "sha256"}), failures, "artifact", "brain-prompt"):
-        return None
-    commit = _ref(value["commit"], "brain_prompt.commit", failures)
-    digest = _sha(value["sha256"], "brain_prompt.sha256", failures)
-    return {"commit": commit, "sha256": digest} if commit and digest else None
 
 
 def _admission(artifact: dict[str, Any], failures: list[dict[str, Any]]) -> None:
@@ -564,8 +537,6 @@ def _case(
         input_data["case_sha256"] != expected.source_cases[case_id]
         or input_data["fixture_sha256"] != expected.source_fixtures[case_id]
         or input_data["source_sha256"] != expected.source_fixtures[case_id]
-        or (implementation == "stigmergy" and input_data["brain_prompt"] != expected.brain_prompt)
-        or (implementation == "hippocampus" and input_data["brain_prompt"] is not None)
     ):
         _failure(failures, implementation, "case-input", case_id=case_id)
         return
@@ -1198,18 +1169,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", required=True)
     parser.add_argument("--repo-root", default=str(ROOT))
-    parser.add_argument("--brain-root", required=True)
-    parser.add_argument("--brain-commit", required=True)
     args = parser.parse_args(argv)
     try:
         artifact = json.loads(Path(args.artifact).read_text(encoding="utf-8"))
         result = evaluate(
             artifact,
-            expected=current_release_inputs(
-                Path(args.repo_root),
-                brain_root=Path(args.brain_root),
-                brain_commit=args.brain_commit,
-            ),
+            expected=current_release_inputs(Path(args.repo_root)),
             review_root=Path(args.artifact).resolve().parent,
         )
     except (OSError, ReleaseInputError, ValueError, json.JSONDecodeError) as error:
