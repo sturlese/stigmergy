@@ -18,9 +18,15 @@ The local bridge, Slack, and backoffice authenticate and acquire bytes. They the
 capture service with actor, audience, provenance, artifact references, and optional contradiction
 resolution intent. The durable request contains no duplicate document body or binary payload.
 
-The state machine is `queued -> processing -> landed|failed`. Technical failures retry within a
-bounded lease policy. Idempotency is scoped to actor and caller key. A crash after the Git commit is
-reconciled by the operation marker and commit SHA rather than producing a second commit.
+The state machine is `queued -> processing -> landed|failed`. The first processing claim starts one
+capture-wide budget whose absolute deadline is persisted in the queue and shared by extraction,
+model calls, correction, gates, and at most one automatic
+retry. Only explicit transient failures retry, after a fixed ten seconds and within the remaining
+budget; deadline exhaustion and deterministic failures are terminal. A master retry resets the budget
+over the same immutable evidence. Idempotency is scoped to actor and caller key. A crash after the Git
+commit receives a bounded recovery-only claim and is reconciled by the operation marker and commit
+SHA rather than producing a second commit or another model run. Queue leases are fenced by their exact
+claim timestamp, and expiry cannot race a writer holding the publication lock.
 
 Public URL acquisition resolves and revalidates every redirect, blocks non-public destinations,
 streams under a byte limit, and sends no ambient credentials. Its source records sanitized original

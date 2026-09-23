@@ -113,11 +113,13 @@ effort `minimal` with reasoning excluded from returned output and an output ceil
 sent as `max_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
 requires supported parameters, denies data collection, and requires
 zero-data-retention processing. The librarian prefers the fastest compatible provider and permits
-same-model provider fallback. Each
-writer attempt makes at most three model requests: one coherent filing request, one schema retry when
+same-model provider fallback. Each filing attempt makes at most three model requests: one coherent filing request, one schema retry when
 structured output is invalid, and, only when a mechanical
-writer contract fails, one bounded correction over the same source and safe context. Retryable failures
-use the existing bounded queue-attempt policy; answer and OCR requests retain same-model provider
+writer contract fails, one bounded correction over the same source and safe context. The first worker
+claim persists one absolute capture-wide execution deadline. Only explicit transient failures receive one automatic
+retry after ten seconds within the remaining budget; deadline exhaustion and deterministic failures are
+terminal. An expired worker may receive a bounded recovery-only claim that can reconcile an existing
+commit but cannot invoke the model. A master retry starts a new budget over the same immutable artifact. Answer and OCR requests retain same-model provider
 failover. Model fallback is prohibited. The application never reads,
 forwards, or falls back to Anthropic, OpenAI, Gemini, or another direct model-provider credential.
 
@@ -227,7 +229,13 @@ queued -> processing -> landed
                     \-> failed
 ```
 
-An upload session exists before `queued` but is not a capture until all declared objects have been verified and the request is finalized. Processing uses bounded automatic retries for technical failures. There is no `awaiting_review`, `needs_human`, or equivalent state. A terminal failure has a safe error category and is visible to the master; it leaves no partial Git commit.
+An upload session exists before `queued` but is not a capture until all declared objects have been
+verified and the request is finalized. Processing permits one fixed-delay automatic retry only for
+explicit transient failures and never resets the capture-wide budget. There is no `awaiting_review`,
+`needs_human`, or equivalent state. A terminal failure has a safe error category and is visible to the
+master; it leaves no partial Git commit and retains the immutable artifact for an explicit master retry.
+If a worker dies after publishing, a recovery-only claim reconciles that existing commit and never runs
+the filing model again.
 
 Slack channel visibility is mapped to a configured Stigmergy audience. An organization-wide channel may map to organization-wide; a private channel maps to a restricted group and can never be broadened by the reacting user. An unmapped channel fails safely before capture. For MCP, omission of `audience` uses the authenticated identity's configured default and never silently falls back to organization-wide. The master may choose any configured audience in the backoffice.
 

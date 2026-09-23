@@ -7,20 +7,21 @@ import signal
 import time
 from dataclasses import dataclass
 
+import httpx
 import psycopg
-from pydantic_ai.exceptions import AgentRunError, ModelHTTPError
+from pydantic_ai.exceptions import ModelHTTPError
 
 from stigmergy.capture import ops, queue, schema, uploads
-from stigmergy.capture.errors import CaptureError, QueueStateError, SubmissionRejected
+from stigmergy.capture.errors import QueueStateError, SubmissionRejected
 from stigmergy.kernel.deadline import hard_deadline
 from stigmergy.knowledge.planner import PydanticPlanner, ScriptedPlanner
 from stigmergy.knowledge.writer import (
-    WriterDeadline,
+    WRITER_LOCK_KEY,
     WriterDeps,
     process,
 )
-from stigmergy.librarian import gitcmd, schedule
-from stigmergy.librarian.errors import GitError, LibrarianConfigError
+from stigmergy.librarian import config, gitcmd, schedule
+from stigmergy.librarian.errors import LibrarianConfigError
 
 log = logging.getLogger(__name__)
 GARDEN_JOB = "garden"
@@ -72,10 +73,10 @@ def build_deps(settings, resolved: dict, evidence) -> WriterDeps:
 
 def process_next(conn, deps: WriterDeps):
     settings = deps.settings
+    _release_expired_if_writer_idle(conn, settings.visibility_timeout_s)
     item = queue.claim_next(
         conn,
-        visibility_timeout_s=settings.visibility_timeout_s,
-        max_attempts=settings.max_attempts,
+        operation_budget_s=config.operation_budget_s(timeout_s=settings.timeout_s),
     )
     if item is None:
         return None
@@ -91,6 +92,7 @@ def process_next(conn, deps: WriterDeps):
                 conn,
                 item["id"],
                 expected_attempts=item["attempts"],
+                expected_lease_started_at=item["lease_started_at"],
                 source_path=result.source_path,
                 commit_sha=result.commit_sha,
                 change_id=result.change_id,
@@ -107,12 +109,12 @@ def process_next(conn, deps: WriterDeps):
                 conn,
                 item["id"],
                 expected_attempts=item["attempts"],
+                expected_lease_started_at=item["lease_started_at"],
                 category=getattr(error, "category", error.__class__.__name__),
                 error=_safe_error(error),
                 retryable=retryable,
-                max_attempts=settings.max_attempts,
             )
-            if retryable:
+            if row["status"] == schema.QUEUED:
                 log.error(
                     "knowledge operation %s will retry (%s)",
                     item["id"],
@@ -133,20 +135,22 @@ def _retryable(error: Exception) -> bool:
     if hasattr(error, "retryable"):
         return bool(error.retryable)
     if isinstance(error, ModelHTTPError):
-        return error.status_code in {404, 408, 409, 425, 429} or error.status_code >= 500
+        return error.status_code in {408, 409, 425, 429} or error.status_code >= 500
     return isinstance(
         error,
-        (
-            AgentRunError,
-            CaptureError,
-            GitError,
-            WriterDeadline,
-            psycopg.OperationalError,
-            TimeoutError,
-            ConnectionError,
-            OSError,
-        ),
+        (httpx.TimeoutException, httpx.NetworkError, psycopg.OperationalError, ConnectionError),
     )
+
+
+def _release_expired_if_writer_idle(conn, visibility_timeout_s: int) -> dict[str, int]:
+    """Reclaim leases only when no writer can be inside its publish transaction."""
+    with ops.try_advisory_lock(conn, WRITER_LOCK_KEY) as acquired:
+        if not acquired:
+            return {"released": 0, "failed": 0}
+        return queue.release_expired(
+            conn,
+            visibility_timeout_s=visibility_timeout_s,
+        )
 
 
 def _safe_error(error: Exception) -> str:
@@ -184,11 +188,6 @@ class Worker:
     def run(self) -> int:
         processed = 0
         ops.heartbeat(self.conn, "idle")
-        queue.release_expired(
-            self.conn,
-            visibility_timeout_s=self.deps.settings.visibility_timeout_s,
-            max_attempts=self.deps.settings.max_attempts,
-        )
         while not self.stopping:
             self._maybe_garden()
             self._maybe_purge_uploads()

@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from stigmergy.capture import queue
 from stigmergy.capture.extraction import CAPTURE_TIMEOUT_S
 from stigmergy.kernel.llm import LIBRARIAN_MODEL, OCR_MODEL
 from stigmergy.librarian.errors import LibrarianConfigError
@@ -66,7 +65,6 @@ class Settings:
     timeout_s: int = DEFAULT_TIMEOUT_S
     poll_interval_s: float = DEFAULT_POLL_INTERVAL_S
     visibility_timeout_s: int = DEFAULT_VISIBILITY_TIMEOUT_S
-    max_attempts: int = queue.DEFAULT_MAX_ATTEMPTS
     garden_at: str = "05:07"
     worktree_root: str = ""
     ocr_model: str = OCR_MODEL
@@ -89,7 +87,6 @@ class Settings:
             timeout_s=timeout_s,
             poll_interval_s=float(option("poll_interval", cls.poll_interval_s)),
             visibility_timeout_s=int(option("visibility_timeout", resolved_visibility_timeout_s(timeout_s=timeout_s))),
-            max_attempts=int(option("max_attempts", cls.max_attempts)),
             garden_at=os.environ.get(GARDEN_AT_ENV, cls.garden_at),
             worktree_root=os.environ.get("STIGMERGY_LIBRARIAN_WORKTREE_ROOT", ""),
             ocr_model=os.environ.get("STIGMERGY_OCR_MODEL", cls.ocr_model).strip(),
@@ -106,7 +103,7 @@ class Settings:
             raise LibrarianConfigError(f"the librarian request budget must be {DEFAULT_MAX_TURNS}")
         if self.timeout_s < 1:
             raise LibrarianConfigError("model limits must be positive")
-        if self.poll_interval_s <= 0 or self.max_attempts < 1:
+        if self.poll_interval_s <= 0:
             raise LibrarianConfigError("worker loop limits must be positive")
         if self.ocr_model != OCR_MODEL:
             raise LibrarianConfigError(f"the OCR model must be {OCR_MODEL}")

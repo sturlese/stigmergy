@@ -10,7 +10,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from stigmergy.capture import ops, references, schema
+from stigmergy.capture import ops, queue, references, schema
+from stigmergy.capture.errors import QueueStateError
 from stigmergy.capture.extraction import extract_capture
 from stigmergy.capture.source import render_source, source_path
 from stigmergy.changes.model import ChangeRecord
@@ -58,7 +59,7 @@ from stigmergy.knowledge.write_guard import (
     allow_existing,
     allow_explicit_master,
 )
-from stigmergy.librarian import config, gitcmd
+from stigmergy.librarian import gitcmd
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ class WriterBusy(KnowledgeWriteError):
 
 
 class WriterDeadline(KnowledgeWriteError):
-    retryable = True
+    pass
 
 
 class GateRefused(KnowledgeWriteError):
@@ -111,44 +112,72 @@ class WriteResult:
 
 
 def process(conn, item: dict, deps: WriterDeps) -> WriteResult:
-    budget_s = config.operation_budget_s(timeout_s=deps.settings.timeout_s)
-    with hard_deadline(
-        budget_s,
-        lambda: WriterDeadline("knowledge operation exceeded its queue lease budget"),
-    ):
-        return _process_with_lock(conn, item, deps)
+    return _process_with_lock(conn, item, deps)
+
+
+def _remaining_operation_budget_s(
+    item: dict,
+    *,
+    now: dt.datetime | None = None,
+) -> float:
+    raw_deadline = item.get("budget_deadline_at")
+    if not raw_deadline:
+        raise WriterDeadline("capture budget has no persisted deadline")
+    try:
+        deadline = dt.datetime.fromisoformat(str(raw_deadline))
+    except ValueError as error:
+        raise WriterDeadline("capture budget has an invalid persisted deadline") from error
+    if deadline.tzinfo is None:
+        raise WriterDeadline("capture budget deadline has no timezone")
+    current = now or dt.datetime.now(dt.UTC)
+    return max(0.0, (deadline - current).total_seconds())
 
 
 def _process_with_lock(conn, item: dict, deps: WriterDeps) -> WriteResult:
     with ops.try_advisory_lock(conn, WRITER_LOCK_KEY) as acquired:
         if not acquired:
             raise WriterBusy("another knowledge write is active")
-        base = gitcmd.base_ref(deps.repo, deps.settings.branch)
-        recovered = _recover(conn, item, deps, base.sha)
+        with hard_deadline(
+            deps.settings.timeout_s,
+            lambda: WriterDeadline("commit reconciliation exceeded its bounded budget"),
+        ):
+            base = gitcmd.base_ref(deps.repo, deps.settings.branch)
+            recovered = _recover(conn, item, deps, base.sha)
         if recovered:
             return recovered
-        if item["operation"] == schema.CAPTURE:
-            return _capture(conn, item, deps, base)
-        if item["operation"] == schema.DELETE:
-            return _delete(conn, item, deps, base)
-        if item["operation"] == schema.ENTITY:
-            return _entity(conn, item, deps, base)
-        if item["operation"] == schema.GARDEN:
-            request = schema.parse_garden(item["request"])
-            if request.mode == "recompile":
-                return _recompile(conn, deps, base, request=request)
-            return _garden(
-                conn,
-                deps,
-                base,
-                operation_id=str(request.operation_id),
-                actor=request.actor.subject,
-            )
-        raise KnowledgeWriteError("unknown writer operation")
+        if int(item["attempts"]) > queue.DEFAULT_MAX_ATTEMPTS:
+            raise WriterDeadline("recovery-only lease found no landed commit")
+        budget_s = _remaining_operation_budget_s(
+            item,
+        )
+        with hard_deadline(
+            budget_s,
+            lambda: WriterDeadline("knowledge operation exhausted its capture budget"),
+        ):
+            if item["operation"] == schema.CAPTURE:
+                return _capture(conn, item, deps, base)
+            if item["operation"] == schema.DELETE:
+                return _delete(conn, item, deps, base)
+            if item["operation"] == schema.ENTITY:
+                return _entity(conn, item, deps, base)
+            if item["operation"] == schema.GARDEN:
+                request = schema.parse_garden(item["request"])
+                if request.mode == "recompile":
+                    return _recompile(conn, item, deps, base, request=request)
+                return _garden(
+                    conn,
+                    item,
+                    deps,
+                    base,
+                    operation_id=str(request.operation_id),
+                    actor=request.actor.subject,
+                )
+            raise KnowledgeWriteError("unknown writer operation")
 
 
 def _garden(
     conn,
+    item: dict,
     deps: WriterDeps,
     base: gitcmd.BaseRef,
     *,
@@ -217,6 +246,8 @@ def _garden(
             base_sha=base.sha,
             entries=entries,
             item_id=operation_id,
+            expected_attempts=item["attempts"],
+            expected_lease_started_at=item["lease_started_at"],
             trigger="garden",
             actor=actor,
             summary=f"Repaired {len(set(changed) | set(model_changed))} corpus path(s)",
@@ -263,7 +294,14 @@ def _garden_repair_files(root: str, violations: tuple[Violation, ...]) -> tuple[
     return files, context
 
 
-def _recompile(conn, deps: WriterDeps, base: gitcmd.BaseRef, *, request: schema.GardenRequest) -> WriteResult:
+def _recompile(
+    conn,
+    item: dict,
+    deps: WriterDeps,
+    base: gitcmd.BaseRef,
+    *,
+    request: schema.GardenRequest,
+) -> WriteResult:
     """Rebuild derived knowledge from immutable sources in one master-only commit."""
     with (
         ops.job_run(conn, "recompile", base_commit_sha=base.sha) as run,
@@ -295,6 +333,8 @@ def _recompile(conn, deps: WriterDeps, base: gitcmd.BaseRef, *, request: schema.
             base_sha=base.sha,
             entries=entries,
             item_id=str(request.operation_id),
+            expected_attempts=item["attempts"],
+            expected_lease_started_at=item["lease_started_at"],
             trigger="garden",
             actor=request.actor.subject,
             summary=(f"Recompiled derived knowledge from {report['source_count']} immutable source(s)"),
@@ -828,6 +868,8 @@ def _capture(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteR
             base_sha=base.sha,
             entries=entries,
             item_id=str(envelope.capture_id),
+            expected_attempts=item["attempts"],
+            expected_lease_started_at=item["lease_started_at"],
             trigger=trigger,
             actor=envelope.actor.subject,
             summary=summary,
@@ -937,6 +979,8 @@ def _delete(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteRe
             base_sha=base.sha,
             entries=entries,
             item_id=str(request.operation_id),
+            expected_attempts=item["attempts"],
+            expected_lease_started_at=item["lease_started_at"],
             trigger="delete",
             actor=request.actor.subject,
             summary=f"Deleted {len(request.paths)} knowledge path(s)",
@@ -988,6 +1032,8 @@ def _entity(conn, item: dict, deps: WriterDeps, base: gitcmd.BaseRef) -> WriteRe
             base_sha=base.sha,
             entries=entries,
             item_id=str(request.operation_id),
+            expected_attempts=item["attempts"],
+            expected_lease_started_at=item["lease_started_at"],
             trigger="entity",
             actor=request.actor.subject,
             summary=summary,
@@ -1427,6 +1473,8 @@ def _commit_and_record(
     base_sha: str,
     entries,
     item_id: str,
+    expected_attempts: int,
+    expected_lease_started_at: str,
     trigger: str,
     actor: str,
     summary: str,
@@ -1436,6 +1484,13 @@ def _commit_and_record(
 ) -> tuple[str, ChangeRecord]:
     safe_summary = _safe_summary(summary)
     message = f"feat(knowledge): {safe_summary[:68]}\n\nStigmergy-Operation: {item_id}\nStigmergy-Trigger: {trigger}\n"
+    if not queue.holds_lease(
+        conn,
+        item_id,
+        expected_attempts=expected_attempts,
+        expected_lease_started_at=expected_lease_started_at,
+    ):
+        raise QueueStateError("processing lease was redelivered before publication")
     commit = gitcmd.commit(
         worktree,
         message=message,

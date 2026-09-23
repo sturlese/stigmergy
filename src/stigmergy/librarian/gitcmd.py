@@ -10,7 +10,12 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
-from stigmergy.librarian.errors import GitError, LibrarianConfigError, WorktreeError
+from stigmergy.librarian.errors import (
+    GitError,
+    LibrarianConfigError,
+    TransientGitError,
+    WorktreeError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +46,10 @@ def run(*args: str, cwd: str | None = None, check: bool = True,
         proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
                               env={**os.environ, **(env or {})}, timeout=timeout)
     except subprocess.TimeoutExpired as ex:
-        raise GitError(f"`git {' '.join(_scrub(a) for a in args)}` exceeded its {timeout}s "
-                       f"budget — the remote did not answer in time") from ex
+        raise TransientGitError(
+            f"`git {' '.join(_scrub(a) for a in args)}` exceeded its {timeout}s "
+            f"budget — the remote did not answer in time"
+        ) from ex
     if check and proc.returncode != 0:
         raise GitError(f"`git {' '.join(_scrub(a) for a in args)}` rc={proc.returncode}: "
                        f"{_scrub(proc.stderr).strip()[:STDERR_LIMIT]}")

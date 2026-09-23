@@ -26,6 +26,22 @@ The private knowledge repository stores current Markdown and control files.
 
 Queue inspection/retry, gardener triggers, entity operations, changes, contradictions, and health
 are backoffice capabilities rather than separate product CLIs.
+
+Capture processing has one total budget from its first worker claim. Its absolute deadline is stored
+with the queue item, so a retry or configuration deploy cannot reset it. All filing work is bounded by
+that remaining budget. Only explicit transient provider, network, database, Git timeout, lock, or
+evidence failures receive one automatic retry after ten seconds; deadline exhaustion and deterministic
+failures become visible terminal failures. If a worker dies after publication, one bounded recovery-only
+claim may reconcile the existing commit without invoking the model. The original content-addressed
+evidence remains available, and the master backoffice retry resets the attempt count and budget without
+creating a duplicate capture.
+
+Queue deadline schema changes use a clean-cut deployment, never runtime compatibility DDL. Stop every
+process that can enqueue or claim work, verify that `capture_queue` has no `processing` rows, apply
+`ops/migrations/20260924_capture_deadlines.sql`, deploy the new image, then restore the process counts.
+Rollback uses the same drained order: stop all process groups, drop `budget_deadline_at` and
+`lease_started_at`, deploy the previous image, and restore the prior counts. Never run old and new
+workers concurrently across this schema boundary.
 The master-only `POST /admin/api/knowledge/recompile` control submits the same writer request as
 gardening with `mode: recompile`; it is not an index rebuild and has no separate installed CLI. It
 recompiles only derived notes, concepts, links, and entity anchors from committed immutable sources

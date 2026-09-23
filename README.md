@@ -78,9 +78,12 @@ binary evidence, Slack, audit. Stigmergy adds exactly that and nothing that dupl
 </p>
 
 States are `queued → processing → landed | failed`. Nothing waits for a human: ambiguity becomes
-an explicit contradiction, technical failures retry within a bounded lease, and a terminal failure
-carries a typed error the master can retry. A crash after the commit is reconciled by commit SHA,
-never by a second commit.
+an explicit contradiction. Processing has one capture-wide budget anchored at its first claim; only
+an explicit transient failure receives one automatic retry after ten seconds, within the persisted
+deadline's remaining
+budget. A terminal failure keeps its original evidence and typed error for a master retry. A crash
+after the commit receives a bounded recovery-only claim and is reconciled by commit SHA, never by a
+second commit or another model run.
 
 The librarian may create or rewrite a note or concept, consolidate and delete a redundant page,
 propose an entity claim, add or resolve a contradiction, or file nothing — the source still lands.

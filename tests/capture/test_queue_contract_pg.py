@@ -23,6 +23,11 @@ from tests import testdb
 
 ALICE = schema.Actor(subject="alice@example.com", display_name="Alice")
 CAPTURED_AT = dt.datetime(2026, 8, 24, 12, tzinfo=dt.UTC)
+TEST_OPERATION_BUDGET_S = 600
+
+
+def _claim(conn, *, operation_budget_s: int = TEST_OPERATION_BUDGET_S):
+    return queue.claim_next(conn, operation_budget_s=operation_budget_s)
 
 
 def _capture(conn, evidence, *, text="knowledge", key=None):
@@ -112,7 +117,7 @@ def test_claiming_is_exactly_once_under_parallel_workers(clean_queue):
     def claim(_):
         connection = index_store.connect(testdb.dsn())
         try:
-            item = queue.claim_next(connection)
+            item = _claim(connection)
             return item["id"] if item else None
         finally:
             connection.close()
@@ -128,9 +133,22 @@ def test_claiming_is_exactly_once_under_parallel_workers(clean_queue):
 def test_a_redelivered_lease_fences_the_stale_worker(clean_queue):
     evidence = MemoryEvidenceStore()
     receipt = _capture(clean_queue, evidence, key="lease")
-    first = queue.claim_next(clean_queue, visibility_timeout_s=0)
-    queue.release_expired(clean_queue, visibility_timeout_s=0)
-    second = queue.claim_next(clean_queue)
+    first = _claim(clean_queue)
+    queue.fail_or_retry(
+        clean_queue,
+        receipt["id"],
+        expected_attempts=first["attempts"],
+        expected_lease_started_at=first["lease_started_at"],
+        category="transient",
+        error="temporary",
+        retryable=True,
+    )
+    with clean_queue.cursor() as cursor:
+        cursor.execute(
+            "UPDATE capture_queue SET next_attempt_at = now() WHERE id = %s",
+            (receipt["id"],),
+        )
+    second = _claim(clean_queue)
 
     assert first["attempts"] == 1
     assert second["attempts"] == 2
@@ -139,6 +157,7 @@ def test_a_redelivered_lease_fences_the_stale_worker(clean_queue):
             clean_queue,
             receipt["id"],
             expected_attempts=first["attempts"],
+            expected_lease_started_at=first["lease_started_at"],
             source_path="sources/2026/08/x.md",
             commit_sha="a" * 40,
             change_id=uuid.uuid4(),
@@ -148,13 +167,14 @@ def test_a_redelivered_lease_fences_the_stale_worker(clean_queue):
 def test_landed_transition_records_commit_source_and_change(clean_queue):
     evidence = MemoryEvidenceStore()
     receipt = _capture(clean_queue, evidence, key="land")
-    claimed = queue.claim_next(clean_queue)
+    claimed = _claim(clean_queue)
     change_id = uuid.uuid4()
 
     landed = queue.finish_landed(
         clean_queue,
         receipt["id"],
         expected_attempts=claimed["attempts"],
+        expected_lease_started_at=claimed["lease_started_at"],
         source_path=f"sources/2026/08/{receipt['id']}.md",
         commit_sha="b" * 40,
         change_id=change_id,
@@ -168,36 +188,123 @@ def test_landed_transition_records_commit_source_and_change(clean_queue):
     assert landed["extraction"] == {"artifacts": 1}
 
 
-def test_retryable_failures_back_off_then_terminally_fail(clean_queue):
+def test_retryable_failures_share_one_budget_and_retry_once_after_ten_seconds(clean_queue):
     evidence = MemoryEvidenceStore()
     receipt = _capture(clean_queue, evidence, key="retry")
-    claimed = queue.claim_next(clean_queue)
+    claimed = _claim(clean_queue)
+    first_started_at = claimed["processing_started_at"]
+    first_deadline_at = claimed["budget_deadline_at"]
+
+    assert queue.DEFAULT_MAX_ATTEMPTS == 2
+    assert queue.RETRY_DELAY_S == 10
+    assert claimed["lease_started_at"] is not None
 
     retry = queue.fail_or_retry(
         clean_queue,
         receipt["id"],
         expected_attempts=claimed["attempts"],
+        expected_lease_started_at=claimed["lease_started_at"],
         category="transient",
         error="temporary",
         retryable=True,
     )
     assert retry["status"] == schema.QUEUED
+    assert retry["processing_started_at"] == first_started_at
+    assert retry["lease_started_at"] is None
+    retry_at = dt.datetime.fromisoformat(retry["next_attempt_at"])
+    assert 9 <= (retry_at - dt.datetime.now(dt.UTC)).total_seconds() <= 11
+    assert evidence.get(receipt["request"]["artifacts"][0]["blob_ref"]) == b"knowledge"
 
     with clean_queue.cursor() as cursor:
         cursor.execute(
             "UPDATE capture_queue SET next_attempt_at = now() WHERE id = %s",
             (receipt["id"],),
         )
-    claimed = queue.claim_next(clean_queue)
+    claimed = _claim(clean_queue, operation_budget_s=9999)
+    assert claimed["processing_started_at"] == first_started_at
+    assert claimed["budget_deadline_at"] == first_deadline_at
+    assert claimed["lease_started_at"] is not None
     failed = queue.fail_or_retry(
         clean_queue,
         receipt["id"],
         expected_attempts=claimed["attempts"],
-        category="invalid_artifact",
-        error="corrupt",
+        expected_lease_started_at=claimed["lease_started_at"],
+        category="transient",
+        error="still unavailable",
+        retryable=True,
+    )
+    assert failed["status"] == schema.FAILED
+
+    manual = queue.retry_failed(clean_queue, receipt["id"])
+    assert manual["status"] == schema.QUEUED
+    assert manual["attempts"] == 0
+    assert manual["processing_started_at"] is None
+    assert manual["budget_deadline_at"] is None
+    assert manual["lease_started_at"] is None
+    assert manual["request"] == receipt["request"]
+
+
+def test_an_expired_lease_gets_one_bounded_commit_reconciliation_claim(clean_queue):
+    evidence = MemoryEvidenceStore()
+    receipt = _capture(clean_queue, evidence, key="expired-lease")
+    _claim(clean_queue)
+
+    result = queue.release_expired(clean_queue, visibility_timeout_s=0)
+
+    assert result == {"released": 1, "failed": 0}
+    reclaimed = _claim(clean_queue)
+    assert reclaimed["status"] == schema.PROCESSING
+    assert reclaimed["attempts"] == 2
+    assert reclaimed["processing_started_at"] is not None
+
+    queue.release_expired(clean_queue, visibility_timeout_s=0)
+    final_claim = _claim(clean_queue)
+    assert final_claim["attempts"] == 3
+    assert queue.release_expired(clean_queue, visibility_timeout_s=0) == {
+        "released": 0,
+        "failed": 1,
+    }
+    assert queue.get_submission_trace(clean_queue, receipt["id"])["status"] == schema.FAILED
+
+
+def test_fresh_schema_has_the_attempt_lease_clock(conn):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'capture_queue' "
+            "AND column_name = 'lease_started_at'"
+        )
+        assert cursor.fetchone() == ("lease_started_at",)
+
+
+def test_manual_retry_cannot_reuse_a_stale_lease_with_the_same_attempt_number(clean_queue):
+    evidence = MemoryEvidenceStore()
+    receipt = _capture(clean_queue, evidence, key="manual-retry-fence")
+    stale = _claim(clean_queue)
+    failed = queue.fail_or_retry(
+        clean_queue,
+        receipt["id"],
+        expected_attempts=stale["attempts"],
+        expected_lease_started_at=stale["lease_started_at"],
+        category="deterministic",
+        error="failed",
         retryable=False,
     )
     assert failed["status"] == schema.FAILED
+    queue.retry_failed(clean_queue, receipt["id"])
+    current = _claim(clean_queue)
+    assert current["attempts"] == stale["attempts"] == 1
+    assert current["lease_started_at"] != stale["lease_started_at"]
+
+    with pytest.raises(QueueStateError, match="redelivered"):
+        queue.finish_landed(
+            clean_queue,
+            receipt["id"],
+            expected_attempts=stale["attempts"],
+            expected_lease_started_at=stale["lease_started_at"],
+            commit_sha="c" * 40,
+            change_id=uuid.uuid4(),
+        )
 
 
 def test_verified_upload_session_returns_an_artifact_reference(clean_queue):
