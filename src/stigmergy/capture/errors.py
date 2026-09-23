@@ -3,6 +3,7 @@
 
 class CaptureError(RuntimeError):
     category = "capture"
+    retryable = False
 
 
 class SubmissionRejected(CaptureError):
@@ -19,6 +20,7 @@ class FetchRejected(SubmissionRejected):
 
 class FetchUnavailable(CaptureError):
     category = "fetch_unavailable"
+    retryable = True
 
 
 class ExtractionError(CaptureError):
@@ -27,6 +29,7 @@ class ExtractionError(CaptureError):
 
 class EvidenceError(CaptureError):
     category = "evidence_unavailable"
+    retryable = True
 
 
 class UploadError(CaptureError):

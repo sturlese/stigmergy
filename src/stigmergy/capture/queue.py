@@ -11,11 +11,11 @@ from stigmergy.capture import schema
 from stigmergy.capture.errors import QueueStateError, SubmissionRejected
 
 DEFAULT_VISIBILITY_TIMEOUT_S = 900
-DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_MAX_ATTEMPTS = 2
 RECLAIM_BATCH = 100
 MAX_LIST_LIMIT = 200
 DEFAULT_LIST_LIMIT = 20
-RETRY_BASE_S = 30
+RETRY_DELAY_S = 10
 MAX_SAFE_ERROR_CHARS = 1000
 
 _ITEM_COLUMNS = (
@@ -31,6 +31,8 @@ _ITEM_COLUMNS = (
     "next_attempt_at",
     "created_at",
     "processing_started_at",
+    "budget_deadline_at",
+    "lease_started_at",
     "finished_at",
     "source_path",
     "commit_sha",
@@ -59,7 +61,12 @@ WHERE submitted_by = %s AND idempotency_key = %s
 _CLAIM = f"""
 UPDATE capture_queue
 SET status = '{schema.PROCESSING}',
-    processing_started_at = now(),
+    processing_started_at = COALESCE(processing_started_at, clock_timestamp()),
+    budget_deadline_at = COALESCE(
+        budget_deadline_at,
+        clock_timestamp() + make_interval(secs => %(operation_budget_s)s)
+    ),
+    lease_started_at = clock_timestamp(),
     attempts = attempts + 1,
     error_category = '',
     error = ''
@@ -75,7 +82,7 @@ RETURNING {_ITEM_SQL}
 """
 
 _LEASE_EXPIRED = (
-    "processing_started_at < now() - make_interval(secs => %(visibility_timeout_s)s)"
+    "lease_started_at < now() - make_interval(secs => %(visibility_timeout_s)s)"
 )
 
 _EXPIRED = f"""
@@ -87,22 +94,23 @@ FOR UPDATE SKIP LOCKED
 LIMIT %(batch)s
 """
 
-_REQUEUE_EXPIRED = f"""
+_FAIL_EXPIRED = f"""
 UPDATE capture_queue
-SET status = '{schema.QUEUED}',
-    processing_started_at = NULL,
-    next_attempt_at = now(),
+SET status = '{schema.FAILED}',
+    lease_started_at = NULL,
+    finished_at = now(),
     error_category = 'lease_expired',
     error = 'processing lease expired'
 WHERE id = ANY(%s) AND status = '{schema.PROCESSING}'
 """
 
-_FAIL_EXPIRED = f"""
+_REQUEUE_EXPIRED = f"""
 UPDATE capture_queue
-SET status = '{schema.FAILED}',
-    finished_at = now(),
-    error_category = 'attempts_exhausted',
-    error = 'processing lease expired after all attempts'
+SET status = '{schema.QUEUED}',
+    lease_started_at = NULL,
+    next_attempt_at = now(),
+    error_category = 'lease_expired',
+    error = 'processing lease expired; queued for commit reconciliation'
 WHERE id = ANY(%s) AND status = '{schema.PROCESSING}'
 """
 
@@ -124,6 +132,8 @@ def _shape(row) -> dict:
         "next_attempt_at",
         "created_at",
         "processing_started_at",
+        "budget_deadline_at",
+        "lease_started_at",
         "finished_at",
     ):
         item[key] = _iso(item[key])
@@ -268,16 +278,10 @@ def enqueue_garden(conn, request: schema.GardenRequest) -> dict:
 def claim_next(
     conn,
     *,
-    visibility_timeout_s: int = DEFAULT_VISIBILITY_TIMEOUT_S,
-    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    operation_budget_s: int,
 ) -> dict | None:
-    release_expired(
-        conn,
-        visibility_timeout_s=visibility_timeout_s,
-        max_attempts=max_attempts,
-    )
     with conn.cursor() as cursor:
-        cursor.execute(_CLAIM)
+        cursor.execute(_CLAIM, {"operation_budget_s": max(1, int(operation_budget_s))})
         row = cursor.fetchone()
     return _shape(row) if row else None
 
@@ -286,7 +290,6 @@ def release_expired(
     conn,
     *,
     visibility_timeout_s: int,
-    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     batch: int = RECLAIM_BATCH,
 ) -> dict[str, int]:
     with conn.transaction(), conn.cursor() as cursor:
@@ -298,27 +301,37 @@ def release_expired(
             },
         )
         rows = cursor.fetchall()
-        failed = [item_id for item_id, attempts in rows if attempts >= max_attempts]
-        retry = [item_id for item_id, attempts in rows if attempts < max_attempts]
-        if retry:
-            cursor.execute(_REQUEUE_EXPIRED, (retry,))
+        released = [item_id for item_id, attempts in rows if attempts <= DEFAULT_MAX_ATTEMPTS]
+        failed = [item_id for item_id, attempts in rows if attempts > DEFAULT_MAX_ATTEMPTS]
+        if released:
+            cursor.execute(_REQUEUE_EXPIRED, (released,))
         if failed:
             cursor.execute(_FAIL_EXPIRED, (failed,))
-    return {"released": len(retry), "failed": len(failed)}
+    return {"released": len(released), "failed": len(failed)}
 
 
-def holds_lease(conn, item_id: str | uuid.UUID, *, expected_attempts: int) -> bool:
+def holds_lease(
+    conn,
+    item_id: str | uuid.UUID,
+    *,
+    expected_attempts: int,
+    expected_lease_started_at: str,
+) -> bool:
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT status, attempts FROM capture_queue WHERE id = %s",
-            (item_id,),
+            f"""
+            SELECT EXISTS(
+                SELECT 1 FROM capture_queue
+                WHERE id = %s
+                  AND status = '{schema.PROCESSING}'
+                  AND attempts = %s
+                  AND lease_started_at = %s::timestamptz
+            )
+            """,
+            (item_id, int(expected_attempts), expected_lease_started_at),
         )
         row = cursor.fetchone()
-    return bool(
-        row
-        and row[0] == schema.PROCESSING
-        and int(row[1]) == int(expected_attempts)
-    )
+    return bool(row and row[0])
 
 
 def finish_landed(
@@ -326,6 +339,7 @@ def finish_landed(
     item_id: str | uuid.UUID,
     *,
     expected_attempts: int,
+    expected_lease_started_at: str,
     source_path: str = "",
     commit_sha: str,
     change_id: str | uuid.UUID | None,
@@ -337,6 +351,7 @@ def finish_landed(
             f"""
             UPDATE capture_queue
             SET status = '{schema.LANDED}',
+                lease_started_at = NULL,
                 finished_at = now(),
                 source_path = %s,
                 commit_sha = %s,
@@ -348,6 +363,7 @@ def finish_landed(
             WHERE id = %s
               AND status = '{schema.PROCESSING}'
               AND attempts = %s
+              AND lease_started_at = %s::timestamptz
             RETURNING {_ITEM_SQL}
             """,
             (
@@ -358,11 +374,12 @@ def finish_landed(
                 Jsonb(report or {}),
                 item_id,
                 int(expected_attempts),
+                expected_lease_started_at,
             ),
         )
         row = cursor.fetchone()
     if row is None:
-        _raise_lost_lease(conn, item_id, expected_attempts)
+        _raise_lost_lease(conn, item_id)
     return _shape(row)
 
 
@@ -371,22 +388,21 @@ def fail_or_retry(
     item_id: str | uuid.UUID,
     *,
     expected_attempts: int,
+    expected_lease_started_at: str,
     category: str,
     error: str,
     retryable: bool,
-    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> dict:
     safe_category = _safe(category, 100) or "processing_failed"
     safe_error = _safe(error, MAX_SAFE_ERROR_CHARS) or "processing failed"
-    retry = retryable and expected_attempts < max_attempts
+    retry = retryable and expected_attempts < DEFAULT_MAX_ATTEMPTS
     status = schema.QUEUED if retry else schema.FAILED
-    delay = min(RETRY_BASE_S * (2 ** max(0, expected_attempts - 1)), 900)
     with conn.cursor() as cursor:
         cursor.execute(
             f"""
             UPDATE capture_queue
             SET status = %s,
-                processing_started_at = CASE WHEN %s THEN NULL ELSE processing_started_at END,
+                lease_started_at = NULL,
                 next_attempt_at = CASE
                     WHEN %s THEN now() + make_interval(secs => %s)
                     ELSE next_attempt_at
@@ -397,23 +413,24 @@ def fail_or_retry(
             WHERE id = %s
               AND status = '{schema.PROCESSING}'
               AND attempts = %s
+              AND lease_started_at = %s::timestamptz
             RETURNING {_ITEM_SQL}
             """,
             (
                 status,
                 retry,
-                retry,
-                delay,
+                RETRY_DELAY_S,
                 retry,
                 safe_category,
                 safe_error,
                 item_id,
                 int(expected_attempts),
+                expected_lease_started_at,
             ),
         )
         row = cursor.fetchone()
     if row is None:
-        _raise_lost_lease(conn, item_id, expected_attempts)
+        _raise_lost_lease(conn, item_id)
     return _shape(row)
 
 
@@ -426,6 +443,8 @@ def retry_failed(conn, item_id: str | uuid.UUID) -> dict:
                 attempts = 0,
                 next_attempt_at = now(),
                 processing_started_at = NULL,
+                budget_deadline_at = NULL,
+                lease_started_at = NULL,
                 finished_at = NULL,
                 error_category = '',
                 error = ''
@@ -440,7 +459,7 @@ def retry_failed(conn, item_id: str | uuid.UUID) -> dict:
     return _shape(row)
 
 
-def _raise_lost_lease(conn, item_id, expected_attempts: int) -> None:
+def _raise_lost_lease(conn, item_id) -> None:
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT status, attempts FROM capture_queue WHERE id = %s",
@@ -449,8 +468,8 @@ def _raise_lost_lease(conn, item_id, expected_attempts: int) -> None:
         row = cursor.fetchone()
     if row is None:
         raise QueueStateError(f"queue item {item_id} does not exist")
-    status, attempts = row
-    if status == schema.PROCESSING and int(attempts) != int(expected_attempts):
+    status, _attempts = row
+    if status == schema.PROCESSING:
         raise QueueStateError("processing lease was redelivered")
     raise QueueStateError(f"queue item is {status!r}, not owned by this processor")
 

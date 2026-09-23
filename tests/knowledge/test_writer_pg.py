@@ -2720,6 +2720,11 @@ def test_recompile_records_one_garden_ledger_row_under_previous_trigger_constrai
         rationale="Record one compiled change under the historical ledger constraint",
         mode="recompile",
     )
+    queue.enqueue_garden(clean_queue, request)
+    item = queue.claim_next(
+        clean_queue,
+        operation_budget_s=config.operation_budget_s(timeout_s=settings.timeout_s),
+    )
     commits_before = int(
         subprocess.check_output(
             ["git", "rev-list", "--count", "main"], cwd=target_repo, text=True
@@ -2728,6 +2733,7 @@ def test_recompile_records_one_garden_ledger_row_under_previous_trigger_constrai
 
     result = writer._recompile(
         clean_queue,
+        item,
         deps,
         writer.gitcmd.base_ref(str(target_repo), "main"),
         request=request,

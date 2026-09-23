@@ -15,6 +15,8 @@ def test_cli_exposes_only_the_long_running_writer():
     assert cli.build_parser().parse_args(["run"]).command == "run"
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["once"])
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["run", "--max-attempts", "3"])
 
 
 def test_cli_bounds_database_statements_before_schema_startup(monkeypatch):
@@ -147,7 +149,7 @@ def test_cli_scrubs_raw_git_startup_error_before_writing_stderr(monkeypatch, cap
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    (("poll_interval_s", 0), ("max_attempts", 0), ("visibility_timeout_s", 1)),
+    (("poll_interval_s", 0), ("visibility_timeout_s", 1)),
 )
 def test_worker_limits_fail_closed(field, value):
     settings = config.Settings(backend="scripted", **{field: value})

@@ -21,7 +21,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backend", choices=("scripted", "pydantic"))
     parser.add_argument("--poll-interval", type=float)
     parser.add_argument("--visibility-timeout", type=int)
-    parser.add_argument("--max-attempts", type=int)
     return parser
 
 

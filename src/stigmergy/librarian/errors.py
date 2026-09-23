@@ -14,4 +14,10 @@ class WorktreeError(LibrarianError):
 
 
 class GitError(LibrarianError):
-    pass
+    retryable = False
+
+
+class TransientGitError(GitError):
+    """A bounded Git transport timeout whose outcome can be reconciled safely."""
+
+    retryable = True

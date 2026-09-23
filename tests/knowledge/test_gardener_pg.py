@@ -280,7 +280,7 @@ def test_garden_recovers_commit_after_change_record_failure(
     monkeypatch.setattr(
         knowledge_writer,
         "record_change",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("unavailable")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ConnectionError("unavailable")),
     )
 
     first, first_outcome = worker.process_next(
