@@ -103,16 +103,17 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 | Runtime purpose | Model |
 |---|---|
 | librarian filing and bounded contract correction | `openrouter:deepseek/deepseek-v4.1-flash` |
-| cited answers | `z-ai/glm-5.2` |
+| cited answers | `openrouter:deepseek/deepseek-v4.1-flash` |
 | vector embeddings | `openai/text-embedding-3-large`, 2560 dimensions |
 | scanned-page and image OCR | `qwen/qwen3-vl-8b-instruct` |
 
 Deterministic linting is the gardener's detection step and makes no model call. Filing and bounded
-contract correction use the librarian's `openrouter:deepseek/deepseek-v4.1-flash` model. Librarian calls request reasoning
+contract correction use the librarian's `openrouter:deepseek/deepseek-v4.1-flash` model; cited answers use the same model with
+the same request settings. Librarian calls request reasoning
 effort `medium` with reasoning excluded from returned output and an output ceiling of `40960` tokens,
 sent as `max_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
 requires supported parameters, denies data collection, and requires
-zero-data-retention processing. The librarian prefers the fastest compatible provider and permits
+zero-data-retention processing. Librarian and answer calls prefer the fastest compatible provider and permit
 same-model provider fallback. Each filing attempt makes at most three model requests: one coherent filing request, one schema retry when
 structured output is invalid, and, only when a mechanical
 writer contract fails, one bounded correction over the same source and safe context. The first worker

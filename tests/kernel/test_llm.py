@@ -5,7 +5,7 @@ from stigmergy.kernel import llm
 
 
 def test_runtime_model_contract_contains_no_premium_recovery_model():
-    assert llm.ANSWER_MODEL == "openrouter:z-ai/glm-5.2"
+    assert llm.ANSWER_MODEL == "openrouter:deepseek/deepseek-v4.1-flash"
     assert llm.LIBRARIAN_MODEL == "openrouter:deepseek/deepseek-v4.1-flash"
     assert llm.OCR_MODEL == "openrouter:qwen/qwen3-vl-8b-instruct"
     assert frozenset(
@@ -38,14 +38,23 @@ def test_librarian_prefers_the_fastest_compatible_private_provider():
     }
 
 
-def test_non_librarian_models_keep_same_model_provider_failover(monkeypatch):
+def test_ocr_keeps_same_model_provider_failover_without_librarian_settings(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
-    for configured in (llm.ANSWER_MODEL, llm.OCR_MODEL):
-        model, _ = llm.build_model(configured)
-        assert model.settings["openrouter_provider"] == llm.OPENROUTER_PROVIDER_POLICY
-        assert "openrouter_reasoning" not in model.settings
-        assert "max_tokens" not in model.settings
+    model, _ = llm.build_model(llm.OCR_MODEL)
+    assert model.settings["openrouter_provider"] == llm.OPENROUTER_PROVIDER_POLICY
+    assert "openrouter_reasoning" not in model.settings
+    assert "max_tokens" not in model.settings
+
+
+def test_answers_share_the_librarian_model_settings(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    _answer_model, answer_settings = llm.build_model(llm.ANSWER_MODEL)
+    _librarian_model, librarian_settings = llm.build_model(llm.LIBRARIAN_MODEL)
+
+    assert answer_settings == librarian_settings
+    assert answer_settings["openrouter_provider"] == llm.provider_policy(llm.LIBRARIAN_MODEL)
 
 
 def test_librarian_requests_medium_reasoning_and_native_deterministic_output(monkeypatch):

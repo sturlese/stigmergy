@@ -38,6 +38,7 @@ import sys
 import pytest
 
 from stigmergy.kernel import usage_repair
+from stigmergy.kernel.llm import ANSWER_MODEL
 from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -382,7 +383,7 @@ def test_the_answer_synthesizer_installs_the_repair(spy, monkeypatch):
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     settings = types.SimpleNamespace(
-        llm="openrouter", model="openrouter:z-ai/glm-5.2"
+        llm="openrouter", model=ANSWER_MODEL
     )
 
     synthesize.build_synthesizer(settings)

@@ -314,7 +314,7 @@ as comparative, replay-verified baseline evidence and is not a Stigmergy admissi
 | Purpose | Model |
 |---|---|
 | filing and bounded contract correction | `deepseek/deepseek-v4.1-flash` |
-| cited answers | `z-ai/glm-5.2` |
+| cited answers | `deepseek/deepseek-v4.1-flash` |
 | embeddings | `openai/text-embedding-3-large`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |
 
