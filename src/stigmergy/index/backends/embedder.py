@@ -1,4 +1,4 @@
-"""Qwen embeddings through the approved OpenRouter boundary."""
+"""OpenAI text embeddings through the approved OpenRouter boundary."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import httpx
 
 from stigmergy.kernel.llm import OPENROUTER_PROVIDER_POLICY
 
-DEFAULT_MODEL = "qwen/qwen3-embedding-8b"
+DEFAULT_MODEL = "openai/text-embedding-3-large"
 DEFAULT_DIMENSIONS = 2560
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 EMBED_BATCH = 128
@@ -16,7 +16,7 @@ EMBED_BATCH = 128
 PROVIDER_POLICY = OPENROUTER_PROVIDER_POLICY
 
 MISSING_KEY_MESSAGE = (
-    "OPENROUTER_API_KEY is not set, so Qwen embeddings are unavailable. "
+    "OPENROUTER_API_KEY is not set, so embeddings are unavailable. "
     "Capture remains available; configure the key or rebuild and run the complete index with "
     "the deterministic fake embedder for offline tests."
 )
@@ -37,34 +37,35 @@ class OpenRouterEmbedder:
         self.host = DEFAULT_BASE_URL
         self._url = f"{self.host}/embeddings"
         self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
-        self._transport = transport
         if not self._api_key:
             raise RuntimeError(MISSING_KEY_MESSAGE)
+        # One keep-alive client per process spares every query a fresh TLS handshake.
+        self._client = httpx.Client(transport=transport, limits=httpx.Limits(keepalive_expiry=60))
 
     def embed(self, texts: list[str], *, timeout_s: float = 120) -> list[list[float]]:
         vectors: list[list[float]] = []
-        with httpx.Client(timeout=timeout_s, transport=self._transport) as client:
-            for index in range(0, len(texts), EMBED_BATCH):
-                response = client.post(
-                    self._url,
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    json={
-                        "model": self.model,
-                        "input": texts[index:index + EMBED_BATCH],
-                        "dimensions": DEFAULT_DIMENSIONS,
-                        "provider": dict(PROVIDER_POLICY),
-                    },
-                )
-                response.raise_for_status()
-                batch = sorted(response.json()["data"], key=lambda item: item["index"])
-                for item in batch:
-                    vector = item["embedding"]
-                    if len(vector) != DEFAULT_DIMENSIONS:
-                        raise RuntimeError(
-                            f"embedding host returned {len(vector)} dimensions; "
-                            f"expected {DEFAULT_DIMENSIONS}"
-                        )
-                    vectors.append(vector)
+        for index in range(0, len(texts), EMBED_BATCH):
+            response = self._client.post(
+                self._url,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "model": self.model,
+                    "input": texts[index:index + EMBED_BATCH],
+                    "dimensions": DEFAULT_DIMENSIONS,
+                    "provider": dict(PROVIDER_POLICY),
+                },
+                timeout=timeout_s,
+            )
+            response.raise_for_status()
+            batch = sorted(response.json()["data"], key=lambda item: item["index"])
+            for item in batch:
+                vector = item["embedding"]
+                if len(vector) != DEFAULT_DIMENSIONS:
+                    raise RuntimeError(
+                        f"embedding host returned {len(vector)} dimensions; "
+                        f"expected {DEFAULT_DIMENSIONS}"
+                    )
+                vectors.append(vector)
         return vectors
 
 

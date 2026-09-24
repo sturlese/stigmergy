@@ -36,7 +36,13 @@ from stigmergy.knowledge.context import (
     render_context,
 )
 from stigmergy.knowledge.lint import Violation, check
-from stigmergy.knowledge.pages import PageContractError, page_path, parse_page, render_page
+from stigmergy.knowledge.pages import (
+    PageContractError,
+    page_path,
+    parse_page,
+    render_page,
+    title_stem,
+)
 from stigmergy.knowledge.plan import FilingPlan, PageMutation
 from stigmergy.knowledge.planner import Planner
 from stigmergy.knowledge.relationships import (
@@ -58,6 +64,7 @@ from stigmergy.knowledge.write_guard import (
     allow_create,
     allow_existing,
     allow_explicit_master,
+    may_link,
 )
 from stigmergy.librarian import gitcmd
 
@@ -1085,7 +1092,10 @@ def _apply_filing_plan(
             connections=_entity_connections(plan),
         )
     updated_pages: set[str] = set()
+    link_stems = _knowledge_link_stems(root, plan, context)
     for index, mutation in enumerate(plan.mutations):
+        if mutation.body:
+            mutation = mutation.model_copy(update={"body": _canonical_links(mutation.body, link_stems)})
         try:
             changed_path = _apply_page_mutation(
                 root,
@@ -1153,6 +1163,46 @@ def _apply_filing_plan(
         except KnowledgeWriteError as error:
             raise KnowledgeWriteError("planned contradiction resolution could not be applied") from error
         reasons.update({path: envelope.intent.rationale or "Resolved contradiction" for path in removed})
+
+
+def _knowledge_link_stems(root: str, plan: FilingPlan, context: WriteContext) -> dict[str, str | None]:
+    """Casefolded stems of pages this write may address; `None` marks an ambiguous stem."""
+    stems = []
+    for folder in ("wiki/notes", "wiki/concepts"):
+        for path in Path(root, folder).glob("*.md"):
+            page = parse_page(path.relative_to(root).as_posix(), path.read_text(encoding="utf-8"))
+            if may_link(context, page.acl):
+                stems.append(path.stem)
+    for mutation in plan.mutations:
+        if mutation.action == "create":
+            try:
+                stems.append(Path(page_path(mutation.role or "", mutation.title or "")).stem)
+            except PageContractError:
+                continue
+    resolved: dict[str, str | None] = {}
+    for stem in stems:
+        key = stem.casefold()
+        resolved[key] = stem if resolved.get(key, stem) == stem else None
+    return resolved
+
+
+def _canonical_links(body: str, stems: dict[str, str | None]) -> str:
+    """Point a title-form wikilink at the filename its title was sanitized into."""
+
+    def replace(match):
+        target, separator, label = match.group(1).partition("|")
+        name, anchor_mark, anchor = target.partition("#")
+        cleaned = name.strip().removesuffix(".md")
+        if cleaned.casefold() in stems:
+            return match.group(0)
+        canonical = stems.get(title_stem(cleaned).casefold())
+        if not canonical:
+            return match.group(0)
+        embed = "!" if match.group(0).startswith("!") else ""
+        shown = label if separator else cleaned
+        return f"{embed}[[{canonical}{anchor_mark}{anchor}|{shown}]]"
+
+    return _WIKILINK_RE.sub(replace, body)
 
 
 def _entity_connections(plan: FilingPlan) -> dict[str, tuple[str, ...]]:

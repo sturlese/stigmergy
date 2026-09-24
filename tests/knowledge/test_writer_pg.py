@@ -362,6 +362,57 @@ def test_one_capture_lands_source_wiki_and_change_in_one_commit(clean_queue, tar
     ).strip() == "2"
 
 
+def test_title_form_wikilink_lands_as_the_canonical_page_link(clean_queue, target_repo):
+    """A link written with the page title resolves to the filename the title was sanitized into."""
+    store = evidence.MemoryEvidenceStore()
+    meeting = "Reunión: Pre Helmcode — 2026-09-23"
+    plan = FilingPlan(
+        summary="Recorded the pre-alignment meeting and its weekly follow-up",
+        mutations=(
+            PageMutation(
+                action="create",
+                role="note",
+                title=meeting,
+                body=f"# {meeting}\n\nThe partners aligned on the diligence questions before the call.",
+                entities=(),
+                reason="The source records a dated pre-alignment meeting",
+            ),
+            PageMutation(
+                action="create",
+                role="note",
+                title="Seguimiento semanal de Helmcode",
+                body=(
+                    "# Seguimiento semanal de Helmcode\n\n"
+                    f"The weekly follow-up continues the questions agreed in [[{meeting}]]."
+                ),
+                entities=(),
+                reason="The source sets a weekly follow-up cadence",
+            ),
+        ),
+    )
+
+    _receipt, item, outcome = _process_capture(
+        clean_queue,
+        target_repo,
+        store,
+        actor=Actor(subject="marc", display_name="Marc"),
+        audience=None,
+        key="title-form-link",
+        text="Pre-alignment meeting before the Helmcode call; follow up weekly.",
+        plan=plan,
+        editorial=True,
+    )
+
+    assert outcome.status == "landed"
+    assert outcome.report["plan_rejected"] is False
+    follow_up = subprocess.check_output(
+        ["git", "show", "main:wiki/notes/Seguimiento semanal de Helmcode.md"],
+        cwd=target_repo,
+        text=True,
+    )
+    assert f"[[Reunión- Pre Helmcode — 2026-09-23|{meeting}]]" in follow_up
+
+
 def test_public_url_lands_sanitized_original_and_final_provenance(
     clean_queue, target_repo, monkeypatch
 ):

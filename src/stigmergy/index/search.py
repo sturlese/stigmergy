@@ -10,7 +10,7 @@ from stigmergy.index.errors import EmptyIndexError, StigmergyIndexError
 from stigmergy.index.store import PAGE_COLUMNS, read_meta
 
 FILTER_COLUMNS = ("zone", "type", "status", "entity")
-QUERY_EMBED_TIMEOUT_S = 10
+QUERY_EMBED_TIMEOUT_S = 3
 
 # Build an OR query from escaped normalized lexemes so natural-language questions retain recall.
 _FTS_SQL = """
@@ -204,12 +204,12 @@ def search_arms(conn, query: str, *, embedder=None, k: int = rank.TOP_K,
     try:
         q_emb = embedder.embed([query], timeout_s=QUERY_EMBED_TIMEOUT_S)[0]
     except httpx.TimeoutException:
-        vec = []
+        vec, vector_search = [], "timed_out"
     else:
-        vec = vec_ranking(conn, q_emb, filters, audiences=audiences)
+        vec, vector_search = vec_ranking(conn, q_emb, filters, audiences=audiences), "ok"
     candidates = fetch_pages(conn, sorted(set(fts) | set(vec)))
     hits = rank.rank(candidates, fts, vec, query, k=k, today=today, entity_hint=entity_hint)
-    return {"fts": fts, "vec": vec, "hits": hits,
+    return {"fts": fts, "vec": vec, "hits": hits, "vector_search": vector_search,
             "page_ids": {p: c["page_id"] for p, c in candidates.items()}}
 
 

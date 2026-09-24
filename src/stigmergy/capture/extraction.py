@@ -30,6 +30,7 @@ DEFAULT_TIMEOUT_S = 120
 CAPTURE_TIMEOUT_S = 180
 OCR_DPI = 200
 MAX_CHILD_ADDRESS_SPACE_BYTES = 1024 * 1024 * 1024
+_IN_PROCESS_MEDIA = frozenset({schema.MEDIA_TEXT, schema.MEDIA_MARKDOWN})
 
 
 class ExtractionResult(BaseModel):
@@ -227,6 +228,8 @@ def _extract_capture(
 
     for artifact in envelope.artifacts:
         remaining()
+        if artifact.media_type in _IN_PROCESS_MEDIA and artifact.bytes > MAX_CAPTURE_EXTRACTED_BYTES:
+            raise ExtractionError("extraction exceeds the readable byte limit")
         if store.head(artifact.blob_ref).bytes != artifact.bytes:
             raise ExtractionError("original artifact failed its digest or size check")
         data = store.get_limited(artifact.blob_ref, max_bytes=artifact.bytes)
@@ -236,7 +239,9 @@ def _extract_capture(
             or evidence_module.sha256(data) != artifact.sha256
         ):
             raise ExtractionError("original artifact failed its digest or size check")
-        extract = extract_bounded if bounded else extract_artifact
+        # UTF-8 text runs no parser, so it needs neither the child sandbox nor its interpreter start.
+        isolate = bounded and artifact.media_type not in _IN_PROCESS_MEDIA
+        extract = extract_bounded if isolate else extract_artifact
         result = extract(
             data,
             artifact.media_type,
@@ -245,7 +250,7 @@ def _extract_capture(
                     "timeout_s": remaining(),
                     "ocr_model": ocr_model,
                 }
-                if bounded
+                if isolate
                 else {"ocr_model": ocr_model, "vision_ocr": vision_ocr}
             ),
         )

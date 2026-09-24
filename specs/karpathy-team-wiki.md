@@ -104,12 +104,12 @@ Every model-backed path uses the single `OPENROUTER_API_KEY` boundary and a clos
 |---|---|
 | librarian filing and bounded contract correction | `openrouter:deepseek/deepseek-v4.1-flash` |
 | cited answers | `z-ai/glm-5.2` |
-| vector embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
+| vector embeddings | `openai/text-embedding-3-large`, 2560 dimensions |
 | scanned-page and image OCR | `qwen/qwen3-vl-8b-instruct` |
 
 Deterministic linting is the gardener's detection step and makes no model call. Filing and bounded
 contract correction use the librarian's `openrouter:deepseek/deepseek-v4.1-flash` model. Librarian calls request reasoning
-effort `minimal` with reasoning excluded from returned output and an output ceiling of `40960` tokens,
+effort `medium` with reasoning excluded from returned output and an output ceiling of `40960` tokens,
 sent as `max_tokens`; they require strict provider-native JSON Schema plans. OpenRouter
 requires supported parameters, denies data collection, and requires
 zero-data-retention processing. The librarian prefers the fastest compatible provider and permits
@@ -560,7 +560,7 @@ All captures and diffs are master-only. The backoffice continues to use one mast
 
 ### 5.12 Search and index reconciliation
 
-The existing hybrid full-text plus embedding search and ranking remain. Search, `ask`, filing retrieval, `list_entities`, and `describe_entity` all apply the same visibility policy. Query embeddings have a bounded timeout; only a provider timeout degrades that request to the ACL-filtered full-text arm. Corpus indexing remains strict and fails rather than writing a partial vector state. HTTP request and Slack connections bound each Postgres statement, while workers and rebuilds keep the database default; a statement cancelled while `ask` recovers evidence ends in the ordinary budget refusal and discloses nothing the cancelled recovery gathered.
+The existing hybrid full-text plus embedding search and ranking remain. Search, `ask`, filing retrieval, `list_entities`, and `describe_entity` all apply the same visibility policy. Query embeddings use one keep-alive client with a three-second connect and read timeout; only a provider timeout degrades that request to the ACL-filtered full-text arm, and `search_brain` then reports `vector_search: "timed_out"` instead of `"ok"`. Corpus indexing remains strict and fails rather than writing a partial vector state. HTTP requests check out connections from one bounded serving pool. HTTP request and Slack connections bound each Postgres statement, while workers and rebuilds keep the database default; a statement cancelled while `ask` recovers evidence ends in the ordinary budget refusal and discloses nothing the cancelled recovery gathered.
 
 Incremental GitHub webhook indexing remains the fast path. A nightly full rebuild is restored in the private knowledge repository as the reconciliation path:
 
@@ -761,7 +761,7 @@ Slack and the local bridge act as the authenticated member represented by their 
 5. Slack Socket Mode is authenticated by its app token, and event redelivery is idempotent before
    queueing.
 6. Public URL acquisition implements SSRF and redirect defenses described above.
-7. Parsers run with resource limits and reject unsafe containers, decompression bombs, and unsupported encryption.
+7. Parsers run with resource limits in a separate process and reject unsafe containers, decompression bombs, and unsupported encryption. Plain text and Markdown run no parser and are decoded in process under the same capture deadline and readable-byte limit.
 8. The model receives only material permitted for the filing identity/target visibility.
 9. Entity lookup, redirects, list, describe, and errors do not reveal hidden existence or aliases.
 10. A Git operation is atomic from the reader's perspective: the repository ref moves only after all gates pass.

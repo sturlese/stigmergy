@@ -57,6 +57,7 @@ def test_provider_query_timeout_degrades_to_acl_scoped_lexical_hits(conn):
 
     assert result["fts"]
     assert result["vec"] == []
+    assert result["vector_search"] == "timed_out"
     assert result["hits"]
     assert all(hit["arms"] == ["fts"] for hit in result["hits"])
 

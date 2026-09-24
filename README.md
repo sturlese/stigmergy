@@ -315,13 +315,14 @@ as comparative, replay-verified baseline evidence and is not a Stigmergy admissi
 |---|---|
 | filing and bounded contract correction | `deepseek/deepseek-v4.1-flash` |
 | cited answers | `z-ai/glm-5.2` |
-| embeddings | `qwen/qwen3-embedding-8b`, 2560 dimensions |
+| embeddings | `openai/text-embedding-3-large`, 2560 dimensions |
 | OCR | `qwen/qwen3-vl-8b-instruct` |
 
-Query embeddings are bounded. A provider timeout degrades that request to ACL-scoped lexical
-ranking; indexing remains strict and never accepts an incomplete vector build. Serving connections
-— HTTP requests and the Slack adapter — bound every Postgres statement; workers and rebuilds keep
-the database default.
+Query embeddings use one keep-alive client with a three-second connect and read timeout. A provider timeout
+degrades that request to ACL-scoped lexical ranking and reports `vector_search: "timed_out"`;
+indexing remains strict and never accepts an incomplete vector build. Serving connections — pooled
+HTTP request connections and the Slack adapter — bound every Postgres statement; workers and
+rebuilds keep the database default.
 
 ## Quality and tests
 
