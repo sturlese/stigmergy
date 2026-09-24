@@ -4,11 +4,11 @@ import pytest
 from pydantic_ai import Agent
 
 from stigmergy.answer.synthesize import FakeSynthesizer, build_synthesizer
-from stigmergy.kernel.llm import ANSWER_MODEL, OPENROUTER_PROVIDER_POLICY
+from stigmergy.kernel.llm import ANSWER_MODEL, OCR_MODEL, OPENROUTER_PROVIDER_POLICY
 from stigmergy.server.settings import Settings
 
 
-def test_default_answer_model_is_glm_5_2():
+def test_default_answer_model_is_the_approved_answer_model():
     assert Settings().model == ANSWER_MODEL
     assert Settings().llm == "openrouter"
 
@@ -29,14 +29,14 @@ def test_openrouter_without_key_is_a_clean_error(monkeypatch):
         build_synthesizer(Settings())
 
 
-def test_answer_agent_uses_glm_with_the_mandatory_provider_policy(monkeypatch):
+def test_answer_agent_uses_deepseek_with_the_mandatory_provider_policy(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     agent = build_synthesizer(Settings())
 
     assert isinstance(agent, Agent)
-    assert agent.model.model_name == "z-ai/glm-5.2"
-    assert agent.model.settings["openrouter_provider"] == OPENROUTER_PROVIDER_POLICY
+    assert agent.model.model_name == "deepseek/deepseek-v4.1-flash"
+    assert OPENROUTER_PROVIDER_POLICY.items() <= agent.model.settings["openrouter_provider"].items()
 
 
 def test_unapproved_answer_model_is_rejected(monkeypatch):
@@ -48,7 +48,7 @@ def test_unapproved_answer_model_is_rejected(monkeypatch):
 def test_other_approved_model_is_rejected_for_answers(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     with pytest.raises(RuntimeError, match="answer model"):
-        build_synthesizer(Settings(model="openrouter:deepseek/deepseek-v4-flash"))
+        build_synthesizer(Settings(model=OCR_MODEL))
 
 
 def test_answer_llm_env_fallback(monkeypatch):

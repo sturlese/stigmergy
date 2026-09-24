@@ -24,7 +24,7 @@ rendering of the same day, and `cites` accepts a chain where any one page is val
 
   # the real measurement (needs OPENROUTER_API_KEY)
   python evals/run_qa.py --embedder openrouter --llm openrouter \
-      --rebuild --repo evals/corpus --report evals/out/qa-glm.json
+      --rebuild --repo evals/corpus --report evals/out/qa.json
 """
 import argparse
 import asyncio

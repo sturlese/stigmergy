@@ -7,8 +7,9 @@ import os
 
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 
-ANSWER_MODEL = "openrouter:z-ai/glm-5.2"
 LIBRARIAN_MODEL = "openrouter:deepseek/deepseek-v4.1-flash"
+# Answers share the librarian model, and so its reasoning, token ceiling, and provider routing.
+ANSWER_MODEL = LIBRARIAN_MODEL
 LIBRARIAN_REASONING_LEVEL = "medium"
 LIBRARIAN_MAX_TOKENS = 40960
 LIBRARIAN_TEMPERATURE = 0

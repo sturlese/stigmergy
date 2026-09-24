@@ -184,7 +184,7 @@ def test_specification_names_the_exact_librarian_model():
     assert f"`{llm.LIBRARIAN_MODEL}`" in specification
 
 
-def test_deployed_answer_uses_the_approved_glm_model():
+def test_deployed_answer_uses_the_approved_answer_model():
     env = _fly_config()["env"]
     assert env["ANSWER_LLM"] == "openrouter"
     assert env["ANSWER_MODEL"] == llm.ANSWER_MODEL
