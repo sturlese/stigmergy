@@ -13,6 +13,8 @@ from stigmergy.knowledge.plan import FilingPlan, RepairPlan
 from stigmergy.text import fence
 
 MAX_PLANNER_PROMPT_BYTES = 4 * 1024 * 1024
+# A request still unanswered after this long is raced by one identical request.
+HEDGE_AFTER_S = 75
 
 log = logging.getLogger(__name__)
 
@@ -318,10 +320,19 @@ class PydanticPlanner:
             model_settings=model_settings,
         )
         started = time.perf_counter()
-        result = await agent.run(
-            prompt,
-            usage=usage,
-            usage_limits=UsageLimits(request_limit=request_limit),
+
+        async def attempt(run_usage):
+            run_result = await agent.run(
+                prompt,
+                usage=run_usage,
+                usage_limits=UsageLimits(request_limit=request_limit),
+            )
+            return run_result, run_usage
+
+        (result, usage), hedged = await _first_success(
+            lambda: attempt(usage),
+            lambda: attempt(RunUsage()),
+            hedge_after_s=HEDGE_AFTER_S,
         )
         telemetry = _model_telemetry(
             result,
@@ -333,12 +344,38 @@ class PydanticPlanner:
             request_limit=request_limit,
             reasoning_level=reasoning_level,
         )
+        telemetry["hedged"] = hedged
         log.info("librarian model telemetry %s", json.dumps(telemetry, sort_keys=True))
         return PlanRun(
             plan=result.output,
             model_requests=int(getattr(usage, "requests", 0) or 0),
             telemetry=telemetry,
         )
+
+
+async def _first_success(primary, hedge, *, hedge_after_s: float):
+    """Return the first successful result and whether an identical hedge request was started."""
+    first = asyncio.ensure_future(primary())
+    done, _ = await asyncio.wait({first}, timeout=hedge_after_s)
+    if done:
+        return first.result(), False
+    second = asyncio.ensure_future(hedge())
+    tasks = (first, second)
+    try:
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    return task.result(), True
+                except Exception:  # noqa: BLE001 — the other request may still succeed
+                    continue
+        return first.result(), True
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _model_telemetry(

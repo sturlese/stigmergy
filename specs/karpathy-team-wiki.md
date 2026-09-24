@@ -116,7 +116,9 @@ requires supported parameters, denies data collection, and requires
 zero-data-retention processing. Librarian and answer calls prefer the fastest compatible provider and permit
 same-model provider fallback. Each filing attempt makes at most three model requests: one coherent filing request, one schema retry when
 structured output is invalid, and, only when a mechanical
-writer contract fails, one bounded correction over the same source and safe context. The first worker
+writer contract fails, one bounded correction over the same source and safe context. A librarian
+request still unanswered after 75 seconds is raced by one identical request; the first successful
+response is used, the other is cancelled, and the duplicate is not an additional attempt. The first worker
 claim persists one absolute capture-wide execution deadline. Only explicit transient failures receive one automatic
 retry after ten seconds within the remaining budget; deadline exhaustion and deterministic failures are
 terminal. An expired worker may receive a bounded recovery-only claim that can reconcile an existing
