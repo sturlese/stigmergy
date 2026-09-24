@@ -1,12 +1,14 @@
-"""Per-identity token buckets for overall, answer, and deletion traffic."""
+"""Per-identity token buckets for overall, answer, capture, and deletion traffic."""
 import threading
 import time
 
 from stigmergy.server.errors import RateLimitError
 
-DEFAULT_OVERALL_PER_MIN = 30
+DEFAULT_OVERALL_PER_MIN = 120
 DEFAULT_ASK_PER_MIN = 10
 DEFAULT_DELETE_PER_MIN = 3
+# Captures spend model tokens, so they keep their own budget under the read allowance.
+DEFAULT_CAPTURE_PER_MIN = 30
 
 
 class _Bucket:
@@ -34,16 +36,21 @@ class RateLimiter:
 
     def __init__(self, overall_per_min: int = DEFAULT_OVERALL_PER_MIN,
                  ask_per_min: int = DEFAULT_ASK_PER_MIN,
-                 delete_per_min: int = DEFAULT_DELETE_PER_MIN, clock=time.monotonic):
+                 delete_per_min: int = DEFAULT_DELETE_PER_MIN,
+                 capture_per_min: int = DEFAULT_CAPTURE_PER_MIN, clock=time.monotonic):
         self.overall_per_min = overall_per_min
         self.ask_per_min = ask_per_min
         self.delete_per_min = delete_per_min
+        self.capture_per_min = capture_per_min
         self._clock = clock
         self._lock = threading.Lock()
         self._overall: dict[str, _Bucket] = {}
+        captures = (self.capture_per_min, {})
         self._extra: dict[str, tuple[int, dict[str, _Bucket]]] = {
             "ask": (self.ask_per_min, {}),
             "brain_delete": (self.delete_per_min, {}),
+            "brain_submit": captures,
+            "brain_upload_finalize": captures,
         }
 
     def check(self, identity: str, tool: str) -> None:

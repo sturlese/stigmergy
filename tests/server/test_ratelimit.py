@@ -144,3 +144,19 @@ def test_refill_never_exceeds_capacity():
         limiter.check("steward@example.com", "search_brain")   # the bucket never over-fills past 30
     with pytest.raises(RateLimitError):
         limiter.check("steward@example.com", "search_brain")
+
+
+# ── default budgets: fast reads get headroom, paid work keeps its own ceiling ─────────────────────
+def test_default_budget_admits_an_agent_read_burst_but_caps_captures_separately():
+    clock = FakeClock()
+    limiter = RateLimiter(clock=clock)
+    for _ in range(60):
+        limiter.check("agent@example.com", "search_brain")
+    for index in range(30):
+        limiter.check("agent@example.com", "brain_submit" if index % 2 else "brain_upload_finalize")
+    with pytest.raises(RateLimitError, match="30 brain_submit requests/min"):
+        limiter.check("agent@example.com", "brain_submit")
+    for _ in range(30):
+        limiter.check("agent@example.com", "read_page")
+    with pytest.raises(RateLimitError, match="120 requests/min"):
+        limiter.check("agent@example.com", "read_page")
