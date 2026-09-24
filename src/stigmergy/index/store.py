@@ -5,6 +5,7 @@ import time
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
+from psycopg_pool import ConnectionPool
 
 DSN_ENV = "STIGMERGY_INDEX_DSN"
 DSN_DEFAULT = "postgresql://stigmergy:stigmergy@localhost:54321/stigmergy"
@@ -120,6 +121,34 @@ def bound_statements(conn: psycopg.Connection,
 def connect_serving(conninfo: str | None = None) -> psycopg.Connection:
     """The connection every request-scoped reader opens."""
     return bound_statements(connect(conninfo))
+
+
+# Kept connections outlive requests, so a silently dropped pooler socket must fail fast.
+_SERVING_LIVENESS = {
+    "connect_timeout": 5,
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 3,
+}
+
+
+def serving_pool(conninfo: str | None = None, *, max_size: int) -> ConnectionPool:
+    """Bounded serving connections. `getconn()` hands one request an exclusive checked
+    connection and its `close()` returns it, so request code keeps the open/close contract."""
+    return ConnectionPool(
+        conninfo or dsn(),
+        min_size=1,
+        max_size=max_size,
+        open=True,
+        close_returns=True,
+        kwargs={"autocommit": True, **_SERVING_LIVENESS},
+        configure=bound_statements,
+        check=ConnectionPool.check_connection,
+        max_idle=120,
+        timeout=10,
+        name="serving",
+    )
 
 
 def init_schema(conn: psycopg.Connection, dim: int, model: str, fts_config: str,

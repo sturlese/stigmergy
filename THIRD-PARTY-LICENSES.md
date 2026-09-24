@@ -6,7 +6,7 @@ their own licenses. This file records them, and the one obligation that is not a
 ## The one that carries an obligation: psycopg (LGPL-3.0-only)
 
 [`psycopg`](https://www.psycopg.org/) — the PostgreSQL driver behind the derived index — is
-**LGPL-3.0-only**, and `psycopg[binary]` ships the same license.
+**LGPL-3.0-only**, and `psycopg[binary]` and `psycopg-pool` ship the same license.
 
 This does **not** make this project LGPL. psycopg is used as a separate, ordinarily-installed
 library through its public API; nothing here is a derivative work of it. Apache-2.0 remains the
@@ -30,6 +30,7 @@ Verified against the installed distributions' own metadata.
 | Package | License | What it is here for |
 |---|---|---|
 | `psycopg` | **LGPL-3.0-only** | the hybrid derived index: Postgres + pgvector |
+| `psycopg-pool` | **LGPL-3.0-only** | the HTTP transport's bounded serving connection pool |
 | `aiohttp` | Apache-2.0 AND MIT | the Slack transport's async Socket Mode handler |
 | `boto3` | Apache-2.0 | the evidence plane's S3-compatible object store |
 | `mcp` | MIT | the MCP server — the only API over the brain |
@@ -42,7 +43,7 @@ Verified against the installed distributions' own metadata.
 | `starlette` | BSD-3-Clause | the HTTP transport's ASGI layer |
 | `uvicorn` | BSD-3-Clause | the HTTP transport's ASGI server |
 
-Everything above except `psycopg` is permissive and imposes no condition beyond attribution.
+Everything above except `psycopg` and `psycopg-pool` is permissive and imposes no condition beyond attribution.
 
 `certifi`, pulled in transitively, is MPL-2.0 — file-level copyleft that reaches only modifications
 to certifi's own files, and so places no condition on this project.

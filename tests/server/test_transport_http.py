@@ -219,6 +219,32 @@ def test_http_request_factory_bounds_postgres_statements_but_worker_connections_
     assert worker_timeout in {"0", "0ms", "0s"}
 
 
+def test_http_requests_reuse_pooled_serving_connections(indexed):
+    """Consecutive request units share one warm backend instead of reconnecting each time."""
+    conn, fixture = indexed
+    _token, digest = issue_test_token(fixture.ENG)
+    app = build_test_http_app(fixture, {digest: fixture.ENG})
+    from stigmergy.server.transport_http import _BearerAuthMiddleware
+
+    factory = next(m for m in app.user_middleware if m.cls is _BearerAuthMiddleware).kwargs[
+        "connection_factory"
+    ]
+    backends = []
+    for _ in range(5):
+        serving_conn = factory()
+        try:
+            with serving_conn.cursor() as cursor:
+                cursor.execute("SELECT pg_backend_pid(), current_setting('statement_timeout')")
+                pid, timeout = cursor.fetchone()
+        finally:
+            serving_conn.close()
+        backends.append(pid)
+        assert timeout not in {"0", "0ms", "0s"}
+
+    assert len(set(backends)) < len(backends)
+    assert not serving_conn.closed
+
+
 def test_identities_fixture_is_keyed_by_email(fixture):
     """`ops/identities.json` is keyed by email, not by bare name — the seam HTTP auth resolves
     through, and the invariant every peer test in this file depends on."""

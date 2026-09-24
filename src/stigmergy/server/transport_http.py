@@ -15,7 +15,7 @@ from stigmergy.capture.schema import ensure_capture_schema
 from stigmergy.capture.uploads import ensure_upload_schema
 from stigmergy.changes.store import ensure_change_schema
 from stigmergy.index import store
-from stigmergy.kernel.blocking import run_blocking
+from stigmergy.kernel.blocking import BLOCKING_WORKERS, run_blocking
 from stigmergy.server import ops_files, webhook
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import IdentityError
@@ -288,7 +288,7 @@ async def _json_service_call(request: Request, method_name: str) -> JSONResponse
 
 
 def build_http_app(settings, *, token_store: dict[str, str]):
-    """Build the HTTP app with one isolated database connection per request."""
+    """Build the HTTP app; each request unit checks out one pooled database connection."""
     startup_conn, embedder = open_scoped_resources(settings)
     ensure_audit_table(startup_conn)
     ensure_capture_schema(startup_conn)
@@ -298,7 +298,8 @@ def build_http_app(settings, *, token_store: dict[str, str]):
     store.ensure_webhook_dedupe_table(startup_conn)
     rate_limiter = RateLimiter()
     evidence = evidence_plane.store_from_env()
-    connection_factory = functools.partial(store.connect_serving, settings.dsn)
+    # One blocking worker holds at most one serving connection at a time.
+    connection_factory = store.serving_pool(settings.dsn, max_size=BLOCKING_WORKERS).getconn
 
     mcp = build_mcp(_ScopedServiceProxy(), stateless_http=True,
                     transport_security=_transport_security_for_env(), json_response=True)

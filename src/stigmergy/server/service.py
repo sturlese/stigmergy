@@ -359,6 +359,7 @@ class BrainService:
             "query": query,
             "built_at": meta.get("built_at"),
             "embedding_model": meta.get("model"),
+            "vector_search": result["vector_search"],
             "count": len(hits),
             "hits": hits,
         }

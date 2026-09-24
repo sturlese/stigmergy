@@ -166,6 +166,64 @@ def test_capture_extraction_uses_one_deadline_for_every_artifact(monkeypatch):
     assert len(store.objects) == 2
 
 
+@pytest.mark.parametrize("media_type", [schema.MEDIA_TEXT, schema.MEDIA_MARKDOWN])
+def test_bounded_capture_decodes_text_in_process(monkeypatch, media_type):
+    data = b"Plain readable decision text.\n"
+    store = MemoryEvidenceStore()
+    envelope = schema.CaptureEnvelope(
+        idempotency_key=f"in-process-{media_type}",
+        actor=schema.Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        origin=schema.Origin(adapter="mcp", captured_at=dt.datetime.now(dt.UTC)),
+        artifacts=(
+            schema.ArtifactRef(
+                blob_ref=store.put(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+                bytes=len(data),
+                media_type=media_type,
+            ),
+        ),
+    )
+
+    def child(*_args, **_kwargs):
+        raise AssertionError("text extraction must not start a sandbox process")
+
+    monkeypatch.setattr(extraction_module, "extract_bounded", child)
+
+    extracted = extraction_module.extract_capture(store, envelope)
+
+    assert extracted[0].result.text.encode() == data
+    assert extracted[0].readable_ref == envelope.artifacts[0].blob_ref
+
+
+def test_oversized_text_is_refused_before_it_is_fetched_for_in_process_decoding(monkeypatch):
+    store = MemoryEvidenceStore()
+    data = b"x" * 32
+    envelope = schema.CaptureEnvelope(
+        idempotency_key="oversized-text",
+        actor=schema.Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        origin=schema.Origin(adapter="mcp", captured_at=dt.datetime.now(dt.UTC)),
+        artifacts=(
+            schema.ArtifactRef(
+                blob_ref=store.put(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+                bytes=len(data),
+                media_type=schema.MEDIA_TEXT,
+            ),
+        ),
+    )
+    monkeypatch.setattr(extraction_module, "MAX_CAPTURE_EXTRACTED_BYTES", 16)
+
+    def fetch(*_args, **_kwargs):
+        raise AssertionError("an oversized text artifact must not be fetched")
+
+    monkeypatch.setattr(store, "get_limited", fetch)
+
+    with pytest.raises(ExtractionError, match="readable byte limit"):
+        extraction_module.extract_capture(store, envelope)
+
+
 def test_html_extraction_keeps_title_and_readable_content():
     data = (
         b"<html><head><title>Plan</title><style>hidden</style></head>"

@@ -31,6 +31,15 @@ def allow_existing(context: WriteContext, page_acl: tuple[str, ...] | None) -> N
         raise WriteRefused("restricted material cannot affect a broader page")
 
 
+def may_link(context: WriteContext, target_acl: tuple[str, ...] | None) -> bool:
+    """Whether knowledge written under `context` may link to a page with `target_acl`."""
+    try:
+        _actor_may_read(context, target_acl)
+    except WriteRefused:
+        return False
+    return flows_into(_list(target_acl), _list(context.content_acl))
+
+
 def allow_explicit_master(context: WriteContext) -> None:
     if not context.unrestricted:
         raise WriteRefused("this operation requires the master identity")

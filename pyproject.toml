@@ -28,6 +28,7 @@ dependencies = [
   "google-auth-oauthlib>=1.2,<2",
   "keyring>=25,<26",
   "python-multipart>=0.0.20,<1",
+  "psycopg-pool>=3.2,<4",
 ]
 
 [project.optional-dependencies]

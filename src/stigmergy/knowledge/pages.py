@@ -38,11 +38,16 @@ class KnowledgePage:
     body: str
 
 
+def title_stem(title: str) -> str:
+    """The filename stem a knowledge title is stored under, and so the target a wikilink uses."""
+    normalized = unicodedata.normalize("NFC", " ".join(title.split()))
+    return _UNSAFE_TITLE.sub("-", normalized).strip(" .-")
+
+
 def page_path(role: str, title: str) -> str:
     if role not in ROLES:
         raise PageContractError("knowledge role must be note or concept")
-    normalized = unicodedata.normalize("NFC", " ".join(title.split()))
-    filename = _UNSAFE_TITLE.sub("-", normalized).strip(" .-")
+    filename = title_stem(title)
     if not filename:
         raise PageContractError("page title cannot form a filename")
     if len(f"{filename}.md".encode()) > _MAX_FILENAME_BYTES:

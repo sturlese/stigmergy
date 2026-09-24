@@ -40,7 +40,7 @@ def test_real_embedder_requires_the_openrouter_key(monkeypatch):
     assert str(exc.value) == MISSING_KEY_MESSAGE
 
 
-def test_real_embedder_uses_only_qwen_and_the_private_provider_policy():
+def test_real_embedder_uses_only_the_approved_model_and_the_private_provider_policy():
     seen = []
 
     def handler(request):
@@ -68,63 +68,55 @@ def test_real_embedder_uses_only_qwen_and_the_private_provider_policy():
     }
 
 
-def test_query_embedding_uses_a_short_explicit_timeout(monkeypatch):
-    observed = []
+def test_query_embedding_uses_a_short_explicit_timeout():
+    timeouts = []
 
-    class Client:
-        def __init__(self, *, timeout, transport):
-            observed.append(timeout)
+    def handler(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        return _response(request)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def post(self, *_args, **_kwargs):
-            # `request=` so `raise_for_status()` has the request every real response carries.
-            return httpx.Response(
-                200,
-                json={"data": [{"index": 0, "embedding": [0.0] * DEFAULT_DIMENSIONS}]},
-                request=httpx.Request("POST", DEFAULT_BASE_URL),
-            )
-
-    monkeypatch.setattr(embedder_module.httpx, "Client", Client)
-    embedder = OpenRouterEmbedder(api_key="test-key")
+    embedder = OpenRouterEmbedder(api_key="test-key", transport=httpx.MockTransport(handler))
 
     assert len(embedder.embed(["renewal status"], timeout_s=3)[0]) == DEFAULT_DIMENSIONS
-    assert observed == [3]
+    assert timeouts == [3]
 
 
-def test_batch_embedding_keeps_its_default_timeout_and_reraises_provider_timeouts(monkeypatch):
-    observed = []
+def test_batch_embedding_keeps_its_default_timeout_and_reraises_provider_timeouts():
+    timeouts = []
 
-    class Client:
-        def __init__(self, *, timeout, transport):
-            observed.append(timeout)
+    def handler(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        raise httpx.ReadTimeout("provider timed out", request=request)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def post(self, *_args, **_kwargs):
-            raise httpx.ReadTimeout("provider timed out")
-
-    monkeypatch.setattr(embedder_module.httpx, "Client", Client)
-    embedder = OpenRouterEmbedder(api_key="test-key")
+    embedder = OpenRouterEmbedder(api_key="test-key", transport=httpx.MockTransport(handler))
 
     with pytest.raises(httpx.ReadTimeout, match="provider timed out"):
         embedder.embed(["index this corpus page"])
-    assert observed == [120]
+    assert timeouts == [120]
+
+
+def test_consecutive_embeddings_reuse_one_keep_alive_client(monkeypatch):
+    created = []
+    real_client = httpx.Client
+
+    def counting_client(*args, **kwargs):
+        created.append(kwargs)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(embedder_module.httpx, "Client", counting_client)
+    embedder = OpenRouterEmbedder(api_key="test-key", transport=httpx.MockTransport(_response))
+
+    for query in ("first", "second", "third"):
+        embedder.embed([query], timeout_s=3)
+
+    assert len(created) == 1
 
 
 @pytest.mark.parametrize(
     "model",
-    ["text-embedding-3-large", "openai/text-embedding-3-large", "other/model"],
+    ["text-embedding-3-large", "qwen/qwen3-embedding-8b", "other/model"],
 )
-def test_non_qwen_embedding_models_are_rejected(model):
+def test_unapproved_embedding_models_are_rejected(model):
     with pytest.raises(RuntimeError, match="not approved"):
         OpenRouterEmbedder(model=model, api_key="test-key")
 
@@ -151,4 +143,4 @@ def test_build_and_index_model_dispatch_are_closed(monkeypatch):
     with pytest.raises(ValueError, match="unknown embedder"):
         build_embedder("openai")
     with pytest.raises(RuntimeError, match="not approved"):
-        embedder_for_model("text-embedding-3-large")
+        embedder_for_model("qwen/qwen3-embedding-8b")

@@ -9,6 +9,7 @@ def test_search_hits_carry_factors_score_arms_and_index_meta(indexed):
     conn, fx = indexed
     out = make_service(fx, conn, fx.STEWARD).search("quarterly revenue")
     assert out["built_at"] and out["embedding_model"] == "fake-hashed-bow-256"
+    assert out["vector_search"] == "ok"
     assert out["hits"]
     for h in out["hits"]:
         assert set(h) >= {"path", "title", "snippet", "score", "arms", "factors", "updated"}
