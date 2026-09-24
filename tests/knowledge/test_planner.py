@@ -1,6 +1,8 @@
+import asyncio
 import datetime as dt
 import hashlib
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -148,3 +150,69 @@ def test_prompt_guard_rejects_oversized_inputs(monkeypatch):
             source_text="Primary evidence",
             context="{}",
         )
+
+
+def _plan_with(respond, tmp_path):
+    librarian = planner.PydanticPlanner(_settings(), model_factory=lambda: FunctionModel(respond))
+    started = time.monotonic()
+    run = librarian.plan(
+        worktree=_worktree(tmp_path),
+        envelope=_envelope(),
+        source_path="sources/2026/08/example.md",
+        source_text="A durable decision.",
+        context="{}",
+    )
+    return run, time.monotonic() - started
+
+
+def test_a_slow_planning_request_is_raced_by_one_identical_request(tmp_path, monkeypatch):
+    monkeypatch.setattr(planner, "HEDGE_AFTER_S", 0.05)
+    calls = []
+
+    async def respond(_messages, _info):
+        calls.append(len(calls))
+        if len(calls) == 1:
+            await asyncio.sleep(3)
+            return ModelResponse(parts=[TextPart(json.dumps({"summary": "slow first plan"}))])
+        return ModelResponse(parts=[TextPart(json.dumps({"summary": "hedged plan"}))])
+
+    run, elapsed = _plan_with(respond, tmp_path)
+
+    assert run.plan.summary == "hedged plan"
+    assert elapsed < 2
+    assert len(calls) == 2
+    assert run.model_requests == 1
+    assert run.telemetry["hedged"] is True
+
+
+def test_a_prompt_planning_request_is_never_duplicated(tmp_path, monkeypatch):
+    monkeypatch.setattr(planner, "HEDGE_AFTER_S", 1)
+    calls = []
+
+    async def respond(_messages, _info):
+        calls.append(1)
+        return ModelResponse(parts=[TextPart(json.dumps({"summary": "prompt plan"}))])
+
+    run, _elapsed = _plan_with(respond, tmp_path)
+
+    assert run.plan.summary == "prompt plan"
+    assert len(calls) == 1
+    assert run.telemetry["hedged"] is False
+
+
+def test_a_failed_first_request_yields_to_the_racing_request(tmp_path, monkeypatch):
+    monkeypatch.setattr(planner, "HEDGE_AFTER_S", 0.05)
+    calls = []
+
+    async def respond(_messages, _info):
+        calls.append(1)
+        if len(calls) == 1:
+            await asyncio.sleep(0.3)
+            raise RuntimeError("provider stalled and failed")
+        await asyncio.sleep(0.6)
+        return ModelResponse(parts=[TextPart(json.dumps({"summary": "hedged plan"}))])
+
+    run, _elapsed = _plan_with(respond, tmp_path)
+
+    assert run.plan.summary == "hedged plan"
+    assert run.telemetry["hedged"] is True
