@@ -1,0 +1,326 @@
+[
+  {
+    "input": "01",
+    "source": "sources/2026/01/60e59b80-2e07-52cb-9a03-a4b3d40e34fd.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 23,
+    "mutations": 13,
+    "failure": []
+  },
+  {
+    "input": "02",
+    "source": "sources/2026/01/5649a227-256b-5fc1-9ddd-551c0b8b3de4.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 38,
+    "mutations": 10,
+    "failure": []
+  },
+  {
+    "input": "03",
+    "source": "sources/2026/01/3e586328-f506-5919-af51-2773aa286315.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 43,
+    "mutations": 8,
+    "failure": []
+  },
+  {
+    "input": "04",
+    "source": "sources/2026/02/059b5629-3b54-5ba3-821e-08fcb2c7146f.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 25,
+    "mutations": 10,
+    "failure": []
+  },
+  {
+    "input": "05",
+    "source": "sources/2026/02/789e0314-ea63-54a8-b7c2-dfa80f6d595f.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 42,
+    "mutations": 11,
+    "failure": []
+  },
+  {
+    "input": "06",
+    "source": "sources/2026/02/a010c926-04ec-5123-bd6e-ecc7d532f5f2.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 45,
+    "mutations": 8,
+    "failure": []
+  },
+  {
+    "input": "07",
+    "source": "sources/2026/02/a72c62aa-a32d-5e01-8437-bdc6a7a85b1a.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 28,
+    "mutations": 9,
+    "failure": []
+  },
+  {
+    "input": "08",
+    "source": "sources/2026/03/7fea1cb0-76c8-5fee-bf88-e5d11f072207.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 31,
+    "mutations": 9,
+    "failure": []
+  },
+  {
+    "input": "09",
+    "source": "sources/2026/03/6b6348b1-877b-5da1-bc95-849a8a3c6ede.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 58,
+    "mutations": 9,
+    "failure": []
+  },
+  {
+    "input": "10",
+    "source": "sources/2026/03/50f70755-f5c4-5148-a444-1e4187125b02.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 28,
+    "mutations": 9,
+    "failure": []
+  },
+  {
+    "input": "11",
+    "source": "sources/2026/03/62b65f0b-56b9-5b32-8640-0cf17bda9932.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 39,
+    "mutations": 10,
+    "failure": []
+  },
+  {
+    "input": "12",
+    "source": "sources/2026/04/067f41cc-472f-5ede-8b6c-dfeaa680e01e.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 63,
+    "mutations": 9,
+    "failure": []
+  },
+  {
+    "input": "13",
+    "source": "sources/2026/04/af1eefa5-0082-5c2c-92bc-a108b57dcce0.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 62,
+    "mutations": 11,
+    "failure": []
+  },
+  {
+    "input": "14",
+    "source": "sources/2026/04/19f0d701-6384-5034-bf11-afa208b071d8.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 41,
+    "mutations": 10,
+    "failure": []
+  },
+  {
+    "input": "15",
+    "source": "sources/2026/04/ce9fdf9b-593d-5421-ac1a-3685218be795.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 49,
+    "mutations": 7,
+    "failure": []
+  },
+  {
+    "input": "16",
+    "source": "sources/2026/04/76cb1b34-48f6-50d9-9cc0-199d77e64b7a.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 56,
+    "mutations": 5,
+    "failure": []
+  },
+  {
+    "input": "17",
+    "source": null,
+    "outcome": "rejected",
+    "requests": null,
+    "seconds": 187,
+    "mutations": 0,
+    "failure": [
+      "revise:UnexpectedModelBehavior"
+    ]
+  },
+  {
+    "input": "18",
+    "source": "sources/2026/05/006a32e9-a5eb-5b14-bbfb-1a5a8b15373f.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 33,
+    "mutations": 8,
+    "failure": []
+  },
+  {
+    "input": "19",
+    "source": "sources/2026/05/764e9f2e-7356-53ba-8931-f52a87c758b2.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 30,
+    "mutations": 8,
+    "failure": []
+  },
+  {
+    "input": "20",
+    "source": "sources/2026/05/ecbc4006-43b5-542a-80a7-44fb9f384b8c.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 69,
+    "mutations": 8,
+    "failure": []
+  },
+  {
+    "input": "21",
+    "source": "sources/2026/06/98690a71-c5fc-5cfe-8b9c-2dde0530ed7d.md",
+    "outcome": "first",
+    "requests": 2,
+    "seconds": 79,
+    "mutations": 10,
+    "failure": []
+  },
+  {
+    "input": "22",
+    "source": "sources/2026/06/c53e64d7-7552-5fe9-a458-e2f48f6820b8.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 42,
+    "mutations": 9,
+    "failure": []
+  },
+  {
+    "input": "23",
+    "source": null,
+    "outcome": "rejected",
+    "requests": 2,
+    "seconds": 210,
+    "mutations": 7,
+    "failure": [
+      "KnowledgeWriteError"
+    ]
+  },
+  {
+    "input": "24",
+    "source": "sources/2026/06/b7b68a5b-c333-5c46-8831-2006543cfc9b.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 63,
+    "mutations": 8,
+    "failure": []
+  },
+  {
+    "input": "25",
+    "source": null,
+    "outcome": "rejected",
+    "requests": 2,
+    "seconds": 166,
+    "mutations": 6,
+    "failure": [
+      "placeholder-knowledge-body",
+      "placeholder-knowledge-body"
+    ]
+  },
+  {
+    "input": "26",
+    "source": "sources/2026/06/f0965a0c-1c57-529c-a4f0-679d12f235f1.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 98,
+    "mutations": 9,
+    "failure": []
+  },
+  {
+    "input": "27",
+    "source": "sources/2026/07/c54967da-3d89-5c8d-b202-c1056f8f92e4.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 50,
+    "mutations": 11,
+    "failure": []
+  },
+  {
+    "input": "28",
+    "source": "sources/2026/07/e64e610b-8873-5f99-b8ae-72f819367db6.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 57,
+    "mutations": 11,
+    "failure": []
+  },
+  {
+    "input": "29",
+    "source": "sources/2026/07/b799fdea-578c-5c1a-8f76-58b921608682.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 64,
+    "mutations": 7,
+    "failure": []
+  },
+  {
+    "input": "30",
+    "source": "sources/2026/07/e17d5404-01e2-535c-8c1a-a03bf0d45a03.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 56,
+    "mutations": 10,
+    "failure": []
+  },
+  {
+    "input": "31",
+    "source": "sources/2026/07/dd0f247e-5dbb-57cd-854c-419824760f67.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 53,
+    "mutations": 8,
+    "failure": []
+  },
+  {
+    "input": "32",
+    "source": "sources/2026/07/dab77dff-5866-5868-8074-3fa9683636ba.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 70,
+    "mutations": 9,
+    "failure": []
+  },
+  {
+    "input": "33",
+    "source": null,
+    "outcome": "rejected",
+    "requests": null,
+    "seconds": 323,
+    "mutations": 0,
+    "failure": [
+      "revise:UnexpectedModelBehavior"
+    ]
+  },
+  {
+    "input": "34",
+    "source": "sources/2026/07/79091125-3d38-52e3-91b3-ad372c20a374.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 71,
+    "mutations": 11,
+    "failure": []
+  },
+  {
+    "input": "35",
+    "source": "sources/2026/08/64c1d91a-92fc-55a1-8f95-cf07cb0e9a72.md",
+    "outcome": "first",
+    "requests": 1,
+    "seconds": 65,
+    "mutations": 12,
+    "failure": []
+  }
+]

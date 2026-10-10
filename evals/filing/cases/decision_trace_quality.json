@@ -1,0 +1,113 @@
+{
+  "version": 3,
+  "name": "decision-trace-quality",
+  "source_title": "Decision Trace Quality",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000002.md",
+  "fixture_path": "../fixtures/decision_trace_quality.md",
+  "seed_pages": [
+    {
+      "id": "page_eval_agent_harness",
+      "role": "concept",
+      "title": "Agent Harness",
+      "body": "# Agent Harness\n\nAn agent harness supplies the task loop, tools, feedback, and memory around a model. Its loop produces automated decisions and outcomes that can be audited. (Source: `{source_path}`)"
+    }
+  ],
+  "mutations": {
+    "min_count": 1,
+    "max_count": 7,
+    "closed": true,
+    "required": [
+      {
+        "action": "create",
+        "role": "concept",
+        "title": "Decision Trace Quality"
+      }
+    ],
+    "allowed": [
+      {
+        "action": "create",
+        "role": "entity"
+      },
+      {
+        "action": "create",
+        "role": "note"
+      },
+      {
+        "action": "update",
+        "title": "Agent Harness"
+      }
+    ],
+    "forbidden": [],
+    "max_per_role": {
+      "note": 1
+    }
+  },
+  "entities": {
+    "required": [
+      "Mira Chen",
+      "Northstar Signal Lab"
+    ],
+    "allowed": [],
+    "forbidden": [
+      "OrbitBench",
+      "Recall at Five",
+      "Paired Holdout Review",
+      "VectorCache"
+    ],
+    "closed": true
+  },
+  "links": {
+    "required": [
+      "Mira Chen",
+      "Northstar Signal Lab"
+    ],
+    "forbidden": [
+      "OrbitBench",
+      "Recall at Five",
+      "Paired Holdout Review",
+      "VectorCache"
+    ]
+  },
+  "link_coverage": {
+    "allow_unlinked": []
+  },
+  "link_density": {
+    "min_links_per_page": 2,
+    "roles": [
+      "note",
+      "concept"
+    ]
+  },
+  "bodies": {
+    "required": [
+      "decision trace quality"
+    ],
+    "forbidden": [
+      "efficient retrieval",
+      "facilitates debugging",
+      "high-stakes or regulated environments",
+      "integrated with existing infrastructure"
+    ],
+    "require_local_source": true
+  },
+  "editorial_quality": {
+    "require_epistemic_caveat": true,
+    "min_explanatory_paragraphs": 2
+  },
+  "entity_editorial_quality": {
+    "required": [
+      "Mira Chen",
+      "Northstar Signal Lab"
+    ],
+    "min_description_words": 3,
+    "min_facts": 1,
+    "require_temporal_fact": false
+  },
+  "connections": [
+    {
+      "from": "Decision Trace Quality",
+      "to": "Agent Harness",
+      "reciprocal": false
+    }
+  ]
+}

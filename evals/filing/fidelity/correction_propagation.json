@@ -1,0 +1,74 @@
+{
+  "version": 3,
+  "name": "correction-propagation",
+  "source_title": "Context corrections 2026-09-10",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000203.md",
+  "fixture_path": "fixtures/correction_propagation.md",
+  "mutations": {
+    "min_count": 1,
+    "max_count": 8,
+    "closed": false,
+    "required": [
+      {
+        "action": "update",
+        "title": "Ledgerly"
+      }
+    ],
+    "allowed": [],
+    "forbidden": [],
+    "max_per_role": {}
+  },
+  "entities": {
+    "required": [],
+    "allowed": [],
+    "forbidden": [],
+    "closed": false
+  },
+  "links": {
+    "required": [],
+    "forbidden": []
+  },
+  "link_coverage": {
+    "allow_unlinked": []
+  },
+  "bodies": {
+    "required": [],
+    "required_any": [
+      {
+        "label": "Ledgerly records that Daria set it up",
+        "phrases": [
+          "set up by [[Daria Pell]]",
+          "[[Daria Pell]] set up",
+          "[[Daria Pell]], not [[Dario Pell]]",
+          "[[Daria Pell]] set it up",
+          "[[Daria Pell]] set up Ledgerly"
+        ]
+      }
+    ],
+    "forbidden": [],
+    "require_local_source": true
+  },
+  "seed_pages": [
+    {
+      "id": "page_eval_ledgerly",
+      "role": "entity",
+      "entity_type": "tool",
+      "title": "Ledgerly",
+      "body": "# Ledgerly\n\n## What / Who\n\nLedgerly is the team's former deal-flow CRM. (Source: `{source_path}`)\n\n## Facts\n\n- 2026-05-02: [[Dario Pell]] set up Ledgerly for deal flow; it has not been used since he left. (Source: `{source_path}`)\n\n## Connections\n\n- [[Dario Pell]] - set it up"
+    },
+    {
+      "id": "page_eval_dario",
+      "role": "entity",
+      "entity_type": "person",
+      "title": "Dario Pell",
+      "body": "# Dario Pell\n\n## What / Who\n\nDario Pell is a former analyst who set up [[Ledgerly]]. (Source: `{source_path}`)"
+    },
+    {
+      "id": "page_eval_daria",
+      "role": "entity",
+      "entity_type": "person",
+      "title": "Daria Pell",
+      "body": "# Daria Pell\n\n## What / Who\n\nDaria Pell is an associate on the deal team. (Source: `{source_path}`)"
+    }
+  ]
+}

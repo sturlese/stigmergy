@@ -1,0 +1,481 @@
+"""`evals/run_qa.py`'s scorer.
+
+Same posture as `test_eval_history.py` and `test_run_retrieval_filters.py`: the eval RUNNER has no
+unit tests of its own — it is the test, at system level — but `_score`/`_aggregate` are a small
+pure library, and they are where a yardstick can lie. Every defect pinned here made the instrument
+report a MISS for behavior that is actually CORRECT, the dangerous direction for a number a
+release gate is armed against.
+
+The `res` fixtures mirror `AnswerService.ask`'s real return shape: `refused`, `answer_markdown`,
+`citations` (dicts carrying `path`), `verdict.verdict`, and the two verdict detail lists.
+"""
+import pytest
+
+from evals import run_qa
+
+
+def _res(answer="", *, refused=False, cites=(), verdict="verified", retried=False,
+         citation_problems=(), unverified_figures=()):
+    return {"refused": refused, "answer_markdown": answer,
+            "citations": [{"path": p} for p in cites],
+            "verdict": {"verdict": verdict, "unverified_figures": list(unverified_figures),
+                       "citation_problems": list(citation_problems)},
+            "reason": "", "suppressed": False, "retried": retried}
+
+
+PAGE = "sources/2026/08/20000000-0000-4000-8000-000000000002.md"
+
+
+def _exact(expect, cites=PAGE):
+    return {"id": "c", "kind": "exact", "family": "answerable",
+            "expect_contains": expect, "cites": cites}
+
+
+# ------------------------------------------------------------------------------- figures
+
+@pytest.mark.parametrize("expected, answer", [
+    ("1074", "In 2026-03 Aurora Systems had **1.074** active users."),        # thousands dot
+    ("512000", "February ARR was 512.000 USD."),                             # thousands dot
+    ("512000", "February ARR was 512k USD."),                                # magnitude suffix
+    ("1,234,567", "ARR reached 1234567 EUR."),                               # grouping dropped
+    ("1,234,567", "ARR reached 1.234.567 EUR."),                             # other grouping
+    ("2.3x", "Our engine is 2,3x faster."),                                  # decimal comma
+    ("2.3x", "It is 2.3 times faster on the 10k-stop dataset."),             # 'x' spelled out
+    ("18%", "It puts forward an 18 % saving on routing costs."),             # spaced percent
+])
+def test_a_figure_scores_as_found_when_it_is_numerically_equivalent(expected, answer):
+    """The literal `in` test made the scorer fail answers that are RIGHT — a model writing
+    1.074 for 1074 was recorded as a groundedness miss. The model picks the notation; the
+    question set does not, which is why these equivalences survive an English golden."""
+    scored = run_qa._score(_exact(expected), _res(answer, cites=[PAGE]))
+    assert scored["ok"], scored.get("miss")
+
+
+@pytest.mark.parametrize("expected, answer", [
+    ("3", "The rollout covers three regions."),
+    ("10", "The agreement covers ten locations."),
+    ("42", "The accepted price was forty-two euros."),
+])
+def test_a_small_integer_scores_as_found_when_written_in_words(expected, answer):
+    scored = run_qa._score(_exact(expected), _res(answer, cites=[PAGE]))
+    assert scored["ok"], scored.get("miss")
+
+
+def test_a_different_number_word_remains_a_miss():
+    scored = run_qa._score(_exact("3"), _res("The rollout covers five regions.", cites=[PAGE]))
+    assert not scored["ok"]
+
+
+@pytest.mark.parametrize("expected, answer", [
+    ("1074", "Aurora Systems had 2.500 active users."),
+    ("512000", "February ARR was 480.000 USD."),
+    ("2.3x", "Our engine is 5x faster."),
+])
+def test_a_wrong_figure_still_scores_as_a_miss(expected, answer):
+    """Generosity in one direction only: numeric equivalence must not become 'any number'."""
+    scored = run_qa._score(_exact(expected), _res(answer, cites=[PAGE]))
+    assert not scored["ok"]
+    assert scored["miss"]["expected_found"] is False
+
+
+def test_numeric_equivalence_never_applies_to_a_prose_expectation():
+    """`routing v2` carries a digit but is not a figure. If the fallback fired on it, ANY answer
+    containing a 2 would score as a hit — the scorer would stop measuring anything at all."""
+    case = {"id": "roadmap-q2", "kind": "prose", "family": "answerable",
+            "expect_contains": "routing v2", "cites": PAGE}
+    scored = run_qa._score(case, _res("El Q2 trae mejoras de rendimiento.", cites=[PAGE]))
+    assert not scored["ok"]
+
+
+def test_a_literal_prose_expectation_still_matches_literally():
+    case = {"id": "git-store-repo", "kind": "prose", "family": "answerable",
+            "expect_contains": "stigmergy", "cites": PAGE}
+    assert run_qa._score(case, _res("Vive en el repositorio stigmergy.", cites=[PAGE]))["ok"]
+
+
+# -------------------------------------------------------------------------------- chains
+
+def test_cites_accepts_a_chain_and_any_page_in_it_counts_as_the_citation():
+    """Any explicitly accepted supporting page counts as a valid citation."""
+    first = "wiki/notes/Aurora renewal.md"
+    second = "sources/2026/08/20000000-0000-4000-8000-000000000002.md"
+    case = {"id": "aurora-renewal-summary", "kind": "prose", "family": "entity-shaped",
+            "expect_contains": "SSO", "cites": [first, second]}
+
+    assert run_qa._score(case, _res("Pendiente el SSO.", cites=[first]))["ok"]
+    assert run_qa._score(case, _res("Pendiente el SSO.", cites=[second]))["ok"]
+
+
+def test_a_citation_outside_the_chain_is_still_a_miss():
+    case = {"id": "x", "kind": "prose", "family": "entity-shaped", "expect_contains": "SSO",
+            "cites": ["wiki/notes/Aurora renewal.md"]}
+    scored = run_qa._score(
+        case,
+        _res(
+            "Pendiente el SSO.",
+            cites=["sources/2026/08/30000000-0000-4000-8000-000000000003.md"],
+        ),
+    )
+    assert not scored["ok"]
+    assert scored["miss"]["cited_expected_page"] is False
+
+
+def test_cites_as_a_plain_string_still_works():
+    """Most golden cases keep the scalar spelling, and it must keep working."""
+    assert run_qa._score(_exact("1074"), _res("Fueron 1074.", cites=[PAGE]))["ok"]
+
+
+# ------------------------------------------------------------------------- false premise
+
+REFUTE = {"id": "benchmark-5x-premise", "kind": "refute", "family": "false-premise",
+          "refutes": "5x", "expect_contains": "2.3x",
+          "cites": PAGE}
+BENCH = PAGE
+
+
+def test_a_false_premise_question_passes_when_the_brain_refuses():
+    """Unchanged: refusing a mis-premised question was, and stays, correct behavior."""
+    assert run_qa._score(REFUTE, _res(refused=True))["ok"]
+
+
+def test_a_false_premise_question_passes_when_the_brain_REFUTES_with_a_cited_figure():
+    """Correcting the premise is BETTER than refusing, and the scorer used to record it as a
+    miss — the instrument punished the best available behavior."""
+    answer = "The benchmark does not say 5x: it measures **2.3x** faster on the 10k-stop dataset."
+    assert run_qa._score(REFUTE, _res(answer, cites=[BENCH]))["ok"]
+
+
+def test_a_refutation_is_numerically_equivalent_too():
+    answer = "El estudio reporta 2,3x, no 5x."
+    assert run_qa._score(REFUTE, _res(answer, cites=[BENCH]))["ok"]
+
+
+def test_swallowing_the_false_premise_is_still_a_miss():
+    """The failure mode the case exists to catch: answering AS IF 5x were true."""
+    answer = "A 5x de velocidad el consumo de memoria se mantiene dentro del 10%."
+    assert not run_qa._score(REFUTE, _res(answer, cites=[BENCH]))["ok"]
+
+
+def test_an_uncited_refutation_is_a_miss():
+    assert not run_qa._score(REFUTE, _res("En realidad son 2.3x.", cites=[]))["ok"]
+
+
+def test_a_refutation_whose_verdict_failed_is_a_miss():
+    answer = "El benchmark mide 2.3x, no 5x."
+    assert not run_qa._score(REFUTE, _res(answer, cites=[BENCH], verdict="failed"))["ok"]
+
+
+# ----------------------------------------------------------- mixed-entity disambiguation
+
+DISAMB = {"id": "northwind-mrr", "kind": "disambiguate", "family": "mixed-entity",
+          "expect_contains": "41200", "cites": "wiki/notes/Cascade pricing.md"}
+UPDATE = "wiki/notes/Cascade pricing.md"
+
+
+def test_a_mixed_entity_question_passes_when_the_brain_refuses():
+    """The honest refusal is a first-class pass — accepting disambiguation widens what counts,
+    it never narrows it."""
+    assert run_qa._score(DISAMB, _res(refused=True))["ok"]
+
+
+def test_a_mixed_entity_question_passes_when_the_brain_DISAMBIGUATES_with_a_cited_figure():
+    """A measured answer's exact shape: 'no own figure for X' plus sibling Y's real figure,
+    correctly attributed and cited, verdict verified — the refusal-only scorer counted it a
+    honesty miss, punishing the better behavior."""
+    answer = ("The pages hold no MRR of Northwind Group's own; Brightmoor, a portfolio company, "
+              "reported 41,200 USD of contracted MRR at the end of June.")
+    assert run_qa._score(DISAMB, _res(answer, cites=[UPDATE]))["ok"]
+
+
+def test_an_uncited_disambiguation_is_a_miss():
+    answer = "Northwind has no MRR of its own; Brightmoor's was 41,200 USD."
+    assert not run_qa._score(DISAMB, _res(answer, cites=[]))["ok"]
+
+
+def test_a_disambiguation_with_the_wrong_figure_is_a_miss():
+    answer = "Northwind has no MRR of its own; Brightmoor's was 99,000 USD."
+    assert not run_qa._score(DISAMB, _res(answer, cites=[UPDATE]))["ok"]
+
+
+def test_a_disambiguation_whose_verdict_failed_is_a_miss():
+    answer = "Brightmoor's contracted MRR was 41,200 USD."
+    assert not run_qa._score(DISAMB, _res(answer, cites=[UPDATE], verdict="failed"))["ok"]
+
+
+# --------------------------------------------------------------- the honesty denominator
+
+def _golden(questions):
+    return {"questions": questions}
+
+
+def test_refute_cases_leave_the_honesty_denominator_and_get_their_own_axis():
+    """Honesty means REFUSAL RATE over genuinely unanswerable questions. A mis-premised question
+    is answerable — correctly, by contradiction — so keeping it in that denominator while
+    accepting a non-refusal would quietly redefine the metric the release gate is armed against.
+    It gets a third axis instead, and groundedness (which measures plain answering) does not
+    absorb it either."""
+    results = [
+        {"id": "a", "family": "answerable", "kind": "exact", "ok": True},
+        {"id": "r", "family": "absent-fact", "kind": "refusal", "ok": True},
+        {"id": "f1", "family": "false-premise", "kind": "refute", "ok": True},
+        {"id": "f2", "family": "false-premise", "kind": "refute", "ok": False},
+    ]
+    report = run_qa._aggregate(_golden([]), results, "gpt-5.6-terra")
+
+    assert report["counts"] == {"answerable": 1, "unanswerable": 1, "corrective": 2}
+    assert report["honesty"] == 1.0
+    assert report["groundedness"] == 1.0
+    assert report["refutation"] == 0.5
+
+
+def test_disambiguate_cases_join_the_refutation_axis_and_leave_honesty_alone():
+    """Aggregated: a failed disambiguation moves REFUTATION, never honesty — the honesty gate
+    keeps meaning "refusal rate over the genuinely unanswerable"."""
+    results = [
+        {"id": "r", "family": "absent-fact", "kind": "refusal", "ok": True},
+        {"id": "d1", "family": "mixed-entity", "kind": "disambiguate", "ok": True},
+        {"id": "d2", "family": "mixed-entity", "kind": "disambiguate", "ok": False},
+        {"id": "f1", "family": "false-premise", "kind": "refute", "ok": True},
+    ]
+    report = run_qa._aggregate(_golden([]), results, "gpt-5.6-terra")
+
+    assert report["counts"] == {"answerable": 0, "unanswerable": 1, "corrective": 3}
+    assert report["honesty"] == 1.0
+    assert report["refutation"] == pytest.approx(2 / 3)
+
+
+def test_the_rendered_report_shows_the_refutation_axis():
+    results = [{"id": "f", "family": "false-premise", "kind": "refute", "ok": True}]
+    rendered = run_qa._render(run_qa._aggregate(_golden([]), results, "m"))
+    assert "refutation" in rendered
+
+
+# ------------------------------------------------------------- the shipped golden set
+
+def test_the_three_false_premise_cases_carry_expected_refutation_fields():
+    """The values come from the frozen corpus, never invented here."""
+    import json
+
+    golden = json.loads((run_qa.ROOT / "evals" / "qa_golden.json").read_text(encoding="utf-8"))
+    cases = [q for q in golden["questions"] if q["family"] == "false-premise"]
+
+    assert len(cases) == 3
+    for c in cases:
+        assert c["kind"] == "refute"
+        assert c["refutes"] and c["expect_contains"] and c["cites"]
+
+
+def test_the_golden_set_size_is_pinned():
+    """Pinned so the instrument cannot be quietly resized between runs — a score is only
+    comparable against another score over the same question set."""
+    import json
+
+    golden = json.loads((run_qa.ROOT / "evals" / "qa_golden.json").read_text(encoding="utf-8"))
+    assert len(golden["questions"]) == 15
+
+
+# ------------------------------------------------------------------------ date equivalence
+def test_an_iso_expectation_matches_the_long_form_either_way_round():
+    """`aurora-timeline-q1`'s measured miss: right page, right date, verdict verified — the
+    yardstick just couldn't read a long-form spelling of the day as 2026-02-10. Both orders
+    are accepted because English writes both."""
+    case = {"expect_contains": "2026-02-10"}
+    assert run_qa._expectation_met(case, "The agreed date was 10 February 2026.")
+    assert run_qa._expectation_met(case, "The agreed date was February 10, 2026.")
+
+
+def test_an_iso_expectation_still_matches_itself_and_numeric_forms():
+    case = {"expect_contains": "2026-02-10"}
+    assert run_qa._expectation_met(case, "the deadline is 2026-02-10")
+    assert run_qa._expectation_met(case, "it closes on 10/02/2026")
+    assert run_qa._expectation_met(case, "it closes on 10-2-2026")
+
+
+def test_a_wrong_date_is_still_a_miss_the_benign_twin_of_equivalence():
+    """Equivalence must not decay into leniency: the SAME month in a different day/year stays a
+    miss, and a bare year mention proves nothing."""
+    case = {"expect_contains": "2026-02-10"}
+    assert not run_qa._expectation_met(case, "11 February 2026")
+    assert not run_qa._expectation_met(case, "in February 2026")
+    assert not run_qa._expectation_met(case, "10 February 2025")
+
+
+def test_a_yearless_date_matches_when_no_year_contradicts():
+    """`premise-ledgerly-api`'s measured miss: a correct, cited, verified correction wrote that
+    it was agreed "to check with the vendor on 12 August" — prose leaves the year contextual —
+    and the full-form-only matcher failed the right answer."""
+    case = {"expect_contains": "2026-08-12"}
+    assert run_qa._expectation_met(case, "it was agreed to check with the vendor on 12 August")
+    assert run_qa._expectation_met(case, "the call is on August 12, with the vendor")
+
+
+def test_a_yearless_match_still_refuses_a_spelled_out_wrong_year():
+    """The lookahead that keeps equivalence from decaying into leniency: yearless acceptance
+    must not let a year-BEARING wrong date in through the side door."""
+    case = {"expect_contains": "2026-08-12"}
+    assert not run_qa._expectation_met(case, "the call was on 12 August 2025")
+    assert not run_qa._expectation_met(case, "the call was on August 12, 2025")
+    assert not run_qa._expectation_met(case, "on 13 August")
+
+
+# --------------------------------------------------- the retry tax rides along on `ok` questions
+# THE defect this instrumentation fixes: `retried`/`citation_problems`/`unverified_figures` used to
+# be recorded only inside the `miss` block, and nearly every retried ask still ends `verified` — so
+# a report that kept these fields only for misses could not see the retry tax at all, because it is
+# paid almost entirely by questions this scorer calls `ok`.
+def test_an_ok_question_still_carries_retried_and_verifier_findings():
+    res = _res("Fueron 1074.", cites=[PAGE], retried=True,
+               citation_problems=["citation quote not found in p.md: 'x'"],
+               unverified_figures=["9.9M"])
+    scored = run_qa._score(_exact("1074"), res)
+    assert scored["ok"] is True
+    assert scored["retried"] is True
+    assert scored["citation_problems"] == ["citation quote not found in p.md: 'x'"]
+    assert scored["unverified_figures"] == ["9.9M"]
+    assert "miss" not in scored          # an `ok` result carries no miss block at all
+
+
+def test_a_non_retried_ok_question_defaults_retried_false_and_carries_no_findings():
+    """The benign twin: an ordinary, non-retried `ok` question must not spuriously report a retry
+    or phantom findings."""
+    scored = run_qa._score(_exact("1074"), _res("Fueron 1074.", cites=[PAGE]))
+    assert scored["ok"] is True
+    assert scored["retried"] is False
+    assert scored["citation_problems"] == []
+    assert scored["unverified_figures"] == []
+
+
+def test_a_missed_question_also_carries_retried_and_findings_same_as_before():
+    """The regression guard for the OLD coverage: these three fields must still be there on a MISS
+    too, not only relocated to the `ok` path — `_score` always sets them, unconditionally, before
+    branching on `ok`."""
+    res = _res("Fueron 2500.", cites=[PAGE], retried=True, citation_problems=["ghost citation"])
+    scored = run_qa._score(_exact("1074"), res)
+    assert scored["ok"] is False
+    assert scored["retried"] is True
+    assert scored["citation_problems"] == ["ghost citation"]
+    assert "miss" in scored
+
+
+# --------------------------------------------------------------------- retry rate and seconds
+def test_aggregate_computes_the_retry_rate_over_all_results():
+    results = [
+        {"id": "a", "family": "fam", "kind": "exact", "ok": True, "retried": True},
+        {"id": "b", "family": "fam", "kind": "exact", "ok": True, "retried": False},
+        {"id": "c", "family": "fam", "kind": "exact", "ok": True, "retried": False},
+        {"id": "d", "family": "fam", "kind": "exact", "ok": False, "retried": False},
+    ]
+    report = run_qa._aggregate(_golden([]), results, "gpt-5.6-terra")
+    assert report["retry_rate"] == pytest.approx(0.25)
+
+
+def test_aggregate_retry_rate_is_zero_with_no_results_never_a_crash():
+    report = run_qa._aggregate(_golden([]), [], "gpt-5.6-terra")
+    assert report["retry_rate"] == 0.0
+
+
+def test_aggregate_seconds_is_none_when_nothing_was_timed():
+    """`_aggregate` is exercised directly by this whole file over results built by hand — none of
+    them ever ran through `_run`'s wall clock — so `seconds` must read `None`, never `0`. A zeroed
+    latency would read as "instantaneous" instead of "not measured"."""
+    results = [{"id": "a", "family": "fam", "kind": "exact", "ok": True}]
+    report = run_qa._aggregate(_golden([]), results, "gpt-5.6-terra")
+    assert report["seconds"] is None
+
+
+def test_aggregate_seconds_median_mean_max_over_timed_results():
+    results = [
+        {"id": "a", "family": "fam", "kind": "exact", "ok": True, "seconds": 2.0},
+        {"id": "b", "family": "fam", "kind": "exact", "ok": True, "seconds": 4.0},
+        {"id": "c", "family": "fam", "kind": "exact", "ok": True, "seconds": 12.0},
+    ]
+    report = run_qa._aggregate(_golden([]), results, "gpt-5.6-terra")
+    assert report["seconds"] == {"median": 4.0, "mean": pytest.approx(6.0), "p90": 12.0, "max": 12.0}
+
+
+def test_render_shows_retry_rate_and_seconds_lines():
+    results = [{"id": "a", "family": "fam", "kind": "exact", "ok": True, "retried": True,
+               "seconds": 3.0}]
+    rendered = run_qa._render(run_qa._aggregate(_golden([]), results, "gpt-5.6-terra"))
+    assert "retry rate" in rendered
+    assert "seconds/q" in rendered
+
+
+def test_render_omits_the_seconds_line_when_nothing_was_timed():
+    """The benign twin of the line above: `_render` must not crash, and must not print a
+    seconds line at all, when `seconds` is `None` (the aggregate-only unit-test path, and any real
+    run where every timing was somehow missing)."""
+    results = [{"id": "a", "family": "fam", "kind": "exact", "ok": True, "retried": False}]
+    rendered = run_qa._render(run_qa._aggregate(_golden([]), results, "gpt-5.6-terra"))
+    assert "seconds/q" not in rendered
+
+
+def test_render_names_only_the_actually_retried_question_ids():
+    """Named, not just counted — the lead for the next prompt or matcher fix. Both a retried and a
+    non-retried id are present so the negative half (the steady id must NOT appear) is proven, not
+    merely assumed from a single-id fixture."""
+    results = [
+        {"id": "aurora-timeline-q1", "family": "fam", "kind": "exact", "ok": True,
+         "retried": True, "seconds": 3.0},
+        {"id": "steady-question", "family": "fam", "kind": "exact", "ok": True,
+         "retried": False, "seconds": 5.0},
+    ]
+    rendered = run_qa._render(run_qa._aggregate(_golden([]), results, "gpt-5.6-terra"))
+    retried_line = next(line for line in rendered.splitlines() if line.startswith("retried:"))
+    assert "aurora-timeline-q1" in retried_line
+    assert "steady-question" not in retried_line
+
+
+def test_render_omits_the_retried_line_entirely_when_nothing_retried():
+    results = [{"id": "a", "family": "fam", "kind": "exact", "ok": True, "retried": False}]
+    rendered = run_qa._render(run_qa._aggregate(_golden([]), results, "gpt-5.6-terra"))
+    assert "retried:" not in rendered
+
+
+def test_aggregate_reports_requests_tokens_and_spend_when_recorded():
+    results = [
+        {"id": "a", "family": "fam", "kind": "exact", "ok": True, "requests": 2,
+         "input_tokens": 1000, "output_tokens": 100, "usd": 0.001},
+        {"id": "b", "family": "fam", "kind": "exact", "ok": True, "requests": 4,
+         "input_tokens": 3000, "output_tokens": 300, "usd": 0.002},
+    ]
+    report = run_qa._aggregate(_golden([]), results, "gpt-5.6-terra")
+    assert report["requests"] == {"median": 3.0, "mean": 3.0, "max": 4,
+                                  "answerable_median": 3.0, "usage_missing": 0}
+    assert report["tokens"] == {"input_median": 2000.0, "output_median": 200.0}
+    assert report["usd"] == pytest.approx(0.003)
+    assert "requests/q" in run_qa._render(report)
+
+
+def test_an_ask_without_usage_is_charged_a_conservative_flat_amount(tmp_path):
+    from evals import spend
+    budget = spend.Budget("t", 2.0, ledger=tmp_path / "spend.ndjson", usage_reader=lambda: None)
+    charged = run_qa._charge_ask(budget, {"usage": None})
+    assert charged["usd"] == spend.UNKNOWN_ASK_USD
+    assert charged["usage_missing"] and charged["requests"] == run_qa.MAX_ANSWER_REQUESTS
+    priced = run_qa._charge_ask(budget, {"usage": {"requests": 3, "input_tokens": 1_000_000,
+                                                   "output_tokens": 0}})
+    assert priced["usd"] == pytest.approx(0.20)
+    assert budget.spent == pytest.approx(spend.UNKNOWN_ASK_USD + 0.20)
+
+
+def _listing(expect_all, expect_none=()):
+    return {"id": "l", "kind": "enumerate", "family": "listing", "q": "List them",
+            "expect_all": list(expect_all), "expect_none": list(expect_none)}
+
+
+def test_an_enumeration_passes_only_when_every_item_is_named_folded():
+    case = _listing(["Aurélie Fontaine", "First-Half 2026 Review", "SOC 2"])
+    answer = "- aurelie fontaine\n- The First Half 2026 review\n- SOC-2 readiness"
+    assert run_qa._score(case, _res(answer))["ok"]
+    scored = run_qa._score(case, _res("- Aurélie Fontaine\n- SOC 2"))
+    assert not scored["ok"] and scored["miss"]["missing"] == ["First-Half 2026 Review"]
+
+
+def test_an_enumeration_that_names_a_forbidden_item_or_refuses_is_a_miss():
+    case = _listing(["Halden"], ["Series A"])
+    scored = run_qa._score(case, _res("Halden pilot; the Series A meetings"))
+    assert not scored["ok"] and scored["miss"]["forbidden"] == ["Series A"]
+    assert not run_qa._score(case, _res("", refused=True))["ok"]
+    assert not run_qa._score(case, _res("Halden", verdict="failed"))["ok"]
+    assert run_qa._aggregate({}, [run_qa._score(case, _res("Halden"))], "m")["groundedness"] == 1.0

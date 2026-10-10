@@ -1,0 +1,19 @@
+{
+  "_comment": "Reader scopes for the golden QA run.",
+  "steward": {
+    "display_name": "Steward",
+    "groups": [
+      "brain-admins"
+    ],
+    "default_audience": null
+  },
+  "analyst": {
+    "display_name": "Analyst",
+    "groups": [
+      "product"
+    ],
+    "default_audience": [
+      "product"
+    ]
+  }
+}

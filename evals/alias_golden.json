@@ -1,0 +1,439 @@
+{
+  "_comment": "Invented alias candidates for the filing-time alias step (spec retrieval-and-curation §3.5, §7 Aliases): true other names (spellings, abbreviations, short, full, legal, former, and first names, nicknames) and non-aliases (roles, descriptions, parts, products named after their company, possessions). Bar: no non-alias accepted at the chosen threshold; recall reported.",
+  "cases": [
+    {
+      "id": "tessera-full",
+      "entity": {
+        "title": "Tessera",
+        "type": "organization",
+        "summary": "Tessera is an edtech company that builds tutoring software for schools.",
+        "aliases": []
+      },
+      "candidate": "Tessera Learning",
+      "sentence": "Tessera Learning presented its pilot results to the board.",
+      "expect": "alias"
+    },
+    {
+      "id": "altamira-short",
+      "entity": {
+        "title": "Altamira Pharma Logistics",
+        "type": "organization",
+        "summary": "Altamira Pharma Logistics distributes temperature-sensitive medicines across Spain.",
+        "aliases": []
+      },
+      "candidate": "Altamira",
+      "sentence": "Altamira asked for a temperature mapping workshop.",
+      "expect": "alias"
+    },
+    {
+      "id": "altamira-abbrev",
+      "entity": {
+        "title": "Altamira Pharma Logistics",
+        "type": "organization",
+        "summary": "Altamira Pharma Logistics distributes temperature-sensitive medicines across Spain.",
+        "aliases": []
+      },
+      "candidate": "APL",
+      "sentence": "APL renewed the pilot for six more months.",
+      "expect": "alias"
+    },
+    {
+      "id": "brandt-first",
+      "entity": {
+        "title": "Hannah Brandt",
+        "type": "person",
+        "summary": "Hannah Brandt is the chief financial officer of Tidewell.",
+        "aliases": []
+      },
+      "candidate": "Hannah",
+      "sentence": "Hannah approved the Lisbon lease.",
+      "expect": "alias"
+    },
+    {
+      "id": "brandt-initial",
+      "entity": {
+        "title": "Hannah Brandt",
+        "type": "person",
+        "summary": "Hannah Brandt is the chief financial officer of Tidewell.",
+        "aliases": []
+      },
+      "candidate": "H. Brandt",
+      "sentence": "The memo is signed by H. Brandt.",
+      "expect": "alias"
+    },
+    {
+      "id": "brightline-short",
+      "entity": {
+        "title": "Brightline Telematics",
+        "type": "organization",
+        "summary": "Brightline Telematics sells fleet tracking devices and competes with Tidewell.",
+        "aliases": []
+      },
+      "candidate": "Brightline",
+      "sentence": "Brightline cut its prices in March.",
+      "expect": "alias"
+    },
+    {
+      "id": "frostvale-short",
+      "entity": {
+        "title": "Frostvale Distribution",
+        "type": "organization",
+        "summary": "Frostvale Distribution is a frozen-food distributor and Tidewell's largest customer.",
+        "aliases": []
+      },
+      "candidate": "Frostvale",
+      "sentence": "Frostvale renewed for two years.",
+      "expect": "alias"
+    },
+    {
+      "id": "carrow-spelling",
+      "entity": {
+        "title": "Carrow & Finch",
+        "type": "organization",
+        "summary": "Carrow & Finch is the audit firm running Tidewell's SOC 2 audit.",
+        "aliases": []
+      },
+      "candidate": "Carrow and Finch",
+      "sentence": "Carrow and Finch sent the evidence request.",
+      "expect": "alias"
+    },
+    {
+      "id": "nordhafen-spelling",
+      "entity": {
+        "title": "Nordhafen Tiefkühl",
+        "type": "organization",
+        "summary": "Nordhafen Tiefkühl is a frozen-food wholesaler in Bremen piloting Tidewell.",
+        "aliases": []
+      },
+      "candidate": "Nordhafen Tiefkuehl",
+      "sentence": "Nordhafen Tiefkuehl started its pilot in July.",
+      "expect": "alias"
+    },
+    {
+      "id": "sentinel-short",
+      "entity": {
+        "title": "Tidewell Sentinel",
+        "type": "product",
+        "summary": "Tidewell Sentinel is the gateway that reads temperature probes in trucks.",
+        "aliases": []
+      },
+      "candidate": "Sentinel",
+      "sentence": "Sentinel buffers readings when the network drops.",
+      "expect": "alias"
+    },
+    {
+      "id": "cumulus-short",
+      "entity": {
+        "title": "Cumulus Cloud",
+        "type": "organization",
+        "summary": "Cumulus Cloud is the hosting provider Tidewell runs on.",
+        "aliases": []
+      },
+      "candidate": "Cumulus",
+      "sentence": "Cumulus had an outage on 1 February.",
+      "expect": "alias"
+    },
+    {
+      "id": "acme-abbrev",
+      "entity": {
+        "title": "Acme Corporation",
+        "type": "organization",
+        "summary": "Acme Corporation is a packaging manufacturer and a prospect.",
+        "aliases": [
+          "Acme"
+        ]
+      },
+      "candidate": "Acme Corp.",
+      "sentence": "Acme Corp. asked for a quote.",
+      "expect": "alias"
+    },
+    {
+      "id": "veldt-legal",
+      "entity": {
+        "title": "Veldt Sensors",
+        "type": "organization",
+        "summary": "Veldt Sensors manufactures the temperature probes Tidewell installs.",
+        "aliases": []
+      },
+      "candidate": "Veldt Sensor Co.",
+      "sentence": "Veldt Sensor Co. replaced the drifting probes.",
+      "expect": "alias"
+    },
+    {
+      "id": "kittiwake-legal",
+      "entity": {
+        "title": "Kittiwake Capital",
+        "type": "organization",
+        "summary": "Kittiwake Capital is a venture fund that invested in Tidewell.",
+        "aliases": []
+      },
+      "candidate": "Kittiwake Capital Partners",
+      "sentence": "Kittiwake Capital Partners led the round.",
+      "expect": "alias"
+    },
+    {
+      "id": "marlow-former",
+      "entity": {
+        "title": "Marlow Freight",
+        "type": "organization",
+        "summary": "Marlow Freight is a haulier that uses Tidewell on its reefer trailers.",
+        "aliases": []
+      },
+      "candidate": "Marlow Haulage",
+      "sentence": "Marlow Freight, formerly Marlow Haulage, signed in February.",
+      "expect": "alias"
+    },
+    {
+      "id": "duarte-nickname",
+      "entity": {
+        "title": "Rafael Duarte",
+        "type": "person",
+        "summary": "Rafael Duarte is Tidewell's head of engineering.",
+        "aliases": []
+      },
+      "candidate": "Rafa",
+      "sentence": "Rafa fixed the firmware bug.",
+      "expect": "alias"
+    },
+    {
+      "id": "park-spelling",
+      "entity": {
+        "title": "Joon-ho Park",
+        "type": "person",
+        "summary": "Joon-ho Park leads data science at Tidewell.",
+        "aliases": []
+      },
+      "candidate": "Joonho Park",
+      "sentence": "Joonho Park presented the anomaly model.",
+      "expect": "alias"
+    },
+    {
+      "id": "coldpath-spelling",
+      "entity": {
+        "title": "Coldpath",
+        "type": "product",
+        "summary": "Coldpath is Tidewell's monitoring application for dispatchers.",
+        "aliases": []
+      },
+      "candidate": "ColdPath",
+      "sentence": "ColdPath now shows dwell time per stop.",
+      "expect": "alias"
+    },
+    {
+      "id": "tidewell-legal",
+      "entity": {
+        "title": "Tidewell",
+        "type": "organization",
+        "summary": "Tidewell is a cold-chain monitoring company headquartered in Rotterdam.",
+        "aliases": []
+      },
+      "candidate": "Tidewell B.V.",
+      "sentence": "Tidewell B.V. signed the lease.",
+      "expect": "alias"
+    },
+    {
+      "id": "raman-first",
+      "entity": {
+        "title": "Priya Raman",
+        "type": "person",
+        "summary": "Priya Raman is Tidewell's head of product.",
+        "aliases": []
+      },
+      "candidate": "Priya",
+      "sentence": "Priya owns the roadmap.",
+      "expect": "alias"
+    },
+    {
+      "id": "brandt-role",
+      "entity": {
+        "title": "Hannah Brandt",
+        "type": "person",
+        "summary": "Hannah Brandt is the chief financial officer of Tidewell.",
+        "aliases": []
+      },
+      "candidate": "the CFO",
+      "sentence": "The plan was approved by the CFO.",
+      "expect": "other"
+    },
+    {
+      "id": "brandt-description",
+      "entity": {
+        "title": "Hannah Brandt",
+        "type": "person",
+        "summary": "Hannah Brandt is the chief financial officer of Tidewell.",
+        "aliases": []
+      },
+      "candidate": "Tidewell's finance chief",
+      "sentence": "Tidewell's finance chief approved the budget.",
+      "expect": "other"
+    },
+    {
+      "id": "tidewell-office",
+      "entity": {
+        "title": "Tidewell",
+        "type": "organization",
+        "summary": "Tidewell is a cold-chain monitoring company headquartered in Rotterdam.",
+        "aliases": []
+      },
+      "candidate": "the Hamburg office",
+      "sentence": "The Hamburg office opened in June.",
+      "expect": "other"
+    },
+    {
+      "id": "tidewell-product",
+      "entity": {
+        "title": "Tidewell",
+        "type": "organization",
+        "summary": "Tidewell is a cold-chain monitoring company headquartered in Rotterdam.",
+        "aliases": []
+      },
+      "candidate": "Tidewell Sentinel",
+      "sentence": "Tidewell Sentinel ships with new firmware.",
+      "expect": "other"
+    },
+    {
+      "id": "sentinel-version",
+      "entity": {
+        "title": "Tidewell Sentinel",
+        "type": "product",
+        "summary": "Tidewell Sentinel is the gateway that reads temperature probes in trucks.",
+        "aliases": []
+      },
+      "candidate": "the v3 gateway",
+      "sentence": "The v3 gateway adds a cellular modem.",
+      "expect": "other"
+    },
+    {
+      "id": "altamira-description",
+      "entity": {
+        "title": "Altamira Pharma Logistics",
+        "type": "organization",
+        "summary": "Altamira Pharma Logistics distributes temperature-sensitive medicines across Spain.",
+        "aliases": []
+      },
+      "candidate": "the pharma customer",
+      "sentence": "The pharma customer needs GDP evidence.",
+      "expect": "other"
+    },
+    {
+      "id": "frostvale-part",
+      "entity": {
+        "title": "Frostvale Distribution",
+        "type": "organization",
+        "summary": "Frostvale Distribution is a frozen-food distributor and Tidewell's largest customer.",
+        "aliases": []
+      },
+      "candidate": "Frostvale's fleet",
+      "sentence": "Frostvale's fleet has 180 trucks.",
+      "expect": "other"
+    },
+    {
+      "id": "raman-team",
+      "entity": {
+        "title": "Priya Raman",
+        "type": "person",
+        "summary": "Priya Raman is Tidewell's head of product.",
+        "aliases": []
+      },
+      "candidate": "Priya Raman's team",
+      "sentence": "Priya Raman's team shipped the release.",
+      "expect": "other"
+    },
+    {
+      "id": "casa-verde-part",
+      "entity": {
+        "title": "Casa Verde Markets",
+        "type": "organization",
+        "summary": "Casa Verde Markets is a grocery chain expanding into Spain.",
+        "aliases": []
+      },
+      "candidate": "Casa Verde's Spanish stores",
+      "sentence": "Casa Verde's Spanish stores open in October.",
+      "expect": "other"
+    },
+    {
+      "id": "halberd-role",
+      "entity": {
+        "title": "Halberd Mutual",
+        "type": "organization",
+        "summary": "Halberd Mutual is an insurer that partners with Tidewell on cargo cover.",
+        "aliases": []
+      },
+      "candidate": "the insurer",
+      "sentence": "The insurer raised premiums.",
+      "expect": "other"
+    },
+    {
+      "id": "coldpath-part",
+      "entity": {
+        "title": "Coldpath",
+        "type": "product",
+        "summary": "Coldpath is Tidewell's monitoring application for dispatchers.",
+        "aliases": []
+      },
+      "candidate": "the mobile app",
+      "sentence": "The mobile app crashed less after August.",
+      "expect": "other"
+    },
+    {
+      "id": "becker-description",
+      "entity": {
+        "title": "Lukas Becker",
+        "type": "person",
+        "summary": "Lukas Becker runs procurement at Tidewell.",
+        "aliases": []
+      },
+      "candidate": "the procurement lead",
+      "sentence": "The procurement lead capped probe purchases.",
+      "expect": "other"
+    },
+    {
+      "id": "tidewell-generic",
+      "entity": {
+        "title": "Tidewell",
+        "type": "organization",
+        "summary": "Tidewell is a cold-chain monitoring company headquartered in Rotterdam.",
+        "aliases": []
+      },
+      "candidate": "the company",
+      "sentence": "The company opened a Lisbon warehouse.",
+      "expect": "other"
+    },
+    {
+      "id": "veldt-batch",
+      "entity": {
+        "title": "Veldt Sensors",
+        "type": "organization",
+        "summary": "Veldt Sensors manufactures the temperature probes Tidewell installs.",
+        "aliases": []
+      },
+      "candidate": "batch VS-2207",
+      "sentence": "Batch VS-2207 drifted by two degrees.",
+      "expect": "other"
+    },
+    {
+      "id": "stratos-product",
+      "entity": {
+        "title": "Stratos Software",
+        "type": "organization",
+        "summary": "Stratos Software makes the ERP that Tidewell integrates with.",
+        "aliases": []
+      },
+      "candidate": "Stratos ERP",
+      "sentence": "Stratos ERP exports invoices nightly.",
+      "expect": "other"
+    },
+    {
+      "id": "marlow-trailers",
+      "entity": {
+        "title": "Marlow Freight",
+        "type": "organization",
+        "summary": "Marlow Freight is a haulier that uses Tidewell on its reefer trailers.",
+        "aliases": []
+      },
+      "candidate": "Marlow's reefer trailers",
+      "sentence": "Marlow's reefer trailers run Sentinel.",
+      "expect": "other"
+    }
+  ]
+}

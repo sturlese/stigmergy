@@ -1,0 +1,363 @@
+"""Authenticated, stateless MCP-over-HTTP transport with request-scoped identity."""
+import contextvars
+import functools
+import logging
+import os
+from dataclasses import dataclass
+
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from stigmergy.admin import routes as admin_routes
+from stigmergy.capture import evidence as evidence_plane
+from stigmergy.capture.errors import CaptureError
+from stigmergy.capture.schema import ensure_capture_schema
+from stigmergy.capture.uploads import ensure_upload_schema
+from stigmergy.changes.store import ensure_change_schema
+from stigmergy.index import store
+from stigmergy.kernel import tenancy
+from stigmergy.kernel.blocking import BLOCKING_WORKERS, run_blocking
+from stigmergy.server import platform, roster, usage, webhook
+from stigmergy.server.audit import AuditWriter, ensure_audit_table
+from stigmergy.server.errors import IdentityError
+from stigmergy.server.mcp_server import build_mcp
+from stigmergy.server.ratelimit import AuthFailureThrottle, RateLimiter, client_address
+from stigmergy.server.service import BrainService, open_scoped_resources
+
+log = logging.getLogger(__name__)
+
+_UNAUTHORIZED_BODY = {"error": "unauthorized"}
+_THROTTLED_BODY = {"error": "too many failed authentications from this address; wait and retry"}
+_HEALTH_PATH = "/health"
+
+# Enforced while streaming, before the MCP SDK buffers or parses the body.
+MAX_REQUEST_BODY_BYTES = 256 * 1024
+_TOO_LARGE_BODY = {"error": "request too large"}
+
+_LOCALHOST_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+_LOCALHOST_ALLOWED_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+
+
+def _public_hosts_from_env() -> list[str]:
+    """Return configured public hostnames."""
+    raw = os.environ.get("STIGMERGY_PUBLIC_HOST", "")
+    return [h.strip() for h in raw.split(",") if h.strip()]
+
+
+def _build_transport_security(public_hosts: list[str]):
+    """Build DNS-rebinding protection for local and deployed hosts."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    allowed_hosts = list(_LOCALHOST_ALLOWED_HOSTS)
+    allowed_origins = list(_LOCALHOST_ALLOWED_ORIGINS)
+    for host in public_hosts:
+        allowed_hosts += [host, f"{host}:443"]
+        allowed_origins.append(f"https://{host}")
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                                     allowed_hosts=allowed_hosts, allowed_origins=allowed_origins)
+
+
+def _transport_security_for_env():
+    """Use FastMCP's localhost defaults when no public host is configured."""
+    public_hosts = _public_hosts_from_env()
+    return _build_transport_security(public_hosts) if public_hosts else None
+
+@dataclass(frozen=True)
+class _RequestServiceScope:
+    """Request identity plus the resources needed to open one worker-owned service."""
+    settings: object
+    principal: object
+    connection_factory: object
+    embedder: object
+    rate_limiter: object
+    evidence: object
+
+    def _with_service(self, operation):
+        conn = self.connection_factory()
+        try:
+            tenancy.set_tenant(conn, self.principal.tenant)
+            audiences_tuple = self.principal.audiences
+            service = BrainService(
+                self.settings,
+                conn,
+                self.embedder,
+                set(audiences_tuple) if audiences_tuple is not None else None,
+                identity=self.principal.subject,
+                rate_limiter=self.rate_limiter,
+                audit=AuditWriter(conn),
+                evidence=self.evidence,
+                principal=self.principal,
+            )
+            return operation(service)
+        finally:
+            conn.close()
+
+    def call(self, method_name: str, *args, **kwargs):
+        return self._with_service(lambda service: getattr(service, method_name)(*args, **kwargs))
+
+    def run_scoped(self, operation):
+        return self._with_service(operation)
+
+
+_current_scope: contextvars.ContextVar[_RequestServiceScope | None] = contextvars.ContextVar(
+    "stigmergy_http_current_scope", default=None)
+
+
+class _ScopedServiceProxy:
+    """Forward tool access to the request-scoped service."""
+
+    def __getattr__(self, name):
+        scope = _current_scope.get()
+        if scope is None:  # pragma: no cover — defensive; the middleware always sets it first
+            raise RuntimeError("no request-scoped BrainService (auth middleware did not run)")
+        return functools.partial(scope.call, name)
+
+    def run_scoped(self, operation):
+        scope = _current_scope.get()
+        if scope is None:  # pragma: no cover — defensive; the middleware always sets it first
+            raise RuntimeError("no request-scoped BrainService (auth middleware did not run)")
+        return scope.run_scoped(operation)
+
+
+async def _refuse(scope, receive, send, body, status) -> None:
+    """Send a fixed refusal without reflecting rejected input."""
+    response = JSONResponse(body, status_code=status)
+    await response(scope, receive, send)
+
+
+def _resolve_request_principal(connection_factory, token: str):
+    """Resolve one bearer token to its principal on a short-lived worker-owned connection."""
+    conn = connection_factory()
+    try:
+        return roster.principal_for_token(conn, token)[0]
+    finally:
+        conn.close()
+
+
+class _BearerAuthMiddleware:
+    """Resolve a principal, then bind worker-owned services for the request."""
+
+    def __init__(self, app, *, settings, connection_factory, embedder,
+                 rate_limiter, evidence=None, throttle: AuthFailureThrottle | None = None):
+        self.app = app
+        self._throttle = throttle or AuthFailureThrottle()
+        self._settings = settings
+        self._connection_factory = connection_factory
+        self._embedder = embedder
+        self._rate_limiter = rate_limiter
+        self._evidence = evidence
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path")
+        method = scope.get("method")
+        if (path == webhook.WEBHOOK_PATH and method == "POST") or (
+            path == _HEALTH_PATH and method in {"GET", "HEAD"}
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        auth_values = [v for k, v in (scope.get("headers") or []) if k.lower() == b"authorization"]
+        if len(auth_values) > 1:
+            log.warning("HTTP auth refused: %d Authorization headers presented", len(auth_values))
+            await _refuse(scope, receive, send, _UNAUTHORIZED_BODY, 401)
+            return
+        raw = auth_values[0].decode("latin-1") if auth_values else ""
+        scheme, _, rest = raw.partition(" ")
+        token = rest.strip() if scheme.lower() == "bearer" else ""
+        if not token:
+            log.warning("HTTP auth refused (no bearer token)")
+            await _refuse(scope, receive, send, _UNAUTHORIZED_BODY, 401)
+            return
+        # Authentication precedes every body check, so the size gate is never a token oracle. A
+        # valid token always passes; only failures from an address count toward its throttle.
+        try:
+            principal = await run_blocking(
+                _resolve_request_principal,
+                self._connection_factory,
+                token,
+            )
+        except IdentityError as ex:
+            address = client_address(scope)
+            if self._throttle.blocked(address):
+                await _refuse(scope, receive, send, _THROTTLED_BODY, 429)
+                return
+            self._throttle.failed(address)
+            log.warning("HTTP auth refused (%s)", ex.__class__.__name__)
+            await _refuse(scope, receive, send, _UNAUTHORIZED_BODY, 401)
+            return
+
+        declared = _declared_body_length(scope)
+        if declared is not None and declared > MAX_REQUEST_BODY_BYTES:
+            log.warning("HTTP request refused: content-length %d exceeds %d bytes",
+                        declared, MAX_REQUEST_BODY_BYTES)
+            await _refuse(scope, receive, send, _TOO_LARGE_BODY, 413)
+            return
+
+        bounded_receive, exceeded = await _bounded_receive(
+            receive, MAX_REQUEST_BODY_BYTES
+        )
+        if exceeded:
+            log.warning(
+                "HTTP request body exceeded %d bytes while streaming",
+                MAX_REQUEST_BODY_BYTES,
+            )
+            await _refuse(scope, receive, send, _TOO_LARGE_BODY, 413)
+            return
+
+        request_scope = _RequestServiceScope(
+            settings=self._settings,
+            principal=principal,
+            connection_factory=self._connection_factory,
+            embedder=self._embedder,
+            rate_limiter=self._rate_limiter,
+            evidence=self._evidence,
+        )
+        reset_token = _current_scope.set(request_scope)
+        try:
+            await self.app(scope, bounded_receive, send)
+        finally:
+            _current_scope.reset(reset_token)
+
+
+def _declared_body_length(scope) -> int | None:
+    """The request's `content-length`, or None when absent or unparseable — unparseable counts as
+    "not declared" because the streaming cap is the backstop either way, so a malformed header
+    never becomes a second refusal path with its own error shape."""
+    for key, value in scope.get("headers") or []:
+        if key.lower() == b"content-length":
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+async def _bounded_receive(receive, limit: int):
+    """Read one bounded request body, then replay it to the application."""
+    messages = []
+    total = 0
+    while True:
+        message = await receive()
+        if message.get("type") != "http.request":
+            messages.append(message)
+            break
+        total += len(message.get("body") or b"")
+        if total > limit:
+            return receive, True
+        messages.append(message)
+        if not message.get("more_body", False):
+            break
+
+    position = 0
+
+    async def replay():
+        nonlocal position
+        if position < len(messages):
+            message = messages[position]
+            position += 1
+            return message
+        return await receive()
+
+    return replay, False
+
+
+
+async def _json_service_call(request: Request, method_name: str) -> JSONResponse:
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise CaptureError("request body must be a JSON object")
+        request_scope = _current_scope.get()
+        if request_scope is None:
+            raise RuntimeError("request identity is unavailable")
+        result = await run_blocking(request_scope.call, method_name, **body)
+        return JSONResponse(result)
+    except CaptureError as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+    except Exception as error:  # noqa: BLE001
+        log.error(
+            "bridge request failed",
+            extra={"operation": method_name, "error_class": error.__class__.__name__},
+        )
+        return JSONResponse({"error": f"request failed ({error.__class__.__name__})"}, status_code=500)
+
+
+def build_http_app(settings):
+    """Build the HTTP app; each request unit checks out one pooled database connection."""
+    startup_conn, embedder = open_scoped_resources(settings)
+    platform.ensure_platform_schema(startup_conn)
+    roster.ensure_roster_schema(startup_conn)
+    ensure_audit_table(startup_conn)
+    usage.ensure_schema(startup_conn)
+    ensure_capture_schema(startup_conn)
+    ensure_upload_schema(startup_conn)
+    ensure_change_schema(startup_conn)
+    store.ensure_webhook_dedupe_table(startup_conn)
+    rate_limiter = RateLimiter()
+    throttle = AuthFailureThrottle()
+    evidence = evidence_plane.store_from_env()
+    # One blocking worker holds at most one serving connection at a time.
+    connection_factory = store.serving_pool(settings.dsn, max_size=BLOCKING_WORKERS).getconn
+
+    mcp = build_mcp(_ScopedServiceProxy(), stateless_http=True,
+                    transport_security=_transport_security_for_env(), json_response=True)
+
+    webhook_settings = webhook.webhook_settings_from_env()
+
+    @mcp.custom_route(_HEALTH_PATH, methods=["GET", "HEAD"])
+    async def _health(_request):
+        return JSONResponse({"status": "ok"})
+
+    @mcp.custom_route(webhook.WEBHOOK_PATH, methods=["POST"])
+    async def _github_webhook(request):
+        return await webhook.webhook_endpoint(
+            request,
+            connection_factory=connection_factory,
+            embedder=embedder,
+            settings=webhook_settings,
+        )
+
+    @mcp.custom_route("/bridge/uploads", methods=["POST"])
+    async def _create_bridge_upload(request: Request):
+        return await _json_service_call(request, "create_upload")
+
+    @mcp.custom_route("/bridge/captures", methods=["POST"])
+    async def _finalize_bridge_capture(request: Request):
+        return await _json_service_call(request, "finalize_upload_capture")
+
+    app = mcp.streamable_http_app()
+    app.add_middleware(
+        _BearerAuthMiddleware,
+        settings=settings,
+        connection_factory=connection_factory,
+        embedder=embedder,
+        rate_limiter=rate_limiter,
+        evidence=evidence,
+        throttle=throttle,
+    )
+    try:
+        return admin_routes.compose(
+            app,
+            conn=startup_conn,
+            connection_factory=connection_factory,
+            server_settings=settings,
+            evidence=evidence,
+            embedder=embedder,
+            rate_limiter=rate_limiter,
+            throttle=throttle,
+        )
+    finally:
+        startup_conn.close()
+
+
+def serve_http(settings, host: str, port: int) -> None:
+    """`stigmergy-server --transport http`'s entry point. Any startup failure propagates as the
+    SAME exception types `mcp_server.main`'s stdio path catches — one error-formatting path."""
+    import uvicorn
+
+    app = build_http_app(settings)
+    uvicorn.run(app, host=host, port=port, access_log=False)

@@ -1,0 +1,70 @@
+[project]
+name = "stigmergy"
+version = "0.12.0"
+description = "A team's knowledge, captured where the work happens, filed by an agent, and answered with citations you can check."
+requires-python = ">=3.12"
+readme = "README.md"
+authors = [{ name = "The Stigmergy contributors" }]
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "CLA.md", "THIRD-PARTY-LICENSES.md"]
+dependencies = [
+  "pydantic>=2.0",
+  "pydantic-ai-slim[openrouter]==2.55.0",
+  "httpx>=0.27",
+  "pyyaml>=6.0",
+  "psycopg[binary]>=3.2",
+  "mcp>=1.28,<2",
+  "starlette>=0.37",
+  "uvicorn>=0.29",
+  "boto3>=1.34",
+  "pyjwt>=2.8",
+  "slack-bolt==1.30.0",
+  "aiohttp>=3.9",
+  "pymupdf>=1.26,<2",
+  "pillow>=10,<13",
+  "python-docx>=1.2,<2",
+  "python-pptx>=1.0,<2",
+  "google-api-python-client>=2.179,<3",
+  "google-auth-oauthlib>=1.2,<2",
+  "keyring>=25,<26",
+  "python-multipart>=0.0.20,<1",
+  "psycopg-pool>=3.2,<4",
+  "markdown-it-py>=3.0,<5",
+  "nh3>=0.2.17,<1",
+  "git-filter-repo>=2.47",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-timeout>=2.3", "ruff>=0.6"]
+
+[project.scripts]
+stigmergy-index = "stigmergy.index.cli:index_main"
+stigmergy-server = "stigmergy.server.mcp_server:main"
+stigmergy-bridge = "stigmergy.bridge.server:main"
+stigmergy-librarian = "stigmergy.librarian.cli:main"
+stigmergy-librarian-boot = "stigmergy.librarian.bootstrap:main"
+stigmergy-librarian-credential = "stigmergy.librarian.gitcredential:main"
+stigmergy-slack = "stigmergy.slack.app:main"
+stigmergy-admin = "stigmergy.admin.cli:main"
+[project.urls]
+Homepage = "https://github.com/sturlese/stigmergy"
+Repository = "https://github.com/sturlese/stigmergy"
+Issues = "https://github.com/sturlese/stigmergy/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stigmergy"]
+# The console is built from web/ and ignored by Git, so it ships as a build artifact.
+artifacts = ["src/stigmergy/admin/static"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = "--cov --cov-report=term-missing"
+
+[tool.coverage.run]
+source_pkgs = ["stigmergy"]
+omit = ["tests/*"]

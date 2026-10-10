@@ -1,0 +1,66 @@
+# One image serves the HTTP app, serialized writer, and Slack Socket Mode adapter.
+app = "stigmergy"
+primary_region = "fra"
+
+# In-flight writer work recovers through the queue lease if Fly reaches this timeout.
+kill_signal = "SIGTERM"
+kill_timeout = "300s"
+
+[build]
+
+[processes]
+  # Byte-identical to the Dockerfile CMD.
+  app = "stigmergy-server --transport http --host 0.0.0.0 --port 8080"
+  # Boot prepares the checkout root; the writer clones each workspace's repository on first use.
+  worker = "stigmergy-librarian-boot"
+  slack = "stigmergy-slack"
+
+[env]
+  # Credentials and DSNs are Fly secrets. This section contains non-secret defaults only. Set the
+  # deployment's own names as secrets too: STIGMERGY_PUBLIC_HOST (every host it answers at, comma
+  # separated, for MCP Host-header validation) and STIGMERGY_GITHUB_ORG (the organization that
+  # holds every workspace's knowledge repository).
+  PORT = "8080"
+  STIGMERGY_LIBRARIAN_BACKEND = "pydantic"
+  ANSWER_LLM = "openrouter"
+  ANSWER_MODEL = "openrouter:deepseek/deepseek-v4.1-flash"
+  STIGMERGY_LIBRARIAN_MODEL = "openrouter:deepseek/deepseek-v4.1-flash"
+  STIGMERGY_LIBRARIAN_MAX_TURNS = "3"
+  STIGMERGY_OCR_MODEL = "openrouter:qwen/qwen3-vl-8b-instruct"
+  # A long meeting's plan takes up to about ten minutes on the writer's hosts.
+  STIGMERGY_LIBRARIAN_TIMEOUT_S = "900"
+  # The writer stops its machine after ten idle minutes; the app wakes it when it queues work.
+  STIGMERGY_LIBRARIAN_IDLE_EXIT_S = "600"
+
+[http_service]
+  # The writer and Slack adapter expose no network service.
+  processes = ["app"]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "15s"
+  method = "GET"
+  timeout = "2s"
+  path = "/health"
+
+[[vm]]
+  processes = ["app"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[vm]]
+  processes = ["worker"]
+  size = "shared-cpu-1x"
+  # Filing runs extraction, the model, Git gates, and full-tree lint passes.
+  memory = "1gb"
+
+[[vm]]
+  processes = ["slack"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  # Socket Mode has no leader election; a Postgres advisory lock enforces one active process.

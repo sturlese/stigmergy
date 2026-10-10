@@ -1,0 +1,75 @@
+{
+  "version": 3,
+  "name": "draft-supply-agreement-state",
+  "source_title": "Halcyon_MSA_Oakline_draft_2026-09-08",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000201.md",
+  "fixture_path": "fixtures/draft_supply_agreement.md",
+  "mutations": {
+    "min_count": 1,
+    "max_count": 8,
+    "closed": false,
+    "required": [],
+    "allowed": [],
+    "forbidden": [],
+    "max_per_role": {}
+  },
+  "entities": {
+    "required": [
+      "Halcyon Robotics",
+      "Oakline Logistics"
+    ],
+    "allowed": [],
+    "forbidden": [],
+    "closed": false
+  },
+  "links": {
+    "required": [
+      "Halcyon Robotics"
+    ],
+    "forbidden": []
+  },
+  "link_coverage": {
+    "allow_unlinked": []
+  },
+  "bodies": {
+    "required": [],
+    "required_any": [
+      {
+        "label": "the agreement is recorded as a draft or unsigned",
+        "phrases": [
+          "draft",
+          "unsigned",
+          "not signed",
+          "not yet signed",
+          "blank signature"
+        ]
+      },
+      {
+        "label": "Tessaly Freight's participation is recorded as proposed",
+        "phrases": [
+          "proposed to join",
+          "has proposed",
+          "proposed participation",
+          "subject to approval by its board",
+          "subject to board approval"
+        ]
+      }
+    ],
+    "forbidden": [
+      "signed the supply agreement",
+      "signed the agreement",
+      "signed a supply agreement",
+      "has signed",
+      "was signed",
+      "were signed",
+      "executed the agreement",
+      "executed the supply agreement",
+      "entered into the supply agreement",
+      "entered into a supply agreement",
+      "Tessaly Freight joined",
+      "Tessaly Freight committed",
+      "Tessaly Freight signed"
+    ],
+    "require_local_source": true
+  }
+}

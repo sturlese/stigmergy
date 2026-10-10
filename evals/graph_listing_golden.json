@@ -1,0 +1,171 @@
+{
+  "_comment": "Enumeration and period questions over evals/graph_corpus (spec retrieval-and-curation §7, Listing). Expected items were computed from the corpus files, not from list_pages: entity types from frontmatter, periods from the dates of the sources each note cites, links from resolved wikilinks. Bar: at least 7 of 8 list completely.",
+  "suite": "graph-listing",
+  "default_identity": "steward",
+  "questions": [
+    {
+      "id": "list-people",
+      "family": "listing",
+      "kind": "enumerate",
+      "q": "List every person the brain has a page for.",
+      "expect_all": [
+        "Amara Nwosu",
+        "Aurélie Fontaine",
+        "Beatriz Sousa",
+        "Dmitri Volkov",
+        "Elena Marín",
+        "Grace Liu",
+        "Gunnar Lindqvist",
+        "Hannah Brandt",
+        "Ines Okafor",
+        "Joon-ho Park",
+        "Klaus Ehrlich",
+        "Kwame Mensah",
+        "Lotte de Vries",
+        "Lukas Becker",
+        "Maren Vogt",
+        "Mireille Laurent",
+        "Nuno Carvalho",
+        "Odile Ferrand",
+        "Oliver Pennington",
+        "Pieter Janssen",
+        "Priya Raman",
+        "Rafael Duarte",
+        "Sabine Krüger",
+        "Sigrid Aas",
+        "Tiago Ferreira",
+        "Tomasz Zielinski"
+      ]
+    },
+    {
+      "id": "list-organizations",
+      "family": "listing",
+      "kind": "enumerate",
+      "q": "Which organizations does the brain have a page for? Give the complete list.",
+      "expect_all": [
+        "Altamira Pharma Logistics",
+        "Brightline Telematics",
+        "Carrow & Finch",
+        "Casa Verde Markets",
+        "Cumulus Cloud",
+        "Frostvale Distribution",
+        "Halberd Mutual",
+        "Halden Seafood",
+        "Kittiwake Capital",
+        "Marlow Freight",
+        "Nordhafen Tiefkühl",
+        "Refritec Instalações",
+        "Stratos Software",
+        "Tidewell",
+        "Veldt Sensors",
+        "Voltaic Grid"
+      ]
+    },
+    {
+      "id": "list-products",
+      "family": "listing",
+      "kind": "enumerate",
+      "q": "Which products does the brain have pages for?",
+      "expect_all": [
+        "Coldpath",
+        "Frostline API",
+        "Stratos ERP",
+        "Tidewell Sentinel"
+      ]
+    },
+    {
+      "id": "list-concepts",
+      "family": "listing",
+      "kind": "enumerate",
+      "q": "List every concept documented in the brain.",
+      "expect_all": [
+        "Alert Fatigue",
+        "Calibration Audit",
+        "Dwell-Time Awareness",
+        "Excursion Budget",
+        "Per-Asset Pricing",
+        "Probe Drift",
+        "Temperature Mapping"
+      ]
+    },
+    {
+      "id": "period-march",
+      "family": "listing",
+      "kind": "enumerate",
+      "q": "Which meetings and events from March 2026 does the brain record? List all of them.",
+      "expect_all": [
+        "Altamira",
+        "Brightline",
+        "Casa Verde",
+        "Coldpath"
+      ]
+    },
+    {
+      "id": "period-july-scoped",
+      "family": "listing",
+      "kind": "enumerate",
+      "identity": "analyst",
+      "q": "What happened in July 2026? List every note from that month.",
+      "expect_all": [
+        "Amara",
+        "Casa Verde",
+        "Advisory Board",
+        "GDP",
+        "Halden",
+        "Nordhafen",
+        "Stratos"
+      ],
+      "expect_none": [
+        "Series A",
+        "investor"
+      ]
+    },
+    {
+      "id": "links-altamira-scoped",
+      "family": "listing",
+      "kind": "enumerate",
+      "identity": "analyst",
+      "q": "List every note that mentions Altamira Pharma Logistics.",
+      "expect_all": [
+        "Pilot Kickoff",
+        "Pilot Results",
+        "Brightline",
+        "Advisory Board",
+        "Excursion Budget",
+        "First-Half",
+        "GDP",
+        "SOC 2",
+        "2026 Kickoff"
+      ],
+      "expect_none": [
+        "Board Pack",
+        "Term Sheet",
+        "investor"
+      ]
+    },
+    {
+      "id": "links-frostvale",
+      "family": "listing",
+      "kind": "enumerate",
+      "q": "List every note that mentions Frostvale Distribution.",
+      "expect_all": [
+        "Alert Fatigue",
+        "Brightline",
+        "Coldpath",
+        "Cumulus",
+        "Advisory Board",
+        "Dwell-Time Alerting",
+        "Excursion Budget",
+        "First-Half",
+        "Dwell-Time Results",
+        "Quarterly Business Review",
+        "Renewal",
+        "Halberd",
+        "Hamburg",
+        "Pricing Workshop",
+        "2026 Kickoff",
+        "Veldt"
+      ]
+    }
+  ]
+}

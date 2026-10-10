@@ -1,0 +1,807 @@
+{
+  "_comment": "Details buried in long sources of evals/graph_corpus, written by evals/make_long_sources.py: an all-hands transcript of about 25,000 words, a customer advisory board transcript, a quarterly operations report with sections, and a due diligence call in the finance layer. Each detail is planted once, some beside a distractor on the same subject; most questions paraphrase the source. Each question carries the answer the agent must state and cite (spec retrieval-and-curation §7, Fragments).",
+  "suite": "graph-detail",
+  "default_identity": "steward",
+  "questions": [
+    {
+      "id": "detail-gdansk",
+      "q": "When does the Gdansk depot start four-hour shift handovers?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "14 September",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-firmware",
+      "q": "Which firmware release stopped the battery drain on refrigerated trailers on freezing routes?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "3.4.1",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-lisbon",
+      "q": "What yearly rent does Tidewell pay for its Portuguese warehouse?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "41,000",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-crash-rate",
+      "q": "How often did the Coldpath mobile app crash after the August release?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "0.3",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-support",
+      "q": "Who covers overnight European support hours?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "Brightdesk",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-hackathon",
+      "q": "What did the winning hackathon team build?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "door-open detector",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-probe-cap",
+      "q": "How many temperature probes may procurement buy on the spot market each month?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "2,500",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-spanish",
+      "q": "Which pilot customer wants alert messages in Spanish?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "Fruteria Albufera",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-insurance",
+      "q": "How much did truck fleet insurance cost go up at renewal?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "7%",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-replica",
+      "q": "Which old database replica was shut down in August?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "coldpath-ro-2",
+      "cites": [
+        "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md"
+      ]
+    },
+    {
+      "id": "detail-murcia-dwell",
+      "q": "After how long at the dock does Casa Verde's Murcia hub want a dwell alert?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "20 minutes",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-insulin-report",
+      "q": "How quickly does Altamira want the excursion report when an insulin shipment breaches its range?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "two hours",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-eindhoven-trailers",
+      "q": "How many trailers is Frostvale moving onto Sentinel gateways from its Eindhoven yard?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "60 trailers",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-milk-tanker-band",
+      "q": "What alarm band did Glenmore Dairies ask for on its milk-tanker template?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "2 to 6 degrees",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-board-vote",
+      "q": "Which roadmap item won the customer advisory board vote for the first half of 2027?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "shared excursion dashboard",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-nordkyl-sim",
+      "q": "Why is Nordkyl Logistik buying its own SIM contracts?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "30 percent",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-offline-mode",
+      "q": "When do drivers get an offline mode in the Coldpath app?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "November release",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-calibration-years",
+      "q": "For how many years do Altamira's auditors want calibration certificates retained?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "seven years",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-gateway-battery",
+      "q": "How long does a gateway now run on one charge in an unpowered trailer?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "19 days",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-crate-pilot",
+      "q": "In how many stores will Casa Verde trial reusable insulated crates?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "16 stores",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-renewal-offer",
+      "q": "What do customers get for signing a three-year renewal before December?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "excursion-insurance add-on",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-finnish-first",
+      "q": "Why does Nordkyl want Finnish alert texts before the Swedish ones?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "Turku depot",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-next-board",
+      "q": "When will the next customer advisory board session take place?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "18 March 2027",
+      "cites": [
+        "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md"
+      ]
+    },
+    {
+      "id": "detail-on-time",
+      "q": "What share of deliveries arrived on time in the second quarter of 2026?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "96.8 percent",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-excursions-q2",
+      "q": "How many temperature excursions did the fleet log from April to June 2026?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "412",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-long-excursions",
+      "q": "Of the second-quarter temperature excursions, how many lasted longer than thirty minutes?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "37",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-fuel-use",
+      "q": "What was reefer fuel consumption per 100 kilometres once the planner stopped using the A7 detour?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "31.4 litres",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-trailer-replacement",
+      "q": "How many of the oldest trailers are due to be replaced in 2027?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "22",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-rotterdam-shift",
+      "q": "On what date did the Rotterdam cross-dock start a second shift?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "3 May",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-cold-room-4",
+      "q": "What had to be replaced before Hamburg's cold room 4 could be re-qualified?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "evaporator fans",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-first-response",
+      "q": "What was the average first-response time for priority tickets in June?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "11 minutes",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-brightdesk-volume",
+      "q": "How many overnight tickets did Brightdesk handle in the second quarter?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "2,940",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-query-costs",
+      "q": "By how much did query costs fall after the analytics store migration?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "27 percent",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-change-failure",
+      "q": "What change failure rate came with the move to daily production deploys?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "4 percent",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-attrition",
+      "q": "What was voluntary attrition for the first half of 2026?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "3 percent",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-modem-supplier",
+      "q": "Which company is the only supplier of the Sentinel gateway modem?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "Kestrel Radio",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-carrier-licence",
+      "q": "By when must the Portuguese carrier licence be renewed to keep the Lisbon routes running?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "30 November",
+      "cites": [
+        "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md"
+      ]
+    },
+    {
+      "id": "detail-concentration",
+      "q": "What revenue share did Seabright want the top three customers held under by closing?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "below 30 percent",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-gross-margin",
+      "q": "What gross margin did the per-asset plans reach in July 2026?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "64 percent",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-runway",
+      "q": "How many months of runway did Tidewell report on the August due diligence call?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "11 months",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-tech-diligence",
+      "q": "Which outside firm runs Seabright's technical due diligence?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "Ardent Systems Review",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-option-pool",
+      "q": "To what size will the option pool be topped up before the round closes?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "12 percent",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-nrr",
+      "q": "What net revenue retention did Tidewell report for the last twelve months?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "118 percent",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-audit-committee",
+      "q": "Which committee seat does Seabright want besides its board seat?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "audit committee",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-receivables",
+      "q": "How much do the two largest Altamira receivables add up to?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "380,000 euros",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-change-of-control",
+      "q": "Which lease needs the landlord's consent on a change of control?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "Hamburg office",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-legal-deadline",
+      "q": "By what date must legal diligence finish for a November closing?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "10 October",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-venture-debt",
+      "q": "Which bank lent Tidewell its venture debt?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "Tern Bank",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-secondary",
+      "q": "Are any founders selling secondary shares in the Series A?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "no founder",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    },
+    {
+      "id": "detail-soc2-fieldwork",
+      "q": "When do the SOC 2 Type II auditors finish their fieldwork?",
+      "kind": "exact",
+      "expect": {
+        "pages": [
+          "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+        ]
+      },
+      "shape": "detail",
+      "family": "answerable",
+      "expect_contains": "24 September",
+      "cites": [
+        "sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,401 @@
+import datetime as dt
+import hashlib
+import io
+import struct
+import zlib
+
+import pymupdf
+import pytest
+from docx import Document
+from pptx import Presentation
+from pptx.util import Inches
+
+from stigmergy.capture import artifacts, schema
+from stigmergy.capture import extraction as extraction_module
+from stigmergy.capture.errors import ArtifactRejected, ExtractionError, ExtractionTimeout
+from stigmergy.capture.evidence import MemoryEvidenceStore
+from stigmergy.capture.extraction import ExtractionResult, extract_artifact
+from stigmergy.kernel.llm import OCR_MODEL
+
+
+def _digital_pdf(text: str) -> bytes:
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 100), text, fontsize=14)
+    data = document.tobytes()
+    document.close()
+    return data
+
+
+def _image_bytes(text: str, image_type: str = "png") -> bytes:
+    document = pymupdf.open(stream=_digital_pdf(text), filetype="pdf")
+    pixmap = document[0].get_pixmap(dpi=200, alpha=False)
+    data = pixmap.tobytes(image_type)
+    document.close()
+    return data
+
+
+def _scanned_pdf(text: str) -> bytes:
+    image = _image_bytes(text)
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_image(page.rect, stream=image)
+    data = document.tobytes()
+    document.close()
+    return data
+
+
+def test_plain_text_extraction_is_byte_exact():
+    data = b"First line\nSecond line\n"
+    result = extract_artifact(data, schema.MEDIA_TEXT)
+
+    assert result.text.encode() == data
+    assert result.ocr_pages == ()
+
+
+def test_capture_envelope_preserves_a_valid_markdown_artifact_through_extraction():
+    data = b"# Decision\n\nKeep the source bytes immutable.\n"
+    store = MemoryEvidenceStore()
+    digest = hashlib.sha256(data).hexdigest()
+    envelope = schema.CaptureEnvelope(
+        idempotency_key="markdown-worker-extraction",
+        actor=schema.Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        origin=schema.Origin(adapter="mcp", captured_at=dt.datetime.now(dt.UTC)),
+        artifacts=(
+            schema.ArtifactRef(
+                blob_ref=store.put(data),
+                sha256=digest,
+                bytes=len(data),
+                media_type=schema.MEDIA_MARKDOWN,
+                original_name="decision.md",
+            ),
+        ),
+    )
+
+    extracted = extraction_module.extract_capture(store, envelope, bounded=False)
+
+    assert extracted[0].result.media_type == schema.MEDIA_MARKDOWN
+    assert extracted[0].result.text.encode() == data
+
+
+def test_readable_output_limit_is_enforced_before_child_serialization(monkeypatch):
+    monkeypatch.setattr(extraction_module, "MAX_CAPTURE_EXTRACTED_BYTES", 10)
+
+    with pytest.raises(ExtractionError, match="readable byte limit"):
+        extract_artifact(b"more than ten bytes", schema.MEDIA_TEXT)
+
+
+def test_capture_extraction_rejects_aggregate_readable_bytes_without_derivatives(monkeypatch):
+    store = MemoryEvidenceStore()
+
+    def artifact(data):
+        digest = hashlib.sha256(data).hexdigest()
+        return schema.ArtifactRef(
+            blob_ref=store.put(data),
+            sha256=digest,
+            bytes=len(data),
+            media_type=schema.MEDIA_PDF,
+        )
+
+    first = artifact(b"first")
+    second = artifact(b"second")
+    envelope = schema.CaptureEnvelope(
+        idempotency_key="aggregate-readable",
+        actor=schema.Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        origin=schema.Origin(adapter="mcp", captured_at=dt.datetime.now(dt.UTC)),
+        artifacts=(first, second),
+    )
+    original_refs = set(store.objects)
+    monkeypatch.setattr(extraction_module, "MAX_CAPTURE_EXTRACTED_BYTES", 10, raising=False)
+    monkeypatch.setattr(
+        extraction_module,
+        "extract_artifact",
+        lambda *_args, **_kwargs: ExtractionResult(
+            text="abcdef",
+            media_type=schema.MEDIA_PDF,
+            extractor="fixture",
+        ),
+    )
+
+    with pytest.raises(ExtractionError):
+        extraction_module.extract_capture(store, envelope, bounded=False)
+
+    assert set(store.objects) == original_refs
+
+
+def test_capture_extraction_uses_one_deadline_for_every_artifact(monkeypatch):
+    store = MemoryEvidenceStore()
+
+    def artifact(data):
+        digest = hashlib.sha256(data).hexdigest()
+        return schema.ArtifactRef(
+            blob_ref=store.put(data),
+            sha256=digest,
+            bytes=len(data),
+            media_type=schema.MEDIA_PDF,
+        )
+
+    envelope = schema.CaptureEnvelope(
+        idempotency_key="capture-deadline",
+        actor=schema.Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        origin=schema.Origin(adapter="mcp", captured_at=dt.datetime.now(dt.UTC)),
+        artifacts=(artifact(b"first"), artifact(b"second")),
+    )
+    clock = {"now": 0.0}
+    received_timeouts = []
+
+    def extract(*_args, timeout_s, **_kwargs):
+        received_timeouts.append(timeout_s)
+        clock["now"] += 6
+        return ExtractionResult(
+            text="readable",
+            media_type=schema.MEDIA_PDF,
+            extractor="fixture",
+        )
+
+    monkeypatch.setattr(extraction_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(extraction_module, "extract_bounded", extract)
+
+    with pytest.raises(ExtractionTimeout, match="capture extraction timed out") as raised:
+        extraction_module.extract_capture(store, envelope, timeout_s=10)
+
+    assert raised.value.retryable is True
+
+    assert received_timeouts == [10, 4]
+    assert len(store.objects) == 2
+
+
+@pytest.mark.parametrize("media_type", [schema.MEDIA_TEXT, schema.MEDIA_MARKDOWN])
+def test_bounded_capture_decodes_text_in_process(monkeypatch, media_type):
+    data = b"Plain readable decision text.\n"
+    store = MemoryEvidenceStore()
+    envelope = schema.CaptureEnvelope(
+        idempotency_key=f"in-process-{media_type}",
+        actor=schema.Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        origin=schema.Origin(adapter="mcp", captured_at=dt.datetime.now(dt.UTC)),
+        artifacts=(
+            schema.ArtifactRef(
+                blob_ref=store.put(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+                bytes=len(data),
+                media_type=media_type,
+            ),
+        ),
+    )
+
+    def child(*_args, **_kwargs):
+        raise AssertionError("text extraction must not start a sandbox process")
+
+    monkeypatch.setattr(extraction_module, "extract_bounded", child)
+
+    extracted = extraction_module.extract_capture(store, envelope)
+
+    assert extracted[0].result.text.encode() == data
+    assert extracted[0].readable_ref == envelope.artifacts[0].blob_ref
+
+
+def test_oversized_text_is_refused_before_it_is_fetched_for_in_process_decoding(monkeypatch):
+    store = MemoryEvidenceStore()
+    data = b"x" * 32
+    envelope = schema.CaptureEnvelope(
+        idempotency_key="oversized-text",
+        actor=schema.Actor(subject="alice", display_name="Alice"),
+        audience=None,
+        origin=schema.Origin(adapter="mcp", captured_at=dt.datetime.now(dt.UTC)),
+        artifacts=(
+            schema.ArtifactRef(
+                blob_ref=store.put(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+                bytes=len(data),
+                media_type=schema.MEDIA_TEXT,
+            ),
+        ),
+    )
+    monkeypatch.setattr(extraction_module, "MAX_CAPTURE_EXTRACTED_BYTES", 16)
+
+    def fetch(*_args, **_kwargs):
+        raise AssertionError("an oversized text artifact must not be fetched")
+
+    monkeypatch.setattr(store, "get_limited", fetch)
+
+    with pytest.raises(ExtractionError, match="readable byte limit"):
+        extraction_module.extract_capture(store, envelope)
+
+
+def test_html_extraction_keeps_title_and_readable_content():
+    data = (
+        b"<html><head><title>Plan</title><style>hidden</style></head>"
+        b"<body><nav>menu</nav><main><h1>Decision</h1><p>Ship it.</p></main></body></html>"
+    )
+    result = extract_artifact(data, schema.MEDIA_HTML)
+
+    assert result.text == "# Plan\n\nDecision\n\nShip it."
+    assert "hidden" not in result.text
+    assert "menu" not in result.text
+
+
+def test_digital_pdf_does_not_use_ocr():
+    calls = []
+    result = extract_artifact(
+        _digital_pdf("Digital text is complete and long enough for extraction."),
+        schema.MEDIA_PDF,
+        ocr_model=OCR_MODEL,
+        vision_ocr=lambda *_args: calls.append(1),
+    )
+
+    assert "Digital text is complete" in result.text
+    assert "## Page 1\n" in result.text and "OCR transcription" not in result.text
+    assert result.ocr_pages == ()
+    assert result.ocr == ()
+    assert result.decisions == ("page 1: digital text",)
+    assert calls == []
+
+
+def test_scanned_pdf_uses_qwen_only_for_the_scanned_page():
+    seen = []
+
+    def transcribe(data, media_type):
+        seen.append((data, media_type))
+        return "Scanned quarterly roadmap"
+
+    result = extract_artifact(
+        _scanned_pdf("content supplied to the image"),
+        schema.MEDIA_PDF,
+        ocr_model=OCR_MODEL,
+        vision_ocr=transcribe,
+    )
+
+    assert "Scanned quarterly roadmap" in result.text
+    assert "## Page 1 (OCR transcription)" in result.text
+    assert result.ocr_pages == (1,)
+    assert [(call.page, call.model) for call in result.ocr] == [(1, OCR_MODEL)]
+    assert result.extractor == "pymupdf+qwen/qwen3-vl-8b-instruct"
+    assert len(seen) == 1
+    assert seen[0][0].startswith(b"\x89PNG")
+    assert seen[0][1] == schema.MEDIA_PNG
+
+
+def test_docx_preserves_heading_paragraph_and_table_order():
+    document = Document()
+    document.add_heading("Roadmap", level=1)
+    document.add_paragraph("First milestone")
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "Owner"
+    table.cell(0, 1).text = "Alice"
+    output = io.BytesIO()
+    document.save(output)
+
+    result = extract_artifact(output.getvalue(), schema.MEDIA_DOCX)
+
+    assert result.text == "# Roadmap\n\nFirst milestone\n\n| Owner | Alice |"
+
+
+def test_pptx_preserves_slide_title_body_table_and_notes():
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+    slide.shapes.title.text = "Launch"
+    slide.placeholders[1].text = "Approve the rollout"
+    table = slide.shapes.add_table(1, 2, Inches(1), Inches(3), Inches(5), Inches(1)).table
+    table.cell(0, 0).text = "Owner"
+    table.cell(0, 1).text = "Bob"
+    slide.notes_slide.notes_text_frame.text = "Mention the Friday deadline"
+    output = io.BytesIO()
+    presentation.save(output)
+
+    result = extract_artifact(output.getvalue(), schema.MEDIA_PPTX)
+
+    assert "## Slide 1" in result.text
+    assert "### Launch" in result.text
+    assert "Approve the rollout" in result.text
+    assert "| Owner | Bob |" in result.text
+    assert "### Speaker notes" in result.text
+    assert "Mention the Friday deadline" in result.text
+
+
+@pytest.mark.parametrize(
+    ("image_type", "media_type"),
+    [("png", schema.MEDIA_PNG), ("jpeg", schema.MEDIA_JPEG)],
+)
+def test_image_formats_use_qwen_when_configured(image_type, media_type):
+    original = _image_bytes("Image decision text", image_type)
+    seen = []
+
+    result = extract_artifact(
+        original,
+        media_type,
+        ocr_model=OCR_MODEL,
+        vision_ocr=lambda data, mime: seen.append((data, mime)) or "Image decision text",
+    )
+
+    assert result.text == "Image decision text"
+    assert result.extractor == "qwen/qwen3-vl-8b-instruct"
+    assert seen == [(original, media_type)]
+    assert [(call.page, call.model) for call in result.ocr] == [(1, OCR_MODEL)]
+
+
+def test_ocr_rejects_any_model_other_than_qwen():
+    with pytest.raises(ExtractionError, match="OCR model must be"):
+        extract_artifact(
+            _image_bytes("Image decision text"),
+            schema.MEDIA_PNG,
+            ocr_model=None,
+            vision_ocr=lambda *_args: "must not run",
+        )
+
+
+def test_image_dimensions_are_bounded_before_raster_decode():
+    data = bytearray(_image_bytes("small image"))
+    data[16:20] = struct.pack(">I", 10_000)
+    data[20:24] = struct.pack(">I", 10_000)
+    data[29:33] = struct.pack(">I", zlib.crc32(data[12:29]) & 0xFFFFFFFF)
+
+    with pytest.raises(ArtifactRejected, match="pixel safety limit"):
+        extract_artifact(bytes(data), schema.MEDIA_PNG)
+
+
+def test_pdf_ocr_dimensions_are_bounded_before_page_rasterization():
+    document = pymupdf.open()
+    document.new_page(width=100_000, height=100_000)
+    data = document.tobytes()
+    document.close()
+
+    with pytest.raises(ArtifactRejected, match="OCR pixel safety limit"):
+        extract_artifact(data, schema.MEDIA_PDF)
+
+
+def test_mime_spoofing_fails_before_parser_execution():
+    with pytest.raises(ArtifactRejected, match="does not match"):
+        extract_artifact(b"not a PDF", schema.MEDIA_PDF)
+
+
+def test_openxml_detection_identifies_real_packages():
+    document = Document()
+    document.add_paragraph("Text")
+    output = io.BytesIO()
+    document.save(output)
+
+    assert artifacts.detect_media(output.getvalue()) == schema.MEDIA_DOCX
+
+
+def test_ocr_telemetry_survives_the_extraction_pipe_and_reaches_the_record():
+    from stigmergy.capture.extraction import ExtractedArtifact, OcrCall
+
+    result = extract_artifact(
+        _scanned_pdf("content supplied to the image"),
+        schema.MEDIA_PDF,
+        ocr_model=OCR_MODEL,
+        vision_ocr=lambda _data, _media: "Scanned quarterly roadmap",
+    )
+
+    assert ExtractionResult.model_validate(result.model_dump(mode="json")) == result
+    assert result.ocr == (OcrCall(page=1, model=OCR_MODEL),)
+    artifact = schema.ArtifactRef(blob_ref=schema.content_ref("0" * 64), sha256="0" * 64, bytes=1,
+                                  media_type=schema.MEDIA_PDF)
+    record = ExtractedArtifact(original=artifact, readable_ref=artifact.blob_ref, readable_sha256="0" * 64,
+                               readable_bytes=1, result=result).metadata()
+    assert record["ocr"] == [{"page": 1, "model": OCR_MODEL, "upstream": "", "ms": 0,
+                              "input_tokens": 0, "output_tokens": 0}]

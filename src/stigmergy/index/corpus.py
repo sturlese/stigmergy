@@ -1,0 +1,294 @@
+"""Parse the canonical Markdown corpus into derived search rows."""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+from stigmergy.index.errors import StigmergyIndexError
+from stigmergy.kernel import layers
+
+ZONES = ("wiki", "sources")
+# Top-level folders a committed tree is read from: the public zones and the layer folders.
+TREE_ROOTS = (*ZONES, layers.LAYER_ROOT)
+WIKILINK_RE = re.compile(r"!?\[\[([^\[\]]+?)\]\]")
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`]*`")
+_WIKI_PATH_RE = re.compile(r"^wiki/(?P<folder>notes|concepts|entities|projects)/[^/]+\.md$")
+_WIKI_TYPES = {"notes": "note", "concepts": "concept", "entities": "entity", "projects": "project"}
+ENTITY_TYPES = ("person", "organization", "product", "tool", "repository", "place")
+_SOURCE_PATH_RE = re.compile(
+    r"^sources/\d{4}/(?:0[1-9]|1[0-2])/[0-9a-f]{8}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.md$"
+)
+
+
+class CorpusContractError(StigmergyIndexError):
+    pass
+
+
+@dataclass
+class PageRow:
+    path: str
+    vpath: str
+    zone: str
+    page_id: str
+    title: str
+    body: str
+    type: str
+    status: str = ""
+    entity_type: str = ""
+    aliases: list[str] = field(default_factory=list)
+    updated: str = ""
+    acl: list[str] | None = None
+    inlinks: int = 0
+    content_hash: str = ""
+    links: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    # A source's own date; every page's sorted dates of the sources it cites (a source: its own).
+    source_date: str = ""
+    source_dates: list[str] = field(default_factory=list)
+
+
+_FRONTMATTER_RE = re.compile(r"^﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n?(.*)$", re.S)
+_OPENS_FRONTMATTER_RE = re.compile(r"^﻿?---[ \t]*\r?\n")
+_DECLARES_ACL_RE = re.compile(r"""(?m)(?:^|[,{][ \t]*)['"]?acl['"]?[ \t]*:""")
+
+
+def _asked_for_an_audience(after_opener: str) -> bool:
+    block = after_opener.replace("\r\n", "\n").partition("\n\n")[0]
+    try:
+        parsed = yaml.safe_load(block)
+    except yaml.YAMLError:
+        return bool(_DECLARES_ACL_RE.search(block))
+    return isinstance(parsed, dict) and "acl" in parsed
+
+
+def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
+    match = _FRONTMATTER_RE.match(text)
+    if match:
+        try:
+            metadata = yaml.safe_load(match.group(1))
+        except yaml.YAMLError:
+            return {}, text, True
+        if metadata is None:
+            return {}, match.group(2), False
+        if not isinstance(metadata, dict):
+            return {}, match.group(2), True
+        return metadata, match.group(2), False
+    opener = _OPENS_FRONTMATTER_RE.match(text)
+    malformed = bool(opener) and _asked_for_an_audience(text[opener.end() :])
+    return {}, text, malformed
+
+
+def split_frontmatter(text: str) -> tuple[dict, str]:
+    metadata, body, _malformed = split_frontmatter_checked(text)
+    return metadata, body
+
+
+def _string_list(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return list(dict.fromkeys(item.strip() for item in value if isinstance(item, str) and item.strip()))
+
+
+def _acl_labels(metadata: dict) -> list[str] | None:
+    if "acl" not in metadata or metadata.get("acl") is None:
+        return None
+    value = metadata["acl"]
+    if not isinstance(value, list):
+        return []
+    labels = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    return list(dict.fromkeys(labels)) if len(labels) == len(value) else []
+
+
+def strip_code(text: str) -> str:
+    """The text with fenced and inline code removed, so a link written as code is not a link."""
+    return _INLINE_CODE_RE.sub("", _FENCE_RE.sub("", text))
+
+
+def link_targets(text: str) -> list[str]:
+    targets = []
+    for match in WIKILINK_RE.finditer(strip_code(text)):
+        target = match.group(1).split("|")[0].split("#")[0].strip()
+        if target.lower().endswith(".md"):
+            target = target[:-3]
+        if target:
+            targets.append(target.lower())
+    return targets
+
+
+def content_hash(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _virtual(rel_path: str) -> tuple[str, str] | None:
+    try:
+        return layers.split_path(rel_path)
+    except layers.LayerError:
+        return None
+
+
+def is_indexable_page(rel_path: str) -> bool:
+    located = _virtual(rel_path)
+    if located is None:
+        return False
+    vpath = located[1]
+    return bool(_WIKI_PATH_RE.fullmatch(vpath) or _SOURCE_PATH_RE.fullmatch(vpath))
+
+
+def zone_of(rel_path: str) -> str:
+    located = _virtual(rel_path)
+    return located[1].split("/", 1)[0] if located else ""
+
+
+def page_row(rel_path: str, zone: str, text: str) -> PageRow:
+    if zone not in ZONES or not is_indexable_page(rel_path) or zone_of(rel_path) != zone:
+        raise CorpusContractError("path is outside the searchable corpus")
+    layer, vpath = layers.split_path(rel_path)
+    metadata, body, malformed = split_frontmatter_checked(text)
+    if malformed or not metadata:
+        raise CorpusContractError("frontmatter is invalid")
+
+    expected_type = "source"
+    wiki_match = _WIKI_PATH_RE.fullmatch(vpath)
+    if wiki_match:
+        expected_type = _WIKI_TYPES[wiki_match.group("folder")]
+    if metadata.get("type") != expected_type:
+        raise CorpusContractError(f"{rel_path} must have type {expected_type}")
+
+    page_id = str(metadata.get("id") or "").strip()
+    if not page_id or not body.strip():
+        raise CorpusContractError("page id and body are required")
+    title = str(metadata.get("title") or "").strip()
+    if not title:
+        title = "Captured source" if expected_type == "source" else Path(rel_path).stem
+    acl = _acl_labels(metadata)
+    if acl == []:
+        raise CorpusContractError("acl must be null or a non-empty string list")
+    # The folder is the audience; a page that disagrees fails closed rather than choosing one.
+    if (tuple(acl) if acl is not None else None) != layers.acl_of_layer(layer):
+        raise CorpusContractError(f"{rel_path} does not carry its layer's audience")
+
+    status = str(metadata.get("status") or "")
+    if expected_type != "source" and status not in {
+        "seed",
+        "developing",
+        "mature",
+        "evergreen",
+    }:
+        raise CorpusContractError("wiki status is invalid")
+    if expected_type == "source" and status:
+        raise CorpusContractError("source pages do not have editorial status")
+
+    updated = metadata.get("updated") or metadata.get("captured_at") or ""
+    source_date = ""
+    if expected_type == "source":
+        source_date = iso_day(metadata.get("occurred_at")) or iso_day(metadata.get("captured_at"))
+    return PageRow(
+        path=rel_path,
+        vpath=vpath,
+        zone=zone,
+        page_id=page_id,
+        title=title,
+        body=body,
+        type=expected_type,
+        status=status,
+        entity_type=str(metadata.get("entity_type") or "") if expected_type == "entity" else "",
+        aliases=_string_list(metadata.get("aliases")) if expected_type == "entity" else [],
+        updated=str(updated)[:10],
+        acl=acl,
+        content_hash=content_hash(f"{title}\n{body}"),
+        links=link_targets(text),
+        sources=_string_list(metadata.get("sources")),
+        source_date=source_date,
+        source_dates=[source_date] if source_date else [],
+    )
+
+
+def iso_day(value) -> str:
+    """The calendar day of an ISO date or timestamp, as `YYYY-MM-DD`; anything else is no date."""
+    if isinstance(value, dt.date):
+        return value.isoformat()[:10]
+    text = str(value or "").strip()[:10]
+    try:
+        return dt.date.fromisoformat(text).isoformat() if len(text) == 10 else ""
+    except ValueError:
+        return ""
+
+
+def attach_source_dates(rows: list[PageRow], known: dict[tuple[str, str], str] | None = None) -> None:
+    """Give every knowledge page the sorted distinct dates of the sources it cites, each resolved
+    in the page's own layer or `public` as links are. `known` maps `(layer, source virtual path)`
+    outside `rows` to its date; a source in `rows` wins."""
+    dates = {**(known or {}), **{(layers.split_path(row.path)[0], row.vpath): row.source_date
+                                  for row in rows if row.type == "source" and row.source_date}}
+    for row in rows:
+        if row.type != "source":
+            scope = dict.fromkeys((layers.split_path(row.path)[0], layers.PUBLIC))
+            row.source_dates = sorted({dates[(layer, path)] for path in row.sources for layer in scope
+                                       if (layer, path) in dates})
+
+
+def by_stem_index(paths: list[str]) -> dict[tuple[str, str], list[str]]:
+    """`{(layer, stem): [virtual paths]}` over repository paths."""
+    index: dict[tuple[str, str], list[str]] = {}
+    for path in paths:
+        located = _virtual(path)
+        if located is None:
+            continue
+        layer, vpath = located
+        index.setdefault((layer, Path(vpath).stem.lower()), []).append(vpath)
+    return index
+
+
+def resolve_links(own_path: str, stems: list[str], by_stem: dict[tuple[str, str], list[str]]) -> list[str]:
+    """Virtual paths a page's wikilinks reach: its own layer's pages and `public`'s. A name that
+    reaches two different pages there resolves to neither, so it reads as plain text."""
+    layer, own = layers.split_path(own_path)
+    scope = dict.fromkeys((layer, layers.PUBLIC))
+    resolved = set()
+    for stem in dict.fromkeys(stems):
+        targets = {path for each in scope for path in by_stem.get((each, stem), ())}
+        if len(targets) == 1:
+            resolved |= targets - {own}
+    return sorted(resolved)
+
+
+def load_page_texts(pages: list[tuple[str, str]]) -> list[PageRow]:
+    """Build canonical derived rows from repository-relative Markdown text."""
+    rows = [
+        page_row(path, zone_of(path), text)
+        for path, text in pages
+        if is_indexable_page(path)
+    ]
+    rows.sort(key=lambda row: row.path)
+    by_stem = by_stem_index([row.path for row in rows])
+    inbound: dict[str, set[str]] = {}
+    for row in rows:
+        row.links = resolve_links(row.path, row.links, by_stem)
+        for target in row.links:
+            inbound.setdefault(target, set()).add(row.vpath)
+    for row in rows:
+        row.inlinks = len(inbound.get(row.vpath, ()))
+    attach_source_dates(rows)
+    return rows
+
+
+def load_pages(repo_dir: str) -> list[PageRow]:
+    root = Path(repo_dir)
+    pages = []
+    for top in TREE_ROOTS:
+        folder = root / top
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.rglob("*.md")):
+            rel_path = path.relative_to(root).as_posix()
+            if is_indexable_page(rel_path):
+                pages.append((rel_path, path.read_text(encoding="utf-8")))
+    return load_page_texts(pages)

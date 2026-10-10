@@ -1,0 +1,587 @@
+{
+  "description": "Synthetic captures for calibrating capture routing (spec audience-layers 3.6.4). Invented content and names; `expect` is a layer or `default`. Cases whose id starts with `h-` were written after the threshold was chosen and held out from choosing it.",
+  "layers": {
+    "engineering": "Software development, infrastructure, incidents, releases, and technical design.",
+    "finance": "Budgets, invoices, payments, accounting, forecasts, taxes, and audits.",
+    "people": "Hiring, onboarding, compensation policy, leave, performance reviews, and team organization.",
+    "sales": "Customer deals, pipeline, pricing proposals, renewals, quotas, and partner negotiations.",
+    "legal": "Contracts, compliance, privacy, intellectual property, and regulatory matters."
+  },
+  "cases": [
+    {
+      "id": "latency-postmortem",
+      "candidates": [
+        "engineering",
+        "finance"
+      ],
+      "expect": "engineering",
+      "title": "Postmortem: checkout API latency",
+      "text": "On Tuesday the checkout API p99 latency rose to four seconds after a schema migration locked the orders table. We rolled back at 14:20, added the missing index, and will run future migrations behind a feature flag."
+    },
+    {
+      "id": "month-close",
+      "candidates": [
+        "engineering",
+        "finance"
+      ],
+      "expect": "finance",
+      "title": "March close",
+      "text": "Accounts payable processed 212 invoices this month. Two vendor payments were delayed by missing purchase orders, and the quarterly forecast was revised down by three percent."
+    },
+    {
+      "id": "support-onboarding",
+      "candidates": [
+        "engineering",
+        "people"
+      ],
+      "expect": "people",
+      "title": "Onboarding plan for new support hires",
+      "text": "New hires spend week one shadowing senior agents and week two in product training, then meet their manager for a 30-day check-in. The people team sends offer letters and benefits enrollment links."
+    },
+    {
+      "id": "release-notes",
+      "candidates": [
+        "engineering",
+        "people"
+      ],
+      "expect": "engineering",
+      "title": "Release 5.2",
+      "text": "Release 5.2 moves the build pipeline to arm64 runners, upgrades the web framework, and removes the deprecated v1 endpoints. The canary ran for two hours without errors before the full rollout."
+    },
+    {
+      "id": "renewal-call",
+      "candidates": [
+        "sales",
+        "finance"
+      ],
+      "expect": "sales",
+      "title": "Renewal call with Acme",
+      "text": "Acme wants a two-year renewal with a ten percent discount if they add fifty seats. Next step: send the pricing proposal by Friday; their operations director is our champion."
+    },
+    {
+      "id": "audit-prep",
+      "candidates": [
+        "sales",
+        "finance"
+      ],
+      "expect": "finance",
+      "title": "Audit preparation",
+      "text": "The external auditors asked for the revenue recognition schedule, bank reconciliations for every account, and the fixed asset register by the fifteenth."
+    },
+    {
+      "id": "dpa-review",
+      "candidates": [
+        "sales",
+        "legal"
+      ],
+      "expect": "legal",
+      "title": "Data processing agreement review",
+      "text": "The customer's data processing agreement asks for 24-hour breach notification and EU-only subprocessors. Counsel suggests 72 hours in line with the regulation and listing our current subprocessors."
+    },
+    {
+      "id": "pipeline-review",
+      "candidates": [
+        "sales",
+        "legal"
+      ],
+      "expect": "sales",
+      "title": "Q3 pipeline review",
+      "text": "Pipeline for Q3 is 1.8 million across twelve deals in negotiation. Three enterprise deals slipped to next quarter; the team will focus on the two largest opportunities."
+    },
+    {
+      "id": "review-cycle",
+      "candidates": [
+        "people",
+        "legal"
+      ],
+      "expect": "people",
+      "title": "Performance review cycle",
+      "text": "Self-assessments open on May 2, manager reviews are due May 20, and calibration sessions follow the week after. Promotions take effect in July."
+    },
+    {
+      "id": "trademark",
+      "candidates": [
+        "people",
+        "legal"
+      ],
+      "expect": "legal",
+      "title": "Trademark filing",
+      "text": "We will register the product name as a trademark in the US and the EU. The clearance search found no conflicting marks in class 9, and outside counsel will prepare the filing."
+    },
+    {
+      "id": "on-call",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people"
+      ],
+      "expect": "engineering",
+      "title": "On-call rotation change",
+      "text": "From next sprint the on-call rotation moves to weekly shifts with a secondary engineer. Pages escalate after fifteen minutes, and the payment service runbooks were rewritten."
+    },
+    {
+      "id": "expense-claims",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people"
+      ],
+      "expect": "finance",
+      "title": "Expense claims and reimbursements",
+      "text": "Accounts payable will reimburse meals up to 60 per day. Receipts must be uploaded within 30 days, and claims without receipts are rejected at month-end close."
+    },
+    {
+      "id": "hiring-plan",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people"
+      ],
+      "expect": "people",
+      "title": "Hiring plan for the analytics team",
+      "text": "Recruiting opens three roles this month. Candidates do a structured phone screen, a take-home exercise, and a panel interview; the hiring manager decides within a week of the panel."
+    },
+    {
+      "id": "discount-approval",
+      "candidates": [
+        "sales",
+        "finance",
+        "legal"
+      ],
+      "expect": "sales",
+      "title": "Discount approval for Globex",
+      "text": "Globex asked for fifteen percent off the enterprise tier in exchange for a three-year commitment. Sales leadership approved twelve percent, and the account executive will send the updated quote."
+    },
+    {
+      "id": "privacy-policy",
+      "candidates": [
+        "sales",
+        "finance",
+        "legal"
+      ],
+      "expect": "legal",
+      "title": "Privacy policy update",
+      "text": "The privacy policy gains a section on cookies and on how long each category of personal data is retained, as the new regulation requires. Counsel approved the wording."
+    },
+    {
+      "id": "cash-forecast",
+      "candidates": [
+        "sales",
+        "finance",
+        "legal"
+      ],
+      "expect": "finance",
+      "title": "Cash flow forecast",
+      "text": "Cash on hand covers eighteen months of runway. Collections improved after reminders on overdue invoices, and the annual insurance premium is paid in September."
+    },
+    {
+      "id": "db-upgrade",
+      "candidates": [
+        "engineering",
+        "sales"
+      ],
+      "expect": "engineering",
+      "title": "Database upgrade",
+      "text": "Postgres goes from version 15 to 17 in Sunday's maintenance window. The upgrade was rehearsed on staging, where replication lag stayed under one second."
+    },
+    {
+      "id": "reseller-terms",
+      "candidates": [
+        "engineering",
+        "sales"
+      ],
+      "expect": "sales",
+      "title": "Reseller negotiation",
+      "text": "The reseller wants a thirty percent margin and exclusivity in the Nordics. We offered twenty percent without exclusivity plus a joint marketing fund."
+    },
+    {
+      "id": "security-patch",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people",
+        "sales",
+        "legal"
+      ],
+      "expect": "engineering",
+      "title": "Security patch rollout",
+      "text": "A critical vulnerability in the image processing library was patched in every service. Containers were rebuilt and redeployed, and the logs show no sign of exploitation."
+    },
+    {
+      "id": "salary-bands",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people",
+        "sales",
+        "legal"
+      ],
+      "expect": "people",
+      "title": "Compensation bands for next year",
+      "text": "Compensation bands rise by four percent next year. Managers explain individual changes in one-on-ones, and any offer above its band needs approval from the people team."
+    },
+    {
+      "id": "vendor-msa",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people",
+        "sales",
+        "legal"
+      ],
+      "expect": "legal",
+      "title": "Hosting vendor master services agreement",
+      "text": "Counsel reviewed the hosting vendor's master services agreement: liability is capped at twelve months of fees and the indemnity clause excludes data loss. We asked for mutual indemnification."
+    },
+    {
+      "id": "annual-budget",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people",
+        "sales",
+        "legal"
+      ],
+      "expect": "finance",
+      "title": "Next year's budget",
+      "text": "Next year's budget allocates forty percent to research and development and twenty-five percent to go-to-market, and keeps a ten percent reserve. Variance to plan this quarter was two percent."
+    },
+    {
+      "id": "initech-win",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people",
+        "sales",
+        "legal"
+      ],
+      "expect": "sales",
+      "title": "Initech signed",
+      "text": "Initech signed a 120-seat annual plan after a four-week pilot. The deal closed at list price, and the account moves to customer success next week."
+    },
+    {
+      "id": "event-bus",
+      "candidates": [
+        "engineering",
+        "legal"
+      ],
+      "expect": "engineering",
+      "title": "Architecture decision: event bus",
+      "text": "We chose a log-based event bus over a classic message queue for replay and partitioning. Services publish domain events, and every consumer must be idempotent."
+    },
+    {
+      "id": "tax-return",
+      "candidates": [
+        "finance",
+        "legal"
+      ],
+      "expect": "finance",
+      "title": "Corporate tax return",
+      "text": "The corporate tax return for last year was filed. The effective tax rate was nineteen percent after research credits, and deferred tax assets were reviewed with the auditors."
+    },
+    {
+      "id": "quota-plan",
+      "candidates": [
+        "people",
+        "sales"
+      ],
+      "expect": "sales",
+      "title": "Quota and territory plan",
+      "text": "Each account executive carries a 900k annual quota. Territories are split by region, and the enterprise team owns every account above one thousand employees."
+    },
+    {
+      "id": "parental-leave",
+      "candidates": [
+        "people",
+        "sales"
+      ],
+      "expect": "people",
+      "title": "Parental leave policy",
+      "text": "Parental leave rises to twenty weeks at full pay for every parent, and it can be split into two blocks within the child's first year."
+    },
+    {
+      "id": "budget-pdf",
+      "candidates": [
+        "engineering",
+        "finance"
+      ],
+      "expect": "finance",
+      "title": "Q3 budget forecast",
+      "files": [
+        "q3-budget-forecast.pdf"
+      ]
+    },
+    {
+      "id": "runbook-pdf",
+      "candidates": [
+        "engineering",
+        "people"
+      ],
+      "expect": "engineering",
+      "title": "Kubernetes cluster upgrade runbook",
+      "files": [
+        "cluster-upgrade-runbook.pdf"
+      ]
+    },
+    {
+      "id": "offer-letter-docx",
+      "candidates": [
+        "people",
+        "legal",
+        "sales"
+      ],
+      "expect": "people",
+      "title": "Offer letter template for new hires",
+      "files": [
+        "offer-letter-template.docx"
+      ]
+    },
+    {
+      "id": "team-lunch",
+      "candidates": [
+        "engineering",
+        "finance"
+      ],
+      "expect": "default",
+      "title": "Team lunch",
+      "text": "Friday's lunch moves to 13:00 in the big meeting room. There will be pizza and salads; tell Sam about any dietary needs."
+    },
+    {
+      "id": "office-move",
+      "candidates": [
+        "sales",
+        "legal"
+      ],
+      "expect": "default",
+      "title": "Office move",
+      "text": "We move to the third floor on Monday. Please pack your desk by Friday evening; the movers arrive at eight."
+    },
+    {
+      "id": "short-week",
+      "candidates": [
+        "engineering",
+        "people"
+      ],
+      "expect": "default",
+      "title": "Weekly notes",
+      "text": "Short week, with several people out on holiday. Priorities are unchanged; more updates next Monday."
+    },
+    {
+      "id": "hires-funding",
+      "candidates": [
+        "finance",
+        "people"
+      ],
+      "expect": "default",
+      "title": "Funding two new hires",
+      "text": "Two new hires in Q3 are funded from the unused events budget; their salaries start at the midpoint of the band and the cost is covered through year end."
+    },
+    {
+      "id": "other-layer-nda",
+      "candidates": [
+        "engineering",
+        "finance"
+      ],
+      "expect": "default",
+      "title": "Supplier NDA",
+      "text": "Counsel reviewed the non-disclosure agreement with the supplier and suggested a two-year term with mutual obligations."
+    },
+    {
+      "id": "tier-pricing",
+      "candidates": [
+        "sales",
+        "finance"
+      ],
+      "expect": "default",
+      "title": "Pricing and margin of the new tier",
+      "text": "The new tier costs 49 per seat per month. Its projected gross margin is seventy percent, adding about 300k of revenue in the first year."
+    },
+    {
+      "id": "escalated-bug",
+      "candidates": [
+        "engineering",
+        "sales"
+      ],
+      "expect": "default",
+      "title": "Escalated export bug",
+      "text": "The Acme account manager escalated a bug: large report exports time out. Engineering will reproduce it this week, and the account renews next month."
+    },
+    {
+      "id": "remote-work-rules",
+      "candidates": [
+        "people",
+        "legal"
+      ],
+      "expect": "default",
+      "title": "Remote work rules",
+      "text": "The handbook now follows the new remote-work law: an equipment allowance, records of working hours, and the right to disconnect after hours."
+    },
+    {
+      "id": "thanks",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people",
+        "sales",
+        "legal"
+      ],
+      "expect": "default",
+      "title": "Thanks everyone",
+      "text": "Great quarter, and thanks everyone for the effort. See you at the offsite."
+    },
+    {
+      "id": "q3-priorities",
+      "candidates": [
+        "engineering",
+        "finance",
+        "people"
+      ],
+      "expect": "default",
+      "title": "Q3 priorities",
+      "text": "Ship the mobile app, reduce cloud costs by fifteen percent, and hire a head of design."
+    },
+    {
+      "id": "reminder",
+      "candidates": [
+        "finance",
+        "legal"
+      ],
+      "expect": "default",
+      "title": "Reminder",
+      "text": "Please submit your documents before the deadline."
+    },
+    {
+      "id": "opaque-scan",
+      "candidates": [
+        "engineering",
+        "finance"
+      ],
+      "expect": "default",
+      "files": [
+        "scan-0042.pdf"
+      ]
+    },
+    {
+      "id": "h-load-test",
+      "candidates": [
+        "engineering",
+        "sales"
+      ],
+      "expect": "engineering",
+      "title": "Load test results",
+      "text": "The load test sustained 3,000 requests per second for an hour. CPU on the API pods peaked at seventy percent, and the connection pool needs a larger limit before launch."
+    },
+    {
+      "id": "h-payment-run",
+      "candidates": [
+        "finance",
+        "people"
+      ],
+      "expect": "finance",
+      "title": "Vendor payment run",
+      "text": "Friday's payment run covers 48 supplier invoices totalling 310k. Three invoices are on hold until the vendor sends credit notes."
+    },
+    {
+      "id": "h-interview-panels",
+      "candidates": [
+        "people",
+        "sales"
+      ],
+      "expect": "people",
+      "title": "Interview panel guidelines",
+      "text": "Each interview panel has three interviewers who use the shared scorecard and submit feedback within 24 hours. Recruiting schedules the debrief for the next morning."
+    },
+    {
+      "id": "h-partner-deals",
+      "candidates": [
+        "sales",
+        "legal"
+      ],
+      "expect": "sales",
+      "title": "Partner-sourced deals",
+      "text": "Our partner in Spain brought two new deals this month. Both are at the proposal stage and expected to close in November."
+    },
+    {
+      "id": "h-data-request",
+      "candidates": [
+        "legal",
+        "finance"
+      ],
+      "expect": "legal",
+      "title": "Data subject access request",
+      "text": "A former customer asked for a copy of their personal data. We must answer within one month, and counsel will review the export before it is sent."
+    },
+    {
+      "id": "h-flag-cleanup",
+      "candidates": [
+        "engineering",
+        "people",
+        "finance"
+      ],
+      "expect": "engineering",
+      "title": "Feature flag cleanup",
+      "text": "We removed forty stale feature flags from the codebase and added a lint rule that fails the build when a flag is older than ninety days."
+    },
+    {
+      "id": "h-lost-deal",
+      "candidates": [
+        "sales",
+        "people",
+        "legal"
+      ],
+      "expect": "sales",
+      "title": "Lost deal analysis",
+      "text": "We lost the Umbrella deal to a competitor on price. The buyer wanted monthly billing, which our standard proposal does not offer."
+    },
+    {
+      "id": "h-parking",
+      "candidates": [
+        "engineering",
+        "finance"
+      ],
+      "expect": "default",
+      "title": "Parking",
+      "text": "The parking garage closes for cleaning on Wednesday; please use the street spaces on the east side."
+    },
+    {
+      "id": "h-coffee",
+      "candidates": [
+        "people",
+        "legal"
+      ],
+      "expect": "default",
+      "title": "Coffee machine",
+      "text": "The new coffee machine on the second floor takes both beans and pods."
+    },
+    {
+      "id": "h-vat-return",
+      "candidates": [
+        "engineering",
+        "sales"
+      ],
+      "expect": "default",
+      "title": "Quarterly VAT return",
+      "text": "The quarterly VAT return was submitted, and the payment is scheduled for the twentieth."
+    },
+    {
+      "id": "h-payment-terms",
+      "candidates": [
+        "finance",
+        "sales"
+      ],
+      "expect": "default",
+      "title": "Payment terms for Acme",
+      "text": "Acme asked to move from 30-day to 60-day payment terms as part of their renewal; finance will assess the effect on cash flow."
+    },
+    {
+      "id": "h-career-ladder",
+      "candidates": [
+        "engineering",
+        "people"
+      ],
+      "expect": "default",
+      "title": "Engineering career ladder",
+      "text": "The new engineering career ladder defines five levels, from junior to principal, with expectations for code review, design ownership, and mentoring."
+    }
+  ]
+}

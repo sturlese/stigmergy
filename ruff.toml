@@ -1,0 +1,16 @@
+# Lint config for the whole repo.
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = [
+  "SIM105",  # try/except/pass is fine for best-effort cleanup
+  "SIM108",  # ternary is not always clearer
+]
+
+[lint.isort]
+known-first-party = ["stigmergy"]
+
+[lint.per-file-ignores]
+"**/tests/*" = ["SIM115"]   # quick open().read()/.write() is fine in tests

@@ -1,0 +1,102 @@
+"""OpenAI text embeddings through the approved OpenRouter boundary."""
+
+from __future__ import annotations
+
+import os
+
+import httpx
+
+from stigmergy.kernel.llm import OPENROUTER_PROVIDER_POLICY
+
+DEFAULT_MODEL = "openai/text-embedding-3-large"
+DEFAULT_DIMENSIONS = 2560
+DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+EMBED_BATCH = 128
+# The provider caps one request's summed input tokens at 300,000; a token covers at least one byte.
+REQUEST_BYTES = 250_000
+
+PROVIDER_POLICY = OPENROUTER_PROVIDER_POLICY
+
+MISSING_KEY_MESSAGE = (
+    "OPENROUTER_API_KEY is not set, so embeddings are unavailable. "
+    "Capture remains available; configure the key or rebuild and run the complete index with "
+    "the deterministic fake embedder for offline tests."
+)
+
+
+class OpenRouterEmbedder:
+    def __init__(
+        self,
+        model: str | None = None,
+        api_key: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ):
+        self.model = model or DEFAULT_MODEL
+        if self.model != DEFAULT_MODEL:
+            raise RuntimeError(
+                f"embedding model is not approved for Stigmergy: {self.model!r}"
+            )
+        self.host = DEFAULT_BASE_URL
+        self._url = f"{self.host}/embeddings"
+        self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not self._api_key:
+            raise RuntimeError(MISSING_KEY_MESSAGE)
+        # One keep-alive client per process spares every query a fresh TLS handshake.
+        self._client = httpx.Client(transport=transport, limits=httpx.Limits(keepalive_expiry=60))
+
+    def embed(self, texts: list[str], *, timeout_s: float = 120) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for batch_texts in _batches(texts):
+            response = self._client.post(
+                self._url,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "model": self.model,
+                    "input": batch_texts,
+                    "dimensions": DEFAULT_DIMENSIONS,
+                    "provider": dict(PROVIDER_POLICY),
+                },
+                timeout=timeout_s,
+            )
+            response.raise_for_status()
+            batch = sorted(response.json()["data"], key=lambda item: item["index"])
+            for item in batch:
+                vector = item["embedding"]
+                if len(vector) != DEFAULT_DIMENSIONS:
+                    raise RuntimeError(
+                        f"embedding host returned {len(vector)} dimensions; "
+                        f"expected {DEFAULT_DIMENSIONS}"
+                    )
+                vectors.append(vector)
+        return vectors
+
+
+def _batches(texts: list[str]):
+    """Consecutive runs of at most `EMBED_BATCH` texts and `REQUEST_BYTES` bytes; a single longer
+    text is a run of its own."""
+    batch: list[str] = []
+    size = 0
+    for text in texts:
+        length = len(text.encode("utf-8"))
+        if batch and (len(batch) == EMBED_BATCH or size + length > REQUEST_BYTES):
+            yield batch
+            batch, size = [], 0
+        batch.append(text)
+        size += length
+    if batch:
+        yield batch
+
+
+def build_embedder(kind: str = "openrouter", model: str | None = None):
+    if kind == "fake":
+        from stigmergy.index.backends.fake_embedder import FakeEmbedder
+        return FakeEmbedder()
+    if kind == "openrouter":
+        return OpenRouterEmbedder(model)
+    raise ValueError(f"unknown embedder: {kind!r} (use 'openrouter' or 'fake')")
+
+
+def embedder_for_model(model: str):
+    if model.startswith("fake"):
+        return build_embedder("fake")
+    return build_embedder("openrouter", model)

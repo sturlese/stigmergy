@@ -1,0 +1,162 @@
+import json
+
+import httpx
+import pytest
+
+import stigmergy.index.backends.embedder as embedder_module
+from stigmergy.index.backends.embedder import (
+    DEFAULT_BASE_URL,
+    DEFAULT_DIMENSIONS,
+    DEFAULT_MODEL,
+    MISSING_KEY_MESSAGE,
+    PROVIDER_POLICY,
+    OpenRouterEmbedder,
+    build_embedder,
+    embedder_for_model,
+)
+from stigmergy.index.backends.fake_embedder import FakeEmbedder
+
+
+def _response(request: httpx.Request, dimensions: int = DEFAULT_DIMENSIONS):
+    payload = json.loads(request.content)
+    return httpx.Response(
+        200,
+        json={
+            "data": [
+                {"index": index, "embedding": [float(index)] * dimensions}
+                for index, _text in reversed(list(enumerate(payload["input"])))
+            ]
+        },
+    )
+
+
+def test_real_embedder_requires_the_openrouter_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-be-used")
+
+    with pytest.raises(RuntimeError) as exc:
+        OpenRouterEmbedder()
+
+    assert str(exc.value) == MISSING_KEY_MESSAGE
+
+
+def test_real_embedder_uses_only_the_approved_model_and_the_private_provider_policy():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return _response(request)
+
+    embedder = OpenRouterEmbedder(
+        api_key="test-key", transport=httpx.MockTransport(handler)
+    )
+
+    vectors = embedder.embed(["uno", "two"])
+
+    assert embedder.model == DEFAULT_MODEL
+    assert embedder.host == DEFAULT_BASE_URL
+    assert [vector[0] for vector in vectors] == [0.0, 1.0]
+    request = seen[0]
+    assert str(request.url) == f"{DEFAULT_BASE_URL}/embeddings"
+    assert request.headers["authorization"] == "Bearer test-key"
+    payload = json.loads(request.content)
+    assert payload == {
+        "model": DEFAULT_MODEL,
+        "input": ["uno", "two"],
+        "dimensions": DEFAULT_DIMENSIONS,
+        "provider": PROVIDER_POLICY,
+    }
+
+
+def test_query_embedding_uses_a_short_explicit_timeout():
+    timeouts = []
+
+    def handler(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        return _response(request)
+
+    embedder = OpenRouterEmbedder(api_key="test-key", transport=httpx.MockTransport(handler))
+
+    assert len(embedder.embed(["renewal status"], timeout_s=3)[0]) == DEFAULT_DIMENSIONS
+    assert timeouts == [3]
+
+
+def test_batch_embedding_keeps_its_default_timeout_and_reraises_provider_timeouts():
+    timeouts = []
+
+    def handler(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        raise httpx.ReadTimeout("provider timed out", request=request)
+
+    embedder = OpenRouterEmbedder(api_key="test-key", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(httpx.ReadTimeout, match="provider timed out"):
+        embedder.embed(["index this corpus page"])
+    assert timeouts == [120]
+
+
+def test_consecutive_embeddings_reuse_one_keep_alive_client(monkeypatch):
+    created = []
+    real_client = httpx.Client
+
+    def counting_client(*args, **kwargs):
+        created.append(kwargs)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(embedder_module.httpx, "Client", counting_client)
+    embedder = OpenRouterEmbedder(api_key="test-key", transport=httpx.MockTransport(_response))
+
+    for query in ("first", "second", "third"):
+        embedder.embed([query], timeout_s=3)
+
+    assert len(created) == 1
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["text-embedding-3-large", "qwen/qwen3-embedding-8b", "other/model"],
+)
+def test_unapproved_embedding_models_are_rejected(model):
+    with pytest.raises(RuntimeError, match="not approved"):
+        OpenRouterEmbedder(model=model, api_key="test-key")
+
+
+def test_wrong_dimension_response_is_rejected():
+    embedder = OpenRouterEmbedder(
+        api_key="test-key",
+        transport=httpx.MockTransport(
+            lambda request: _response(request, dimensions=12)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="returned 12 dimensions"):
+        embedder.embed(["text"])
+
+
+def test_build_and_index_model_dispatch_are_closed(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    assert isinstance(build_embedder("openrouter"), OpenRouterEmbedder)
+    assert isinstance(build_embedder("fake"), FakeEmbedder)
+    assert isinstance(embedder_for_model("fake-hashed-bow-256"), FakeEmbedder)
+    assert isinstance(embedder_for_model(DEFAULT_MODEL), OpenRouterEmbedder)
+    with pytest.raises(ValueError, match="unknown embedder"):
+        build_embedder("openai")
+    with pytest.raises(RuntimeError, match="not approved"):
+        embedder_for_model("qwen/qwen3-embedding-8b")
+
+
+def test_one_request_never_carries_more_bytes_than_the_provider_accepts_in_tokens():
+    sizes = []
+
+    def handler(request):
+        sizes.append(sum(len(text.encode("utf-8")) for text in json.loads(request.content)["input"]))
+        return _response(request)
+
+    embedder = OpenRouterEmbedder(api_key="test-key", transport=httpx.MockTransport(handler))
+    texts = [f"{index} " + "数" * 2000 for index in range(128)]
+
+    vectors = embedder.embed(texts)
+    assert len(vectors) == 128
+    assert max(sizes) <= embedder_module.REQUEST_BYTES and len(sizes) > 1
+    assert [vector[0] for vector in vectors[:2]] == [0.0, 1.0]

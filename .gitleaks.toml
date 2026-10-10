@@ -1,0 +1,24 @@
+# gitleaks configuration for this repository.
+#
+# The default rule set, plus the allowlisted strings below: dead fixture tokens, each random and
+# valid nowhere. CI runs `gitleaks detect --source .` over the whole history.
+#
+# An exemption names one exact value, never a path or a commit: a path exemption (`tests/**`)
+# would blind the scan to a real credential pasted into a test tomorrow. Secret-shaped fixtures live
+# in `tests/adversarial_payloads.py` and are assembled at import, so they need no entry here.
+#
+# Do not add entries to make a scan quiet. A finding is a question about a credential, and the
+# answer is almost never "allowlist it": it is "rotate it, then remove it".
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Dead fixture tokens that exist only in this repository's history"
+regexes = [
+  # An earlier copy of the github-pat fixture. Random, never valid anywhere.
+  '''ghp_2vXk9QpL7mNr4TzB8sWyH3dJfC1aEgU6ZiXo''',
+  # An earlier AWS-shaped fixture. Not a real key: twenty characters of alphabet after the AKIA
+  # prefix, which is why gitleaks' `aws-access-token` rule fires on it and why it grants nothing.
+  '''AKIAABCDEFGHIJKLMNOP''',
+]

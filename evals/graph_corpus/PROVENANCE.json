@@ -1,0 +1,39 @@
+{
+  "frozen_at": "2026-09-27",
+  "pages": 88,
+  "sources": 36,
+  "librarian_model": "deepseek/deepseek-v4.1-flash",
+  "filings": {
+    "first_pass": 31,
+    "corrected": 0,
+    "rejected": 4
+  },
+  "hand_written": [
+    "layers/finance/wiki/notes/Series A Board Pack May 2026.md",
+    "layers/finance/wiki/notes/First-half 2026 Compensation Review.md",
+    "layers/finance/wiki/notes/Series A First Investor Meetings July 2026.md",
+    "layers/finance/wiki/notes/Series A Term Sheet September 2026.md"
+  ],
+  "added": [
+    {
+      "path": "sources/2026/08/e1d48dea-f34e-579b-99f7-daca2a663363.md",
+      "date": "2026-10-02",
+      "why": "A source above the embedding input limit for the fragment index (spec retrieval-and-curation §3.2); filed without wiki pages, as a capture that adds no durable conclusion."
+    },
+    {
+      "path": "sources/2026/09/d371a1d0-175b-560b-a838-b0ccf59d3b7a.md",
+      "date": "2026-10-02",
+      "why": "A long source for the fragment evaluation (spec retrieval-and-curation §7), written by evals/make_long_sources.py with planted details; filed without wiki pages."
+    },
+    {
+      "path": "sources/2026/07/472c69e2-7772-5e0d-b058-0ee1eee82ac8.md",
+      "date": "2026-10-02",
+      "why": "A long source for the fragment evaluation (spec retrieval-and-curation §7), written by evals/make_long_sources.py with planted details; filed without wiki pages."
+    },
+    {
+      "path": "layers/finance/sources/2026/08/bae6eb1f-e6b7-5d56-a23d-2426b4927af6.md",
+      "date": "2026-10-02",
+      "why": "A long source for the fragment evaluation (spec retrieval-and-curation §7), written by evals/make_long_sources.py with planted details; filed without wiki pages."
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "name": "project-from-its-founding-source",
+  "source_title": "Northwind warehouse migration kickoff",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000203.md",
+  "fixture_path": "fixtures/project_founding.md",
+  "mutations": {
+    "min_count": 2,
+    "max_count": 8,
+    "closed": false,
+    "required": [
+      {"action": "create", "role": "project"}
+    ],
+    "allowed": [],
+    "forbidden": [
+      {"action": "create", "role": "project", "title": "Initech"},
+      {"action": "create", "role": "project", "title": "Globex Logistics"}
+    ],
+    "max_per_role": {"project": 1}
+  },
+  "entities": {"required": [], "allowed": [], "forbidden": [], "closed": false},
+  "links": {"required": [], "forbidden": []},
+  "link_coverage": {"allow_unlinked": []},
+  "bodies": {
+    "required": [],
+    "required_any": [
+      {"label": "the project states its current state", "phrases": ["## Current state"]},
+      {"label": "the budget is recorded as not approved", "phrases": ["not approved", "not yet approved", "has not approved", "no budget"]}
+    ],
+    "forbidden": ["budget was approved", "approved the budget"],
+    "require_local_source": true
+  }
+}

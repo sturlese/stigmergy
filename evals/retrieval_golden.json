@@ -1,0 +1,89 @@
+{
+  "_comment": "Hybrid retrieval golden set over the canonical team-wiki corpus.",
+  "questions": [
+    {
+      "id": "git-canonical",
+      "q": "Why is Git the canonical store for current team knowledge?",
+      "expect": {"pages": ["page_eval_git"]}
+    },
+    {
+      "id": "immutable-evidence",
+      "q": "Where are the exact original submitted bytes retained?",
+      "expect": {"pages": ["page_eval_evidence"]}
+    },
+    {
+      "id": "serialized-writer",
+      "q": "How are concurrent knowledge mutations serialized?",
+      "expect": {"pages": ["page_eval_writer"]}
+    },
+    {
+      "id": "nightly-index",
+      "q": "When does the full search-index reconciliation run?",
+      "expect": {"pages": ["page_eval_index"]}
+    },
+    {
+      "id": "honest-contradictions",
+      "q": "What happens when two credible sources contradict each other?",
+      "expect": {"pages": ["page_eval_contradictions"]}
+    },
+    {
+      "id": "slack-snapshot",
+      "q": "What information is preserved when a Slack thread is captured?",
+      "expect": {"pages": ["page_eval_slack"]}
+    },
+    {
+      "id": "aurora-term",
+      "q": "What renewal term did Aurora Systems accept?",
+      "expect": {"pages": ["page_eval_aurora"]},
+      "filters": {"entity": "wiki/entities/Aurora Systems.md"}
+    },
+    {
+      "id": "aurora-budget",
+      "q": "What budget did Aurora Systems approve?",
+      "expect": {"pages": ["page_eval_aurora"]},
+      "filters": {"entity": "wiki/entities/Aurora Systems.md"}
+    },
+    {
+      "id": "aurora-start",
+      "q": "When does Aurora Systems' renewed term start?",
+      "expect": {"pages": ["page_eval_aurora"]},
+      "filters": {"entity": "wiki/entities/Aurora Systems.md"}
+    },
+    {
+      "id": "borealis-regions",
+      "q": "How many regions are included in the Borealis Logistics rollout?",
+      "expect": {"pages": ["page_eval_borealis"]},
+      "filters": {"entity": "wiki/entities/Borealis Logistics.md"}
+    },
+    {
+      "id": "borealis-date",
+      "q": "When will Borealis Logistics launch?",
+      "expect": {"pages": ["page_eval_borealis"]},
+      "filters": {"entity": "wiki/entities/Borealis Logistics.md"}
+    },
+    {
+      "id": "borealis-owner",
+      "q": "Who owns the Borealis Logistics migration checklist?",
+      "expect": {"pages": ["page_eval_borealis"]},
+      "filters": {"entity": "wiki/entities/Borealis Logistics.md"}
+    },
+    {
+      "id": "cascade-price",
+      "q": "What per-user price did Cascade Foods accept?",
+      "expect": {"pages": ["page_eval_cascade"]},
+      "filters": {"entity": "wiki/entities/Cascade Foods.md"}
+    },
+    {
+      "id": "cascade-discount",
+      "q": "What annual-prepayment discount applies to Cascade Foods?",
+      "expect": {"pages": ["page_eval_cascade"]},
+      "filters": {"entity": "wiki/entities/Cascade Foods.md"}
+    },
+    {
+      "id": "cascade-date",
+      "q": "When does Cascade Foods' new pricing take effect?",
+      "expect": {"pages": ["page_eval_cascade"]},
+      "filters": {"entity": "wiki/entities/Cascade Foods.md"}
+    }
+  ]
+}

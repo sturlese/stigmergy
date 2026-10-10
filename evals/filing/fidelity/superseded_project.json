@@ -1,0 +1,65 @@
+{
+  "version": 3,
+  "name": "superseded-project-current-state",
+  "source_title": "Orbit design review 2026-08-13",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000202.md",
+  "fixture_path": "fixtures/superseded_project.md",
+  "mutations": {
+    "min_count": 1,
+    "max_count": 8,
+    "closed": false,
+    "required": [
+      {
+        "action": "update",
+        "title": "Orbit design"
+      }
+    ],
+    "allowed": [],
+    "forbidden": [],
+    "max_per_role": {}
+  },
+  "entities": {
+    "required": [],
+    "allowed": [],
+    "forbidden": [],
+    "closed": false
+  },
+  "links": {
+    "required": [],
+    "forbidden": []
+  },
+  "link_coverage": {
+    "allow_unlinked": []
+  },
+  "bodies": {
+    "required": [],
+    "required_any": [
+      {
+        "label": "Orbit is recorded as retired or replaced by Beacon",
+        "phrases": [
+          "retired",
+          "replaced by [[Beacon]]",
+          "folded into [[Beacon]]",
+          "superseded"
+        ]
+      }
+    ],
+    "forbidden": [],
+    "require_local_source": true
+  },
+  "seed_pages": [
+    {
+      "id": "page_eval_orbit",
+      "role": "project",
+      "title": "Orbit design",
+      "body": "# Orbit design\n\n## Goal\n\nThe Orbit design is a memory-layer design effort for agent teams, led by [[Lena Ward]]. (Source: `{source_path}`)\n\n## Current state\n\n- 2026-07-28: Milestones M1 to M3 were completed. (Source: `{source_path}`)\n- 2026-07-14: Milestone M0 closed. (Source: `{source_path}`)\n\n## People and organizations\n\n- [[Lena Ward]] - leads the design"
+    },
+    {
+      "id": "page_eval_lena",
+      "role": "entity",
+      "entity_type": "person",
+      "title": "Lena Ward",
+      "body": "# Lena Ward\n\n## What / Who\n\nLena Ward leads the [[Orbit design]]. (Source: `{source_path}`)\n\n## Connections\n\n- [[Orbit design]] - the design she leads"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "_comment": "Reader scopes for the graph-search golden set. The analyst cannot read finance pages.",
+  "steward": {
+    "display_name": "Steward",
+    "groups": ["brain-admins", "finance", "product"],
+    "default_audience": null
+  },
+  "analyst": {
+    "display_name": "Analyst",
+    "groups": ["product"],
+    "default_audience": ["product"]
+  }
+}

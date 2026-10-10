@@ -1,0 +1,96 @@
+{
+  "version": 3,
+  "name": "meeting-entity-quality",
+  "source_title": "Helio Stack product review",
+  "source_path": "sources/2026/09/00000000-0000-4000-8000-000000000003.md",
+  "fixture_path": "../fixtures/meeting_entity_quality.md",
+  "mutations": {
+    "min_count": 1,
+    "max_count": 6,
+    "closed": true,
+    "required": [
+      {
+        "action": "create",
+        "role": "note"
+      }
+    ],
+    "allowed": [
+      {
+        "action": "create",
+        "role": "entity"
+      }
+    ],
+    "forbidden": [],
+    "max_per_role": {
+      "note": 1
+    }
+  },
+  "entities": {
+    "required": [
+      "Maya Ortiz",
+      "Leon Park",
+      "Noor Balan",
+      "Priya Sen",
+      "Helio Stack"
+    ],
+    "allowed": [],
+    "forbidden": [
+      "SignalBoard"
+    ],
+    "closed": true
+  },
+  "links": {
+    "required": [
+      "Maya Ortiz",
+      "Leon Park",
+      "Noor Balan",
+      "Priya Sen",
+      "Helio Stack"
+    ],
+    "forbidden": [
+      "SignalBoard"
+    ]
+  },
+  "link_coverage": {
+    "allow_unlinked": []
+  },
+  "link_density": {
+    "min_links_per_page": 2,
+    "roles": [
+      "note",
+      "concept"
+    ]
+  },
+  "bodies": {
+    "required": [
+      "five interview summaries"
+    ],
+    "required_any": [
+      {
+        "label": "dated evaluation cycle",
+        "phrases": [
+          "2026-10-01",
+          "1 October 2026",
+          "October 1, 2026"
+        ]
+      }
+    ],
+    "forbidden": [],
+    "require_local_source": true
+  },
+  "editorial_quality": {
+    "min_explanatory_paragraphs": 1
+  },
+  "entity_editorial_quality": {
+    "required": [
+      "Helio Stack",
+      "Maya Ortiz",
+      "Leon Park",
+      "Noor Balan",
+      "Priya Sen"
+    ],
+    "min_description_words": 3,
+    "min_facts": 1,
+    "require_temporal_fact": true
+  }
+}

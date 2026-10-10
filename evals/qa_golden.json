@@ -1,0 +1,149 @@
+{
+  "_comment": "Grounded-answer and honest-refusal golden set over the canonical team-wiki corpus.",
+  "default_identity": "steward",
+  "questions": [
+    {
+      "id": "aurora-budget",
+      "q": "What budget did Aurora Systems approve?",
+      "kind": "exact",
+      "expect_contains": "120000",
+      "cites": [
+        "wiki/notes/Aurora renewal.md",
+        "sources/2026/08/20000000-0000-4000-8000-000000000002.md"
+      ],
+      "family": "answerable"
+    },
+    {
+      "id": "aurora-start",
+      "q": "When does Aurora Systems' renewed term start?",
+      "kind": "exact",
+      "expect_contains": "2026-09-15",
+      "cites": [
+        "wiki/notes/Aurora renewal.md",
+        "sources/2026/08/20000000-0000-4000-8000-000000000002.md"
+      ],
+      "family": "answerable"
+    },
+    {
+      "id": "borealis-regions",
+      "q": "How many regions are in the Borealis Logistics rollout?",
+      "kind": "exact",
+      "expect_contains": "3",
+      "cites": [
+        "wiki/notes/Borealis rollout.md",
+        "sources/2026/08/30000000-0000-4000-8000-000000000003.md"
+      ],
+      "family": "answerable"
+    },
+    {
+      "id": "borealis-date",
+      "q": "When will Borealis Logistics launch?",
+      "kind": "exact",
+      "expect_contains": "2026-10-01",
+      "cites": [
+        "wiki/notes/Borealis rollout.md",
+        "sources/2026/08/30000000-0000-4000-8000-000000000003.md"
+      ],
+      "family": "answerable"
+    },
+    {
+      "id": "cascade-price",
+      "q": "What per-user price did Cascade Foods accept?",
+      "kind": "exact",
+      "expect_contains": "42",
+      "cites": [
+        "wiki/notes/Cascade pricing.md",
+        "sources/2026/08/40000000-0000-4000-8000-000000000004.md"
+      ],
+      "family": "answerable"
+    },
+    {
+      "id": "cascade-discount",
+      "q": "What annual-prepayment discount applies to Cascade Foods?",
+      "kind": "exact",
+      "expect_contains": "10%",
+      "cites": [
+        "wiki/notes/Cascade pricing.md",
+        "sources/2026/08/40000000-0000-4000-8000-000000000004.md"
+      ],
+      "family": "answerable"
+    },
+    {
+      "id": "git-store",
+      "q": "What format holds current team knowledge in the canonical Git store?",
+      "kind": "prose",
+      "expect_contains": "Markdown",
+      "cites": "wiki/concepts/Git canonical knowledge store.md",
+      "family": "answerable"
+    },
+    {
+      "id": "evidence-store",
+      "q": "Where do exact submitted bytes live?",
+      "kind": "prose",
+      "expect_contains": "object store",
+      "cites": "wiki/concepts/Immutable evidence plane.md",
+      "family": "answerable"
+    },
+    {
+      "id": "aurora-churn",
+      "q": "What is Aurora Systems' churn rate?",
+      "kind": "refusal",
+      "family": "absent-fact"
+    },
+    {
+      "id": "borealis-arr",
+      "q": "What is Borealis Logistics' ARR?",
+      "kind": "refusal",
+      "family": "absent-fact"
+    },
+    {
+      "id": "cascade-nps",
+      "q": "What is Cascade Foods' NPS?",
+      "kind": "refusal",
+      "family": "absent-fact"
+    },
+    {
+      "id": "aurora-monthly-premise",
+      "q": "Aurora Systems accepted a monthly renewal. When does it begin?",
+      "kind": "refute",
+      "family": "false-premise",
+      "refutes": "monthly",
+      "expect_contains": "annual",
+      "cites": [
+        "wiki/notes/Aurora renewal.md",
+        "sources/2026/08/20000000-0000-4000-8000-000000000002.md"
+      ]
+    },
+    {
+      "id": "borealis-five-regions-premise",
+      "q": "Which five regions are included in the Borealis Logistics rollout?",
+      "kind": "refute",
+      "family": "false-premise",
+      "refutes": "five",
+      "expect_contains": "3",
+      "cites": [
+        "wiki/notes/Borealis rollout.md",
+        "sources/2026/08/30000000-0000-4000-8000-000000000003.md"
+      ]
+    },
+    {
+      "id": "cascade-discount-premise",
+      "q": "Why did Cascade Foods receive a 25% annual discount?",
+      "kind": "refute",
+      "family": "false-premise",
+      "refutes": "25%",
+      "expect_contains": "10%",
+      "cites": [
+        "wiki/notes/Cascade pricing.md",
+        "sources/2026/08/40000000-0000-4000-8000-000000000004.md"
+      ]
+    },
+    {
+      "id": "acl-aurora-budget",
+      "q": "What budget did Aurora Systems approve?",
+      "kind": "refusal",
+      "family": "acl-probe",
+      "identity": "analyst"
+    }
+  ]
+}

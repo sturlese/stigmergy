@@ -1,0 +1,384 @@
+{
+ "_comment": "The answer-measurement subset of graph_golden.json, sized to the 2 USD evaluation cap.",
+ "suite": "graph-qa",
+ "default_identity": "steward",
+ "questions": [
+  {
+   "id": "rel-halberd-frostvale",
+   "q": "How much would Frostvale Distribution save a year through the Halberd Mutual partnership?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/notes/Halberd Mutual Partnership Memorandum April 2026.md"
+    ]
+   },
+   "expect_contains": "48000",
+   "cites": [
+    "wiki/notes/Halberd Mutual Partnership Memorandum April 2026.md"
+   ],
+   "shape": "relational",
+   "family": "answerable"
+  },
+  {
+   "id": "rel-veldt-frostvale",
+   "q": "When did Veldt Sensors finish replacing the drifting probes in Frostvale Distribution trucks?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/notes/Frostvale Renewal Negotiation April 2026.md"
+    ]
+   },
+   "expect_contains": "2026-03-28",
+   "cites": [
+    "wiki/notes/Frostvale Renewal Negotiation April 2026.md"
+   ],
+   "shape": "relational",
+   "family": "answerable"
+  },
+  {
+   "id": "rel-stratos-nordhafen",
+   "q": "Who at Stratos Software works with Tidewell on the connector for Nordhafen Tiefkühl?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/notes/Stratos Software Partnership Call July 2026.md"
+    ]
+   },
+   "expect_contains": "Pieter Janssen",
+   "cites": [
+    "wiki/notes/Stratos Software Partnership Call July 2026.md"
+   ],
+   "shape": "relational",
+   "family": "answerable"
+  },
+  {
+   "id": "rel-refritec-casaverde",
+   "q": "How many cold rooms had Refritec Instalações brought live for Casa Verde Markets by 21 July?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/notes/Casa Verde Cold-Room Rollout Phase 1 July 2026.md"
+    ]
+   },
+   "expect_contains": "180",
+   "cites": [
+    "wiki/notes/Casa Verde Cold-Room Rollout Phase 1 July 2026.md"
+   ],
+   "shape": "relational",
+   "family": "answerable"
+  },
+  {
+   "id": "rel-halden-halberd",
+   "q": "After how many months of excursion summaries does Halden Seafood become eligible for the Halberd Mutual discount?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/notes/Halden Seafood Pilot Start July 2026.md"
+    ]
+   },
+   "expect_contains": "2",
+   "cites": [
+    "wiki/notes/Halden Seafood Pilot Start July 2026.md"
+   ],
+   "shape": "relational",
+   "family": "answerable"
+  },
+  {
+   "id": "rel-odile-hamburg",
+   "q": "How many of the first Hamburg pipeline distributors did Odile Ferrand introduce?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/notes/Hamburg Office Opening Report June 2026.md"
+    ]
+   },
+   "expect_contains": "2",
+   "cites": [
+    "wiki/notes/Hamburg Office Opening Report June 2026.md"
+   ],
+   "shape": "relational",
+   "family": "answerable"
+  },
+  {
+   "id": "rel-halden-brightline",
+   "q": "Why did Halden Seafood leave Tidewell for Brightline Telematics in January 2026?",
+   "kind": "prose",
+   "expect": {
+    "pages": [
+     "wiki/notes/Brightline Telematics Competitive Note March 2026.md",
+     "wiki/notes/Halden Seafood Win-Back Call June 2026.md"
+    ]
+   },
+   "expect_contains": "price",
+   "cites": [
+    "wiki/notes/Brightline Telematics Competitive Note March 2026.md",
+    "wiki/notes/Halden Seafood Win-Back Call June 2026.md"
+   ],
+   "shape": "relational",
+   "family": "answerable"
+  },
+  {
+   "id": "rel-mensah-veldt",
+   "q": "What did Kwame Mensah require about Veldt Sensors probes for the Altamira pilot?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/notes/Altamira Pharma Logistics Pilot Kickoff.md"
+    ]
+   },
+   "expect_contains": "VS-2207",
+   "cites": [
+    "wiki/notes/Altamira Pharma Logistics Pilot Kickoff.md"
+   ],
+   "shape": "relational",
+   "family": "answerable"
+  },
+  {
+   "id": "nbr-cfo-employer",
+   "q": "Where did the CFO who ran the per-asset pricing workshop work before joining?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/entities/Hannah Brandt.md",
+     "wiki/notes/Hannah Brandt Joins Tidewell as CFO.md"
+    ]
+   },
+   "expect_contains": "Marlow Freight",
+   "cites": [
+    "wiki/entities/Hannah Brandt.md",
+    "wiki/notes/Hannah Brandt Joins Tidewell as CFO.md"
+   ],
+   "shape": "neighbor",
+   "family": "answerable"
+  },
+  {
+   "id": "nbr-engineer-employer",
+   "q": "Where did the data engineer hired to take over the insurer's monthly excursion summaries work before?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/entities/Amara Nwosu.md",
+     "wiki/notes/Amara Nwosu Joins Tidewell as Data Engineer.md"
+    ]
+   },
+   "expect_contains": "Voltaic Grid",
+   "cites": [
+    "wiki/entities/Amara Nwosu.md",
+    "wiki/notes/Amara Nwosu Joins Tidewell as Data Engineer.md"
+   ],
+   "shape": "neighbor",
+   "family": "answerable"
+  },
+  {
+   "id": "nbr-insurer-contact",
+   "q": "Who is the partnerships contact at the insurer that discounts premiums for monitored fleets?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/entities/Oliver Pennington.md",
+     "wiki/notes/Halberd Mutual Partnership Memorandum April 2026.md"
+    ]
+   },
+   "expect_contains": "Oliver Pennington",
+   "cites": [
+    "wiki/entities/Oliver Pennington.md",
+    "wiki/notes/Halberd Mutual Partnership Memorandum April 2026.md"
+   ],
+   "shape": "neighbor",
+   "family": "answerable"
+  },
+  {
+   "id": "nbr-dach-office",
+   "q": "In which city is the office of the sales lead for Germany, Austria and Switzerland?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/entities/Sabine Krüger.md",
+     "wiki/notes/Hamburg Office Plan April 2026.md"
+    ]
+   },
+   "expect_contains": "Hamburg",
+   "cites": [
+    "wiki/entities/Sabine Krüger.md",
+    "wiki/notes/Hamburg Office Plan April 2026.md"
+   ],
+   "shape": "neighbor",
+   "family": "answerable"
+  },
+  {
+   "id": "nbr-drift-supplier-contact",
+   "q": "Who is the account manager at the supplier whose probe batch drifted in 2026?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/entities/Lotte de Vries.md",
+     "wiki/notes/Veldt Sensors Call February 2026.md"
+    ]
+   },
+   "expect_contains": "Lotte de Vries",
+   "cites": [
+    "wiki/entities/Lotte de Vries.md",
+    "wiki/notes/Veldt Sensors Call February 2026.md"
+   ],
+   "shape": "neighbor",
+   "family": "answerable"
+  },
+  {
+   "id": "nbr-tabletop-auditor-firm",
+   "q": "Which firm does the auditor who observed the ransomware tabletop exercise work for?",
+   "kind": "exact",
+   "expect": {
+    "pages": [
+     "wiki/entities/Grace Liu.md",
+     "wiki/notes/SOC 2 Tabletop Incident Exercise August 2026.md"
+    ]
+   },
+   "expect_contains": "Carrow & Finch",
+   "cites": [
+    "wiki/entities/Grace Liu.md",
+    "wiki/notes/SOC 2 Tabletop Incident Exercise August 2026.md"
+   ],
+   "shape": "neighbor",
+   "family": "answerable"
+  },
+  {
+   "id": "global-alert-fatigue",
+   "q": "What has Tidewell done to reduce alert fatigue for dispatchers?",
+   "kind": "prose",
+   "expect": {
+    "pages": [
+     "wiki/concepts/Alert Fatigue.md",
+     "wiki/notes/Alert Fatigue in Cold-Chain Operations.md",
+     "wiki/notes/Dwell-Time Alerting Design April 2026.md",
+     "wiki/notes/Frostvale Dwell-Time Results June 2026.md",
+     "wiki/notes/Coldpath Redesign Review March 2026.md"
+    ]
+   },
+   "expect_contains": "dwell",
+   "cites": [
+    "wiki/concepts/Alert Fatigue.md",
+    "wiki/notes/Alert Fatigue in Cold-Chain Operations.md",
+    "wiki/notes/Dwell-Time Alerting Design April 2026.md",
+    "wiki/notes/Frostvale Dwell-Time Results June 2026.md",
+    "wiki/notes/Coldpath Redesign Review March 2026.md"
+   ],
+   "shape": "global",
+   "family": "answerable"
+  },
+  {
+   "id": "global-pharma",
+   "q": "What did Tidewell need to win pharmaceutical customers?",
+   "kind": "prose",
+   "expect": {
+    "pages": [
+     "wiki/notes/Altamira Pharma Logistics Pilot Kickoff.md",
+     "wiki/notes/Altamira Pilot Results May 2026.md",
+     "wiki/notes/SOC 2 Type II Readiness Review May 2026.md",
+     "wiki/concepts/Temperature Mapping.md",
+     "wiki/notes/GDP Temperature Mapping Workshop July 2026.md"
+    ]
+   },
+   "expect_contains": "SOC 2",
+   "cites": [
+    "wiki/notes/Altamira Pharma Logistics Pilot Kickoff.md",
+    "wiki/notes/Altamira Pilot Results May 2026.md",
+    "wiki/notes/SOC 2 Type II Readiness Review May 2026.md",
+    "wiki/concepts/Temperature Mapping.md",
+    "wiki/notes/GDP Temperature Mapping Workshop July 2026.md"
+   ],
+   "shape": "global",
+   "family": "answerable"
+  },
+  {
+   "id": "global-brightline",
+   "q": "How has Tidewell competed against Brightline Telematics?",
+   "kind": "prose",
+   "expect": {
+    "pages": [
+     "wiki/notes/Brightline Telematics Competitive Note March 2026.md",
+     "wiki/notes/Halberd Mutual Partnership Memorandum April 2026.md",
+     "wiki/notes/Halden Seafood Win-Back Call June 2026.md"
+    ]
+   },
+   "expect_contains": "Halberd",
+   "cites": [
+    "wiki/notes/Brightline Telematics Competitive Note March 2026.md",
+    "wiki/notes/Halberd Mutual Partnership Memorandum April 2026.md",
+    "wiki/notes/Halden Seafood Win-Back Call June 2026.md"
+   ],
+   "shape": "global",
+   "family": "answerable"
+  },
+  {
+   "id": "global-frostvale",
+   "q": "How did the relationship with Frostvale Distribution develop during 2026?",
+   "kind": "prose",
+   "expect": {
+    "pages": [
+     "wiki/notes/Frostvale Quarterly Business Review January 2026.md",
+     "wiki/notes/Frostvale Renewal Negotiation April 2026.md",
+     "wiki/notes/Frostvale Dwell-Time Results June 2026.md"
+    ]
+   },
+   "expect_contains": "renew",
+   "cites": [
+    "wiki/notes/Frostvale Quarterly Business Review January 2026.md",
+    "wiki/notes/Frostvale Renewal Negotiation April 2026.md",
+    "wiki/notes/Frostvale Dwell-Time Results June 2026.md"
+   ],
+   "shape": "global",
+   "family": "answerable"
+  },
+  {
+   "id": "acl-valuation",
+   "q": "What pre-money valuation did the Series A term sheet set?",
+   "kind": "refusal",
+   "identity": "analyst",
+   "forbid": [
+    "wiki/notes/Series A Board Pack May 2026.md",
+    "wiki/notes/First-half 2026 Compensation Review.md",
+    "wiki/notes/Series A First Investor Meetings July 2026.md",
+    "wiki/notes/Series A Term Sheet September 2026.md"
+   ],
+   "shape": "acl",
+   "family": "acl-probe"
+  },
+  {
+   "id": "acl-equity-refresh",
+   "q": "What equity refresh did Priya Raman receive?",
+   "kind": "refusal",
+   "identity": "analyst",
+   "forbid": [
+    "wiki/notes/Series A Board Pack May 2026.md",
+    "wiki/notes/First-half 2026 Compensation Review.md",
+    "wiki/notes/Series A First Investor Meetings July 2026.md",
+    "wiki/notes/Series A Term Sheet September 2026.md"
+   ],
+   "shape": "acl",
+   "family": "acl-probe"
+  },
+  {
+   "id": "absent-madrid-office",
+   "q": "What is the address of Tidewell's Madrid office?",
+   "kind": "refusal",
+   "shape": "absent",
+   "family": "absent-fact"
+  },
+  {
+   "id": "refute-frostvale-cancel",
+   "q": "Why did Frostvale Distribution cancel its Tidewell contract in April 2026?",
+   "kind": "refute",
+   "expect": {
+    "pages": [
+     "wiki/notes/Frostvale Renewal Negotiation April 2026.md"
+    ]
+   },
+   "expect_contains": "renew",
+   "cites": [
+    "wiki/notes/Frostvale Renewal Negotiation April 2026.md"
+   ],
+   "shape": "refute",
+   "family": "false-premise"
+  }
+ ]
+}

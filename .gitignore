@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+
+# Agent/editor local state — may hold API tokens for a running deployment. `skills/` is the
+# one exception: those describe how to work on THIS repo, so they belong to it. Nothing
+# deployment-specific may be written into them — coordinates live in the gitignored .env.
+.claude/*
+!.claude/skills/
+
+# Local test stack / data volumes
+.data/
+*.sqlite
+*.duckdb
+
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Build/demo/eval outputs
+out/
+evals/out/
+
+
+# coverage artifacts
+.coverage
+
+# The console is built from web/ into the package (make web, CI, and the image build).
+src/stigmergy/admin/static
+web/node_modules/
+# An operator's own landing page, added to the build context at deploy time and never committed.
+/web/landing.html
+/web/src/landing/

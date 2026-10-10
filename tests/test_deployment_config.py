@@ -1,0 +1,377 @@
+import json
+import pathlib
+import re
+import tomllib
+
+import pytest
+
+from stigmergy.kernel import llm
+from stigmergy.librarian import config as librarian_config
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+FLY_TOML = ROOT / "fly.toml"
+ENV_EXAMPLE = ROOT / ".env.example"
+DOCKERFILE = ROOT / "Dockerfile"
+COMPOSE = ROOT / "docker-compose.yml"
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+SLACK_APP_MANIFEST = ROOT / "deploy" / "slack-app-manifest.json"
+
+REQUIRED_SLACK_BOT_SCOPES = {
+    "app_mentions:read",
+    "channels:history",
+    "channels:read",
+    "chat:write",
+    "files:read",
+    "groups:history",
+    "groups:read",
+    "im:history",
+    "im:read",
+    "reactions:read",
+    "users:read",
+    "users:read.email",
+}
+
+REQUIRED_SLACK_BOT_EVENTS = {
+    "app_mention",
+    "message.im",
+    "reaction_added",
+}
+
+SUPPORTED_SCRIPTS = {
+    "stigmergy-index": "operations",
+    "stigmergy-server": "service",
+    "stigmergy-bridge": "local bridge",
+    "stigmergy-librarian": "service",
+    "stigmergy-librarian-boot": "bootstrap",
+    "stigmergy-librarian-credential": "bootstrap",
+    "stigmergy-slack": "service",
+    "stigmergy-admin": "bootstrap",
+}
+
+EXECUTABLE_MODULES = {
+    "src/stigmergy/admin/cli.py": "bootstrap",
+    "src/stigmergy/librarian/bootstrap.py": "bootstrap",
+    "src/stigmergy/librarian/cli.py": "service",
+    "src/stigmergy/librarian/gitcredential.py": "bootstrap",
+    "src/stigmergy/knowledge/lint.py": "operations",
+    "src/stigmergy/knowledge/trust.py": "operations",
+    "src/stigmergy/ops/replay_workspace.py": "operations",
+    "src/stigmergy/ops/reset.py": "operations",
+    "src/stigmergy/server/mcp_server.py": "service",
+    "src/stigmergy/slack/app.py": "service",
+}
+
+
+def _fly_config() -> dict:
+    with FLY_TOML.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def _env_example_value(name: str) -> str:
+    entries = [
+        line.partition("=")
+        for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+        if line.startswith(f"{name}=")
+    ]
+    assert len(entries) == 1
+    return entries[0][2]
+
+
+def _dockerfile_cmd() -> list[str]:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    match = re.search(r"^CMD\s+(\[.*?\])\s*$", text, re.MULTILINE | re.DOTALL)
+    assert match
+    return json.loads(match.group(1).replace("\\\n", "\n"))
+
+
+def test_checked_in_slack_manifest_declares_the_runtime_contract():
+    manifest = json.loads(SLACK_APP_MANIFEST.read_text(encoding="utf-8"))
+    bot_scopes = set(manifest["oauth_config"]["scopes"]["bot"])
+
+    assert manifest["display_information"] == {
+        "name": "stigmergy",
+        "description": "The company brain — ask it questions, react 🧠 to keep something",
+        "background_color": "#2C2D30",
+    }
+    assert manifest["features"]["bot_user"]["display_name"] == "brain"
+    assert bot_scopes == REQUIRED_SLACK_BOT_SCOPES
+    assert {"files:write", "im:write", "reactions:write"}.isdisjoint(bot_scopes)
+    assert set(manifest["settings"]["event_subscriptions"]["bot_events"]) == REQUIRED_SLACK_BOT_EVENTS
+    assert manifest["settings"]["socket_mode_enabled"] is True
+    assert manifest["settings"]["interactivity"]["is_enabled"] is True
+
+
+def test_process_groups_are_exactly_app_worker_and_slack():
+    assert set(_fly_config()["processes"]) == {"app", "worker", "slack"}
+
+
+def test_http_service_exposes_only_app():
+    assert _fly_config()["http_service"]["processes"] == ["app"]
+
+
+def test_http_service_has_a_bounded_get_health_check():
+    checks = _fly_config()["http_service"].get("checks", [])
+    assert len(checks) == 1
+    check = checks[0]
+    assert check["method"] == "GET"
+    assert check["path"] == "/health"
+    limits = {
+        "interval": (1, 60),
+        "timeout": (1, 10),
+        "grace_period": (0, 120),
+    }
+    for key, (minimum, maximum) in limits.items():
+        match = re.fullmatch(r"(\d+)(ms|s|m)", check[key])
+        assert match
+        value = int(match.group(1)) * {"ms": 0.001, "s": 1, "m": 60}[match.group(2)]
+        assert minimum <= value <= maximum
+
+
+def test_app_process_matches_dockerfile_command():
+    assert _fly_config()["processes"]["app"] == " ".join(_dockerfile_cmd())
+
+
+def test_worker_uses_boot_entry_point():
+    assert _fly_config()["processes"]["worker"] == "stigmergy-librarian-boot"
+
+
+def test_no_process_bakes_a_roster_file():
+    """People and channel audiences live in Postgres; the image carries no roster file."""
+    processes = _fly_config()["processes"]
+    assert processes["slack"] == "stigmergy-slack"
+    for command in processes.values():
+        assert "--identities" not in command and "--channels" not in command
+    assert "identities" not in DOCKERFILE.read_text(encoding="utf-8")
+    assert not (ROOT / "deploy" / "identities.json").exists()
+    assert not (ROOT / "deploy" / "slack-channels.json").exists()
+
+
+def test_no_process_bakes_an_entity_registry():
+    assert "entity-registry" not in FLY_TOML.read_text(encoding="utf-8")
+    assert "entity-registry" not in DOCKERFILE.read_text(encoding="utf-8")
+    assert "--entity-registry" not in _dockerfile_cmd()
+    assert not (ROOT / "deploy" / "entity-registry.json").exists()
+
+
+def test_static_environment_contains_no_credentials():
+    forbidden = {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+        "STIGMERGY_INDEX_DSN",
+        "STIGMERGY_TOKEN_STORE",
+        "STIGMERGY_EVIDENCE_ACCESS_KEY_ID",
+        "STIGMERGY_EVIDENCE_SECRET_ACCESS_KEY",
+    }
+    assert not forbidden.intersection(_fly_config().get("env", {}))
+
+
+@pytest.mark.parametrize(
+    ("surface", "configured"),
+    (
+        ("kernel", llm.LIBRARIAN_MODEL),
+        ("librarian default", librarian_config.DEFAULT_MODEL),
+        ("Fly deployment", _fly_config()["env"]["STIGMERGY_LIBRARIAN_MODEL"]),
+        ("environment example", _env_example_value("STIGMERGY_LIBRARIAN_MODEL")),
+    ),
+)
+def test_deployed_librarian_uses_the_supported_default_model(surface, configured):
+    expected = "openrouter:deepseek/deepseek-v4.1-flash"
+    assert configured == expected, surface
+
+
+def test_deployed_librarian_uses_the_bounded_recovery_budget():
+    assert librarian_config.DEFAULT_MAX_TURNS == 3
+    assert _fly_config()["env"]["STIGMERGY_LIBRARIAN_MAX_TURNS"] == "3"
+    assert _env_example_value("STIGMERGY_LIBRARIAN_MAX_TURNS") == "3"
+
+
+def test_specification_names_the_exact_librarian_model():
+    specification = (ROOT / "specs" / "karpathy-team-wiki.md").read_text(encoding="utf-8")
+
+    assert f"`{llm.LIBRARIAN_MODEL}`" in specification
+
+
+def test_deployed_answer_uses_the_approved_answer_model():
+    env = _fly_config()["env"]
+    assert env["ANSWER_LLM"] == "openrouter"
+    assert env["ANSWER_MODEL"] == llm.ANSWER_MODEL
+
+
+def test_deployed_scanned_ocr_uses_the_approved_qwen_model():
+    assert _fly_config()["env"]["STIGMERGY_OCR_MODEL"] == llm.OCR_MODEL
+
+
+def test_deployed_writer_shutdown_uses_fly_maximum_and_recovers_through_the_lease():
+    fly = _fly_config()
+    model_timeout = int(fly["env"]["STIGMERGY_LIBRARIAN_TIMEOUT_S"])
+    visibility = librarian_config.resolved_visibility_timeout_s(timeout_s=model_timeout)
+    kill_timeout = int(fly["kill_timeout"].removesuffix("s"))
+
+    assert kill_timeout == 300
+    assert visibility > kill_timeout
+
+
+def test_static_model_configuration_names_no_disallowed_provider():
+    text = FLY_TOML.read_text(encoding="utf-8").casefold()
+    assert "anthropic" not in text
+    assert "claude" not in text
+    assert "gemini" not in text
+    assert "openai:" not in text
+    assert "gpt-" not in text.replace(llm.LIBRARIAN_MODEL.casefold(), "")
+
+
+def test_runtime_installs_only_the_openrouter_model_extra():
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        dependencies = tomllib.load(handle)["project"]["dependencies"]
+
+    assert "pydantic-ai-slim[openrouter]==2.55.0" in dependencies
+    assert not any(dependency.startswith("pydantic-ai==") for dependency in dependencies)
+    assert not any(dependency.startswith("anthropic") for dependency in dependencies)
+
+
+def test_vm_blocks_cover_all_process_groups():
+    groups = {group for vm in _fly_config()["vm"] for group in vm["processes"]}
+    assert groups == {"app", "worker", "slack"}
+
+
+def test_app_autostarts_and_sleeps_when_idle():
+    service = _fly_config()["http_service"]
+    assert service["auto_stop_machines"] is True
+    assert service["auto_start_machines"] is True
+    assert service["min_machines_running"] == 0
+
+
+def test_package_metadata_is_copied_before_install():
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        project = tomllib.load(handle)["project"]
+    named = [project["readme"], *project.get("license-files", [])]
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    before_install = dockerfile[: dockerfile.index("RUN uv sync --frozen")]
+    assert all(name in before_install for name in named)
+    assert "pyproject.toml" in before_install
+    assert "uv.lock" in before_install
+
+
+def test_deployment_image_does_not_install_a_local_ocr_engine():
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    assert "tesseract" not in dockerfile.lower()
+
+
+def test_deploy_script_runs_one_app_and_one_writer_and_slack_only_when_enabled():
+    script = (ROOT / "scripts" / "deploy_staging.sh").read_text(encoding="utf-8")
+    assert "fly deploy --ha=false --yes" in script
+    assert 'SLACK_MACHINES="${STIGMERGY_SLACK_MACHINES:-0}"' in script
+    assert 'fly scale count app=1 worker=1 slack="$SLACK_MACHINES" --yes' in script
+
+
+def test_installed_commands_are_the_classified_supported_surface():
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        scripts = tomllib.load(handle)["project"]["scripts"]
+
+    assert set(scripts) == set(SUPPORTED_SCRIPTS)
+    assert set(SUPPORTED_SCRIPTS.values()) == {
+        "service",
+        "bootstrap",
+        "operations",
+        "local bridge",
+    }
+    assert {"stigmergy-search", "stigmergy-queue", "stigmergy-gardener"}.isdisjoint(scripts)
+
+
+def test_no_supported_user_capability_exists_only_as_a_remote_cli():
+    local = {name for name, category in SUPPORTED_SCRIPTS.items() if category == "local bridge"}
+    remote = set(SUPPORTED_SCRIPTS) - local
+
+    assert local == {"stigmergy-bridge"}
+    assert all(SUPPORTED_SCRIPTS[name] in {"service", "bootstrap", "operations"} for name in remote)
+
+
+def test_all_directly_executable_runtime_modules_are_classified():
+    discovered = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "src" / "stigmergy").rglob("*.py")
+        if 'if __name__ == "__main__"' in path.read_text(encoding="utf-8")
+    }
+    assert discovered == set(EXECUTABLE_MODULES)
+    assert set(EXECUTABLE_MODULES.values()) <= {"service", "bootstrap", "operations", "local bridge"}
+
+
+def test_retired_runtime_modules_are_absent():
+    retired = {
+        "src/stigmergy/capture/cli.py",
+        "src/stigmergy/gardener/__init__.py",
+        "src/stigmergy/repair/__init__.py",
+        "src/stigmergy/librarian/processing.py",
+        "src/stigmergy/librarian/page.py",
+        "src/stigmergy/kernel/page.py",
+        "src/stigmergy/server/review.py",
+    }
+    assert [path for path in sorted(retired) if (ROOT / path).exists()] == []
+
+
+# Row-level security has no spelling but ALTER TABLE; the one module that turns it on may say
+# nothing else.
+RLS_MODULE = "src/stigmergy/kernel/tenancy.py"
+_RLS_ALTER = re.compile(r"ALTER TABLE \{table\} (ENABLE|FORCE) ROW LEVEL SECURITY")
+
+
+def test_fresh_runtime_schema_has_no_compatibility_alters():
+    offenders = []
+    for path in (ROOT / "src" / "stigmergy").rglob("*.py"):
+        relative = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        if relative == RLS_MODULE:
+            text = _RLS_ALTER.sub("", text)
+        if "ALTER TABLE" in text.upper():
+            offenders.append(relative)
+    assert offenders == []
+
+
+def test_local_service_images_are_digest_pinned():
+    images = re.findall(
+        r"^\s*image:\s*(\S+)\s*$",
+        COMPOSE.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert images
+    assert all(re.fullmatch(r"[^\s@]+:[^\s@]+@sha256:[0-9a-f]{64}", image) for image in images)
+
+
+def test_ci_uses_a_commit_pinned_checksum_verified_uv_installer():
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in workflow
+    assert 'version: "0.11.16"' in workflow
+    assert 'checksum: "74947fe2c03315cf07e82ab3acc703eddef01aba4d5232a98e4c6825ec116131"' in workflow
+    assert "pip install uv" not in workflow
+
+
+def test_runtime_has_no_human_task_or_separate_repair_queue():
+    forbidden = (
+        "awaiting_review",
+        "needs_human",
+        "human_task",
+        "gardener_tasks",
+        "garden_tasks",
+        "repair_queue",
+        "repair_worker",
+    )
+    offenders = []
+    for path in (ROOT / "src" / "stigmergy").rglob("*.py"):
+        text = path.read_text(encoding="utf-8").casefold()
+        if any(term in text for term in forbidden):
+            offenders.append(path.relative_to(ROOT).as_posix())
+    assert offenders == []
+
+
+def test_the_image_and_the_wheel_carry_the_built_console():
+    """The console is built from web/ and ignored by Git, so both the image and the wheel must add
+    it explicitly or the backoffice ships without a page."""
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    assert "AS web" in dockerfile and "npm ci" in dockerfile and "npm run build" in dockerfile
+    assert "COPY --from=web /build/src/stigmergy/admin/static ./src/stigmergy/admin/static" in dockerfile
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        wheel = tomllib.load(handle)["tool"]["hatch"]["build"]["targets"]["wheel"]
+    assert "src/stigmergy/admin/static" in wheel["artifacts"]
+    # Without a trailing slash the pattern also ignores a symlink a worktree puts at that path.
+    assert "src/stigmergy/admin/static\n" in (ROOT / ".gitignore").read_text(encoding="utf-8")
