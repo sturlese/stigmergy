@@ -250,7 +250,10 @@ ships in the platform package at `src/stigmergy/knowledge/librarian_skill.md`.
 The librarian sees the capture's layer view (§5.7): the readable source with its provenance, a
 catalog of every linkable page (title, role, aliases, one-line summary), in full the entity and
 project pages the source names and the closest other pages with their filed contradiction markers,
-and bounded evidence from those pages' sources, all as untrusted data. It returns one `FilingPlan`
+and bounded evidence from those pages' sources, all as untrusted data. The prompt runs from what
+changes least to what changes most (the skill, the catalog oldest page first, the pages and evidence
+chosen for the capture, its provenance and source) and ends with the task, so a provider reuses its
+cached prefix across captures and a correction reuses its plan's prompt. It returns one `FilingPlan`
 (`knowledge/plan.py`): at most 32 page mutations (`create`, `update`, `delete`) plus contradictions
 to file or resolve. It may create, rewrite, consolidate, or delete notes and concepts; create or
 update entity pages with their aliases, and project pages for initiatives whose work outlasts one

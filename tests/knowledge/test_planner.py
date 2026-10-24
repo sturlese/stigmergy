@@ -2,6 +2,7 @@ import asyncio
 import datetime as dt
 import hashlib
 import json
+import os
 import time
 from types import SimpleNamespace
 
@@ -109,6 +110,26 @@ def test_correction_is_one_complete_replacement_with_explicit_failures():
     assert "CONTRACT FAILURES" in prompt
     assert "heading-title" in prompt
     assert '"summary": "Draft"' in prompt
+
+
+def test_a_correction_repeats_its_filing_prompt_up_to_the_task_so_a_provider_reuses_it():
+    shared = dict(
+        envelope=_envelope(),
+        source_path="sources/2026/08/example.md",
+        source_text="Primary evidence",
+        context='{"catalog": ["Visible"]}',
+    )
+    filing = planner._filing_prompt(**shared)
+    correction = planner._correction_prompt(
+        **shared, draft=FilingPlan(summary="Draft"), violations=({"code": "heading-title"},)
+    )
+
+    prefix = os.path.commonprefix([filing, correction])
+    assert prefix.startswith("SAFE EXISTING CONTEXT")
+    assert '"catalog": ["Visible"]' in prefix
+    assert "sources/2026/08/example.md" in prefix
+    assert "Primary evidence" in prefix
+    assert filing.index("PROVENANCE") < filing.index("READABLE SOURCE") < filing.index("Return one complete")
 
 
 def test_repair_with_no_remaining_request_returns_no_mutations(tmp_path):

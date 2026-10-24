@@ -1,5 +1,6 @@
 import datetime as dt
 import hashlib
+import json
 import os
 from pathlib import Path
 from uuid import UUID
@@ -11,7 +12,7 @@ from stigmergy.knowledge import context
 from stigmergy.knowledge.pages import render_page
 
 
-def _page(root, title, acl, body, *, sources=()):
+def _page(root, title, acl, body, *, sources=(), created=dt.date(2026, 8, 24)):
     relative = f"wiki/notes/{title}.md"
     path = Path(root, relative)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -23,14 +24,15 @@ def _page(root, title, acl, body, *, sources=()):
             body=f"# {title}\n\n{body}",
             acl=acl,
             sources=sources,
-            created=dt.date(2026, 8, 24),
+            created=created,
             updated=dt.date(2026, 8, 24),
         ),
         encoding="utf-8",
     )
 
 
-def _entity(root, title, acl, body, *, entity_type="organization", aliases=(), sources=()):
+def _entity(root, title, acl, body, *, entity_type="organization", aliases=(), sources=(),
+            created=dt.date(2026, 8, 24)):
     relative = f"wiki/entities/{title}.md"
     path = Path(root, relative)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -42,7 +44,7 @@ def _entity(root, title, acl, body, *, entity_type="organization", aliases=(), s
             body=f"# {title}\n\n{body}",
             acl=acl,
             sources=sources,
-            created=dt.date(2026, 8, 24),
+            created=created,
             updated=dt.date(2026, 8, 24),
             entity_type=entity_type,
             aliases=aliases,
@@ -680,6 +682,24 @@ def test_context_catalogs_every_admitted_page_and_ranks_entity_pages_as_candidat
     assert "Qaldris Dynamics builds launch tooling" in entity["body"]
     assert "summary" not in entity
     assert "Velorum" not in context.render_context(result)
+
+
+def test_the_catalog_lists_pages_oldest_first_and_leads_the_rendered_context(tmp_path):
+    """A provider reuses a cached prompt only up to its first differing byte, so a new page joins the
+    end of the catalog and the catalog comes before the pages chosen for this capture."""
+    _entity(tmp_path, "Older vendor", None, "Older vendor ships alpha.", created=dt.date(2026, 8, 1))
+    _page(tmp_path, "Newer note", None, "Alpha shipped.", created=dt.date(2026, 9, 1))
+    _page(tmp_path, "Oldest note", None, "Alpha planned.", created=dt.date(2026, 7, 1))
+
+    result = context.filing_context(
+        str(tmp_path), source_text="Alpha shipped.", capture_acl=None, actor_groups=None
+    )
+    rendered = context.render_context(result)
+
+    assert [item["title"] for item in result["catalog"]] == ["Oldest note", "Older vendor", "Newer note"]
+    assert result["candidates"]
+    assert rendered.startswith('{\n  "catalog": [')
+    assert json.loads(rendered) == result
 
 
 def test_context_admits_an_entity_named_only_by_alias_in_the_source(tmp_path):

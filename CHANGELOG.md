@@ -11,6 +11,12 @@ remain authoritative.
 
 ## [Unreleased]
 
+### Changed
+
+- The librarian's prompt now puts what changes least first: the catalog, oldest page first, then
+  the pages chosen for the capture, its provenance and source, and the task last. Providers reuse
+  the cached prefix, so a filing correction pays a fraction of its input.
+
 ## [0.12.0] - 2026-10-10
 
 First public release, under the GNU Affero General Public License 3.0 with a contributor license

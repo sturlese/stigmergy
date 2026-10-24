@@ -69,7 +69,7 @@ def filing_context(
     terms = set(_WORD_RE.findall(folded_source))
     candidates = []
     named = []
-    catalog = []
+    dated_catalog = []
     for folder in KNOWLEDGE_FOLDERS:
         base = Path(root, *folder.split("/"))
         if not base.is_dir():
@@ -84,7 +84,7 @@ def filing_context(
             if page.role == "entity":
                 entry["entity_type"] = page.entity_type
                 entry["aliases"] = list(page.aliases)
-            catalog.append(entry)
+            dated_catalog.append((page.created, entry))
             overlap = len(terms & set(_WORD_RE.findall(f"{page.title}\n{page.body}".casefold())))
             candidate = {
                 **{key: value for key, value in entry.items() if key != "summary"},
@@ -98,6 +98,9 @@ def filing_context(
                 named.append(candidate)
             elif overlap:
                 candidates.append((overlap, candidate))
+    # Oldest page first, ties in folder and path order: a capture filed today adds its pages at the
+    # end, so consecutive captures share most of the catalog as a cached prompt prefix.
+    catalog = [entry for _created, entry in sorted(dated_catalog, key=lambda item: item[0])]
     candidates.sort(key=lambda item: (-item[0], item[1]["path"]))
     # An entity or project the source names is always shown in full: ranking by shared words
     # favours long pages, and a page the model cannot see is one it can never extend.
@@ -179,10 +182,21 @@ def authorized_derived_page_paths(
 
 
 def render_context(context: dict) -> str:
-    rendered = json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2)
+    # The catalog leads because it changes least between captures; a provider reuses a cached
+    # prompt only up to its first differing byte.
+    order = sorted(context, key=lambda key: (key != "catalog", key))
+    rendered = json.dumps({key: _sorted_keys(context[key]) for key in order}, ensure_ascii=False, indent=2)
     if len(rendered.encode("utf-8")) > MAX_PLANNER_CONTEXT_BYTES:
         raise ValueError("filing context exceeds its byte limit")
     return rendered
+
+
+def _sorted_keys(value):
+    if isinstance(value, dict):
+        return {key: _sorted_keys(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_sorted_keys(item) for item in value]
+    return value
 
 
 def _rendered_bytes(context: dict) -> int:
